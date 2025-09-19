@@ -1,0 +1,4 @@
+Webapp/app.db
+Webapp/__pycache__
+.venv
+dev-*
