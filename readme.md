@@ -1,4 +1,4 @@
-# Proactive Land Uncovering & Monitoring 
+i# Proactive Land Uncovering & Monitoring 
 <p align="center">
   <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum-overview.png" />
 </p>
@@ -13,23 +13,22 @@ It provides jobs to agents and collect back scanning data. The final data may be
 as-is or pushed back into the D4 ecosystem
 
 ## Technical requirements
-Python 3
-Flask Appbuilder
+Python 3  
+Flask Appbuilder  
 
 ## Installation
 
 To setup an environnement do;
 
-`bash
-git clone
-cd Plum-Orchestrator
+```bash
+git clone 
+cd Plum-Island
 ./setup.sh
-`
+```
 Then you could prefered web server or simply run for demo
 
-`bash
-source ./venv/bin/activate
-cd webapp
-python run.sh
-`
-
+```bash
+source ./venv/bin/activate  
+cd webapp  
+python run.sh  
+```
