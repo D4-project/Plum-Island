@@ -1,4 +1,4 @@
-i# Proactive Land Uncovering & Monitoring 
+# Proactive Land Uncovering & Monitoring 
 <p align="center">
   <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum-overview.png" />
 </p>

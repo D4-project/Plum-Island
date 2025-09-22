@@ -12,6 +12,7 @@ This module contains all code related to the GUI.
 from flask import render_template
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelView
+from werkzeug.security import generate_password_hash
 from .models import Bots, Targets, Jobs, ApiKeys
 from . import appbuilder, db
 
@@ -47,6 +48,7 @@ class BotsView(ModelView):
     """
 
     datamodel = SQLAInterface(Bots)
+    list_columns = ["uid", "agent_version", "ip", "country", "last_seen"]
 
 
 class JobsView(ModelView):
@@ -63,7 +65,21 @@ class ApiKeysView(ModelView):
     """
 
     datamodel = SQLAInterface(ApiKeys)
-    # list_template = "add_apikeyview.html"
+    add_template = "add_apikeyview.html"  # Custom Add view with KeyGenerator
+    list_columns = ["id", "description"]
+    edit_columns = ["description"]
+    show_columns = ["id", "description"]
+
+    def pre_add(self, item):
+        print(item.key)
+        keyid = key[0:16]
+        print(keyid)
+        password = generate_password_hash(
+            password=item.key,
+            method=db.app.config.get("FAB_PASSWORD_HASH_METHOD", "scrypt"),
+            salt_length=db.app.config.get("FAB_PASSWORD_HASH_SALT_LENGTH", 16),
+        )
+        print(password)
 
 
 appbuilder.add_view(
