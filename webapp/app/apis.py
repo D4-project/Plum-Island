@@ -9,13 +9,39 @@ This module contains all code related to API's.
 """
 
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_appbuilder import ModelRestApi, BaseView
-from flask_appbuilder.api import expose
-from flask import jsonify, request
+from flask_appbuilder import ModelRestApi
+from flask_appbuilder.api import BaseApi, expose, safe
+from flask import request
+
+from marshmallow import Schema, fields, ValidationError
 from .models import Targets
 from . import appbuilder
-import json
 import logging
+
+
+class BotInfoSchema(Schema):
+    UID = fields.String(
+        required=True, metadata={"description": "Identifiant unique du bot"}
+    )
+    DEVICE_MODEL = fields.String(
+        required=False, metadata={"description": "Modèle du périphérique"}
+    )
+    AGENT_VERSION = fields.String(
+        required=False, metadata={"description": "Version de l'agent du bot"}
+    )
+    SYSTEM_VERSION = fields.String(
+        required=False, metadata={"description": "Version du système d'exploitation"}
+    )
+    EXT_IP = fields.String(
+        required=False, metadata={"description": "Adresse IP externe du bot"}
+    )
+
+
+class StatusInputSchema(Schema):
+    botinfo = fields.Nested(
+        BotInfoSchema, required=True, metadata={"description": "Informations du bot"}
+    )
+
 
 logger = logging.getLogger("flask_appbuilder")
 
@@ -28,41 +54,48 @@ class PublicTargetsApi(ModelRestApi):
     datamodel = SQLAInterface(Targets)
 
 
-class Api(BaseView):
+class Api(BaseApi):
     """
-    This class implement all interactions with the BOTS.
+    This class implements all interactions with the BOTS.
     """
 
     route_base = "/bot_api"
+    openapi_spec_tag = "Bots API"
 
     @expose("/beacon", methods=["GET"])
+    @safe
     def beacon(self):
         """
-        This function implement bot registration.
+        This function implements bot registration.
         """
-        return jsonify({"message": "Im Happy"})
+        return self.response(200, message="I'm Happy")
 
     @expose("/status", methods=["POST"])
+    @safe
     def status(self):
         """
         Bot to Island connection health check
         """
+
         try:
             data = request.get_json(force=True)
-            data = json.loads(data)
+            # schema = StatusInputSchema()
+            # data = schema.load(json_data)
+            data = data.loads(data)
+        except ValidationError as err:
+            return self.response_400(message="Invalid input")  # , errors=err.messages)
         except Exception:
-            return jsonify({"error": "Invalid JSON"}), 400
+            return self.response_400(message="Malformed JSON")
 
-        if data is None or data.get("botinfo") is None:
-            return jsonify({"error": "Missing JSON"}), 400
-
+        print(data)
+        print(type(data))
         botinfo = data.get("botinfo")
-        if not botinfo.get("UID"):
-            return jsonify({"error": "Missing bot_id"}), 400
-        logger.debug("UID %s Home check", botinfo.get("UID"))
+        uid = botinfo.get("UID")
 
-        return jsonify({"message": "ready"})
+        logger.debug("UID %s Home check", uid)
+        return self.response(200, message="ready")
 
 
-appbuilder.add_view(Api, "API", category="API")
+# appbuilder.add_view(Api, "API", category="API")
 appbuilder.add_api(PublicTargetsApi)
+appbuilder.add_api(Api)
