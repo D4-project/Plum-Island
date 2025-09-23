@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 from flask_appbuilder import Model
 from sqlalchemy import Column, Integer, String
 from sqlalchemy import DateTime, Boolean
-from sqlalchemy import func
 
 
 class ApiKeys(Model):
@@ -57,6 +56,10 @@ class Targets(Model):
     value = Column(String(45), unique=True, nullable=False)  # The CIDR or HOST
     description = Column(String(256))  # A facultative descrition
     active = Column(Boolean, default=True)  # To suspend the target
+    working = Column(Boolean, default=True)  # Set when jobs todo are presents
+    last_scan = Column(
+        DateTime, default=datetime.now(timezone.utc)
+    )  # Last Scan of the Range.
 
 
 class Jobs(Model):
@@ -68,5 +71,10 @@ class Jobs(Model):
     job = Column(String(256))  # Targets Bundles
     bot_id = Column(Integer)  # Bot currently or lastly on the job
     active = Column(Boolean, default=False)  # Job is running
-    last_seen = Column(DateTime, default=func.now())  # Last job termination.
-    job_start = Column(DateTime, default=func.now())  # Last job start time.
+    finished = Column(Boolean, default=False)  # True if Job was successfull
+    job_end = Column(
+        DateTime, default=datetime.now(timezone.utc)
+    )  # Last job termination.
+    job_start = Column(
+        DateTime, default=datetime.now(timezone.utc)
+    )  # Last job Start time

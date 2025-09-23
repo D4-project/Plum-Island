@@ -68,12 +68,12 @@ class BotInfoSchema(Schema):
         """
         IP Validation
         """
-        if not is_valid_ip(value):
+        if not is_valid_ip(value):  # Validate that IP is a public one.
             raise ValidationError(f"Invalid {data_key}")
         return True
 
     @validates("AGENT_KEY")
-    def validate_agent_key(self, value, data_key):  # , **kwargs):
+    def validate_agent_key(self, value, data_key):
         """
         Validate Authorization to interact with Island
         """
@@ -86,7 +86,7 @@ class BotInfoSchema(Schema):
                 db.session.query(ApiKeys).filter(ApiKeys.keyidx == keyidx).one().key
             )
             if check_password_hash(agentkey, value):
-                return True  # La clef Existe
+                return True  # If the key is existing
         except NoResultFound as error:
             raise ValidationError(f"Invalid {data_key}") from error
         raise ValidationError(f"Invalid {data_key}")
@@ -160,11 +160,15 @@ class Api(BaseApi):
             db.session.commit()
             return self.response(200, message="ready")
         except IntegrityError:
+            # We Update bot info, IP / Last Seen at each beacon.
             db.session.rollback()
             db.session.query(Bots).filter_by(uid=botinfo.get("UID")).update(
                 {
                     Bots.last_seen: datetime.now(timezone.utc),
                     Bots.ip: botinfo.get("EXT_IP"),
+                    Bots.device_model: botinfo.get("DEVICE_MODER"),
+                    Bots.agent_version: botinfo.get("AGENT_VERSION"),
+                    Bots.system_version: botinfo.get("SYSTEM_VERSION"),
                 },
                 synchronize_session="fetch",
             )  # 'fetch' So SQLAlchemy keep correct session state
