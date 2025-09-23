@@ -16,8 +16,8 @@ from flask_appbuilder import ModelRestApi
 from flask_appbuilder.api import BaseApi, expose, safe
 from flask import request
 
-from sqlalchemy.exc import IntegrityError
-
+from sqlalchemy.exc import IntegrityError, NoResultFound
+from werkzeug.security import check_password_hash
 from marshmallow import Schema, fields, validates, ValidationError
 from .models import Targets, Bots, ApiKeys
 from . import appbuilder, db
@@ -46,42 +46,50 @@ class BotInfoSchema(Schema):
         required=True,
         metadata={"description": "Last external IP"},
     )
-    API_KEY = fields.String(
+    AGENT_KEY = fields.String(
         required=True,
         metadata={"description": "Bot Agent access Key"},
     )
 
     # Custom validator for the parameters
     @validates("UID")
-    def validate_uid(self, value, **kwargs):
+    def validate_uid(self, value, data_key):
         """
         UID Validation
         """
         if len(value) != 36:
-            raise ValidationError("Invalid UID")
+            raise ValidationError(f"Invalid {data_key}")
         if not is_valid_uuid(value):
-            raise ValidationError("Invalid UID")
+            raise ValidationError(f"Invalid {data_key}")
         return True
 
     @validates("EXT_IP")
-    def validate_ext_ip(self, value, **kwargs):
+    def validate_ext_ip(self, value, data_key):
         """
         IP Validation
         """
         if not is_valid_ip(value):
-            raise ValidationError("Invalid IP")
+            raise ValidationError(f"Invalid {data_key}")
         return True
 
-    @validates("API_KEY")
-    def validate_api_key(self, value, **kwargs):
+    @validates("AGENT_KEY")
+    def validate_agent_key(self, value, data_key):  # , **kwargs):
         """
         Validate Authorization to interact with Island
         """
-        if len(value) != 64:  # Avoid SQL query or Hash with funky data
-            raise ValidationError("Invalid Key")
-        if db.session.query(ApiKeys).filter_by(key=value).scalar():
-            return True  # La clef Existe
-        raise ValidationError("Invalid Key")
+        if len(value) != 16 + 64:  # Avoid SQL query or Hashing with funky data
+            raise ValidationError("Invalid Agent Key")
+
+        keyidx = value[0:16]  # Get the entry for the ciphered pass
+        try:
+            agentkey = (
+                db.session.query(ApiKeys).filter(ApiKeys.keyidx == keyidx).one().key
+            )
+            if check_password_hash(agentkey, value):
+                return True  # La clef Existe
+        except NoResultFound as error:
+            raise ValidationError(f"Invalid {data_key}") from error
+        raise ValidationError(f"Invalid {data_key}")
 
 
 logger = logging.getLogger("flask_appbuilder")
@@ -115,7 +123,7 @@ class Api(BaseApi):
             -H 'Content-Type: application/json' \
             -d '{"DEVICE_MODEL": "CPython 3.12.3", "AGENT_VERSION": "untagged-ef62e24", \
             "SYSTEM_VERSION": "Linux 6.14.0-27-generic", "UID": "75a04e87-a740-4c75-9096-add9ec13baf5", \
-            "EXT_IP": 203.0.113.128"}'
+            "EXT_IP": 203.0.113.128", "AGENT_KEY": "REPLACEWITHKEY"}'
         """
 
         try:

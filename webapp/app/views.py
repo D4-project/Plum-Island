@@ -67,19 +67,20 @@ class ApiKeysView(ModelView):
     datamodel = SQLAInterface(ApiKeys)
     add_template = "add_apikeyview.html"  # Custom Add view with KeyGenerator
     list_columns = ["id", "description"]
+    add_columns = ["key", "description"]
     edit_columns = ["description"]
-    show_columns = ["id", "description"]
+    # show_columns = ["id", "description"]
 
     def pre_add(self, item):
-        print(item.key)
-        keyid = key[0:16]
-        print(keyid)
-        password = generate_password_hash(
+        # Hash the KeyID and Keep the Index
+        # 16 Char for ID :: 64 for password.
+        item.keyidx = item.key[0:16]
+        item.key = generate_password_hash(
             password=item.key,
             method=db.app.config.get("FAB_PASSWORD_HASH_METHOD", "scrypt"),
             salt_length=db.app.config.get("FAB_PASSWORD_HASH_SALT_LENGTH", 16),
         )
-        print(password)
+        return self
 
 
 appbuilder.add_view(

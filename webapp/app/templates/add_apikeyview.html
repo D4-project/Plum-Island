@@ -1,0 +1,37 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title) }}
+
+
+<div class="alert alert-danger" role="alert">
+Please save carefully your Plum Agent Access key, as it could not be recalled
+</div>
+
+{% block add_form %}
+    {{ widgets.get('add')(form_action=form_action)|safe }}
+    {% endblock %}
+
+<script>
+
+// Function to generate a random Key
+function generateRandomString(length) {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += characters.charAt(Math.floor(Math.random() * characters.length));
+  }
+  return result;
+}
+
+// Function to fill the key input
+document.addEventListener('DOMContentLoaded', function() {
+  const keyInput = document.getElementById('key');
+  keyInput.value = generateRandomString(80);
+  document.getElementById('key').readOnly = true;
+});
+
+</script>
+  {{ lib.panel_end() }}
+    {% endblock %}

@@ -1,0 +1,3 @@
+[MESSAGES CONTROL]
+disable=no-member
+max-line-length=120
