@@ -16,10 +16,11 @@ from flask_appbuilder import ModelRestApi
 from flask_appbuilder.api import BaseApi, expose, safe
 from flask import request
 
+from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from werkzeug.security import check_password_hash
 from marshmallow import Schema, fields, validates, ValidationError
-from .models import Targets, Bots, ApiKeys
+from .models import Targets, Bots, ApiKeys, Jobs, assoc_jobs_targets
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
 
@@ -50,9 +51,18 @@ class BotInfoSchema(Schema):
         required=True,
         metadata={"description": "Bot Agent access Key"},
     )
+    RESULT = fields.String(
+        required=False,
+        metadata={"description": "Result of scan"},
+    )
+    JOB_UID = fields.String(
+        required=False,
+        metadata={"description": "Uid of the scan"},
+    )
 
     # Custom validator for the parameters
     @validates("UID")
+    @validates("JOB_UID")
     def validate_uid(self, value, data_key):
         """
         UID Validation
@@ -174,6 +184,126 @@ class Api(BaseApi):
             )  # 'fetch' So SQLAlchemy keep correct session state
             db.session.commit()
             return self.response(200, message="ready")
+
+    @expose("/getjob", methods=["POST"])
+    @safe
+    def getjobs(self):
+        """
+        Bot to Island connection to fetch a scanning job .
+
+        Return a JobTodo.
+        """
+
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                data = json.loads(
+                    data
+                )  # Convert to Dict (for content type missing requests)
+
+            botinfoschema = BotInfoSchema()
+            botinfo = botinfoschema.load(
+                data,
+            )  # Validate Request data and format
+
+        except ValidationError as err:
+            return self.response_400(
+                message=f"Invalid input: {flat_marsh_error(err.messages)}"
+            )
+
+        logger.debug("Agent UID %s Requesting a JOB", botinfo.get("UID"))
+
+        # Get the BOT object from DB
+        job_bot = (
+            db.session.query(Bots)
+            .filter(Bots.uid == botinfo.get("UID"))
+            .limit("1")
+            .scalar()
+        )
+
+        # Get one Job todo
+        job_todo = (
+            db.session.query(Jobs)
+            .filter(Jobs.active == False, Jobs.finished == False)
+            .limit("1")
+            .scalar()
+        )
+
+        if job_todo:
+            job_todo.active = True  # Set the Job to Active.
+            job_bot.running = True  # Set the Bot to Active too
+            job_todo.job_start = datetime.now(timezone.utc)
+            job_bot.last_seen = datetime.now(timezone.utc)
+            job_todo.bot_id = job_bot.id  # Link Job and Bot.
+            ret_msg = {"message": "ready", "job": job_todo.job, "job_uid": job_todo.uid}
+        else:
+            ret_msg = {"message": "ready", "job": ""}
+
+        db.session.commit()
+
+        return self.response(200, message=ret_msg)
+
+    @expose("/sndjob", methods=["POST"])
+    @safe
+    def sndjobs(self):
+        """
+        Bot to Island connection to fetch a scanning job .
+
+        Return a JobTodo.
+        """
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                data = json.loads(
+                    data
+                )  # Convert to Dict (for content type missing requests)
+
+            botinfoschema = BotInfoSchema()
+            botinfo = botinfoschema.load(
+                data,
+            )  # Validate Request data and format
+
+        except ValidationError as err:
+            return self.response_400(
+                message=f"Invalid input: {flat_marsh_error(err.messages)}"
+            )
+
+        logger.debug("Agent UID %s send back a JOB", botinfo.get("UID"))
+
+        # Tell the JOB that we finished
+        job_bot = (
+            db.session.query(Jobs)
+            .filter(Jobs.uid == botinfo.get("JOB_UID"))
+            .limit("1")
+            .scalar()
+        )
+        job_bot.finished = True
+        job_bot.active = False
+        job_bot.job_end = datetime.now(timezone.utc)
+
+        logger.debug(f"job_bot: {job_bot}")
+        # Check if we release the Target as Ready for a new Turn
+        # Tell the JOB that we finished
+
+        for target in job_bot.targets:
+            logger.debug(f"target_id: {target.id}")
+
+            # Alias pour la table d'association
+            assoc = assoc_jobs_targets.alias()
+
+            # Requête SQLAlchemy
+            count_query = (
+                db.session.query(func.count(distinct(Jobs.id)))
+                .select_from(assoc)
+                .join(Jobs, assoc.c.job_id == Jobs.id, isouter=True)
+                .filter(assoc.c.target_id == target.id, Jobs.finished == False)
+            )
+
+            if count_query.scalar() == 0:
+                target.working = False
+
+        db.session.commit()
+        return self.response(200, message="ready")
 
 
 appbuilder.add_api(PublicTargetsApi)

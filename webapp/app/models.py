@@ -85,14 +85,13 @@ class Jobs(Model):
 
     __tablename__ = "jobs"
     id = Column(Integer, primary_key=True)
-    job = Column(String(256))  # Targets Bundles
+    uid = Column(String(36), unique=True, nullable=False)  # Bot UUID Generate
+    job = Column(String(256), nullable=False)  # Targets Bundles
     bot_id = Column(Integer)  # Bot currently or lastly on the job
     active = Column(Boolean, default=False)  # Job is running
     finished = Column(Boolean, default=False)  # True if Job was successfull
     job_end = Column(DateTime, default=None)  # Last job termination.
-    job_start = Column(
-        DateTime, default=datetime.now(timezone.utc)
-    )  # Last job Start time
+    job_start = Column(DateTime, default=None)  # Last job Start time
 
     targets = relationship(
         "Targets", secondary=assoc_jobs_targets, back_populates="jobs"

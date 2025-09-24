@@ -70,8 +70,24 @@ class JobsView(ModelView):
     """
 
     datamodel = SQLAInterface(Jobs)
-    show_columns = ["job", "bot_id", "job_start", "job_end", "targets"]
-    list_columns = ["job", "bot_id", "job_start", "job_end", "targets"]
+    show_columns = [
+        "uid",
+        "job",
+        "bot_id",
+        "job_start",
+        "job_end",
+        "targets",
+        "active",
+        "finished",
+    ]
+    list_columns = [
+        "job",
+        "job_start",
+        "job_end",
+        "targets",
+        "active",
+        "finished",
+    ]
     search_exclude_columns = ["targets"]
 
     @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
