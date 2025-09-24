@@ -166,7 +166,7 @@ class Api(BaseApi):
                 {
                     Bots.last_seen: datetime.now(timezone.utc),
                     Bots.ip: botinfo.get("EXT_IP"),
-                    Bots.device_model: botinfo.get("DEVICE_MODER"),
+                    Bots.device_model: botinfo.get("DEVICE_MODEL"),
                     Bots.agent_version: botinfo.get("AGENT_VERSION"),
                     Bots.system_version: botinfo.get("SYSTEM_VERSION"),
                 },

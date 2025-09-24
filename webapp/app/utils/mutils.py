@@ -46,3 +46,10 @@ def flat_marsh_error(err_msg):
     for key, value in err_msg.items():
         if isinstance(value, list) and len(value) > 0:
             return f"{value[0]} in {key}"
+
+
+def package_list(source, size):
+    """
+    return chunk of lists
+    """
+    return [source[i : i + size] for i in range(0, len(source), size)]

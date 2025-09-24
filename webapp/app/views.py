@@ -9,9 +9,9 @@
 This module contains all code related to the GUI.
 """
 
-from flask import render_template
+from flask import render_template, redirect
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_appbuilder import ModelView
+from flask_appbuilder import ModelView, action
 from werkzeug.security import generate_password_hash
 from .models import Bots, Targets, Jobs, ApiKeys
 from . import appbuilder, db
@@ -37,9 +37,22 @@ class TargetsView(ModelView):
     """
 
     datamodel = SQLAInterface(Targets)
-    list_columns = ["value", "description", "active"]
+    list_columns = ["value", "description", "active", "working"]
     label_columns = {"value": "CIDR/Host"}
     base_order = ("value", "desc")
+    add_columns = ["value", "description", "active"]
+    edit_columns = ["value", "description", "active", "working"]
+    search_exclude_columns = ["jobs"]
+
+    @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
+    def muldelete(self, items):
+        """
+        Implement Multiple Delete for Targets
+        """
+
+        self.datamodel.delete_all(items)
+        self.update_redirect()
+        return redirect(self.get_redirect())
 
 
 class BotsView(ModelView):
@@ -57,6 +70,19 @@ class JobsView(ModelView):
     """
 
     datamodel = SQLAInterface(Jobs)
+    show_columns = ["job", "bot_id", "job_start", "job_end", "targets"]
+    list_columns = ["job", "bot_id", "job_start", "job_end", "targets"]
+    search_exclude_columns = ["targets"]
+
+    @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
+    def muldelete(self, items):
+        """
+        Implement Multiple Delete for Targets
+        """
+
+        self.datamodel.delete_all(items)
+        self.update_redirect()
+        return redirect(self.get_redirect())
 
 
 class ApiKeysView(ModelView):
