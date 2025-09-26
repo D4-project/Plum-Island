@@ -1,22 +1,22 @@
-'''
- .--.              .--. _       
-: .--'            : .-':_;      
-: :    .--. ,-.,-.: `; .-. .--. 
+"""
+ .--.              .--. _
+: .--'            : .-':_;
+: :    .--. ,-.,-.: `; .-. .--.
 : :__ ' .; :: ,. :: :  : :' .; :
 `.__.'`.__.':_;:_;:_;  :_;`._. ;
                            .-. :
                            `._.'
 
 This module contains all the framework configuration
-'''
+"""
 
 import os
 from flask_appbuilder.security.manager import (
-#    AUTH_OID,
-#    AUTH_REMOTE_USER,
+    #    AUTH_OID,
+    #    AUTH_REMOTE_USER,
     AUTH_DB,
-#    AUTH_LDAP,
-#    AUTH_OAUTH,
+    #    AUTH_LDAP,
+    #    AUTH_OAUTH,
 )
 
 basedir = os.path.abspath(os.path.dirname(__file__))
@@ -36,7 +36,7 @@ CSRF_ENABLED = True
 # GLOBALS FOR APP Builder
 # ------------------------------
 # Uncomment to setup Your App name
-APP_NAME = "P.L.U.M"
+APP_NAME = "P.L.U.M."
 
 # Uncomment to setup Setup an App icon
 # APP_ICON = "static/img/logo.jpg"
@@ -86,7 +86,7 @@ BABEL_DEFAULT_FOLDER = "translations"
 # The allowed translation for you app
 LANGUAGES = {}
 
-'''
+"""
     "en": {"flag": "gb", "name": "English"},
     "pt": {"flag": "pt", "name": "Portuguese"},
     "pt_BR": {"flag": "br", "name": "Pt Brazil"},
@@ -96,7 +96,7 @@ LANGUAGES = {}
     "ru": {"flag": "ru", "name": "Russian"},
     "pl": {"flag": "pl", "name": "Polish"},
 }
-'''
+"""
 # ---------------------------------------------------
 # Image and file configuration
 # ---------------------------------------------------
@@ -106,17 +106,35 @@ UPLOAD_FOLDER = basedir + "/app/static/uploads/"
 # The image upload folder, when using models with images
 IMG_UPLOAD_FOLDER = basedir + "/app/static/uploads/"
 
+JSON_FOLDER = basedir + "/app/jsons"
+
 # The image upload url, when using models with images
 IMG_UPLOAD_URL = "/static/uploads/"
 # Setup image size default is (300, 200, True)
 # IMG_SIZE = (300, 200, True)
 
+# How many time minimum between 2 scans in hour.
+SCAN_DELAY = 1
+
+# Nmap Configuration
+NMAP_PORTS = [22, 23, 80, 443]
+NMAP_NSE = [
+    "http-headers.nse",
+    "http-favicon.nse",
+    # "http-robots.txt.nse", Too Slow
+    "http-title.nse",
+    "ssl-cert.nse",
+    "ssh-hostkey.nse",
+    "tls-alpn.nse",
+]
+
+
 # Theme configuration
 # these are located on static/appbuilder/css/themes
 # you can create your own and easily use them placing them on the same dir structure to override
 # APP_THEME = "bootstrap-theme.css"  # default bootstrap
-#APP_THEME = "cerulean.css"
-#APP_THEME = "amelia.css"
+# APP_THEME = "cerulean.css"
+# APP_THEME = "amelia.css"
 # APP_THEME = "cosmo.css"
 # APP_THEME = "cyborg.css"
 # APP_THEME = "flatly.css"

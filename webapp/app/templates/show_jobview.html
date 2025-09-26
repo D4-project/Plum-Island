@@ -1,0 +1,155 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "show") }}
+
+{% if related_views is defined %}
+    <ul class="nav nav-tabs"  style="{{"display: none;" if not related_views else "" }}">
+    <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a> </li>
+        {% for view in related_views %}
+            <li>
+                <a href="#{{view.__class__.__name__}}" data-toggle="tab">{{view.title}}</a>
+            </li>
+        {% endfor %}
+    </ul>
+
+    <div class="tab-content">
+    {% for view in related_views %}
+        <div id="{{view.__class__.__name__}}" class=tab-pane">
+            {{ widgets.get('related_views')[loop.index - 1](pk = pk)|safe }}
+        </div>
+    {% endfor %}
+{% endif %}
+{% block show_form %}
+    <div id="Home" class="tab-pane active">
+        {{ widgets.get('show')()|safe }}
+    </div>
+{% endblock show_form %}
+
+   <div class="container">
+      <div class="row">
+
+<div class="panel panel-primary">
+  <div class="panel-heading">
+    <h4 class="panel-title ">Show Results</h4>
+  </div>
+  <div class="panel-body" id="addrAccordion">
+
+  <script>
+    fetch("http://127.0.0.1:5000/jobsview/file_get/{{get_job_uid(pk) | safe}}")
+      .then(res => res.json())
+      .then(data => {
+        const addrAccordion = document.getElementById("addrAccordion");
+
+        data.forEach((entry, addrIndex) => {
+          const addrId = `addr-${addrIndex}`;
+          const addrPanel = document.createElement("div");
+          addrPanel.className = "panel panel-default";
+
+          addrPanel.innerHTML = `
+            <div class="panel-heading">
+              <h1 class="panel-title">
+                <a data-toggle="collapse" data-parent="#addrAccordion" href="#collapse-${addrId}">
+                  ${entry.addr}
+                </a>
+              </h1>
+            </div>
+            <div id="collapse-${addrId}" class="panel-collapse collapse">
+              <div class="panel-body">
+                <div class="panel-group" id="ports-${addrId}">
+                  ${entry.ports.map((port, portIndex) => {
+                    const portId = `${addrId}-port-${portIndex}`;
+                    return `
+                      <div class="panel panel-default">
+                        <div class="panel-heading">
+                          <h4 class="panel-title" >
+                            <a data-toggle="collapse" data-parent="#ports-${addrId}" href="#collapse-${portId}">
+                              TCP Port ${port.portid}
+                            </a>
+                          </h4>
+                        </div>
+                        <div id="collapse-${portId}" class="panel-collapse collapse">
+                          <div class="panel-body">
+                            <div class="panel-group" id="details-${portId}">
+                              ${Object.entries(port).filter(([k, v]) => typeof v === "object").map(([key, val], detailIndex) => {
+                                const detailId = `${portId}-detail-${detailIndex}`;
+
+                                if (Array.isArray(val) && val.every(obj => obj && obj.id)) {
+                                  return `
+                                    <div class="panel panel-default">
+                                      <div class="panel-heading">
+                                        <h4 class="panel-title">
+                                          <a data-toggle="collapse" data-parent="#details-${portId}" href="#collapse-${detailId}">
+                                           ${key}
+                                          </a>
+                                        </h4>
+                                      </div>
+                                      <div id="collapse-${detailId}" class="panel-collapse collapse">
+                                        <div class="panel-body">
+                                          <div class="panel-group" id="${detailId}-group">
+                                            ${val.map((obj, objIndex) => {
+                                              const objId = `${detailId}-obj-${objIndex}`;
+                                              return `
+                                                <div class="panel panel-default">
+                                                  <div class="panel-heading">
+                                                    <h4 class="panel-title">
+                                                      <a data-toggle="collapse" data-parent="#${detailId}-group" href="#collapse-${objId}">
+                                                        ID: ${obj.id}
+                                                      </a>
+                                                    </h4>
+                                                  </div>
+                                                  <div id="collapse-${objId}" class="panel-collapse collapse">
+                                                    <div class="panel-body">
+                                                      <pre>${Object.entries(obj).map(([k, v]) => `${k} : ${v}`).join('\n')}</pre>
+                                                    </div>
+                                                  </div>
+                                                </div>`;
+                                            }).join('')}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>`;
+                                }
+
+                                return `
+                                  <div class="panel panel-default">
+                                    <div class="panel-heading">
+                                      <h5 class="panel-title">
+                                        <a data-toggle="collapse" data-parent="#details-${portId}" href="#collapse-${detailId}">
+                                          ${key}
+                                        </a>
+                                      </h4>
+                                    </div>
+                                    <div id="collapse-${detailId}" class="panel-collapse collapse">
+                                      <div class="panel-body">
+                                        <pre>${Object.entries(val).map(([k, v]) => `${k} : ${v}`).join('\n')}</pre>
+                                      </div>
+                                    </div>
+                                  </div>`;
+                              }).join("")}
+                            </div>
+                          </div>
+                        </div>
+                      </div>`;
+                  }).join("")}
+                </div>
+              </div>
+            </div>
+          `;
+          addrAccordion.appendChild(addrPanel);
+        });
+      });
+  </script>
+</div>
+
+</div>
+</div>
+
+{% if related_views is defined %}</div>{% endif %}
+{{ lib.panel_end() }}
+
+{% endblock content %}
+{% block add_tail_js %}
+<script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+{% endblock %}

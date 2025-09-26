@@ -8,6 +8,7 @@
 This module contains all code related to API's.
 """
 
+import os
 from datetime import datetime, timezone
 import json
 import logging
@@ -235,7 +236,13 @@ class Api(BaseApi):
             job_todo.job_start = datetime.now(timezone.utc)
             job_bot.last_seen = datetime.now(timezone.utc)
             job_todo.bot_id = job_bot.id  # Link Job and Bot.
-            ret_msg = {"message": "ready", "job": job_todo.job, "job_uid": job_todo.uid}
+            ret_msg = {
+                "message": "ready",
+                "job": job_todo.job,
+                "job_uid": job_todo.uid,
+                "nmap_nse": db.app.config.get("NMAP_NSE"),
+                "nmap_ports": db.app.config.get("NMAP_PORTS"),
+            }
         else:
             ret_msg = {"message": "ready", "job": ""}
 
@@ -281,17 +288,25 @@ class Api(BaseApi):
         job_bot.active = False
         job_bot.job_end = datetime.now(timezone.utc)
 
-        logger.debug(f"job_bot: {job_bot}")
+        # Save the Job
+        # Build path
+        base = os.path.join(
+            db.app.config.get("JSON_FOLDER"), f"{botinfo.get("JOB_UID")}.json"
+        )
+        with open(base, "w", encoding="utf-8") as f:
+            json.dump(json.loads(botinfo.get("RESULT")), f, indent=2)
+
+        logger.debug("job_bot: %s", job_bot)
         # Check if we release the Target as Ready for a new Turn
         # Tell the JOB that we finished
 
         for target in job_bot.targets:
-            logger.debug(f"target_id: {target.id}")
+            logger.debug("target_id: %s", target.id)
 
-            # Alias pour la table d'association
+            # Alias for association table
             assoc = assoc_jobs_targets.alias()
 
-            # Requête SQLAlchemy
+            # requete SQLAlchemy
             count_query = (
                 db.session.query(func.count(distinct(Jobs.id)))
                 .select_from(assoc)
@@ -301,7 +316,7 @@ class Api(BaseApi):
 
             if count_query.scalar() == 0:
                 target.working = False
-
+                target.last_scan = datetime.now(timezone.utc)
         db.session.commit()
         return self.response(200, message="ready")
 

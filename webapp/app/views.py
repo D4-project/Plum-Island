@@ -9,12 +9,27 @@
 This module contains all code related to the GUI.
 """
 
-from flask import render_template, redirect
+from flask import render_template, redirect, make_response
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_appbuilder import ModelView, action
+from flask_appbuilder import ModelView, action, has_access
+from flask_appbuilder.api import expose
 from werkzeug.security import generate_password_hash
+from app import app
 from .models import Bots, Targets, Jobs, ApiKeys
+from .utils.mutils import is_valid_uuid
 from . import appbuilder, db
+
+
+def get_job_uid(pk):
+    """
+    For Jinja and ajax queries, get a UID from ID
+    """
+    result = db.session.query(Jobs.uid).filter(Jobs.id == pk).scalar()
+    return result
+
+
+# Add a Functions to jinja
+app.jinja_env.globals["get_job_uid"] = get_job_uid
 
 
 @appbuilder.app.errorhandler(404)
@@ -88,6 +103,13 @@ class JobsView(ModelView):
         "active",
         "finished",
     ]
+    edit_columns = [
+        "targets",
+        "active",
+        "finished",
+    ]
+
+    show_template = "show_jobview.html"  # Custom Show view with results
     search_exclude_columns = ["targets"]
 
     @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
@@ -99,6 +121,26 @@ class JobsView(ModelView):
         self.datamodel.delete_all(items)
         self.update_redirect()
         return redirect(self.get_redirect())
+
+    @expose("/file_get/<uid>")
+    @has_access  # Tout authenticated people.
+    def file_get(self, uid):
+        """
+        This methode will display a Json Result
+        """
+        base = db.app.config.get("JSON_FOLDER")
+        try:
+            is_valid_uuid(uid)
+            file = open(f"{base}/{uid}.json", "rb")
+            oobject = file.read()
+            file.close()
+        except (FileNotFoundError, ValueError):
+            oobject = "{}"
+
+        response = make_response(oobject)
+        response.headers["Content-Type"] = "text/json"
+        response.headers["Content-Disposition"] = "inline; filename={uid}.json"
+        return response
 
 
 class ApiKeysView(ModelView):

@@ -68,9 +68,7 @@ class Targets(Model):
     description = Column(String(256))  # A facultative descrition
     active = Column(Boolean, default=True)  # To suspend the target
     working = Column(Boolean, default=False)  # Set when jobs todo are presents
-    last_scan = Column(
-        DateTime, default=datetime.now(timezone.utc)
-    )  # Last Scan of the Range.
+    last_scan = Column(DateTime, default=None)  # Last Scan of the Range.
 
     jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
 
