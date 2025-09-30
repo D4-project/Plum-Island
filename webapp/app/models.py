@@ -49,6 +49,7 @@ class Bots(Model):
     system_version = Column(String(128), nullable=False)
 
 
+# Job to Target pivot table
 assoc_jobs_targets = Table(
     "jobs_targets_assoc",
     Model.metadata,
@@ -57,28 +58,37 @@ assoc_jobs_targets = Table(
 )
 
 
-class Targets(Model):
-    """
-    Class for networks and hosts targets definitions
-    """
+# ScanProfiles to Ports pivot table
+assoc_scanprofiles_ports = Table(
+    "scanprofiles_ports_assoc",
+    Model.metadata,
+    Column("scanprofile_id", Integer, ForeignKey("ScanProfiles.id")),
+    Column("port_id", Integer, ForeignKey("Ports.id")),
+)
 
-    __tablename__ = "targets"
-    id = Column(Integer, primary_key=True)
-    value = Column(String(45), unique=True, nullable=False)  # The CIDR or HOST
-    description = Column(String(256))  # A facultative descrition
-    active = Column(Boolean, default=True)  # To suspend the target
-    working = Column(Boolean, default=False)  # Set when jobs todo are presents
-    last_scan = Column(DateTime, default=None)  # Last Scan of the Range.
 
-    jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
+# ScanProfiles to Nses scripts pivot table
+assoc_scanprofiles_nses = Table(
+    "scanprofiles_nses_assoc",
+    Model.metadata,
+    Column("scanprofile_id", Integer, ForeignKey("ScanProfiles.id")),
+    Column("nses_id", Integer, ForeignKey("Nses.id")),
+)
 
-    def __repr__(self):
-        return self.value
+# ScanProfiles to Targets pivot table
+assoc_scanprofiles_targets = Table(
+    "scanprofiles_targets_assoc",
+    Model.metadata,
+    Column("scanprofile_id", Integer, ForeignKey("ScanProfiles.id")),
+    Column("target_id", Integer, ForeignKey("targets.id")),
+)
 
 
 class Jobs(Model):
     """
     Class for the Job to be run by bots.
+
+    A Job has one or many Targets.
     """
 
     __tablename__ = "jobs"
@@ -97,3 +107,107 @@ class Jobs(Model):
 
     def __repr__(self):
         return self.job
+
+
+class Protos(Model):
+    """
+    Class for the Protocols
+        IE : UDP/TCP
+    """
+
+    __tablename__ = "Protos"
+    id = Column(Integer, primary_key=True)
+    value = Column(String(32), unique=True, nullable=False)  # Udp / Tcp
+    name = Column(String(256), nullable=False)  # Description of the Layer 4 protocol
+
+    def __repr__(self):
+        return self.value
+
+
+class Ports(Model):
+    """
+    Class for the Ports
+    Ports have exactly one mandatory record of Protos
+    """
+
+    __tablename__ = "Ports"
+    id = Column(Integer, primary_key=True)
+    value = Column(Integer, nullable=False)  # Port to Scan
+    name = Column(String(256), nullable=False)  # Description of the port
+    proto_id = Column(Integer, ForeignKey("Protos.id"), nullable=False)
+    proto = relationship("Protos", backref="ports")
+    proto_to_port = Column(
+        String(32 + 5), nullable=False, unique=True
+    )  # (str(port.value):str(proto.id)), empeche les doubles tuple port/proto
+
+    def __repr__(self):
+        return f"{self.proto}:{self.value}"
+
+
+class Nses(Model):
+    """
+    Class for the nsescript
+    """
+
+    __tablename__ = "Nses"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(256), unique=True, nullable=False)  # Name of the NSE Script
+    hash = Column(String(64), unique=True, nullable=False)  # SHA256 of the NSE Body
+    body = Column(String, nullable=False)  # NSE Body
+
+    def __repr__(self):
+        return self.name
+
+
+class ScanProfiles(Model):
+    """
+    A Scan profile define for a target range which are the
+    Ports to scan
+    Nse script to launch
+    If the boolean "Default" is set..This profile will be applied to all ranges without assignations.
+
+    A scan profile has;
+    One or many Ports objects.
+    Zero or many Nses script objects.
+    zero or many Targets objects
+    """
+
+    __tablename__ = "ScanProfiles"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(256), nullable=False)  # Name of the profile.
+    apply_to_all = Column(Boolean, default=False)  # Name of the profile.
+    ports = relationship(
+        "Ports",
+        secondary=assoc_scanprofiles_ports,
+        backref="scanprofiles",
+    )
+    nses = relationship(
+        "Nses", secondary=assoc_scanprofiles_nses, backref="scanprofiles"
+    )
+    targets = relationship(
+        "Targets", secondary=assoc_scanprofiles_targets, backref="scanprofiles"
+    )
+
+    def __repr__(self):
+        return self.name
+
+
+class Targets(Model):
+    """
+    Class for networks and hosts targets definitions
+
+    A Targets has one or many Jobs.
+    """
+
+    __tablename__ = "targets"
+    id = Column(Integer, primary_key=True)
+    value = Column(String(45), unique=True, nullable=False)  # The CIDR or HOST
+    description = Column(String(256))  # A facultative descrition
+    active = Column(Boolean, default=True)  # To suspend the target
+    working = Column(Boolean, default=False)  # Set when jobs todo are presents
+    last_scan = Column(DateTime, default=None)  # Last Scan of the Range.
+
+    jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
+
+    def __repr__(self):
+        return self.value

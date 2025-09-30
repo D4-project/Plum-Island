@@ -37,7 +37,7 @@
   <div class="panel-body" id="addrAccordion">
 
   <script>
-    fetch("http://127.0.0.1:5000/jobsview/file_get/{{get_job_uid(pk) | safe}}")
+    fetch("/jobsview/file_get/{{get_job_uid(pk) | safe}}")
       .then(res => res.json())
       .then(data => {
         const addrAccordion = document.getElementById("addrAccordion");
