@@ -14,10 +14,15 @@ from flask import render_template, redirect, make_response
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
+from wtforms import TextAreaField, SubmitField
+from flask_wtf import FlaskForm
 from werkzeug.security import generate_password_hash
+from sqlalchemy.exc import IntegrityError
 from app import app
 from .models import Bots, Targets, Jobs, ApiKeys, Nses, Protos, ScanProfiles, Ports
-from .utils.mutils import is_valid_uuid
+from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
+from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
+
 from . import appbuilder, db
 
 
@@ -47,6 +52,15 @@ def page_not_found(e):
     )
 
 
+class BulkImportForm(FlaskForm):
+    """
+    Flask Form for Bulk import
+    """
+
+    bulk = TextAreaField("Message Body")
+    submit = SubmitField(label="Import")
+
+
 class TargetsView(ModelView):
     """
     This class implements the GUI for targets
@@ -69,6 +83,63 @@ class TargetsView(ModelView):
         self.datamodel.delete_all(items)
         self.update_redirect()
         return redirect(self.get_redirect())
+
+    def do_bulk_import(self, ips):
+        """
+        Import a list of bulk Ip's into the targets"""
+        log = ""
+        ips = ips.split("\r")
+        for ip in ips:
+            ip_clean = ip.strip("\n ,;'\"")  # remove surrounding "Spc ,; and all quotes
+            if ip_clean == "":
+                pass
+            if is_valid_fqdn(ip_clean):
+                # If we got an FQDN too.
+                new_target = Targets()
+                new_target.description = "Bulk Import"
+                new_target.value = ip_clean
+                db.session.add(new_target)
+                try:
+                    db.session.commit()
+                    log += f"{ip_clean} FQDN Processed\n"
+                except IntegrityError:
+                    # We Update bot info, IP / Last Seen at each beacon.
+                    db.session.rollback()
+                    log += f"{ip_clean} Not Processed, Target already in the database\n"
+            elif is_valid_ip(ip_clean) or is_valid_cidr(ip_clean):
+                new_target = Targets()
+                new_target.description = "Bulk Import"
+                new_target.value = is_valid_ip_or_cidr(
+                    ip_clean
+                )  # Set the First Ip in CIDR
+                db.session.add(new_target)
+                try:
+                    db.session.commit()
+                    log += f"{ip_clean} Processed\n"
+                except IntegrityError:
+                    # We Update bot info, IP / Last Seen at each beacon.
+                    db.session.rollback()
+                    log += f"{ip_clean} Not Processed, Target already in the database\n"
+            else:
+                log += f"{ip_clean} Invalid IP/CIDR/FQDN or private IP\n"
+        return log
+
+    @expose("/bulk_import", methods=["GET", "POST"])
+    def bulk_import(self):
+        """Bulk Import Form"""
+        form = BulkImportForm()
+        form.bulk.label = ""
+        # If post
+        if form.validate_on_submit():
+            bulk_data = form.bulk.data
+            form.bulk.label = "Targets Imported"
+            log = TargetsView.do_bulk_import(self, bulk_data)  # Do the insert Job
+            log = log + "\nEnd of import"
+            form.bulk.data = log
+            del form.submit
+
+        results = []
+        return self.render_template("bulk_targetsview.html", form=form, results=results)
 
 
 class BotsView(ModelView):
@@ -248,8 +319,13 @@ class PortsView(ModelView):
 appbuilder.add_view(
     ApiKeysView, name="", category=None
 )  # See Security.py for additional conf.
-appbuilder.add_view(TargetsView, "Targets", icon="fa-folder-open-o", category="Config")
-appbuilder.add_view(BotsView, "Bots", icon="fa-folder-open-o", category="Config")
+appbuilder.add_view(TargetsView, "Targets", icon="fa-bullseye", category="Config")
+appbuilder.add_link(
+    "Bulk Import",
+    href="/targetsview/bulk_import",
+    category="Config",
+    icon="fa-cart-arrow-down",
+)
 appbuilder.add_separator(category="Config")
 appbuilder.add_view(
     ScanprofilesView, "Scan Profiles", icon="fa-folder-open-o", category="Config"
@@ -257,6 +333,6 @@ appbuilder.add_view(
 appbuilder.add_view(NsesView, "Nse Scripts", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(ProtosView, "Protocols", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(PortsView, "Ports", icon="fa-folder-open-o", category="Config")
-
-appbuilder.add_view(JobsView, "Jobs", icon="fa-folder-open-o", category="Status")
+appbuilder.add_view(JobsView, "Jobs", icon="fa-chart-bar", category="Status")
+appbuilder.add_view(BotsView, "Bots", icon="fa-folder-open-o", category="Status")
 db.create_all()
