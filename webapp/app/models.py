@@ -10,6 +10,7 @@ This is the module containing all the data models
 
 from datetime import datetime, timezone
 from flask_appbuilder import Model
+from flask import Markup as Esc
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table
 from sqlalchemy.orm import relationship
 
@@ -107,6 +108,40 @@ class Jobs(Model):
 
     def __repr__(self):
         return self.job
+
+    def job_html(self):
+        """
+        Display Range as HTML Tags
+        """
+        tags = []
+        # Render nice html pills
+        html = ""
+        # Get all tag name for attached groups
+        if self.job:
+            for tag in self.job.split(","):
+                if tag.endswith("/32"):
+                    tag = tag[0:-3]
+                if tag.endswith("/128"):
+                    tag = tag[0:-4]
+                tags.append(tag)
+        for tag in tags:
+            html += f'<span class="label label-default">{tag}</span> '
+        return Esc(html)
+
+    def targets_html(self):
+        """
+        Display Targets as HTML Tags
+        """
+        tags = []
+        # Render nice html pills
+        html = ""
+        # Get all tag name for attached groups
+        if self.targets:
+            for tag in self.targets:
+                tags.append(tag)
+        for tag in tags:
+            html += f'<span class="label label-default">{tag}</span> '
+        return Esc(html)
 
 
 class Protos(Model):

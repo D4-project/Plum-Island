@@ -120,12 +120,14 @@ SCAN_DELAY = 1
 SCHEDULER_DELAY = 10
 
 # Nmap Configuration
-NMAP_PORTS = [22, 23, 80, 443]
+NMAP_PORTS = [21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3389, 8080, 8443]
+
 NMAP_NSE = [
     "http-headers.nse",
     "http-favicon.nse",
     # "http-robots.txt.nse", Too Slow
     "http-title.nse",
+    "http-security-headers.nse",
     "ssl-cert.nse",
     "ssh-hostkey.nse",
     "tls-alpn.nse",

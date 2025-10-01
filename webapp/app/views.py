@@ -159,19 +159,19 @@ class JobsView(ModelView):
     datamodel = SQLAInterface(Jobs)
     show_columns = [
         "uid",
-        "job",
+        "job_html",
         "bot_id",
         "job_start",
         "job_end",
-        "targets",
+        "targets_html",
         "active",
         "finished",
     ]
     list_columns = [
-        "job",
         "job_start",
         "job_end",
-        "targets",
+        "job_html",
+        "targets_html",
         "active",
         "finished",
     ]
@@ -184,6 +184,7 @@ class JobsView(ModelView):
 
     show_template = "show_jobview.html"  # Custom Show view with results
     search_exclude_columns = ["targets"]
+    label_columns = {"job_html": "Scan Jobs", "targets_html": "Targets"}
 
     @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
     def muldelete(self, items):
@@ -211,12 +212,7 @@ class JobsView(ModelView):
         except (FileNotFoundError, ValueError):
             oobject = "{}"
 
-        cobject = []
-        for item in oobject:
-            if item.get("host_reply") == True:
-                cobject.append(item)
-
-        response = make_response(cobject)
+        response = make_response(oobject)
         response.headers["Content-Type"] = "text/json"
         response.headers["Content-Disposition"] = "inline; filename={uid}.json"
         return response
