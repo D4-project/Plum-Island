@@ -94,7 +94,7 @@ class Jobs(Model):
     __tablename__ = "jobs"
     id = Column(Integer, primary_key=True)
     uid = Column(String(36), unique=True, nullable=False)  # Bot UUID Generate
-    job = Column(String(256), nullable=False)  # Targets Bundles
+    job = Column(String, nullable=False)  # Target Bundles (list of str)
     bot_id = Column(Integer)  # Bot currently or lastly on the job
     active = Column(Boolean, default=False)  # Job is running
     finished = Column(Boolean, default=False)  # True if Job was successfull

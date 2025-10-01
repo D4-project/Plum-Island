@@ -116,6 +116,9 @@ IMG_UPLOAD_URL = "/static/uploads/"
 # How many time minimum between 2 scans in hour.
 SCAN_DELAY = 1
 
+# How many time between job scheduling in minutes
+SCHEDULER_DELAY = 10
+
 # Nmap Configuration
 NMAP_PORTS = [22, 23, 80, 443]
 NMAP_NSE = [

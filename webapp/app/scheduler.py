@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from netaddr import IPNetwork, cidr_merge
 from . import db
 from .models import Targets, Jobs
+from .utils.mutils import is_valid_fqdn
 
 logger = logging.getLogger("flask_appbuilder")
 
@@ -44,21 +45,26 @@ def task_create_jobs():
         .yield_per(100)
     ):
         logger.debug("**** Processing Target %s", record.value)
-        # Split ranges less than 256 IP or More
-        net = IPNetwork(record.value)
-        if net.size > 256:
-            # Split > 256 Ip Ranges
-            ips = list(net)
-            for i in range(0, len(ips), 256):
-                block = ips[i : i + 256]
-                chunks.append(
-                    {
-                        "cidrs": [str(c) for c in cidr_merge(block)],
-                        "source_record_ids": [record.id],
-                    }
-                )
+        if is_valid_fqdn(record.value):
+            # Traitement si c'est un FQDN
+            logger.debug("%s is not an IP", record.value)
+            # small_ranges.append({"ips": record.value, "record_id": record.id})
         else:
-            small_ranges.append({"ips": list(net), "record_id": record.id})
+            # Split ranges less than 256 IP or More
+            net = IPNetwork(record.value)
+            if net.size > 256:
+                # Split > 256 Ip Ranges
+                ips = list(net)
+                for i in range(0, len(ips), 256):
+                    block = ips[i : i + 256]
+                    chunks.append(
+                        {
+                            "cidrs": [str(c) for c in cidr_merge(block)],
+                            "source_record_ids": [record.id],
+                        }
+                    )
+            else:
+                small_ranges.append({"ips": list(net), "record_id": record.id})
 
     # Make packets of < 256 IPs
     current_block = []
@@ -90,10 +96,11 @@ def task_create_jobs():
     # Now from 256 Ip's Chunks do the Scan Jobs
     for chunk in chunks:
         new_job = Jobs()
+        new_job.job = []  # Create the Array of JobTodo
         logger.debug("Scheduler create Job for %s", chunk)
         new_job.uid = str(uuid.uuid4())
         # Create target range string.
-        new_job.job = " ".join(
+        new_job.job = ",".join(
             str(cidr) for cidr in cidr_merge(chunk.get("cidrs"))
         )  # Convert to Str Ranges
         for target in chunk.get("source_record_ids"):
@@ -107,6 +114,9 @@ def task_create_jobs():
 scheduler = BackgroundScheduler()
 if len(scheduler.get_jobs()) == 0:
     scheduler.add_job(
-        func=task_create_jobs, trigger="interval", max_instances=1, minutes=1
+        func=task_create_jobs,
+        trigger="interval",
+        max_instances=1,
+        minutes=db.app.config.get("SCHEDULER_DELAY"),
     )
 scheduler.start()
