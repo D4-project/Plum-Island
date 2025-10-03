@@ -231,7 +231,7 @@ if len(scheduler.get_jobs()) == 0:
         func=task_master_of_puppets,
         trigger="interval",
         max_instances=1,
-        minutes=0.25,  #  db.app.config.get("SCHEDULER_DELAY"),
+        minutes=db.app.config.get("SCHEDULER_DELAY"),
     )
 
 scheduler.start()
