@@ -99,6 +99,7 @@ class Jobs(Model):
     bot_id = Column(Integer)  # Bot currently or lastly on the job
     active = Column(Boolean, default=False)  # Job is running
     finished = Column(Boolean, default=False)  # True if Job was successfull
+    exported = Column(Boolean, default=False)  # True if result was exported
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
 

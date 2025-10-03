@@ -2,11 +2,17 @@
 This module manage asynchrone tasks
 """
 
+import os
 import logging
+import shutil
 import uuid
+import json
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from netaddr import IPNetwork, cidr_merge
+import meilisearch
+from meilisearch.errors import MeilisearchApiError
+from requests.exceptions import HTTPError
 from . import db
 from .models import Targets, Jobs
 from .utils.mutils import is_valid_fqdn
@@ -14,6 +20,32 @@ from .utils.mutils import is_valid_fqdn
 logger = logging.getLogger("flask_appbuilder")
 
 job = []
+
+
+def task_master_of_puppets():
+    """
+    Sequentially run Scheduled tasks
+    """
+    task_create_jobs()  # Create Jobs for the Scanner
+    task_export_to_meili()  # Export New Received reports.
+
+
+def check_json_storage(json_folder):
+    """
+    Will create json storages subfolder
+    and migrate existing json to the subfolder accordly.
+    """
+    for folder in "1234567890abcdef":
+        os.makedirs(os.path.join(json_folder, folder), exist_ok=True)
+
+    # Smart migration from json to subfolders if needed.
+    for filename in os.listdir(json_folder):
+        if filename.endswith(".json"):
+            logger.debug("Moving %s to sub json foler", filename)
+            shutil.move(
+                os.path.join(json_folder, filename),
+                os.path.join(json_folder, filename[0], filename),
+            )
 
 
 def task_create_jobs():
@@ -111,12 +143,95 @@ def task_create_jobs():
     db.session.commit()
 
 
+def task_export_to_meili():
+    """
+    Export Local Json to external DB
+    """
+    idx = db.app.config.get("MEILI_IDX")
+
+    input_dir = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
+
+    output = []
+    success_jobs = []
+    # Select "All" Json
+    for jobs in (
+        db.session.query(Jobs)
+        .filter(
+            Jobs.active == False,
+            Jobs.exported == False,
+            Jobs.finished == True,
+        )
+        .yield_per(100)
+    ):
+
+        success_jobs.append(jobs)  # Candidates for a good export
+        filepath = os.path.join(input_dir, jobs.uid[0], jobs.uid + ".json")
+        print(filepath)
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            item = {}
+            for item in data:
+                # Dns seriously
+                ipuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, item.get("sha256")))
+                output.append(
+                    {
+                        "id": ipuid,
+                        "ip": item.get("addr"),
+                        "body": item,
+                    }
+                )
+
+    if len(output) > 0:
+        try:
+            print(output)
+            idx.add_documents(output)
+            #  if it's success full, we push these result as "exported"
+            for success_job in success_jobs:
+                success_job.exported = True
+                db.session.commit()
+        except (MeilisearchApiError, HTTPError):
+            # We failed to push to meili.
+            db.session.rollback()
+            logger.error("Unable to export to Meili database")
+
+
+# INIT of the Program..
+
+# Check if the folder exists and create subfolders if needed
+check_json_storage(db.app.config.get("JSON_FOLDER"))
+
+# Connect to the Mieili DB ( if the index is not present create IT)
+client = meilisearch.Client(
+    db.app.config.get("MEILI_DATABASE_URI"),
+    db.app.config.get("MEILI_KEY"),
+)
+client.create_index("plum")
+index = client.index("plum")
+# Save the client Index to the global config.
+db.app.config["MEILI_IDX"] = index
+index.add_documents({"hello": "Word"})
+
+# If the database is new, set the searchable attibute.
+current_attrs = index.get_searchable_attributes()
+try:
+    if not current_attrs:  # ou current_attrs == ["*"] selon la version
+        # Declare filterable fields
+        task = index.update_filterable_attributes(["ip"])
+        index.wait_for_task(task.task_uid)
+        # Wait the indexation
+except MeilisearchApiError:
+    task = index.update_filterable_attributes(["ip"])
+    index.wait_for_task(task.task_uid)
+
+
+# Start the scheduled jobs.
 scheduler = BackgroundScheduler()
 if len(scheduler.get_jobs()) == 0:
     scheduler.add_job(
-        func=task_create_jobs,
+        func=task_master_of_puppets,
         trigger="interval",
         max_instances=1,
-        minutes=db.app.config.get("SCHEDULER_DELAY"),
+        minutes=0.25,  #  db.app.config.get("SCHEDULER_DELAY"),
     )
+
 scheduler.start()

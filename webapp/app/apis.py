@@ -291,7 +291,9 @@ class Api(BaseApi):
         # Save the Job
         # Build path
         base = os.path.join(
-            db.app.config.get("JSON_FOLDER"), f"{botinfo.get("JOB_UID")}.json"
+            db.app.config.get("JSON_FOLDER"),
+            botinfo.get("JOB_UID")[0],
+            f"{botinfo.get("JOB_UID")}.json",
         )
         with open(base, "w", encoding="utf-8") as f:
             json.dump(json.loads(botinfo.get("RESULT")), f, indent=2)

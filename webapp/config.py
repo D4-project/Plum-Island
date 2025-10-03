@@ -23,6 +23,10 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 
 # Your App secret key
 SECRET_KEY = "YouNeedToChangeMeInProduction"
+MEILI_KEY = "YouNeedToChangeMeInProduction"
+
+# The Meili database connections settings
+MEILI_DATABASE_URI = "http://localhost:7700"
 
 # The SQLAlchemy connection string.
 SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(basedir, "app.db")
@@ -106,6 +110,7 @@ UPLOAD_FOLDER = basedir + "/app/static/uploads/"
 # The image upload folder, when using models with images
 IMG_UPLOAD_FOLDER = basedir + "/app/static/uploads/"
 
+# The folder where scan results will be stored.
 JSON_FOLDER = basedir + "/app/jsons"
 
 # The image upload url, when using models with images

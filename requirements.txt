@@ -2,3 +2,4 @@ flask-appbuilder==4.8.1
 flask-Limiter==3.12
 APScheduler
 netaddr
+meilisearch

@@ -166,6 +166,7 @@ class JobsView(ModelView):
         "targets_html",
         "active",
         "finished",
+        "exported",
     ]
     list_columns = [
         "job_start",
@@ -206,7 +207,7 @@ class JobsView(ModelView):
         base = db.app.config.get("JSON_FOLDER")
         try:
             is_valid_uuid(uid)
-            file = open(f"{base}/{uid}.json", "rb")
+            file = open(f"{base}/{uid[0]}/{uid}.json", "rb")
             oobject = json.loads(file.read())
             file.close()
         except (FileNotFoundError, ValueError):
