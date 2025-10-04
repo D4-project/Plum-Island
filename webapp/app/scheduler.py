@@ -183,7 +183,6 @@ def task_export_to_meili():
 
     if len(output) > 0:
         try:
-            print(output)
             idx.add_documents(output)
             #  if it's success full, we push these result as "exported"
             for success_job in success_jobs:
