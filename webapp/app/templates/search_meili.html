@@ -1,0 +1,60 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "Query Scans") }}
+
+
+<script>
+async function search() {
+    const query = document.getElementById('query').value;
+    const res = await fetch(`/meilisearchview/query?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    const hitsDiv = document.getElementById('hits');
+    const infoDiv = document.getElementById('info');
+    infoDiv.innerHTML = `Found ${data.estimatedTotalHits} scans in ${data.processingTimeMs}ms`;
+    hitsDiv.innerHTML = '';
+
+    data.hits.forEach((hit, index) => {
+        const panel = document.createElement('div');
+        panel.className = 'panel panel-default';
+        panel.innerHTML = `
+            <div class="panel-heading">
+                <h4 class="panel-title">
+                    <a data-toggle="collapse" data-parent="#hits" href="#collapse${index}">
+                        ${hit.ip} (ID: ${hit.id})
+                    </a>
+                </h4>
+            </div>
+            <div id="collapse${index}" class="panel-collapse collapse">
+                <div class="panel-body">
+                    <pre>${JSON.stringify(hit.body, null, 2)}</pre>
+                </div>
+            </div>
+        `;
+        hitsDiv.appendChild(panel);
+    });
+}
+</script>
+
+<div class="container mt-2">
+  <div class="row g-2">
+    <div class="col-12 col-md-10">
+      <input type="text" id="query" class="form-control" placeholder="Query...">
+    </div>
+    <div class="col-12 col-md-2">
+      <button class="btn btn-primary w-100" onclick="search()">Search</button>
+    </div>
+  </div>
+</div>
+
+
+<div id="info"></div>
+<div id="hits" class="panel-group mt-2"></div>
+
+{{ lib.panel_end() }}
+
+{% endblock content %}
+{% block add_tail_js %}
+<script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+{% endblock %}

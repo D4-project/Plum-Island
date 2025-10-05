@@ -11,9 +11,13 @@ This module contains all code related to the GUI.
 
 import json
 from flask import render_template, redirect, make_response
+from flask import request, jsonify
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
+from flask_appbuilder import BaseView
+from meilisearch import Client
+
 from wtforms import TextAreaField, SubmitField
 from flask_wtf import FlaskForm
 from werkzeug.security import generate_password_hash
@@ -50,6 +54,38 @@ def page_not_found(e):
         ),
         404,
     )
+
+
+# Connect to the Mieili DB
+client = Client(
+    db.app.config.get("MEILI_DATABASE_URI"),
+    db.app.config.get("MEILI_KEY"),
+)
+
+
+class MeiliSearchView(BaseView):
+    """
+    This class interact with the meili database and allow basic search
+    """
+
+    default_view = "search"
+
+    @expose("/query")
+    def query(self):
+        """
+        This Function send the query back to meilisearch.
+        """
+        query = request.args.get("q", "")
+        index = client.index("plum")
+        results = index.search(query)
+        return jsonify(results)
+
+    @expose("/search")
+    def search(self):
+        """
+        This fuction display the search page
+        """
+        return self.render_template("search_meili.html")
 
 
 class BulkImportForm(FlaskForm):
@@ -313,6 +349,9 @@ class PortsView(ModelView):
         return self
 
 
+appbuilder.add_view(
+    MeiliSearchView, "Search", icon="fa-magnifying-glass", category="Analytics"
+)
 appbuilder.add_view(
     ApiKeysView, name="", category=None
 )  # See Security.py for additional conf.
