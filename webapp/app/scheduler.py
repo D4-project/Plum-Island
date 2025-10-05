@@ -222,15 +222,12 @@ except MeilisearchApiError:
     task = index.update_filterable_attributes(["ip"])
     index.wait_for_task(task.task_uid)
 
-
 # Start the scheduled jobs.
 scheduler = BackgroundScheduler()
-if len(scheduler.get_jobs()) == 0:
-    scheduler.add_job(
-        func=task_master_of_puppets,
-        trigger="interval",
-        max_instances=1,
-        minutes=db.app.config.get("SCHEDULER_DELAY"),
-    )
-
+scheduler.add_job(
+    func=task_master_of_puppets,
+    trigger="interval",
+    max_instances=1,
+    minutes=db.app.config.get("SCHEDULER_DELAY"),
+)
 scheduler.start()
