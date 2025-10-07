@@ -146,6 +146,9 @@ class Jobs(Model):
         return Esc(html)
 
     def duration_html(self):
+        """
+        Compute duration.
+        """
         if self.job_start and self.job_end:
             diff = self.job_end - self.job_start
             seconds = diff.total_seconds()
@@ -262,16 +265,27 @@ class Targets(Model):
     jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
 
     def __repr__(self):
+        """
+        Nice representation
+        """
         return self.value
 
     def duration_html(self):
+        """
+        Compute spend time
+        """
         if self.last_scan and self.last_previous_scan:
             diff = self.last_scan - self.last_previous_scan
-            seconds = diff.total_seconds()
-            minutes, seconds = divmod(seconds, 60)
-            if minutes == 0:
-                return f"{int(seconds)}s"
+            total_seconds = int(diff.total_seconds())
+
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+
+            if hours:
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            elif minutes:
+                return f"{minutes:02d}:{seconds:02d}"
             else:
-                return f"{int(minutes):02d}:{int(seconds):02d}"
+                return f"{seconds}s"
         else:
             return "oo"
