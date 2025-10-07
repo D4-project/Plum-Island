@@ -203,6 +203,7 @@ class JobsView(ModelView):
         "active",
         "finished",
         "exported",
+        "duration_html",
     ]
     list_columns = [
         "job_start",
@@ -212,11 +213,7 @@ class JobsView(ModelView):
         "active",
         "finished",
     ]
-    edit_columns = [
-        "targets",
-        "active",
-        "finished",
-    ]
+    edit_columns = ["targets", "active", "finished", "exported"]
     base_order = ("job_end", "desc")  # Latest finished on top.
 
     show_template = "show_jobview.html"  # Custom Show view with results

@@ -144,6 +144,19 @@ class Jobs(Model):
             html += f'<span class="label label-default">{tag}</span> '
         return Esc(html)
 
+    def duration_html(self):
+        if self.job_start and self.job_end:
+            diff = self.job_end - self.job_start
+            seconds = diff.total_seconds()
+            minutes, seconds = divmod(seconds, 60)
+
+            if minutes == 0:
+                return f"{int(seconds)}s"
+            else:
+                return f"{int(minutes):02d}:{int(seconds):02d}"
+        else:
+            return "oo"
+
 
 class Protos(Model):
     """

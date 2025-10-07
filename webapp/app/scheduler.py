@@ -3,6 +3,7 @@ This module manage asynchrone tasks
 """
 
 import os
+import secrets
 import logging
 import shutil
 import uuid
@@ -172,7 +173,12 @@ def task_export_to_meili():
             item = {}
             for item in data:
                 # Dns seriously
-                ipuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, item.get("sha256")))
+                # Derivate the uid from the headers smart hash.. or randomize it it not present.
+                ipuid = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_DNS, item.get("hsh256", secrets.randbits(64))
+                    )
+                )
                 output.append(
                     {
                         "id": ipuid,
