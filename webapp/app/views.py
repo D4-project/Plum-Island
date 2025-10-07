@@ -103,12 +103,25 @@ class TargetsView(ModelView):
     """
 
     datamodel = SQLAInterface(Targets)
-    list_columns = ["value", "description", "active", "working"]
-    label_columns = {"value": "CIDR/Host", "scanprofiles": "Scan profiles"}
-    base_order = ("value", "desc")
+    list_columns = ["value", "description", "last_scan", "active", "working"]
+    label_columns = {
+        "value": "CIDR/Host",
+        "scanprofiles": "Scan profiles",
+        "duration_html": "Scan Cycle",
+    }
     add_columns = ["value", "description", "active", "scanprofiles"]
     edit_columns = ["value", "description", "active", "working", "scanprofiles"]
+    show_columns = [
+        "value",
+        "description",
+        "active",
+        "working",
+        "scanprofiles",
+        "last_scan",
+        "duration_html",
+    ]
     search_exclude_columns = ["jobs"]
+    base_order = ("last_scan", "desc")  # Latest finished on top.
 
     @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
     def muldelete(self, items):
@@ -197,6 +210,7 @@ class JobsView(ModelView):
         "uid",
         "job_html",
         "bot_id",
+        "job_creation",
         "job_start",
         "job_end",
         "targets_html",
@@ -206,6 +220,7 @@ class JobsView(ModelView):
         "duration_html",
     ]
     list_columns = [
+        "job_creation",
         "job_start",
         "job_end",
         "job_html",
@@ -214,11 +229,15 @@ class JobsView(ModelView):
         "finished",
     ]
     edit_columns = ["targets", "active", "finished", "exported"]
-    base_order = ("job_end", "desc")  # Latest finished on top.
+    base_order = ("job_creation", "desc")  # Latest finished on top.
 
     show_template = "show_jobview.html"  # Custom Show view with results
     search_exclude_columns = ["targets"]
-    label_columns = {"job_html": "Scan Jobs", "targets_html": "Targets"}
+    label_columns = {
+        "job_html": "Scan Jobs",
+        "targets_html": "Targets",
+        "duration_html": "Duration",
+    }
 
     @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
     def muldelete(self, items):

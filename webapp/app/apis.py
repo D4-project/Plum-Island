@@ -190,7 +190,7 @@ class Api(BaseApi):
     @safe
     def getjobs(self):
         """
-        Bot to Island connection to fetch a scanning job .
+        Bot to Island connection to fetch new a scanning job .
 
         Return a JobTodo.
         """
@@ -254,7 +254,7 @@ class Api(BaseApi):
     @safe
     def sndjobs(self):
         """
-        Bot to Island connection to fetch a scanning job .
+        Bot to Island connection to give back a job that was scanned
 
         Return a JobTodo.
         """
@@ -303,8 +303,9 @@ class Api(BaseApi):
         # Tell the JOB that we finished
 
         for target in job_bot.targets:
-            logger.debug("target_id: %s", target.id)
-
+            logger.debug("target_id candidate to clean: %s", target.id)
+            logger.debug("target_id candidate last scan %s", target.last_scan)
+            previous_scan = target.last_scan
             # Alias for association table
             assoc = assoc_jobs_targets.alias()
 
@@ -316,9 +317,13 @@ class Api(BaseApi):
                 .filter(assoc.c.target_id == target.id, Jobs.finished == False)
             )
 
+            logger.debug("%s", count_query)
             if count_query.scalar() == 0:
-                target.working = False
-                target.last_scan = datetime.now(timezone.utc)
+                # When we have done "All" jobs for a specific target.
+                target.working = False  # The target is not working.
+                target.last_previous_scan = previous_scan
+                target.last_scan = datetime.now(timezone.utc)  # target last_scan
+                db.session.merge(target)  # ensure attached
         db.session.commit()
         return self.response(200, message="ready")
 

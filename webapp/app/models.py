@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from flask_appbuilder import Model
 from flask import Markup as Esc
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table
+from sqlalchemy import func
 from sqlalchemy.orm import relationship
 
 
@@ -102,7 +103,7 @@ class Jobs(Model):
     exported = Column(Boolean, default=False)  # True if result was exported
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
-
+    job_creation = Column(DateTime, default=func.now())  # Timestamp of job creation
     targets = relationship(
         "Targets", secondary=assoc_jobs_targets, back_populates="jobs"
     )
@@ -255,8 +256,22 @@ class Targets(Model):
     active = Column(Boolean, default=True)  # To suspend the target
     working = Column(Boolean, default=False)  # Set when jobs todo are presents
     last_scan = Column(DateTime, default=None)  # Last Scan of the Range.
-
+    last_previous_scan = Column(
+        DateTime, default=None
+    )  # Previous Last Scan to have an idea of time for a cycle.
     jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
 
     def __repr__(self):
         return self.value
+
+    def duration_html(self):
+        if self.last_scan and self.last_previous_scan:
+            diff = self.last_scan - self.last_previous_scan
+            seconds = diff.total_seconds()
+            minutes, seconds = divmod(seconds, 60)
+            if minutes == 0:
+                return f"{int(seconds)}s"
+            else:
+                return f"{int(minutes):02d}:{int(seconds):02d}"
+        else:
+            return "oo"
