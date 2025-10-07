@@ -226,8 +226,8 @@ class Api(BaseApi):
         job_todo = (
             db.session.query(Jobs)
             .filter(Jobs.active == False, Jobs.finished == False)
-            .limit("1")
-            .scalar()
+            .order_by(Jobs.job_creation.asc())  # Get all waiting jobs, oldest first
+            .first()  # get one Job object
         )
 
         if job_todo:

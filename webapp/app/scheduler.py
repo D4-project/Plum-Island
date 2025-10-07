@@ -167,7 +167,8 @@ def task_export_to_meili():
 
         success_jobs.append(jobs)  # Candidates for a good export
         filepath = os.path.join(input_dir, jobs.uid[0], jobs.uid + ".json")
-        print(filepath)
+        logger.debug("Analysis of %s", filepath)
+
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
             item = {}
