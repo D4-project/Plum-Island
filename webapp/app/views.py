@@ -232,6 +232,7 @@ class JobsView(ModelView):
     base_order = ("job_creation", "desc")  # Latest finished on top.
 
     show_template = "show_jobview.html"  # Custom Show view with results
+    list_template = "list_jobview.html"  # Custom Show view with results
     search_exclude_columns = ["targets"]
     label_columns = {
         "job_html": "Scan Jobs",
@@ -319,8 +320,7 @@ class ScanprofilesView(ModelView):
 
     def pre_add(self, item):
         if len(item.ports) == 0:
-            print("raise")
-            raise ValueError("At least one port is madatory")
+            raise ValueError("At least one port is mandatory")
         return self
 
 
