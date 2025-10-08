@@ -104,6 +104,7 @@ class Jobs(Model):
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
     job_creation = Column(DateTime, default=func.now())  # Timestamp of job creation
+    priority = Column(Integer, default=0)  # Priority, by default LOW
     targets = relationship(
         "Targets", secondary=assoc_jobs_targets, back_populates="jobs"
     )
