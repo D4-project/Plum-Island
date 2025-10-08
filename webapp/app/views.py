@@ -88,6 +88,30 @@ class MeiliSearchView(BaseView):
         return self.render_template("search_meili.html")
 
 
+class KVSearchView(BaseView):
+    """
+    This class interact with the meili database and allow basic search
+    """
+
+    default_view = "search"
+
+    @expose("/query")
+    def query(self):
+        """
+        This Function send the query back to KVRocks
+        """
+        # query = request.args.get("q", "")
+        results = {}
+        return jsonify(results)
+
+    @expose("/search")
+    def search(self):
+        """
+        This fuction display the search page
+        """
+        return self.render_template("search_kvrocks.html")
+
+
 class BulkImportForm(FlaskForm):
     """
     Flask Form for Bulk import
@@ -218,6 +242,7 @@ class JobsView(ModelView):
         "finished",
         "exported",
         "duration_html",
+        "priority",
     ]
     list_columns = [
         "job_creation",
@@ -228,7 +253,7 @@ class JobsView(ModelView):
         "active",
         "finished",
     ]
-    edit_columns = ["targets", "active", "finished", "exported"]
+    edit_columns = ["targets", "active", "finished", "exported", "priority"]
     base_order = ("job_creation", "desc")  # Latest finished on top.
 
     show_template = "show_jobview.html"  # Custom Show view with results

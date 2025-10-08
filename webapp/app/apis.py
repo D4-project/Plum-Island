@@ -222,14 +222,40 @@ class Api(BaseApi):
             .scalar()
         )
 
-        # Get one Job todo
-        job_todo = (
-            db.session.query(Jobs)
-            .filter(Jobs.active == False, Jobs.finished == False)
-            .order_by(Jobs.job_creation.asc())  # Get all waiting jobs, oldest first
-            .first()  # get one Job object
-        )
+        # Get one Job todo, take care of priority.
 
+        # Step 1 Init "Run" counter if not set
+        if "job_counter" not in db.app.config:
+            db.app.config["job_counter"] = 0
+        counter = db.app.config["job_counter"]
+        counter += 1  # We increment
+        if counter >= 10:
+            counter = 0
+
+        # Step 2 Determine priority to serve based on counter value
+        # Prio 2 = High,  1 = medium, 0 = Low
+        if counter % 10 in [0, 2, 4, 6, 8]:  # 5 times out of 10 for High
+            prio_list = [2, 1, 0]
+        elif counter % 10 in [1, 5, 9]:  # 3 times out of 10 for Medium
+            prio_list = [1, 2, 0]
+        else:  # 2 times out of 10 Low queue (7 and 3)
+            prio_list = [0, 1, 2]
+
+        # Step 3 find a job for for each priority
+        job_todo = None
+        for prio in prio_list:
+            job_todo = (
+                db.session.query(Jobs)
+                .filter(
+                    Jobs.active == False, Jobs.finished == False, Jobs.priority == prio
+                )
+                .order_by(Jobs.job_creation.asc())  # oldest first
+                .first()
+            )
+            if job_todo:
+                break  # A soon as a Job is found... return.
+
+        # Now whe have maybe a job to launch.
         if job_todo:
             job_todo.active = True  # Set the Job to Active.
             job_bot.running = True  # Set the Bot to Active too
@@ -243,6 +269,11 @@ class Api(BaseApi):
                 "nmap_nse": db.app.config.get("NMAP_NSE"),
                 "nmap_ports": db.app.config.get("NMAP_PORTS"),
             }
+
+            # Finally ... reset the counter if > 10
+            db.app.config["job_counter"] = (
+                counter  # We save IT, only if we have job to do.
+            )
         else:
             ret_msg = {"message": "ready", "job": ""}
 
@@ -317,7 +348,6 @@ class Api(BaseApi):
                 .filter(assoc.c.target_id == target.id, Jobs.finished == False)
             )
 
-            logger.debug("%s", count_query)
             if count_query.scalar() == 0:
                 # When we have done "All" jobs for a specific target.
                 target.working = False  # The target is not working.
