@@ -241,7 +241,9 @@ class TargetsView(ModelView):
     search_exclude_columns = ["jobs"]
     base_order = ("last_scan", "desc")  # Latest finished on top.
 
-    @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
+    @action(
+        "muldelete", "Delete Job", "Delete all Really?", "fa-trash-can", single=False
+    )
     def muldelete(self, items):
         """
         Implement Multiple Delete for Targets
@@ -359,7 +361,31 @@ class JobsView(ModelView):
         "duration_html": "Duration",
     }
 
-    @action("muldelete", "Delete", "Delete all Really?", "fa-rocket", single=False)
+    @action(
+        "mulraisepriority",
+        "Priority Boost",
+        "Raise Priority?",
+        "fa-rocket",
+        single=False,
+    )
+    def mulraiseprioriy(self, items):
+        """
+        Implement Raise priority of job to 2
+        """
+        if isinstance(items, list):
+            # Raise N record
+            for item in items:
+                item.priority = 2
+        else:
+            # Raise Un tag
+            items.priority = 2
+        db.session.commit()
+        self.update_redirect()
+        return redirect(self.get_redirect())
+
+    @action(
+        "muldelete", "Delete Jobs", "Delete all Really?", "fa-trash-can", single=False
+    )
     def muldelete(self, items):
         """
         Implement Multiple Delete for Targets
