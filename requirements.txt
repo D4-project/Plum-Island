@@ -3,3 +3,4 @@ flask-Limiter==3.12
 APScheduler
 netaddr
 meilisearch
+redis

@@ -4,57 +4,94 @@
 {% block content %}
 {{ lib.panel_begin(title, "Query Scans") }}
 
-
 <script>
 async function search() {
     const query = document.getElementById('query').value;
-    const res = await fetch(`/kvrocksearchview/query?q=${encodeURIComponent(query)}`);
+    const res = await fetch(`/kvsearchview/query?q=${encodeURIComponent(query)}`);
     const data = await res.json();
+
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
-    infoDiv.innerHTML = `Found ${data.estimatedTotalHits} scans in ${data.processingTimeMs}ms`;
+    const errorDiv = document.getElementById('msg_error');
+    const time = (data.processingTimeMs || 0).toFixed(3);
+    infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms`;
+
+    errorDiv.innerHTML = ``;
+    if (data.status === false) {
+    errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
+    }
     hitsDiv.innerHTML = '';
 
-    data.hits.forEach((hit, index) => {
-        const panel = document.createElement('div');
-        panel.className = 'panel panel-default';
-        panel.innerHTML = `
+    Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
+        const ipPanel = document.createElement('div');
+        ipPanel.className = 'panel panel-default';
+
+        // IP accordion
+        ipPanel.innerHTML = `
             <div class="panel-heading">
                 <h4 class="panel-title">
-                    <a data-toggle="collapse" data-parent="#hits" href="#collapse${index}">
-                        ${hit.ip} (ID: ${hit.id})
+                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
+                        ${ip}
                     </a>
                 </h4>
             </div>
-            <div id="collapse${index}" class="panel-collapse collapse">
-                <div class="panel-body">
-                    <pre>${JSON.stringify(hit.body, null, 2)}</pre>
+            <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
+                <div class="panel-body" id="uids-${ipIndex}">
+                    <!-- UID panels will go here -->
                 </div>
             </div>
         `;
-        hitsDiv.appendChild(panel);
+        hitsDiv.appendChild(ipPanel);
+
+        const uidsDiv = document.getElementById(`uids-${ipIndex}`);
+        uids.forEach((uid, uidIndex) => {
+            const uidPanel = document.createElement('div');
+            uidPanel.className = 'panel panel-info';
+            uidPanel.innerHTML = `
+                <div class="panel-heading">
+                    <h5 class="panel-title">
+                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
+                            ${uid}
+                        </a>
+                    </h5>
+                </div>
+                <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
+            `;
+            uidsDiv.appendChild(uidPanel);
+        });
     });
+}
+
+async function loadUid(uid, targetId) {
+    const target = document.getElementById(targetId);
+    if (target.style.display === 'none' || target.innerHTML === '') {
+        const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
+        const data = await res.json();
+        target.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        target.style.display = 'block';
+    } else {
+        target.style.display = 'none';
+    }
 }
 </script>
 
 <div class="container mt-2">
-  <div class="row g-2">
-    <div class="col-12 col-md-10">
-      <input type="text" id="query" class="form-control" placeholder="Query...">
+    <div class="row g-2">
+        <div class="col-12 col-md-10">
+            <input type="text" id="query" class="form-control" placeholder="Query...">
+        </div>
+        <div class="col-12 col-md-2">
+            <button class="btn btn-primary w-100" onclick="search()">Search</button>
+        </div>
     </div>
-    <div class="col-12 col-md-2">
-      <button class="btn btn-primary w-100" onclick="search()">Search</button>
-    </div>
-  </div>
 </div>
 
-
-<div id="info"></div>
+<div id="info" class="mt-2"></div>
+<div id="msg_error" class="panel-group mt-2"></div>
 <div id="hits" class="panel-group mt-2"></div>
-
 {{ lib.panel_end() }}
-
 {% endblock content %}
+
 {% block add_tail_js %}
 <script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
 {% endblock %}

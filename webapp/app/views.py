@@ -1,5 +1,4 @@
 """
-
  .--. .-..-..-.                     .-.
 : .--': :: :: :                     : :
 : : _ : :: :: :       .--.  .--.  .-' : .--.
@@ -10,6 +9,11 @@ This module contains all code related to the GUI.
 """
 
 import json
+import shlex
+import time
+import logging
+
+
 from flask import render_template, redirect, make_response
 from flask import request, jsonify
 from flask_appbuilder.models.sqla.interface import SQLAInterface
@@ -26,8 +30,12 @@ from app import app
 from .models import Bots, Targets, Jobs, ApiKeys, Nses, Protos, ScanProfiles, Ports
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
+from .utils.kvrocks import KVrocksIndexer
+
 
 from . import appbuilder, db
+
+logger = logging.getLogger("flask_appbuilder")
 
 
 def get_job_uid(pk):
@@ -83,25 +91,111 @@ class MeiliSearchView(BaseView):
     @expose("/search")
     def search(self):
         """
-        This fuction display the search page
+        This function display the search page
         """
         return self.render_template("search_meili.html")
+
+    @expose("/getuid")
+    def getuid(self):
+        """
+        This function retrieve a document from the meili.
+
+        """
+        uid = request.args.get("uid", "")
+        index = client.index("plum")
+        try:
+            result = index.get_document(uid)
+            return jsonify(vars(result))  # doc is already a dict-like
+        except Exception as e:
+            return jsonify({"error": str(e)}), 404
 
 
 class KVSearchView(BaseView):
     """
-    This class interact with the meili database and allow basic search
+    This class interact with the KvRocks database and allow basic search
     """
 
     default_view = "search"
+
+    def parse_query(self, query):
+        """
+        This function parse the query string.
+        It validate if we got a good syntax and use only authorised keyywords.
+
+        """
+
+        valid_keywords = {
+            "http_server",
+            "http_cookie",
+            "http_title",
+            "ip",
+            "net",
+            "port",
+        }
+
+        valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
+
+        result = {}
+        msg_error = None
+        parts = shlex.split(query)
+        for part in parts:
+            if ":" not in part:
+                msg_error = f"Bad keyword/value: {part}"
+                continue
+
+            key, value = part.split(":", 1)
+
+            # Determine base key without modifier
+            base_key = key
+            for suf in valid_modifiers:
+                if key.endswith(suf):
+                    base_key = key[: -len(suf)]
+                    break
+
+            if base_key not in valid_keywords:
+                msg_error = f"Bad keyword: {key}"
+                continue
+
+            # store values in list to allow multiple occurrences
+            if key not in result:
+                result[key] = [value]
+            else:
+                result[key].append(value)
+
+        status = True
+        if msg_error:
+            status = False
+        return result, status, msg_error
 
     @expose("/query")
     def query(self):
         """
         This Function send the query back to KVRocks
         """
-        # query = request.args.get("q", "")
-        results = {}
+        start_time = time.time()
+        query = request.args.get("q", "")
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        criteria, status, msg_error = self.parse_query(query)
+        end_time = time.time()
+        processingtimems = end_time - start_time
+        if status is True:
+            logger.debug(criteria)
+            uids = indexer.get_uids_by_criteria(criteria)
+            results = {
+                "status": True,
+                "results": indexer.get_ip_from_uids(uids),
+                "msg_error": "",
+                "processingTimeMs": processingtimems,
+            }
+        else:
+            results = {
+                "status": False,
+                "results": {},
+                "msg_error": msg_error,
+                "processingTimeMs": processingtimems,
+            }
         return jsonify(results)
 
     @expose("/search")
@@ -391,7 +485,10 @@ class PortsView(ModelView):
 
 
 appbuilder.add_view(
-    MeiliSearchView, "Search", icon="fa-magnifying-glass", category="Analytics"
+    MeiliSearchView, "Token Search", icon="fa-magnifying-glass", category="Analytics"
+)
+appbuilder.add_view(
+    KVSearchView, "Header Search", icon="fa-magnifying-glass", category="Analytics"
 )
 appbuilder.add_view(
     ApiKeysView, name="", category=None

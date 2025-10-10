@@ -17,6 +17,8 @@ from requests.exceptions import HTTPError
 from . import db
 from .models import Targets, Jobs
 from .utils.mutils import is_valid_fqdn
+from .utils.kvrocks import KVrocksIndexer
+from .utils.result_parser import parse_json
 
 logger = logging.getLogger("flask_appbuilder")
 
@@ -28,7 +30,7 @@ def task_master_of_puppets():
     Sequentially run Scheduled tasks
     """
     task_create_jobs()  # Create Jobs for the Scanner
-    task_export_to_meili()  # Export New Received reports.
+    task_export_to_dbs()  # Export New Received reports.
 
 
 def check_json_storage(json_folder):
@@ -144,15 +146,19 @@ def task_create_jobs():
     db.session.commit()
 
 
-def task_export_to_meili():
+def task_export_to_dbs():
     """
     Export Local Json to external DB
     """
-    idx = db.app.config.get("MEILI_IDX")
+
+    # Reuse the connections.
+    meili_idx = db.app.config.get("MEILI_IDX")
+    kvrocks_idx = db.app.config.get("KVROCKS_IDX")
 
     input_dir = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
 
-    output = []
+    objects_to_save_to_meili = []
+    objects_to_save_to_kvrocks = []
     success_jobs = []
     # Select "All" Json
     for jobs in (
@@ -169,28 +175,39 @@ def task_export_to_meili():
         filepath = os.path.join(input_dir, jobs.uid[0], jobs.uid + ".json")
         logger.debug("Analysis of %s", filepath)
 
+        # Now We Create the documents to import.
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
             item = {}
             for item in data:
-                # Dns seriously
+                # Dns UUID ? seriously
                 # Derivate the uid from the headers smart hash.. or randomize it it not present.
                 ipuid = str(
                     uuid.uuid5(
                         uuid.NAMESPACE_DNS, item.get("hsh256", secrets.randbits(64))
                     )
                 )
-                output.append(
-                    {
-                        "id": ipuid,
-                        "ip": item.get("addr"),
-                        "body": item,
-                    }
-                )
+                object_to_save = {
+                    "id": ipuid,
+                    "ip": item.get("addr"),
+                    "body": item,
+                }
+                objects_to_save_to_meili.append(object_to_save)
+                objects_to_save_to_kvrocks.append(parse_json(object_to_save))
 
-    if len(output) > 0:
+    # Be carefull here, if we got more documents than commit capacity.
+    # meaning more than 10000 IP reports / 5 min ( default )
+    # Should be good for a while for now .
+    # If it append.. we need to iterate the report
+    # 10K is the limit in the kvrocks insertion.
+
+    if len(objects_to_save_to_meili) > 0:
         try:
-            idx.add_documents(output)
+            # push to meili
+            meili_idx.add_documents(objects_to_save_to_meili)
+            # puth to kvrocks.
+            kvrocks_idx.add_documents_batch(objects_to_save_to_kvrocks)
+
             #  if it's success full, we push these result as "exported"
             for success_job in success_jobs:
                 success_job.exported = True
@@ -206,16 +223,22 @@ def task_export_to_meili():
 # Check if the folder exists and create subfolders if needed
 check_json_storage(db.app.config.get("JSON_FOLDER"))
 
+# Connect to the Kvrocks and keep this index for all indexing.
+db.app.config["KVROCKS_IDX"] = KVrocksIndexer(
+    db.app.config.get("KVROCKS_HOST", db.app.config.get("KVROCKS_PORT"))
+)
+
 # Connect to the Mieili DB ( if the index is not present create IT)
 client = meilisearch.Client(
     db.app.config.get("MEILI_DATABASE_URI"),
     db.app.config.get("MEILI_KEY"),
 )
+
 client.create_index("plum")
 index = client.index("plum")
 # Save the client Index to the global config.
 db.app.config["MEILI_IDX"] = index
-index.add_documents({"hello": "Word"})
+# index.add_documents({"hello": "Word"})
 
 # If the database is new, set the searchable attibute.
 current_attrs = index.get_searchable_attributes()
