@@ -1,0 +1,37 @@
+#!/bin/env python
+import os
+import json
+import sys
+import yaml
+
+sys.path.append("../webapp/app/utils")  # parent of webapp
+from kvrocks import KVrocksIndexer
+from result_parser import parse_json
+
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+KVROCKS_PORT = config.get("KVROCKS_PORT")
+KVROCKS_HOST = config.get("KVROCKS_HOST")
+
+
+def json_import(json_file):
+    print(f"Importing {json_file}")
+    with open(json_file, "r", encoding="utf-8") as f:
+        doc = json.loads(f.read())
+        return parse_json(doc)
+
+
+INPUT_DIR = "meili_dump"
+indexer = KVrocksIndexer(KVROCKS_HOST, KVROCKS_PORT)
+max_per_folder = 10000
+for folder in "abcdef0123456789":
+    objects_to_index = []
+    path = os.path.join(INPUT_DIR, folder)
+    for file in os.listdir(path):
+        if file.endswith(".json"):
+            objects_to_index.append(json_import(os.path.join(INPUT_DIR, folder, file)))
+            if len(objects_to_index) == 10000:
+                indexer.add_documents_batch(objects_to_index)
+                objects_to_index = []
+    # finally
+    indexer.add_documents_batch(objects_to_index)

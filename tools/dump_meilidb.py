@@ -1,3 +1,4 @@
+#!/bin/env python
 """
 This script do a full export of Plum IP database of the meilli instance
 Each report is save using the UID
@@ -7,13 +8,18 @@ import os
 import json
 import time
 import meilisearch
+import yaml
 
 # Configuration
-MEILI_URL = "http://localhost:7700"
-MEILI_API_KEY = "YouNeedToChangeMeInProduction"
-INDEX_NAME = "plum"
 PAGE_SIZE = 1000
 OUTPUT_DIR = "meili_dump"
+
+
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
+MEILI_URL = config.get("MEILI_URL")
+MEILI_API_KEY = config.get("MEILI_API_KEY")
+INDEX_NAME = config.get("INDEX_NAME")
 
 # Init client
 client = meilisearch.Client(MEILI_URL, MEILI_API_KEY)
