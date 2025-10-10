@@ -67,12 +67,18 @@ async function loadUid(uid, targetId) {
     if (target.style.display === 'none' || target.innerHTML === '') {
         const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
         const data = await res.json();
-        target.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        let json = JSON.stringify(data, null, 2);
+        // garde l'indentation devant les lignes ajoutées
+        json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>
+            line.replace(/\\n/g, '\\n\n' + indent + '  ')
+        );
+        target.innerHTML = `<pre>${json}</pre>`;
         target.style.display = 'block';
     } else {
         target.style.display = 'none';
     }
 }
+
 </script>
 
 <div class="container mt-2">
