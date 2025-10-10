@@ -14,7 +14,7 @@ async function search() {
     const infoDiv = document.getElementById('info');
     const errorDiv = document.getElementById('msg_error');
     const time = (data.processingTimeMs || 0).toFixed(3);
-    infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms`;
+    infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
 
     errorDiv.innerHTML = ``;
     if (data.status === false) {

@@ -179,7 +179,9 @@ class KVSearchView(BaseView):
         )
         criteria, status, msg_error = self.parse_query(query)
         end_time = time.time()
+        count_objects = indexer.objects_count()
         processingtimems = end_time - start_time
+
         if status is True:
             logger.debug(criteria)
             uids = indexer.get_uids_by_criteria(criteria)
@@ -188,6 +190,8 @@ class KVSearchView(BaseView):
                 "results": indexer.get_ip_from_uids(uids),
                 "msg_error": "",
                 "processingTimeMs": processingtimems,
+                "uid_count": count_objects.get("uid_count"),
+                "ip_count": count_objects.get("ip_count"),
             }
         else:
             results = {
@@ -195,6 +199,8 @@ class KVSearchView(BaseView):
                 "results": {},
                 "msg_error": msg_error,
                 "processingTimeMs": processingtimems,
+                "uid_count": count_objects.get("uid_count"),
+                "ip_count": count_objects.get("ip_count"),
             }
         return jsonify(results)
 

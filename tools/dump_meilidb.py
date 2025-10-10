@@ -11,7 +11,7 @@ import meilisearch
 import yaml
 
 # Configuration
-PAGE_SIZE = 1000
+PAGE_SIZE = 5000
 OUTPUT_DIR = "meili_dump"
 
 

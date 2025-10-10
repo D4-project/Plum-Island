@@ -35,6 +35,16 @@ class KVrocksIndexer:
         """
         self.r.flushdb()
 
+    def objects_count(self):
+        """
+        This methods returns the object count
+        """
+        all_counts = {
+            "ip_count": self.r.scard("all_ips"),
+            "uid_count": self.r.scard("all_uids"),
+        }
+        return all_counts
+
     def add_documents_batch(self, docs, batch_size=10000):
         """
         insert documents into the kvrocks.
@@ -78,6 +88,9 @@ class KVrocksIndexer:
                 )
 
                 # Index IP
+                pipe.sadd(f"all_ips", ip)  # Generic Spaces all IP
+                pipe.sadd(f"all_uids", uid)  # Generic Space all UID's
+
                 pipe.sadd(f"ip:{ip}", uid)  # Create a Set of many UID per IP
                 pipe.set(
                     f"uid:{uid}", ip
@@ -129,7 +142,7 @@ class KVrocksIndexer:
 
         criteria example is
         {'http_title.like': ['ivanti', 'portal'], 'net': ['147.67.0.0/16'],
-         'http_title.bg': ['ivanti'], 'http_cookie': ['JSESSIONID']}
+         'http_title.bg': ['ivanti'], 'http_cookie': ['JSESSIONID'], 'port': 80}
 
 
         The method used is the following.
@@ -191,41 +204,45 @@ class KVrocksIndexer:
             else:
                 # partial_result = # partial_result.intersection(uids_net)
                 partial_result = partial_result | uids_net
-            # print("net result")
-            # print(partial_result)
-        else:
-            # If the base seach is not there we create the basic set using one exact match
-            if partial_result is None:
-                logger.debug("No IP/NET specified, get base UID")
-                found_base = False
-                for field, values in remaining_criteria.items():
-                    if not isinstance(values, list):
-                        values = [values]
-                    for value in values:
-                        base_field = field.split(".")[0]
-                        suffix = field.split(".")[1] if "." in field else ""
-                        if suffix == "":
-                            logger.debug("Looking by %s", suffix)
-                            uids = self.r.smembers(f"{base_field}:{value}")
-                            if uids:
-                                partial_result = set(uids)
-                                remaining_criteria.pop(field)
-                                found_base = True
-                                break
-                    if found_base:
-                        break
 
-                # 2A) fallback: if no base, scan first criterion remove the .modifier
-            if partial_result is None:
-
-                field, values = next(iter(remaining_criteria.items()))
+        # If the base seach is not there we create the basic set using one available exact match
+        if partial_result is None:
+            logger.debug("No IP/NET specified, get base UID")
+            found_base = False
+            for field, values in remaining_criteria.items():
                 if not isinstance(values, list):
                     values = [values]
+                for value in values:
+                    base_field = field.split(".")[0]
+                    suffix = field.split(".")[1] if "." in field else ""
+                    if suffix == "":
+                        logger.debug(
+                            "Generate partial result by Looking at %s", base_field
+                        )
+                        uids = self.r.smembers(f"{base_field}:{value}")
+                        if uids:
+                            partial_result = set(uids)
+                            remaining_criteria.pop(field)
+                            found_base = True
+                            break
+                if found_base:
+                    break
+
+                # 2A) fallback: if no base, scan first criterion remove the .modifier and do not pop
+            if partial_result is None:
+                logger.debug("No plein search, looking by any modifier")
+
+                # avoid using port as search ( as is retrieve everything.)
+                # if only port.modifier is given, it will still be used
+                for field, values in remaining_criteria.items():
+                    if not field.startswith("port."):
+                        break
+
                 base_field = field.split(".")[0]
-                keys = list(self.r.scan_iter(f"{base_field}:{values[0]}*"))
-                partial_result = set()
-                for k in keys:
-                    partial_result.update(self.r.smembers(k))
+                logger.debug(
+                    "No usable criteria get uid list from Base field: %s", base_field
+                )
+                partial_result = self.r.sunion(*self.r.keys(f"{base_field}:*"))
 
         # 3) Finally using the rest of criterais.
         for field, values in remaining_criteria.items():
@@ -244,7 +261,7 @@ class KVrocksIndexer:
                     for key in self.r.scan_iter(f"{base_field}:*"):
                         val = key.split(":", 2)[1]
                         # If NOT is asked... we forgot this key
-                        if suffix in ("not", "nt") and value not in val:
+                        """if suffix in ("not", "nt") and value not in val:
                             # For NOT we need to get all the keys matching from the partials results...
                             # Then fetch the keys from these uid that are not matching the "pattern".
                             # print(partial_result)
@@ -252,6 +269,7 @@ class KVrocksIndexer:
                             matching_uids.update(
                                 self.r.smembers(key).intersection(partial_result)
                             )
+                        """
                         # IF like or begin we select it.
                         if (suffix in ("like", "lk") and value in val) or (
                             suffix in ("begin", "bg") and val.startswith(value)
