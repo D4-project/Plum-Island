@@ -31,6 +31,7 @@ from .models import Bots, Targets, Jobs, ApiKeys, Nses, Protos, ScanProfiles, Po
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
 from .utils.kvrocks import KVrocksIndexer
+from .utils.ip2asn import get_asn_description_for_ip
 
 
 from . import appbuilder, db
@@ -178,16 +179,18 @@ class KVSearchView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         criteria, status, msg_error = self.parse_query(query)
-        end_time = time.time()
         count_objects = indexer.objects_count()
-        processingtimems = end_time - start_time
 
+        uids = indexer.get_uids_by_criteria(criteria)
+        results_ip = indexer.get_ip_from_uids(uids)
+
+        end_time = time.time()
+        processingtimems = (end_time - start_time) * 1000
         if status is True:
             logger.debug(criteria)
-            uids = indexer.get_uids_by_criteria(criteria)
             results = {
                 "status": True,
-                "results": indexer.get_ip_from_uids(uids),
+                "results": results_ip,
                 "msg_error": "",
                 "processingTimeMs": processingtimems,
                 "uid_count": count_objects.get("uid_count"),
@@ -248,6 +251,30 @@ class TargetsView(ModelView):
     base_order = ("last_scan", "desc")  # Latest finished on top.
 
     @action(
+        "mulresolvehwois",
+        "Refresh Network informations",
+        "Refresh Network informations ?",
+        "fa-rocket",
+        single=False,
+    )
+    def mulrreslovewhois(self, items):
+        """
+        Implement Raise priority of job to 2
+        """
+        if isinstance(items, list):
+            # Raise N record
+            for item in items:
+                info = get_asn_description_for_ip(item.value)
+                item.description = info
+        else:
+            # Raise Un tag
+            info = get_asn_description_for_ip(item.value)
+            item.description = info
+        db.session.commit()
+        self.update_redirect()
+        return redirect(self.get_redirect())
+
+    @action(
         "muldelete", "Delete Job", "Delete all Really?", "fa-trash-can", single=False
     )
     def muldelete(self, items):
@@ -257,6 +284,14 @@ class TargetsView(ModelView):
 
         self.datamodel.delete_all(items)
         self.update_redirect()
+        return redirect(self.get_redirect())
+
+    @expose("/custom_action/<int:pk>")
+    def custom_action(self, pk):
+        item = self.datamodel.get(pk)
+        item.name = item.name.upper()
+        self.datamodel.session.commit()
+        flash(f"Action applied on {item.name}")
         return redirect(self.get_redirect())
 
     def do_bulk_import(self, ips):

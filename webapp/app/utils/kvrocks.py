@@ -96,6 +96,11 @@ class KVrocksIndexer:
                     f"uid:{uid}", ip
                 )  # Create a hash of One UID that give only one IP
 
+                # Index network from 16 down to 24
+                for mask in range(16, 25):
+                    network = str(IPNetwork(f"{ip}/{mask}").network) + f"/{mask}"
+                    pipe.sadd(f"net:{network}", uid)
+
                 # Need to be "iterated magically" to avoid
                 # Index favicons (multiple)
                 for f in favicons:
@@ -194,16 +199,13 @@ class KVrocksIndexer:
 
             uids_net = set()
             for net_val in net_vals:
-                network = IPNetwork(net_val)
-                for uid in (uid.split(":", 2)[1] for uid in self.r.scan_iter("doc:*")):
-                    ip_val = self.r.hget(f"doc:{uid}", "ip")
-                    if ip_val and IPAddress(ip_val) in network:
-                        uids_net.add(uid)
+                # Get uid of the given net
+                uids_net.update(self.r.smembers(f"net:{net_val}"))
+
             if partial_result is None:
                 partial_result = uids_net
             else:
-                # partial_result = # partial_result.intersection(uids_net)
-                partial_result = partial_result | uids_net
+                partial_result |= uids_net  # union with previous results
 
         # If the base seach is not there we create the basic set using one available exact match
         if partial_result is None:
