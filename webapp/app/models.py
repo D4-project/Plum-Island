@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from flask_appbuilder import Model
 from flask import Markup as Esc
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table
+from flask_appbuilder.models.mixins import FileColumn
 from sqlalchemy import func
 from sqlalchemy.orm import relationship
 
@@ -64,8 +65,8 @@ assoc_jobs_targets = Table(
 assoc_scanprofiles_ports = Table(
     "scanprofiles_ports_assoc",
     Model.metadata,
-    Column("scanprofile_id", Integer, ForeignKey("ScanProfiles.id")),
-    Column("port_id", Integer, ForeignKey("Ports.id")),
+    Column("scanprofile_id", Integer, ForeignKey("scanprofiles.id")),
+    Column("port_id", Integer, ForeignKey("ports.id")),
 )
 
 
@@ -73,15 +74,15 @@ assoc_scanprofiles_ports = Table(
 assoc_scanprofiles_nses = Table(
     "scanprofiles_nses_assoc",
     Model.metadata,
-    Column("scanprofile_id", Integer, ForeignKey("ScanProfiles.id")),
-    Column("nses_id", Integer, ForeignKey("Nses.id")),
+    Column("scanprofile_id", Integer, ForeignKey("scanprofiles.id")),
+    Column("nses_id", Integer, ForeignKey("nses.id")),
 )
 
 # ScanProfiles to Targets pivot table
 assoc_scanprofiles_targets = Table(
     "scanprofiles_targets_assoc",
     Model.metadata,
-    Column("scanprofile_id", Integer, ForeignKey("ScanProfiles.id")),
+    Column("scanprofile_id", Integer, ForeignKey("scanprofiles.id")),
     Column("target_id", Integer, ForeignKey("targets.id")),
 )
 
@@ -169,7 +170,7 @@ class Protos(Model):
         IE : UDP/TCP
     """
 
-    __tablename__ = "Protos"
+    __tablename__ = "protos"
     id = Column(Integer, primary_key=True)
     value = Column(String(32), unique=True, nullable=False)  # Udp / Tcp
     name = Column(String(256), nullable=False)  # Description of the Layer 4 protocol
@@ -184,11 +185,11 @@ class Ports(Model):
     Ports have exactly one mandatory record of Protos
     """
 
-    __tablename__ = "Ports"
+    __tablename__ = "ports"
     id = Column(Integer, primary_key=True)
     value = Column(Integer, nullable=False)  # Port to Scan
     name = Column(String(256), nullable=False)  # Description of the port
-    proto_id = Column(Integer, ForeignKey("Protos.id"), nullable=False)
+    proto_id = Column(Integer, ForeignKey("protos.id"), nullable=False)
     proto = relationship("Protos", backref="ports")
     proto_to_port = Column(
         String(32 + 5), nullable=False, unique=True
@@ -203,11 +204,11 @@ class Nses(Model):
     Class for the nsescript
     """
 
-    __tablename__ = "Nses"
+    __tablename__ = "nses"
     id = Column(Integer, primary_key=True)
     name = Column(String(256), unique=True, nullable=False)  # Name of the NSE Script
     hash = Column(String(64), unique=True, nullable=False)  # SHA256 of the NSE Body
-    body = Column(String, nullable=False)  # NSE Body
+    filebody = Column(FileColumn, nullable=False)
 
     def __repr__(self):
         return self.name
@@ -226,7 +227,7 @@ class ScanProfiles(Model):
     zero or many Targets objects
     """
 
-    __tablename__ = "ScanProfiles"
+    __tablename__ = "scanprofiles"
     id = Column(Integer, primary_key=True)
     name = Column(String(256), nullable=False)  # Name of the profile.
     apply_to_all = Column(Boolean, default=False)  # Name of the profile.
@@ -241,6 +242,8 @@ class ScanProfiles(Model):
     targets = relationship(
         "Targets", secondary=assoc_scanprofiles_targets, backref="scanprofiles"
     )
+
+    priority = Column(Integer, default=0)
 
     def __repr__(self):
         return self.name
@@ -264,6 +267,11 @@ class Targets(Model):
         DateTime, default=None
     )  # Previous Last Scan to have an idea of time for a cycle.
     jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
+
+    as_bgp = Column(Integer, default=0)  # BGP AS Number
+    as_description = Column(String(256))  # AS Description.
+    as_country = Column(String(2), default="ZZ")  # AS Country
+    priority = Column(Integer, default=1)  # Priority, by default LOW
 
     def __repr__(self):
         """
@@ -289,4 +297,4 @@ class Targets(Model):
             else:
                 return f"{seconds}s"
         else:
-            return "oo"
+            return "∞"
