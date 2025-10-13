@@ -6,9 +6,9 @@ It contains all the logic to find something.
 """
 
 import datetime
-import redis
-from netaddr import IPNetwork, IPAddress
 import logging
+import redis
+from netaddr import IPNetwork
 
 logger = logging.getLogger("flask_appbuilder")
 
@@ -88,8 +88,8 @@ class KVrocksIndexer:
                 )
 
                 # Index IP
-                pipe.sadd(f"all_ips", ip)  # Generic Spaces all IP
-                pipe.sadd(f"all_uids", uid)  # Generic Space all UID's
+                pipe.sadd("all_ips", ip)  # Generic Spaces all IP
+                pipe.sadd("all_uids", uid)  # Generic Space all UID's
 
                 pipe.sadd(f"ip:{ip}", uid)  # Create a Set of many UID per IP
                 pipe.set(
@@ -198,6 +198,7 @@ class KVrocksIndexer:
                 net_vals = [net_vals]
 
             uids_net = set()
+            # For each net required, add corresponding uid it to uid_nets
             for net_val in net_vals:
                 # Get uid of the given net
                 uids_net.update(self.r.smembers(f"net:{net_val}"))

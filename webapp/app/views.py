@@ -186,6 +186,7 @@ class KVSearchView(BaseView):
 
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
+
         if status is True:
             logger.debug(criteria)
             results = {
@@ -281,22 +282,14 @@ class TargetsView(ModelView):
         """
         Implement Multiple Delete for Targets
         """
-
         self.datamodel.delete_all(items)
         self.update_redirect()
         return redirect(self.get_redirect())
 
-    @expose("/custom_action/<int:pk>")
-    def custom_action(self, pk):
-        item = self.datamodel.get(pk)
-        item.name = item.name.upper()
-        self.datamodel.session.commit()
-        flash(f"Action applied on {item.name}")
-        return redirect(self.get_redirect())
-
     def do_bulk_import(self, ips):
         """
-        Import a list of bulk Ip's into the targets"""
+        Import a list of bulk Ip's into the targets
+        """
         log = ""
         ips = ips.split("\r")
         for ip in ips:

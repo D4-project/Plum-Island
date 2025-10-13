@@ -16,14 +16,24 @@ def parse_http_headers(headers):
     # Set-Cookie: acSamlv2Error=; expires=Thu, 01 Jan 1970 22:00:00 GMT; path=/; secure
     http_cookies = []
     http_servers = []
+    http_etags = []
 
     for line in headers.splitlines():
-        # I know normally only one server header.
-        if line.strip().lower().startswith("server:"):
+        # I know normally only one server header
+        # but just in case, everything is in array
+        candidate = line.strip().lower()
+        if candidate.startswith("server:"):
             http_servers.append(line.split(":", 1)[1].strip())
-        if line.strip().lower().startswith("set-cookie:"):
+        if candidate.startswith("etag:"):
+            http_etags.append(line.split(":", 1)[1].strip())
+        if candidate.startswith("set-cookie:"):
             http_cookies.append(line.split(":", 1)[1].split("=")[0].strip())
-    return {"http_servers": http_servers, "http_cookies": http_cookies}
+
+    return {
+        "http_servers": http_servers,
+        "http_cookies": http_cookies,
+        "http_etags": http_etags,
+    }
 
 
 def parse_json(doc):
@@ -34,6 +44,7 @@ def parse_json(doc):
     http_servers = []
     http_titles = []
     http_cookies = []
+    http_etags = []
     last_seen = doc.get("body").get("endtime")
     for port in doc.get("body").get("ports"):
         ports.append(port.get("portid"))
@@ -44,7 +55,7 @@ def parse_json(doc):
                 parsed_headers = parse_http_headers(script.get("output", {}))
                 http_servers.extend(parsed_headers.get("http_servers"))
                 http_cookies.extend(parsed_headers.get("http_cookies"))
-
+                http_etags.extend(parsed_headers.get("http_etags"))
             if script.get("id") == "ssl-cert":
                 pass
                 # parse_cerfificate(script.get("output"))
@@ -53,6 +64,7 @@ def parse_json(doc):
     http_servers = list(set(insensitive(http_servers)))
     http_titles = list(set(insensitive(http_titles)))
     http_cookies = list(set(insensitive(http_cookies)))
+    http_etags = list(set(insensitive(http_etags)))
     """
     print(
         f"IP: {ip}, uid{uid}, last_seen{last_seen}, Ports {ports}, http_server {http_servers},cookies {http_cookies},  http_titles {http_titles}, ssl_commonnames {ssl_commonnames}"
@@ -66,6 +78,7 @@ def parse_json(doc):
         "http_servers": http_servers,
         "http_cookies": http_cookies,
         "http_titles": http_titles,
+        "http_etags": http_etags,
         "ports": ports,
         "last_seen": last_seen,
     }
