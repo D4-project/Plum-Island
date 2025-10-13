@@ -145,7 +145,7 @@ class KVSearchView(BaseView):
                 continue
 
             key, value = part.split(":", 1)
-
+            key = key.lower()
             # Determine base key without modifier
             base_key = key
             for suf in valid_modifiers:
@@ -181,8 +181,9 @@ class KVSearchView(BaseView):
         criteria, status, msg_error = self.parse_query(query)
         count_objects = indexer.objects_count()
 
-        uids = indexer.get_uids_by_criteria(criteria)
-        results_ip = indexer.get_ip_from_uids(uids)
+        if status:
+            uids = indexer.get_uids_by_criteria(criteria)
+            results_ip = indexer.get_ip_from_uids(uids)
 
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
