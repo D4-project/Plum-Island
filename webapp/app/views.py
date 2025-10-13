@@ -47,8 +47,21 @@ def get_job_uid(pk):
     return result
 
 
+def get_target_value(pk):
+    """
+    For Jinja and ajax queries, get a netword/ip search query from target ID
+    """
+    result = db.session.query(Targets.value).filter(Targets.id == pk).scalar()
+    if "/" in result:
+        result = f"net:{result}"
+    else:
+        result = f"ip:{result}"
+    return result
+
+
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
+app.jinja_env.globals["get_target_value"] = get_target_value
 
 
 @appbuilder.app.errorhandler(404)
@@ -251,6 +264,7 @@ class TargetsView(ModelView):
     ]
     search_exclude_columns = ["jobs"]
     base_order = ("last_scan", "desc")  # Latest finished on top.
+    show_template = "show_targetsview.html"  # Custom Show view with results
 
     @action(
         "mulresolvehwois",

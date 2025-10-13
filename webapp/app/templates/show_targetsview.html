@@ -1,0 +1,135 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "show") }}
+
+{% if related_views is defined %}
+    <ul class="nav nav-tabs"  style="{{"display: none;" if not related_views else "" }}">
+    <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a> </li>
+        {% for view in related_views %}
+            <li>
+                <a href="#{{view.__class__.__name__}}" data-toggle="tab">{{view.title}}</a>
+            </li>
+        {% endfor %}
+    </ul>
+    <div class="tab-content">
+    {% for view in related_views %}
+        <div id="{{view.__class__.__name__}}" class=tab-pane">
+            {{ widgets.get('related_views')[loop.index - 1](pk = pk)|safe }}
+        </div>
+    {% endfor %}
+{% endif %}
+{% block show_form %}
+    <div id="Home" class="tab-pane active">
+        {{ widgets.get('show')()|safe }}
+    </div>
+{% endblock show_form %}
+
+   <div class="container">
+      <div class="row">
+
+<div class="panel panel-primary">
+  <div class="panel-heading">
+    <h4 class="panel-title ">Show Results</h4>
+  </div>
+  <div class="panel-body" id="addrAccordion">
+<div id="info" class="mt-2"></div>
+<div id="msg_error" class="panel-group mt-2"></div>
+<div id="hits" class="panel-group mt-2"></div>
+
+
+<script>
+    window.addEventListener('DOMContentLoaded', async () => {
+  await search();
+});
+
+
+async function search() {
+    const res = await fetch(`/kvsearchview/query?q={{get_target_value(pk) | safe}}`);
+    const data = await res.json();
+
+    const hitsDiv = document.getElementById('hits');
+    const infoDiv = document.getElementById('info');
+    const errorDiv = document.getElementById('msg_error');
+    const time = (data.processingTimeMs || 0).toFixed(3);
+    infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
+
+    errorDiv.innerHTML = ``;
+    if (data.status === false) {
+    errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
+    }
+    hitsDiv.innerHTML = '';
+
+    Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
+        const ipPanel = document.createElement('div');
+        ipPanel.className = 'panel panel-default';
+
+        // IP accordion
+        ipPanel.innerHTML = `
+            <div class="panel-heading">
+                <h4 class="panel-title">
+                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
+                        ${ip}
+                    </a>
+                </h4>
+            </div>
+            <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
+                <div class="panel-body" id="uids-${ipIndex}">
+                    <!-- UID panels will go here -->
+                </div>
+            </div>
+        `;
+        hitsDiv.appendChild(ipPanel);
+
+        const uidsDiv = document.getElementById(`uids-${ipIndex}`);
+        uids.forEach((uid, uidIndex) => {
+            const uidPanel = document.createElement('div');
+            uidPanel.className = 'panel panel-info';
+            uidPanel.innerHTML = `
+                <div class="panel-heading">
+                    <h5 class="panel-title">
+                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
+                            ${uid}
+                        </a>
+                    </h5>
+                </div>
+                <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
+            `;
+            uidsDiv.appendChild(uidPanel);
+        });
+    });
+}
+
+async function loadUid(uid, targetId) {
+    const target = document.getElementById(targetId);
+    if (target.style.display === 'none' || target.innerHTML === '') {
+        const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
+        const data = await res.json();
+        let json = JSON.stringify(data, null, 2);
+        // garde l'indentation devant les lignes ajoutées
+        json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>
+            line.replace(/\\n/g, '\\n\n' + indent + '  ')
+        );
+        target.innerHTML = `<pre>${json}</pre>`;
+        target.style.display = 'block';
+    } else {
+        target.style.display = 'none';
+    }
+}
+
+
+
+  </script>
+</div>
+
+</div>
+</div>
+
+{% if related_views is defined %}</div>{% endif %}
+{{ lib.panel_end() }}
+
+{% endblock content %}
+{% block add_tail_js %}
+<script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+{% endblock %}
