@@ -65,6 +65,7 @@ def task_create_jobs():
     logger.debug("**** Start Create Job TASK ****")
 
     chunks = []  # Output Jobs
+    hostname_chuncks = []  # Output Fqdns
     small_ranges = []
 
     # HERE need to have a test on the last "scan", > of scan cycle or "empty" -> go create job.
@@ -82,8 +83,10 @@ def task_create_jobs():
         logger.debug("**** Processing Target %s", record.value)
         if is_valid_fqdn(record.value):
             # Traitement si c'est un FQDN
-            logger.debug("%s is not an IP", record.value)
-            # small_ranges.append({"ips": record.value, "record_id": record.id})
+            logger.debug("%s is not an IP, storing fqnd", record.value)
+            hostname_chuncks.append(
+                {"host": [record.value], "source_record_ids": [record.id]}
+            )
         else:
             # Split ranges less than 256 IP or More
             net = IPNetwork(record.value)
@@ -143,6 +146,36 @@ def task_create_jobs():
             new_job.targets.append(obj_target)
             obj_target.working = True  # set the Subnet as "Working"
         db.session.add(new_job)
+
+    # Now do packets of 256 hosts.
+    i = 0
+    chunk256 = []
+    print(hostname_chuncks)
+    for chunck in hostname_chuncks:
+        chunk256.append(chunck)
+        i += 1
+        if i == 256 or i == len(hostname_chuncks):  # si max ou 256 hosts
+            i = 0
+            new_job = Jobs()
+            new_job.job = []  # Create the Array of JobTodo
+            logger.debug("Scheduler create Job for %s", chunk256)
+            new_job.uid = str(uuid.uuid4())
+            # Create target range string.
+            final = []
+            for item in chunk256:
+                for host in item.get("host"):
+                    final.append(host)
+            new_job.job = ",".join(final)
+            print(final)
+            for item in chunk256:
+                for target in item.get("source_record_ids"):
+                    obj_target = (
+                        db.session.query(Targets).filter(Targets.id == target).scalar()
+                    )
+                new_job.targets.append(obj_target)
+                obj_target.working = True  # set the Subnet as "Working"
+            db.session.add(new_job)
+            chunk256 = []
     db.session.commit()
 
 
