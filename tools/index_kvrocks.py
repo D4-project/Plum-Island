@@ -1,4 +1,9 @@
 #!/bin/env python
+'''
+This script will import json data exported from meilidb
+into the Kvrocks for idexation.
+
+'''
 import os
 import json
 import sys
@@ -10,9 +15,8 @@ from result_parser import parse_json
 
 with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
-KVROCKS_PORT = config.get("KVROCKS_PORT")
-KVROCKS_HOST = config.get("KVROCKS_HOST")
-
+KVROCKS_PORT = config.get("OUT_KVROCKS_PORT")
+KVROCKS_HOST = config.get("OUT_KVROCKS_HOST")
 
 def json_import(json_file):
     print(f"Importing {json_file}")

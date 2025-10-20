@@ -1,4 +1,6 @@
-Webapp/app.db
-Webapp/__pycache__
+webapp/app.db
+webapp/app/jsons
+webapp/__pycache__
 .venv
 dev-*
+tools/meili_dump

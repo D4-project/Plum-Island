@@ -34,9 +34,9 @@ def save_document(doc):
     os.makedirs(path, exist_ok=True)
 
     filepath = os.path.join(path, doc.id + ".json")
-    with open(filepath, "w", encoding="utf-8") as f:
+    with open(filepath, "w", encoding="utf-8") as file2save:
         # Save as json
-        json.dump(dict(doc), f, ensure_ascii=False, indent=2)
+        json.dump(dict(doc), file2save, ensure_ascii=False, indent=2)
 
 
 def main():
