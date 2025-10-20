@@ -1,14 +1,15 @@
 
 <div align="center">
-  <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum-logo.png" />
+  <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_logo.png"   style="width:25%;" />
 
 <h1> Proactive Land Uncovering & Monitoring </h1>
   <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum-overview.png" />
 </div>
-
+<p>
 <center>
 *Beta version*
 </center>
+</p>
 
 ## Description
 This this tool is a orchestrator for performing surface exposure proactive discovery.
