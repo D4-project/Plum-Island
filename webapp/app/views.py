@@ -138,14 +138,42 @@ class KVSearchView(BaseView):
 
         """
 
-        valid_keywords = {
-            "http_server",
-            "http_cookie",
-            "http_title",
+        valid_keywords = [
             "ip",
             "net",
+            # "as",
+            # "as_number",
+            # "as_name",
+            # "as_description",
+            # "as_country",
+            "fqdn",
+            "host",
+            "domain",
+            "tld",
+            # "url_path",
             "port",
-        }
+            # "protocol",
+            "http_title",
+            # "http_favicon_hash",
+            # "http_favicon_sha256",
+            # "http_favicon_sha1",
+            # "http_favicon",
+            # "http_filename",
+            "http_cookiename",
+            "http_etag",
+            "http_server",
+            # "email",
+            "x509_issuer",
+            "x509_md5",
+            "x509_sha1",
+            "x509_sha256",
+            "x509_subject",
+            "x509_san",
+            # "time_filter_before_after",
+            # "ssh_fingerprint",
+            # "ttl_count",
+            # "hsh"
+        ]
 
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
 
@@ -193,6 +221,7 @@ class KVSearchView(BaseView):
         )
         criteria, status, msg_error = self.parse_query(query)
         count_objects = indexer.objects_count()
+        results_ip = {}
 
         if status:
             uids = indexer.get_uids_by_criteria(criteria)

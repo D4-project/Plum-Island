@@ -24,14 +24,13 @@
     <div id="Home" class="tab-pane active">
         {{ widgets.get('show')()|safe }}
     </div>
-{% endblock show_form %}
 
    <div class="container">
       <div class="row">
 
 <div class="panel panel-primary">
   <div class="panel-heading">
-    <h4 class="panel-title ">Show Results</h4>
+    <h4 class="panel-title ">Results</h4>
   </div>
   <div class="panel-body" id="addrAccordion">
 <div id="info" class="mt-2"></div>
@@ -117,15 +116,13 @@ async function loadUid(uid, targetId) {
         target.style.display = 'none';
     }
 }
-
-
-
   </script>
 </div>
 
 </div>
 </div>
 
+{% endblock show_form %}
 {% if related_views is defined %}</div>{% endif %}
 {{ lib.panel_end() }}
 

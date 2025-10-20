@@ -53,16 +53,55 @@ class KVrocksIndexer:
 
         it does "batch insertions", up to 10K per insert by default
         """
+
+        keywords = [
+            # "ip",
+            "net",
+            # "as",
+            # "as_number",
+            # "as_name",
+            # "as_description",
+            # "as_country",
+            "fqdn",
+            "host",
+            "domain",
+            "tld",
+            # "url_path",
+            "port",
+            # "protocol",
+            "http_title",
+            # "http_favicon_hash",
+            # "http_favicon_sha256",
+            # "http_favicon_sha1",
+            # "http_favicon",
+            # "http_filename",
+            "http_cookiename",
+            "http_etag",
+            "http_server",
+            # "email",
+            "x509_issuer",
+            "x509_md5",
+            "x509_sha1",
+            "x509_sha256",
+            "x509_subject",
+            "x509_san",
+            # "time_filter_before_after",
+            # "ssh_fingerprint",
+            # "ttl_count",
+            # "hsh"
+        ]
+
         for i in range(0, len(docs), batch_size):
             batch = docs[i : i + batch_size]
             pipe = self.r.pipeline(transaction=False)
             for doc in batch:
                 uid = doc["uid"]
                 ip = doc["ip"]
-                favicons = doc.get("http_favicon", [])
-                http_servers = doc.get("http_servers", [])
-                http_cookies = doc.get("http_cookies", [])
-                http_titles = doc.get("http_titles", [])
+
+                # favicons = doc.get("http_favicon", [])
+                # http_servers = doc.get("http_servers, [])
+                # http_cookies = doc.get("http_cookies", [])
+                # http_titles = doc.get("http_titles", [])
                 ports = doc.get("ports", [])
                 last_seen = doc.get("last_seen")  # Document last time scanned.
 
@@ -100,37 +139,17 @@ class KVrocksIndexer:
                 for mask in range(16, 25):
                     network = str(IPNetwork(f"{ip}/{mask}").network) + f"/{mask}"
                     pipe.sadd(f"net:{network}", uid)
-
-                # Need to be "iterated magically" to avoid
-                # Index favicons (multiple)
-                for f in favicons:
-                    pipe.sadd(
-                        f"http_favicon:{f}", uid
-                    )  # one favicon type gives many uid
-                    pipe.sadd(f"http_favicons:{uid}", f)  # all object having favicons.
-
-                # Index http_servers (multiple).. Could be refactored to "loop" a list instead.
-                for s in http_servers:
-                    pipe.sadd(
-                        f"http_server:{s}", f"{uid}"
-                    )  # idem.. one http_server set give all uid
-                    pipe.sadd(f"http_servers:{uid}", s)  # idem....
-
-                # Index http_cookies (multiple)
-                for c in http_cookies:
-                    pipe.sadd(f"http_cookie:{c}", f"{uid}")  # idem...
-                    pipe.sadd(f"http_cookies:{uid}", c)
-
-                # Index Ports (multiple)
-                for p in ports:
-                    pipe.sadd(f"port:{p}", f"{uid}")
-                    pipe.sadd(f"ports:{uid}", p)
-
-                # Index http_title (multiple)
-                for p in http_titles:
-                    pipe.sadd(f"http_title:{p}", f"{uid}")
-                    pipe.sadd(f"http_titles:{uid}", p)
-
+                # Generic indexing for any othe keyword
+                # uid = unique identifier for the entry
+                for field in keywords:
+                    values = doc.get(field, [])
+                    # print(f"{field} - {values} - {uid}")
+                    # We have still NONE in table
+                    for v in values:
+                        if v:
+                            # print(f"{field} - {v} - {uid}")
+                            pipe.sadd(f"{field}:{v}", uid)
+                            pipe.sadd(f"{field}s:{uid}", v)
             pipe.execute()
 
     def get_uids_by_criteria(self, criteria: dict):
