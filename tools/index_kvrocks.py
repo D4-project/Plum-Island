@@ -28,13 +28,14 @@ def json_import(json_file):
 INPUT_DIR = "meili_dump"
 indexer = KVrocksIndexer(KVROCKS_HOST, KVROCKS_PORT)
 max_per_folder = 10000
+max_per_folder = 1
 for folder in "abcdef0123456789":
     objects_to_index = []
     path = os.path.join(INPUT_DIR, folder)
     for file in os.listdir(path):
         if file.endswith(".json"):
             objects_to_index.append(json_import(os.path.join(INPUT_DIR, folder, file)))
-            if len(objects_to_index) == 10000:
+            if len(objects_to_index) == max_per_folder:
                 indexer.add_documents_batch(objects_to_index)
                 objects_to_index = []
     # finally
