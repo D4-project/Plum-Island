@@ -44,13 +44,12 @@ modifier could be abreviated;
 * like to lk
 * begin to bg
 
-### Example of query
-For now the query string only do AND between times.
+For now the query string only do AND between terms.
 
+### Example of query
 >domain.begin:"circl.lu" port:443 http_server.lk:nginx
 
 Retrieve all Nginx http servers listening on port 443, with any mention to domain belonging to CIRCL.lu
-
 
 ## Technical requirements
 Python 3.10  
