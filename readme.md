@@ -3,7 +3,7 @@
   <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_logo.png"   style="width:25%;" />
 
 <h1> Proactive Land Uncovering & Monitoring </h1>
-  <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum-overview.png" />
+  <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_overview.png" />
 </div>
 <p>
 <center>
@@ -45,14 +45,16 @@ modifier could be abreviated;
 * begin to bg
 
 ### Example of query
->domain.begin:circl.lu port:443 http_server.lk:nginx
+For now the query string only do AND between times.
+
+>domain.begin:"circl.lu" port:443 http_server.lk:nginx
 
 Retrieve all Nginx http servers listening on port 443, with any mention to domain belonging to CIRCL.lu
 
 
 ## Technical requirements
-Python 3  
-Flask Appbuilder  
+Python 3.10  
+Flask Appbuilder 4.8  
 meillisearch  
 kvrock
 
