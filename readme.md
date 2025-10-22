@@ -37,8 +37,8 @@ The following keywords are available for diging into the data;
 | x509_md5 | | md5sum of the tls  certificate public signature   
 | x509_sha1 | | sha1sum of the tls certificate public signature | 
 | x509_sha256 | | sha256sum of the tls certificate public signature | 
-|x509_subject |like, begin | tls certificate common name  |
-|x509_san |like, begin |  tls certificate subject alternatives name |
+| x509_subject |like, begin | tls certificate common name  |
+| x509_san |like, begin |  tls certificate subject alternatives name |
 
 modifier could be abreviated;  
 * like to lk
@@ -67,8 +67,9 @@ git clone
 cd Plum-Island
 ./setup.sh
 ```
-Then you could setup your prefered web server or simply run for demo
+And review config.py for matching your configuration 
 
+Then you could setup your prefered web server or simply run for demo
 ```bash
 source ./venv/bin/activate  
 cd webapp  
