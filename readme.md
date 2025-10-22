@@ -12,13 +12,13 @@
 </p>
 
 ## Description
-This this tool is a orchestrator for performing surface exposure proactive discovery.
-It provides jobs to agents and collect back scanning data. The final data may be stored
-as-is with history and is queriable.
+
+This tool acts as an orchestrator for proactive surface-exposure discovery.
+It assigns scanning tasks to agents, collects their results, and stores the data with full history. The collected information is queryable.
 
 ## Search capacity
 
-The following keywords are available for diging into the data;
+The following keywords can be used to explore the data:
 
 | Keyword | Modifier | Description |
 | -------- | -------- | -------- |
@@ -47,15 +47,17 @@ modifier could be abreviated;
 For now the query string only do AND between terms.
 
 ### Example of query
+
 >domain.begin:"circl.lu" port:443 http_server.lk:nginx
 
 Retrieve all Nginx http servers listening on port 443, with any mention to domain belonging to CIRCL.lu
 
 ## Technical requirements
-Python 3.10  
-Flask Appbuilder 4.8  
-meillisearch  
-kvrock
+
+- Python 3.10  
+- Flask Appbuilder 4.8  
+- meilisearch 
+- Kvrocks
 
 ## Installation
 
