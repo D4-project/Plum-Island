@@ -54,19 +54,21 @@ Retrieve all Nginx http servers listening on port 443, with any mention to domai
 
 ## Technical requirements
 
-- Python 3.10  
-- Flask Appbuilder 4.8  
-- meilisearch 
-- Kvrocks
+- Python 3.10 
+- Flask Appbuilder 4.8 (https://flask-appbuilder.readthedocs.io/en/latest/#) 
+- meilisearch (https://www.meilisearch.com/) 
+- Kvrocks (https://kvrocks.apache.org/) 
 
 ## Installation
+
+Before starting the setup, please ensure that you have both a meilisearch and a kvrocks servers running and reachable.
 
 To setup an environnement do;
 
 ```bash
 git clone 
-cd Plum-Island
-./setup.sh
+cd Plum-Island 
+./setup.sh 
 ```
 And review config.py for matching your configuration 
 
