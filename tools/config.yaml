@@ -1,5 +1,0 @@
-MEILI_URL: "http://localhost:7800"
-MEILI_API_KEY: "password"
-INDEX_NAME: "plum"
-KVROCKS_PORT: 6666
-KVROCKS_HOST: localhost

@@ -1,0 +1,7 @@
+MEILI_URL: "http://localhost:7800"
+MEILI_API_KEY: "thisneedtobechangedinproduction"
+INDEX_NAME: "plum"
+IN_KVROCKS_PORT: 6666
+IN_KVROCKS_HOST: localhost
+OUT_KVROCKS_PORT: 6666
+OUT_KVROCKS_HOST: localhost

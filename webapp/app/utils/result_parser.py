@@ -26,7 +26,7 @@ from pyfaup import Url
 # P -> Body.ports.XXXX Per Port Search
 
 default_parsing = [
-    # "get_hosts:b.hostnames",
+    "get_hosts:b.hostnames",
     "get_http_server:p.http-headers.output",
     "get_http_cookies:p.http-headers.output",
     "get_http_etag:p.http-headers.output",
@@ -162,6 +162,7 @@ def get_hosts(data: dict, target: str):
     body = get_body(data, target)
     hosts, fqdn_hosts, domains, tlds = [], [], [], []
     if body:
+        # Extract FQDN using regex if not empty data
         fqdn_hosts = fqdn_regex.findall(str(body))
     if fqdn_hosts:
         for host in fqdn_hosts:
