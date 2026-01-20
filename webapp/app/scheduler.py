@@ -245,7 +245,7 @@ def task_export_to_dbs():
     # If it append.. we need to iterate the report
     # 10K is the limit in the kvrocks insertion.
 
-    logger.debug("Documents to export %n", len(objects_to_save_to_meili))
+    logger.debug("Documents to export %s", len(objects_to_save_to_meili))
     if len(objects_to_save_to_meili) > 0:
         try:
             # push to meili
