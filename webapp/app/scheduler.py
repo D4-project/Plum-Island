@@ -8,6 +8,7 @@ import logging
 import shutil
 import uuid
 import json
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from netaddr import IPNetwork, cidr_merge
@@ -192,10 +193,6 @@ def task_export_to_dbs():
     input_dir = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
 
     job_snapshots = []
-    job_ids = []
-
-    objects_to_save_to_meili = []
-    objects_to_save_to_kvrocks = []
     # Select "All" Json
     for job_data in (
         db.session.query(Jobs.id, Jobs.uid)
@@ -207,76 +204,108 @@ def task_export_to_dbs():
         .yield_per(100)
     ):
         job_snapshots.append({"id": job_data.id, "uid": job_data.uid})
-        job_ids.append(job_data.id)
 
     if not job_snapshots:
+        db.session.remove()
         return
 
     # Release the read transaction before spending time on IO/exports to avoid long locks.
     db.session.commit()
+    db.session.remove()
 
-    for job in job_snapshots:
-        filepath = os.path.join(input_dir, job["uid"][0], job["uid"] + ".json")
-        logger.debug("Analysis of %s", filepath)
-
-        # Now We Create the documents to import.
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            item = {}
-            for item in data:
-                # Dns UUID ? seriously
-                # Derivate the uid from the headers smart hash.. or randomize it it not present.
-                ipuid = str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_DNS, item.get("hsh256", secrets.randbits(64))
-                    )
-                )
-                object_to_save = {
-                    "id": ipuid,
-                    "ip": item.get("addr"),
-                    "body": item,
-                }
-                objects_to_save_to_meili.append(object_to_save)
-                objects_to_save_to_kvrocks.append(parse_json(object_to_save))
-
-    # Be carefull here, if we got more documents than commit capacity.
-    # meaning more than 10000 IP reports / 5 min ( default )
-    # Should be good for a while for now .
-    # If it append.. we need to iterate the report
-    # 10K is the limit in the kvrocks insertion.
-
-    total_documents = len(objects_to_save_to_meili)
-    logger.debug("Documents to export %s", total_documents)
     batch_size = 2500
-    if total_documents > 0:
-        try:
-            batches = (total_documents + batch_size - 1) // batch_size
-            for batch_index in range(batches):
-                start = batch_index * batch_size
-                end = min(start + batch_size, total_documents)
-                logger.debug(
-                    "Export batch %s/%s (items %s-%s)",
-                    batch_index + 1,
-                    batches,
-                    start,
-                    end - 1,
-                )
-                # push to meili
-                meili_idx.add_documents(objects_to_save_to_meili[start:end])
-                # push to kvrocks.
-                kvrocks_idx.add_documents_batch(objects_to_save_to_kvrocks[start:end])
+    pending_meili = []
+    pending_kvrocks = []
+    pending_job_refs = []
+    outstanding_docs = defaultdict(int)
+    completed_jobs = set()
+    ready_jobs = set()
+    total_documents = 0
+    batch_count = 0
 
-            #  if it's success full, we push these result as "exported"
-            (
+    def flush_batch():
+        nonlocal batch_count, total_documents
+        if not pending_meili:
+            return
+        batch_count += 1
+        start_index = total_documents
+        end_index = total_documents + len(pending_meili) - 1
+        logger.debug(
+            "Export batch %s (items %s-%s)", batch_count, start_index, end_index
+        )
+        meili_idx.add_documents(pending_meili)
+        kvrocks_idx.add_documents_batch(pending_kvrocks)
+        for job_id in pending_job_refs:
+            outstanding_docs[job_id] -= 1
+            if outstanding_docs[job_id] == 0 and job_id in completed_jobs:
+                ready_jobs.add(job_id)
+        total_documents += len(pending_meili)
+        pending_meili.clear()
+        pending_kvrocks.clear()
+        pending_job_refs.clear()
+
+    try:
+        for job in job_snapshots:
+            filepath = os.path.join(input_dir, job["uid"][0], job["uid"] + ".json")
+            logger.debug("Analysis of %s", filepath)
+
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                item = {}
+                for item in data:
+                    ipuid = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_DNS, item.get("hsh256", secrets.randbits(64))
+                        )
+                    )
+                    object_to_save = {
+                        "id": ipuid,
+                        "ip": item.get("addr"),
+                        "body": item,
+                    }
+                    pending_meili.append(object_to_save)
+                    pending_kvrocks.append(parse_json(object_to_save))
+                    pending_job_refs.append(job["id"])
+                    outstanding_docs[job["id"]] += 1
+
+                    if len(pending_meili) >= batch_size:
+                        flush_batch()
+
+            completed_jobs.add(job["id"])
+            if outstanding_docs[job["id"]] == 0:
+                ready_jobs.add(job["id"])
+
+        flush_batch()
+
+        logger.debug(
+            "Total exported documents %s across %s batches", total_documents, batch_count
+        )
+
+        if ready_jobs:
+            updated_rows = (
                 db.session.query(Jobs)
-                .filter(Jobs.id.in_(job_ids))
+                .filter(
+                    Jobs.id.in_(ready_jobs),
+                    Jobs.active == False,
+                    Jobs.finished == True,
+                    Jobs.exported == False,
+                )
                 .update({Jobs.exported: True}, synchronize_session=False)
             )
+            if updated_rows != len(ready_jobs):
+                logger.warning(
+                    "Exported job mismatch, expected %s updated %s",
+                    len(ready_jobs),
+                    updated_rows,
+                )
             db.session.commit()
-        except (MeilisearchApiError, HTTPError):
-            # We failed to push to meili.
-            db.session.rollback()
-            logger.error("Unable to export to Meili database")
+        else:
+            logger.debug("No jobs ready to mark as exported")
+    except (MeilisearchApiError, HTTPError):
+        db.session.rollback()
+        logger.error("Unable to export to Meili database")
+    finally:
+        db.session.remove()
 
     logger.debug("**** Stop TASK EXPORT ****")
 
