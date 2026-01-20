@@ -4,3 +4,4 @@ webapp/__pycache__
 .venv
 dev-*
 tools/meili_dump
+tools/config.yaml
