@@ -177,25 +177,28 @@ def task_create_jobs():
             db.session.add(new_job)
             chunk256 = []
     db.session.commit()
+    logger.debug("**** Stop Job TASK SCHEDULER ****")
 
 
 def task_export_to_dbs():
     """
     Export Local Json to external DB
     """
-
+    logger.debug("**** Start TASK EXPORT ****")
     # Reuse the connections.
     meili_idx = db.app.config.get("MEILI_IDX")
     kvrocks_idx = db.app.config.get("KVROCKS_IDX")
 
     input_dir = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
 
+    job_snapshots = []
+    job_ids = []
+
     objects_to_save_to_meili = []
     objects_to_save_to_kvrocks = []
-    success_jobs = []
     # Select "All" Json
-    for jobs in (
-        db.session.query(Jobs)
+    for job_data in (
+        db.session.query(Jobs.id, Jobs.uid)
         .filter(
             Jobs.active == False,
             Jobs.exported == False,
@@ -203,9 +206,17 @@ def task_export_to_dbs():
         )
         .yield_per(100)
     ):
+        job_snapshots.append({"id": job_data.id, "uid": job_data.uid})
+        job_ids.append(job_data.id)
 
-        success_jobs.append(jobs)  # Candidates for a good export
-        filepath = os.path.join(input_dir, jobs.uid[0], jobs.uid + ".json")
+    if not job_snapshots:
+        return
+
+    # Release the read transaction before spending time on IO/exports to avoid long locks.
+    db.session.commit()
+
+    for job in job_snapshots:
+        filepath = os.path.join(input_dir, job["uid"][0], job["uid"] + ".json")
         logger.debug("Analysis of %s", filepath)
 
         # Now We Create the documents to import.
@@ -234,6 +245,7 @@ def task_export_to_dbs():
     # If it append.. we need to iterate the report
     # 10K is the limit in the kvrocks insertion.
 
+    logger.debug("Documents to export %n", len(objects_to_save_to_meili))
     if len(objects_to_save_to_meili) > 0:
         try:
             # push to meili
@@ -242,13 +254,18 @@ def task_export_to_dbs():
             kvrocks_idx.add_documents_batch(objects_to_save_to_kvrocks)
 
             #  if it's success full, we push these result as "exported"
-            for success_job in success_jobs:
-                success_job.exported = True
-                db.session.commit()
+            (
+                db.session.query(Jobs)
+                .filter(Jobs.id.in_(job_ids))
+                .update({Jobs.exported: True}, synchronize_session=False)
+            )
+            db.session.commit()
         except (MeilisearchApiError, HTTPError):
             # We failed to push to meili.
             db.session.rollback()
             logger.error("Unable to export to Meili database")
+
+    logger.debug("**** Stop TASK EXPORT ****")
 
 
 # INIT of the Program..
