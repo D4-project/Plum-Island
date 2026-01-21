@@ -127,6 +127,8 @@ SCAN_DELAY = 12
 
 # How many time between job scheduling in minutes
 SCHEDULER_DELAY = 10
+                                                                                                                                                                                         # Job Local retention of results in days 
+JOB_SCAVENGE = 60
 
 # Nmap Configuration
 NMAP_PORTS = [21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3389, 8080, 8443]

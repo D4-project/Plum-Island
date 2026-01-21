@@ -32,6 +32,7 @@ def task_master_of_puppets():
     """
     task_create_jobs()  # Create Jobs for the Scanner
     task_export_to_dbs()  # Export New Received reports.
+    task_cleanup_jobs()  # Delete both Jobs from DB and Files
 
 
 def check_json_storage(json_folder):
@@ -213,7 +214,7 @@ def task_export_to_dbs():
     db.session.commit()
     db.session.remove()
 
-    batch_size = 2500
+    batch_size = 2500  # How many Document we flush at once to backend.
     pending_meili = []
     pending_kvrocks = []
     pending_job_refs = []
@@ -224,6 +225,9 @@ def task_export_to_dbs():
     batch_count = 0
 
     def flush_batch():
+        """
+        This subprocedure flush reports (per IP)
+        """
         nonlocal batch_count, total_documents
         if not pending_meili:
             return
@@ -278,7 +282,9 @@ def task_export_to_dbs():
         flush_batch()
 
         logger.debug(
-            "Total exported documents %s across %s batches", total_documents, batch_count
+            "Total exported documents %s across %s batches",
+            total_documents,
+            batch_count,
         )
 
         if ready_jobs:
@@ -309,6 +315,53 @@ def task_export_to_dbs():
 
     logger.debug("**** Stop TASK EXPORT ****")
 
+
+def task_cleanup_jobs():
+    """
+    This procedure will delete both Jobs from DB and Files
+    """
+
+    job_scavenge = db.app.config.get("JOB_SCAVENGE")
+    logger.debug("**** Start Cleanup Job at %s Days****", job_scavenge)
+
+    job_scavenge = db.app.config.get("JOB_SCAVENGE")
+    json_folder = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
+    deleted_jobs = 0
+
+    for job_data in (
+        db.session.query(Jobs.id, Jobs.uid)
+        .filter(
+            Jobs.active == False,
+            Jobs.exported == True,
+            Jobs.finished == True,
+            Jobs.job_end <= datetime.now(timezone.utc) - timedelta(days=job_scavenge),
+        )
+        .yield_per(100)
+    ):
+        logger.debug("Cleanup Scan Data %s", job_data)
+        filepath = os.path.join(
+            json_folder,
+            job_data.uid[0],
+            f"{job_data.uid}.json",
+        )
+        try:
+            os.remove(filepath)
+            logger.debug("Deleted job file %s", filepath)
+        except FileNotFoundError:
+            logger.warning("Job file already absent %s", filepath)
+        except OSError as err:
+            logger.error("Unable to delete job file %s: %s", filepath, err)
+
+        db.session.query(Jobs).filter(Jobs.id == job_data.id).delete(
+            synchronize_session=False
+        )
+        deleted_jobs += 1
+
+    if deleted_jobs:
+        db.session.commit()
+        logger.debug("Cleanup removed %s jobs", deleted_jobs)
+    else:
+        logger.debug("No jobs eligible for cleanup")
 
 # INIT of the Program..
 
