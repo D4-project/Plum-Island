@@ -116,6 +116,10 @@ class KVrocksIndexer:
                     first_seen = min(existing.get("first_seen", first_seen), first_seen)
                     last_seen = max(existing.get("last_seen", last_seen), last_seen)
 
+                # Set the "LastSeen/FirstSeen" Index
+                pipe.zadd("last_seen_index", {uid: last_seen})
+                pipe.zadd("first_seen_index", {uid: first_seen})
+
                 # Store hashset uid
                 pipe.hset(
                     uid_key,

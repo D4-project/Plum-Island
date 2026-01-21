@@ -5,3 +5,4 @@
 ## Bugfix
 - Improve document storage to avoid lock
 - Add cleanup of old jobs
+- Add index for scan timeline
