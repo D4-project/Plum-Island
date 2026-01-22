@@ -127,6 +127,7 @@ class MeiliSearchView(BaseView):
 class KVSearchView(BaseView):
     """
     This class interact with the KvRocks database and allow basic search
+    It return found document sorted by IP's.
     """
 
     default_view = "search"
@@ -220,12 +221,16 @@ class KVSearchView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         criteria, status, msg_error = self.parse_query(query)
-        count_objects = indexer.objects_count()
+        count_objects = indexer.objects_count()  # Get object count in db
         results_ip = {}
 
+        timestamp_array = {}
         if status:
             uids = indexer.get_uids_by_criteria(criteria)
             results_ip = indexer.get_ip_from_uids(uids)
+
+            for ip in results_ip:
+                timestamp_array[ip] = indexer.get_timestamp_for_ip(ip)
 
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
@@ -239,11 +244,13 @@ class KVSearchView(BaseView):
                 "processingTimeMs": processingtimems,
                 "uid_count": count_objects.get("uid_count"),
                 "ip_count": count_objects.get("ip_count"),
+                "timestamps": timestamp_array,
             }
         else:
             results = {
                 "status": False,
                 "results": {},
+                "timestamps": {},
                 "msg_error": msg_error,
                 "processingTimeMs": processingtimems,
                 "uid_count": count_objects.get("uid_count"),

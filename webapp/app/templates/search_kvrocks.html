@@ -5,6 +5,50 @@
 {{ lib.panel_begin(title, "Query Scans") }}
 
 <script>
+function formatTimestamp(ts) {
+    if (ts === null || ts === undefined) {
+        return '';
+    }
+    const numericTs = Number(ts);
+    if (Number.isNaN(numericTs)) {
+        return '';
+    }
+    const milliseconds = numericTs > 1e12 ? numericTs : numericTs * 1000;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
+}
+
+function formatTimestampWithRaw(ts) {
+    if (ts === null || ts === undefined || ts === '') {
+        return '';
+    }
+    const pretty = formatTimestamp(ts);
+    return pretty || ts;
+}
+
+function hasTimestampValue(value) {
+    return value !== null && value !== undefined && value !== '';
+}
+
+function buildTimestampMeta(first, last) {
+    if (!hasTimestampValue(first) && !hasTimestampValue(last)) {
+        return '';
+    }
+    const firstDisplay = hasTimestampValue(first) ? formatTimestampWithRaw(first) : 'N/A';
+    const lastDisplay = hasTimestampValue(last) ? formatTimestampWithRaw(last) : 'N/A';
+    return `<span class="timestamp-meta">
+        <span class="timestamp-chip timestamp-first">
+            <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
+            ${firstDisplay}
+        </span>
+        <span class="timestamp-separator">|</span>
+        <span class="timestamp-chip timestamp-last">
+            ${lastDisplay}
+            <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
+        </span>
+    </span>`;
+}
+
 async function search() {
     const query = document.getElementById('query').value;
     const res = await fetch(`/kvsearchview/query?q=${encodeURIComponent(query)}`);
@@ -25,13 +69,17 @@ async function search() {
     Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
         const ipPanel = document.createElement('div');
         ipPanel.className = 'panel panel-default';
+        const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
+        const ipLabel = ip;
+        const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
 
         // IP accordion
         ipPanel.innerHTML = `
             <div class="panel-heading">
                 <h4 class="panel-title">
                     <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
-                        ${ip}
+                        ${ipLabel}
+                        ${ipMeta}
                     </a>
                 </h4>
             </div>
@@ -44,15 +92,27 @@ async function search() {
         hitsDiv.appendChild(ipPanel);
 
         const uidsDiv = document.getElementById(`uids-${ipIndex}`);
-        uids.forEach((uid, uidIndex) => {
+        const sortedUids = [...uids].sort((a, b) => {
+            const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
+            const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
+            return bLast - aLast;
+        });
+
+        sortedUids.forEach((uid, uidIndex) => {
             const uidPanel = document.createElement('div');
             uidPanel.className = 'panel panel-info';
+            const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
+            const uidLabel = uid;
+            const uidMeta = uidTimestamp
+                ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
+                : '';
             uidPanel.innerHTML = `
                 <div class="panel-heading">
                     <h5 class="panel-title">
                         <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
-                            ${uid}
+                            ${uidLabel}
                         </a>
+                        ${uidMeta}
                     </h5>
                 </div>
                 <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
@@ -80,6 +140,31 @@ async function loadUid(uid, targetId) {
 }
 
 </script>
+<style>
+.timestamp-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+    font-size: 0.85em;
+    font-family: "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
+    color: #6c757d;
+    float: right;
+    text-align: right;
+}
+.timestamp-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+.timestamp-separator {
+    font-weight: 600;
+}
+.timestamp-chip i {
+    font-size: 0.9em;
+}
+</style>
 
 <div class="container mt-2">
     <div class="row g-2">

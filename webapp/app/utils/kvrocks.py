@@ -309,6 +309,7 @@ class KVrocksIndexer:
                     uids = self.r.smembers(f"{base_field}:{value}")
                     partial_result = partial_result.intersection(uids)
 
+        # return an list of UUIDs
         return list(partial_result)
 
     def get_ip_info(self, ip):
@@ -355,3 +356,65 @@ class KVrocksIndexer:
                 else:
                     ip_map[ip] = [uid]
         return ip_map
+
+    def get_timestamp_from_uid(self, uid):
+        """
+        This Function ask doc timestamp ( last first)
+
+        :param uid: Document UUID in kvrocks
+
+        127.0.0.1:6666> HGETALL doc:a64dd35e-f1d1-59cf-bd71-dff5affffd8a
+            1) "first_seen"
+            2) "1767778159"
+            3) "ip"
+            4) "104.18.34.219"
+            5) "last_seen"
+            6) "1767778159"
+
+        """
+        pipe = self.r.pipeline()
+        pipe.hgetall(f"doc:{uid}")
+        results_raw = pipe.execute()
+        result = {}
+        result["first_seen"] = int(data.get("first_seen"))
+        result["last_seen"] = int(data.get("last_seen"))
+        return result
+
+    def get_timestamp_for_ip(self, ip):
+        """
+        This functions ask timestamp for a given IP
+
+        :param self: Description
+        :param ip: Description
+
+        127.0.0.1:6666> smembers ip:146.0.178.196
+            1) "0512bce3-96ef-54cc-861d-3eca8056eb1f"
+            2) "404bd035-be3a-56b7-b517-f2620614969a"
+            3) "4146fc22-7d71-572f-80c1-d89da512d8aa"
+            4) "4388792d-2642-54e0-942b-f59f307c1c4c"
+            ...
+
+        """
+        max_first_seen = 9999999999999
+        max_last_seen = -1
+
+        uids = self.r.smembers(f"ip:{ip}")
+        pipe = self.r.pipeline()
+        for uid in uids:
+            pipe.hgetall(f"doc:{uid}")
+        results_raw = pipe.execute()
+        results = {}
+        for uid, data in zip(uids, results_raw):
+            results[uid] = {
+                "first_seen": int(data.get("first_seen")),
+                "last_seen": int(data.get("last_seen")),
+            }
+            max_first_seen = min(
+                int(data.get("first_seen", max_first_seen)), max_first_seen
+            )
+            max_last_seen = max(
+                int(data.get("last_seen", max_last_seen)), max_last_seen
+            )
+        results["max_seen"] = max_last_seen
+        results["min_seen"] = max_first_seen
+        return results
