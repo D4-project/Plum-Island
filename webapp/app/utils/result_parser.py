@@ -167,12 +167,12 @@ def get_hosts(data: dict, target: str):
     if fqdn_hosts:
         for host in fqdn_hosts:
             try:
-                url = Url(f"http://{host}")
+                url = Url(f"http://{str.lower(host)}")
                 subdomain = url.subdomain
                 if subdomain:
-                    hosts.append(subdomain)
-                tlds.append(url.suffix)
-                domains.append(url.domain)
+                    hosts.append(str.lower(subdomain))
+                tlds.append(str.lower(url.suffix))
+                domains.append(str.lower(url.domain))
             except (ValueError, TypeError):
                 pass
 
