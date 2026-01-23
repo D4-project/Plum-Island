@@ -84,6 +84,11 @@ def bulk_import_targets(base_url: str, access_token: str, bulk_payload: str) -> 
                 time.sleep(RETRY_DELAY_SECONDS)
                 continue
             raise
+        except (TimeoutError, requests.exceptions.ConnectionError) as err:
+            if attempts < MAX_RETRIES:
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            raise
 
 
 def parse_args() -> argparse.Namespace:
