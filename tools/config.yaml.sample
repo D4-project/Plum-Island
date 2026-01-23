@@ -5,3 +5,7 @@ IN_KVROCKS_PORT: 6666
 IN_KVROCKS_HOST: localhost
 OUT_KVROCKS_PORT: 6666
 OUT_KVROCKS_HOST: localhost
+# Plum API Interactions
+PLUMISLAND: "https://localhost:5001"
+PLUMAPIUSER: "myuser"
+PLUMAPIPWD: "averystrongpasswordtochange"

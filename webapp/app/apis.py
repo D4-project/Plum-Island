@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 import json
 import logging
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_appbuilder import ModelRestApi
-from flask_appbuilder.api import BaseApi, expose, safe
+from flask_appbuilder import ModelRestApi, has_access
+from flask_appbuilder.api import BaseApi, expose, safe, protect
 from flask import request
 
 from sqlalchemy import func, distinct
@@ -24,6 +24,7 @@ from marshmallow import Schema, fields, validates, ValidationError
 from .models import Targets, Bots, ApiKeys, Jobs, assoc_jobs_targets
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
+from .views import TargetsView
 
 
 class BotInfoSchema(Schema):
@@ -103,6 +104,26 @@ class BotInfoSchema(Schema):
         raise ValidationError(f"Invalid {data_key}")
 
 
+class BulkTargetsSchema(Schema):
+    """
+    Schema for Targets bulk import via API
+    """
+
+    bulk = fields.String(
+        required=True,
+        metadata={"description": "One IP/CIDR/FQDN per line."},
+    )
+
+    @validates("bulk")
+    def validate_bulk(self, value, data_key):  # pylint: disable=unused-argument
+        """
+        Ensure we have at least one target in the payload.
+        """
+        if not value or not value.strip():
+            raise ValidationError("Bulk payload cannot be empty")
+        return True
+
+
 logger = logging.getLogger("flask_appbuilder")
 
 
@@ -112,6 +133,74 @@ class PublicTargetsApi(ModelRestApi):
     """
 
     datamodel = SQLAInterface(Targets)
+
+
+class TargetsApi(BaseApi):
+    """
+    Additional API endpoints for managing targets (Swagger exposed).
+    """
+
+    route_base = "/targets_api"
+    openapi_spec_tag = "Targets API"
+    bulk_schema = BulkTargetsSchema()
+
+    @expose("/bulk_import", methods=["POST"])
+    @protect()
+    @safe
+    def bulk_import(self):
+        """
+        summary: Bulk import targets (IP, CIDR, FQDN).
+        description: |
+            Accepts the same newline-separated payload as the HTML form and
+            queues each entry for scanning.
+        parameters:
+            - in: body
+              name: payload
+              required: true
+              schema:
+                  type: object
+                  properties:
+                      bulk:
+                          type: string
+                          description: One IP/CIDR/FQDN per line.
+                  required:
+                      - bulk
+        responses:
+            200:
+                description: Import log and statistics.
+                content:
+                    application/json:
+                        schema:
+                            type: object
+        """
+
+        try:
+            payload = request.get_json(force=True)
+        except Exception:
+            return self.response_400(message="Invalid or missing JSON payload")
+
+        if not isinstance(payload, dict):
+            payload = {"bulk": payload}
+
+        try:
+            data = self.bulk_schema.load(payload)
+        except ValidationError as err:
+            return self.response_400(
+                message=f"Invalid input: {flat_marsh_error(err.messages)}"
+            )
+
+        bulk_text = data["bulk"].replace("\r\n", "\r").replace("\n", "\r")
+        submitted_entries = [
+            entry.strip() for entry in bulk_text.split("\r") if entry.strip()
+        ]
+        log = TargetsView.do_bulk_import(bulk_text)
+        full_log = f"{log}\nEnd of import"
+        log_lines = [line for line in full_log.split("\n") if line.strip()]
+
+        return self.response(
+            200,
+            message={"log": log_lines, "entries_submitted": len(submitted_entries)},
+        )
 
 
 class Api(BaseApi):
@@ -359,4 +448,5 @@ class Api(BaseApi):
 
 
 appbuilder.add_api(PublicTargetsApi)
+appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)

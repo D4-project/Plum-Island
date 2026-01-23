@@ -337,7 +337,8 @@ class TargetsView(ModelView):
         self.update_redirect()
         return redirect(self.get_redirect())
 
-    def do_bulk_import(self, ips):
+    @staticmethod
+    def do_bulk_import(ips):
         """
         Import a list of bulk Ip's into the targets
         """
@@ -387,7 +388,7 @@ class TargetsView(ModelView):
         if form.validate_on_submit():
             bulk_data = form.bulk.data
             form.bulk.label = "Targets Imported"
-            log = TargetsView.do_bulk_import(self, bulk_data)  # Do the insert Job
+            log = self.do_bulk_import(bulk_data)  # Do the insert Job
             log = log + "\nEnd of import"
             form.bulk.data = log
             del form.submit
