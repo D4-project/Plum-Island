@@ -8,3 +8,4 @@
 - Add index for scan timeline
 - Add Timescan display in the KV search
 - Add tool script for PDNS extraction last_fqdns.py
+- Add tool script for API target import 
