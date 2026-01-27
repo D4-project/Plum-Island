@@ -152,6 +152,7 @@ class KVrocksIndexer:
                     # We have still NONE in table
                     for v in values:
                         if v:
+                            v = v.lower()
                             # print(f"{field} - {v} - {uid}")
                             pipe.sadd(f"{field}:{v}", uid)
                             pipe.sadd(f"{field}s:{uid}", v)

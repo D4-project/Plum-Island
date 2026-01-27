@@ -130,3 +130,21 @@ def package_list(source, size):
     return chunk of lists
     """
     return [source[i : i + size] for i in range(0, len(source), size)]
+
+
+def lowercase_dict(input_dict):
+    """
+    Lowercase_values of dict of list
+
+    :param input_dict: Description
+    """
+    # lowercase strings and lists of strings
+    output_dict = {}
+    for key, value in input_dict.items():
+        if isinstance(value, list):
+            output_dict[key] = [element.lower() for element in value]
+        elif isinstance(value, str):
+            output_dict[key] = value.lower()
+        else:
+            output_dict[key] = value
+    return output_dict

@@ -29,7 +29,7 @@ from sqlalchemy.exc import IntegrityError
 from app import app
 from .models import Bots, Targets, Jobs, ApiKeys, Nses, Protos, ScanProfiles, Ports
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
-from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
+from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
 from .utils.ip2asn import get_asn_description_for_ip
 
@@ -227,6 +227,7 @@ class KVSearchView(BaseView):
 
         timestamp_array = {}
         if status:
+            criteria = lowercase_dict(criteria)
             uids = indexer.get_uids_by_criteria(criteria)
             results_ip = indexer.get_ip_from_uids(uids)
 
