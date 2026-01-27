@@ -1,8 +1,7 @@
 """
 This module will parse json results an prepare required data for indexation.
 
-This module should be heavily refactored to be used according to scanprofiles results
-each scanprofile should have a with a flexible text syntax for parsing like that;
+It use a parsing profile description.
 
 hsh:http-header.output
 get_http_cookies:http-header.output
@@ -22,6 +21,8 @@ For now far from performance issues anyway.
 import re
 from pyfaup import Url
 
+TLDS = []
+
 # B -> Body.XXXX Subsearch
 # P -> Body.ports.XXXX Per Port Search
 
@@ -35,14 +36,18 @@ default_parsing = [
     "get_ssl_info:p.ssl-cert",
     "get_hosts:p.ssl-cert.issuer.commonName",
     "get_hosts:p.ssl-cert.extensions.X509v3_Subject_Alternative_Name",
+    "get_hosts:p.banner.output",
+    "get_banner:p.banner.output",
 ]
 
+# Authorised data harversting methods.
 ALLOW = [
     "get_http_cookies",
     "get_hosts",
     "get_http_server",
     "get_http_title",
     "get_http_etag",
+    "get_banner",
     "get_ssl_info",
     "hsh",
 ]
@@ -163,16 +168,20 @@ def get_hosts(data: dict, target: str):
     hosts, fqdn_hosts, domains, tlds = [], [], [], []
     if body:
         # Extract FQDN using regex if not empty data
-        fqdn_hosts = fqdn_regex.findall(str(body))
-    if fqdn_hosts:
-        for host in fqdn_hosts:
+        fqdn_hosts_candidates = fqdn_regex.findall(str(body))
+    if fqdn_hosts_candidates:
+        for host in fqdn_hosts_candidates:
             try:
                 url = Url(f"http://{str.lower(host)}")
-                subdomain = url.subdomain
-                if subdomain:
-                    hosts.append(str.lower(subdomain))
-                tlds.append(str.lower(url.suffix))
-                domains.append(str.lower(url.domain))
+                subdomain = url.subdomain  # Host
+                suffix = url.suffix.lower()  # TLD
+                # Validate if TLD is known by a ROOT server
+                if suffix in TLDS:
+                    fqdn_hosts.append(str.lower(host))
+                    if subdomain:
+                        hosts.append(str.lower(subdomain))
+                    tlds.append(str.lower(url.suffix))
+                    domains.append(str.lower(url.domain))
             except (ValueError, TypeError):
                 pass
 
@@ -188,6 +197,17 @@ def get_http_title(data: dict, target: str):
     if body:
         http_title = [body]
     return {"http_title": http_title}
+
+
+def get_banner(data: dict, target: str):
+    """
+    look for banner text
+    """
+    body = get_body(data, target)
+    banner = []
+    if body:
+        banner = [body]
+    return {"banner": banner}
 
 
 def get_http_server(data: dict, target: str):
@@ -221,7 +241,11 @@ def fuse_dicts(d1, d2):
     return fused
 
 
-def parse_json(doc):
+def parse_json(doc, tlds):
+
+    # Save TLDS
+    global TLDS
+    TLDS = tlds
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:

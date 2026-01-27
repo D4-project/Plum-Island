@@ -5,6 +5,7 @@ Generic utils library
 import uuid
 import ipaddress
 import re
+import requests
 
 
 def is_valid_uuid(value):
@@ -105,6 +106,23 @@ def flat_marsh_error(err_msg):
     for key, value in err_msg.items():
         if isinstance(value, list) and len(value) > 0:
             return f"{value[0]} in {key}"
+
+
+def fetch_tlds():
+    """
+    Download the file from IANA and load into an ARRAY
+    """
+    response = requests.get("https://data.iana.org/TLD/tlds-alpha-by-domain.txt")
+    response.raise_for_status()
+
+    tld_list = []
+    for line in response.text.splitlines():
+        # Skip comments or blank lines
+        if line.startswith("#") or not line.strip():
+            continue
+        # Append lowercase TLD to list
+        tld_list.append(line.strip().lower())
+    return tld_list
 
 
 def package_list(source, size):

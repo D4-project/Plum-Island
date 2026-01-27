@@ -33,6 +33,7 @@ The following keywords can be used to explore the data:
 | http_cookiename | like, begin | Http set cookie keyname |
 | http_etag | like, begin | http etag value |
 | http_server | like, begin | http serveur value |
+| banner | like, begin | Services banner server value |
 | x509_issuer | like, begin | 
 | x509_md5 | | md5sum of the tls  certificate public signature   
 | x509_sha1 | | sha1sum of the tls certificate public signature | 

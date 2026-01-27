@@ -174,6 +174,7 @@ class KVSearchView(BaseView):
             # "ssh_fingerprint",
             # "ttl_count",
             # "hsh"
+            "banner",
         ]
 
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}

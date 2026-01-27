@@ -17,7 +17,7 @@ from meilisearch.errors import MeilisearchApiError
 from requests.exceptions import HTTPError
 from . import db
 from .models import Targets, Jobs
-from .utils.mutils import is_valid_fqdn
+from .utils.mutils import is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json
 
@@ -268,7 +268,9 @@ def task_export_to_dbs():
                         "body": item,
                     }
                     pending_meili.append(object_to_save)
-                    pending_kvrocks.append(parse_json(object_to_save))
+                    pending_kvrocks.append(
+                        parse_json(object_to_save, db.app.config["TLDS"])
+                    )
                     pending_job_refs.append(job["id"])
                     outstanding_docs[job["id"]] += 1
 
@@ -363,6 +365,7 @@ def task_cleanup_jobs():
     else:
         logger.debug("No jobs eligible for cleanup")
 
+
 # INIT of the Program..
 
 # Check if the folder exists and create subfolders if needed
@@ -378,6 +381,10 @@ client = meilisearch.Client(
     db.app.config.get("MEILI_DATABASE_URI"),
     db.app.config.get("MEILI_KEY"),
 )
+
+# Download https://data.iana.org/TLD/tlds-alpha-by-domain.txt and create an array of TLDs
+db.app.config["TLDS"] = fetch_tlds
+
 
 client.create_index("plum")
 index = client.index("plum")

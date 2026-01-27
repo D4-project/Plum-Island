@@ -142,6 +142,7 @@ NMAP_NSE = [
     "ssl-cert.nse",
     "ssh-hostkey.nse",
     "tls-alpn.nse",
+    "banner",
 ]
 
 

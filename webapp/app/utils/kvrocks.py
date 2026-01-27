@@ -89,6 +89,7 @@ class KVrocksIndexer:
             # "ssh_fingerprint",
             # "ttl_count",
             # "hsh"
+            "banner",
         ]
 
         for i in range(0, len(docs), batch_size):

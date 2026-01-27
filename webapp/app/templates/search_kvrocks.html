@@ -164,6 +164,58 @@ async function loadUid(uid, targetId) {
 .timestamp-chip i {
     font-size: 0.9em;
 }
+.kvrocks-table-wrapper {
+    display: flex;
+    justify-content: center;
+    margin: 2rem auto 1rem;
+    padding: 0 1rem;
+}
+.kvrocks-table {
+    border-collapse: collapse;
+    font-family: "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+    font-size: 0.85rem;
+    min-width: 320px;
+    max-width: 520px;
+    width: 100%;
+    text-align: center;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+    border: 1px solid rgba(51, 122, 183, 0.25);
+}
+.kvrocks-table th,
+.kvrocks-table td {
+    padding: 0.65rem 0.9rem;
+}
+.kvrocks-table thead {
+    background: #337ab7;
+    color: #fff;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-weight: 600;
+    border-bottom: 2px solid #265a88;
+}
+.kvrocks-table tbody tr:nth-child(even) {
+    background: #f5f8fb;
+}
+.kvrocks-table tbody tr:nth-child(odd) {
+    background: #ffffff;
+}
+.kvrocks-table tbody tr:hover {
+    background: rgba(51, 122, 183, 0.11);
+}
+.kvrocks-table td:first-child {
+    font-weight: 600;
+    color: #24527a;
+}
+.kvrocks-table td:nth-child(2) {
+    color: #4d6172;
+}
+.kvrocks-table td:nth-child(3) {
+    color: #2f353a;
+    text-align: left;
+}
 </style>
 
 <div class="container mt-2">
@@ -181,6 +233,111 @@ async function loadUid(uid, targetId) {
 <div id="msg_error" class="panel-group mt-2"></div>
 <div id="hits" class="panel-group mt-2"></div>
 {{ lib.panel_end() }}
+
+<div class="kvrocks-table-wrapper">
+<table class="kvrocks-table">
+  <thead>
+    <tr>
+      <th>Keyword</th>
+      <th>Modifier</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ip</td>
+      <td></td>
+      <td>IP of the host</td>
+    </tr>
+    <tr>
+      <td>net</td>
+      <td></td>
+      <td>Cidr network, from /16 to /24</td>
+    </tr>
+    <tr>
+      <td>fqdn</td>
+      <td>lk, bg</td>
+      <td>fully qualified domain name</td>
+    </tr>
+    <tr>
+      <td>host</td>
+      <td>lk, bg</td>
+      <td>hostname, the subdomain part</td>
+    </tr>
+    <tr>
+      <td>domain</td>
+      <td>lk, bg</td>
+      <td>Dns domain</td>
+    </tr>
+    <tr>
+      <td>tld</td>
+      <td>lk, bg</td>
+      <td>Top level domain</td>
+    </tr>
+    <tr>
+      <td>port</td>
+      <td></td>
+      <td>Open port</td>
+    </tr>
+    <tr>
+      <td>http_title</td>
+      <td>lk, bg</td>
+      <td>html title tag</td>
+    </tr>
+    <tr>
+      <td>http_cookiename</td>
+      <td>lk, bg</td>
+      <td>Http set cookie keyname</td>
+    </tr>
+    <tr>
+      <td>http_etag</td>
+      <td>lk, bg</td>
+      <td>http etag value</td>
+    </tr>
+    <tr>
+      <td>http_server</td>
+      <td>lk, bg</td>
+      <td>http serveur value</td>
+    </tr>
+    <tr>
+      <td>banner</td>
+      <td>lk, bg</td>
+      <td>Services banner value</td>
+    </tr>
+    <tr>
+      <td>x509_issuer</td>
+      <td>lk, bg</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>x509_md5</td>
+      <td></td>
+      <td>md5sum of the tls certificate public signature</td>
+    </tr>
+    <tr>
+      <td>x509_sha1</td>
+      <td></td>
+      <td>sha1sum of the tls certificate public signature</td>
+    </tr>
+    <tr>
+      <td>x509_sha256</td>
+      <td></td>
+      <td>sha256sum of the tls certificate public signature</td>
+    </tr>
+    <tr>
+      <td>x509_subject</td>
+      <td>lk, bg</td>
+      <td>tls certificate common name</td>
+    </tr>
+    <tr>
+      <td>x509_san</td>
+      <td>lk, bg</td>
+      <td>tls certificate subject alternatives name</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
 {% endblock content %}
 
 {% block add_tail_js %}
