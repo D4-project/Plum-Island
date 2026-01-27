@@ -169,21 +169,21 @@ def get_hosts(data: dict, target: str):
     if body:
         # Extract FQDN using regex if not empty data
         fqdn_hosts_candidates = fqdn_regex.findall(str(body))
-    if fqdn_hosts_candidates:
-        for host in fqdn_hosts_candidates:
-            try:
-                url = Url(f"http://{str.lower(host)}")
-                subdomain = url.subdomain  # Host
-                suffix = url.suffix.lower()  # TLD
-                # Validate if TLD is known by a ROOT server
-                if suffix in TLDS:
-                    fqdn_hosts.append(str.lower(host))
-                    if subdomain:
-                        hosts.append(str.lower(subdomain))
-                    tlds.append(str.lower(url.suffix))
-                    domains.append(str.lower(url.domain))
-            except (ValueError, TypeError):
-                pass
+        if fqdn_hosts_candidates:
+            for host in fqdn_hosts_candidates:
+                try:
+                    url = Url(f"http://{str.lower(host)}")
+                    subdomain = url.subdomain  # Host
+                    suffix = url.suffix.lower()  # TLD
+                    # Validate if TLD is known by a ROOT server
+                    if suffix in TLDS:
+                        fqdn_hosts.append(str.lower(host))
+                        if subdomain:
+                            hosts.append(str.lower(subdomain))
+                        tlds.append(str.lower(url.suffix))
+                        domains.append(str.lower(url.domain))
+                except (ValueError, TypeError):
+                    pass
 
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
 
