@@ -174,14 +174,15 @@ def get_hosts(data: dict, target: str):
                 try:
                     url = Url(f"http://{str.lower(host)}")
                     subdomain = url.subdomain  # Host
-                    suffix = url.suffix.lower()  # TLD
-                    # Validate if TLD is known by a ROOT server
-                    if suffix in TLDS:
-                        fqdn_hosts.append(str.lower(host))
-                        if subdomain:
-                            hosts.append(str.lower(subdomain))
-                        tlds.append(str.lower(url.suffix))
-                        domains.append(str.lower(url.domain))
+                    suffix = url.suffix  # TLD
+                    if suffix:  # Validate if TLD is known by a ROOT server
+                        suffix = url.suffix.lower()  # TLD
+                        if suffix in TLDS:
+                            fqdn_hosts.append(str.lower(host))
+                            if subdomain:
+                                hosts.append(str.lower(subdomain))
+                            tlds.append(str.lower(url.suffix))
+                            domains.append(str.lower(url.domain))
                 except (ValueError, TypeError):
                     pass
 
