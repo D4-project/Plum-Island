@@ -5,7 +5,8 @@
 - Add tool script for PDNS hosts extraction last_fqdns.py 
 - Add tool script for API target import 
 - Add Sheet Cheat on search page
-- Add Timescan display in the KV search 
+- Add Timescan display in the KV search
+- Add Search result Download function
 
 ## Bugfix
 - Improve document storage to avoid lock 

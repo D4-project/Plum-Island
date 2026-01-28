@@ -211,23 +211,23 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
-    @expose("/query")
-    def query(self):
+    def execute_search(self, query):
         """
-        This Function send the query back to KVRocks
+        Shared search executor used by both JSON and export endpoints.
         """
         start_time = time.time()
-        query = request.args.get("q", "")
+        query = query or ""
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         criteria, status, msg_error = self.parse_query(query)
         count_objects = indexer.objects_count()  # Get object count in db
         results_ip = {}
-
         timestamp_array = {}
+
         if status:
             criteria = lowercase_dict(criteria)
+            logger.debug(criteria)
             uids = indexer.get_uids_by_criteria(criteria)
             results_ip = indexer.get_ip_from_uids(uids)
 
@@ -237,28 +237,47 @@ class KVSearchView(BaseView):
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
 
-        if status is True:
-            logger.debug(criteria)
-            results = {
-                "status": True,
-                "results": results_ip,
-                "msg_error": "",
-                "processingTimeMs": processingtimems,
-                "uid_count": count_objects.get("uid_count"),
-                "ip_count": count_objects.get("ip_count"),
-                "timestamps": timestamp_array,
-            }
-        else:
-            results = {
-                "status": False,
-                "results": {},
-                "timestamps": {},
-                "msg_error": msg_error,
-                "processingTimeMs": processingtimems,
-                "uid_count": count_objects.get("uid_count"),
-                "ip_count": count_objects.get("ip_count"),
-            }
+        return {
+            "status": status,
+            "results": results_ip if status else {},
+            "timestamps": timestamp_array if status else {},
+            "msg_error": msg_error or "",
+            "processingTimeMs": processingtimems,
+            "uid_count": count_objects.get("uid_count"),
+            "ip_count": count_objects.get("ip_count"),
+        }
+
+    @expose("/query")
+    def query(self):
+        """
+        This Function send the query back to KVRocks
+        """
+        query = request.args.get("q", "")
+        results = self.execute_search(query)
         return jsonify(results)
+
+    @expose("/export")
+    def export(self):
+        """
+        Export plain-text list of IPs for a search query.
+        """
+        query = request.args.get("q", "")
+        if not query:
+            return make_response("Missing 'q' parameter", 400)
+
+        results = self.execute_search(query)
+        if not results["status"]:
+            msg = results.get("msg_error") or "Invalid query"
+            return make_response(msg, 400)
+
+        ips = sorted(results["results"].keys())
+        payload = "\n".join(ips)
+        if ips:
+            payload += "\n"
+        response = make_response(payload)
+        response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        response.headers["Content-Disposition"] = "attachment; filename=ip_list.txt"
+        return response
 
     @expose("/search")
     def search(self):

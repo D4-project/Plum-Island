@@ -5,6 +5,8 @@
 {{ lib.panel_begin(title, "Query Scans") }}
 
 <script>
+let lastSuccessfulQuery = null;
+
 function formatTimestamp(ts) {
     if (ts === null || ts === undefined) {
         return '';
@@ -49,77 +51,183 @@ function buildTimestampMeta(first, last) {
     </span>`;
 }
 
+function copyIpToClipboard(ip, triggerEl) {
+    const markCopied = () => {
+        if (!triggerEl) {
+            return;
+        }
+        triggerEl.classList.add('copied');
+        triggerEl.setAttribute('aria-label', `Copied ${ip}`);
+        setTimeout(() => {
+            triggerEl.classList.remove('copied');
+            triggerEl.removeAttribute('aria-label');
+        }, 1500);
+    };
+
+    const fallbackCopy = () => {
+        const textarea = document.createElement('textarea');
+        textarea.value = ip;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'absolute';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            markCopied();
+        } catch (err) {
+            console.warn('Clipboard copy failed', err);
+        } finally {
+            document.body.removeChild(textarea);
+        }
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(ip).then(markCopied).catch(fallbackCopy);
+    } else {
+        fallbackCopy();
+    }
+}
+
+function setDownloadButtonState(enabled) {
+    const container = document.getElementById('download-button-container');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+    if (!enabled) {
+        return;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'download-ips-btn';
+    button.className = 'btn btn-outline-secondary w-100 mt-2';
+    button.textContent = 'Download';
+    button.addEventListener('click', downloadIps);
+    container.innerHTML = '<br>';
+    container.appendChild(button);
+}
+
+function setSearchLoading(isLoading) {
+    const spinner = document.getElementById('info-spinner');
+    const searchBtn = document.getElementById('search-btn');
+    if (!spinner || !searchBtn) {
+        return;
+    }
+    if (isLoading) {
+        spinner.style.display = 'inline-flex';
+        searchBtn.disabled = true;
+    } else {
+        spinner.style.display = 'none';
+        searchBtn.disabled = false;
+    }
+}
+
+function downloadIps() {
+    if (!lastSuccessfulQuery) {
+        return;
+    }
+    const url = `/kvsearchview/export?q=${encodeURIComponent(lastSuccessfulQuery)}`;
+    const tmpLink = document.createElement('a');
+    tmpLink.href = url;
+    tmpLink.style.display = 'none';
+    tmpLink.setAttribute('download', 'ip_list.txt');
+    document.body.appendChild(tmpLink);
+    tmpLink.click();
+    document.body.removeChild(tmpLink);
+}
+
 async function search() {
     const query = document.getElementById('query').value;
-    const res = await fetch(`/kvsearchview/query?q=${encodeURIComponent(query)}`);
-    const data = await res.json();
-
+    lastSuccessfulQuery = null;
+    setDownloadButtonState(false);
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
     const errorDiv = document.getElementById('msg_error');
-    const time = (data.processingTimeMs || 0).toFixed(3);
-    infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
+    setSearchLoading(true);
+    try {
+        const res = await fetch(`/kvsearchview/query?q=${encodeURIComponent(query)}`);
+        const data = await res.json();
 
-    errorDiv.innerHTML = ``;
-    if (data.status === false) {
-    errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
-    }
-    hitsDiv.innerHTML = '';
+        const time = (data.processingTimeMs || 0).toFixed(3);
+        infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
 
-    Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
-        const ipPanel = document.createElement('div');
-        ipPanel.className = 'panel panel-default';
-        const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
-        const ipLabel = ip;
-        const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
+        errorDiv.innerHTML = ``;
+        if (data.status === false) {
+            errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
+        }
+        if (data.status && Object.keys(data.results || {}).length > 0) {
+            lastSuccessfulQuery = query;
+            setDownloadButtonState(true);
+        }
 
-        // IP accordion
-        ipPanel.innerHTML = `
-            <div class="panel-heading">
-                <h4 class="panel-title">
-                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
-                        ${ipLabel}
-                        ${ipMeta}
-                    </a>
-                </h4>
-            </div>
-            <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
-                <div class="panel-body" id="uids-${ipIndex}">
-                    <!-- UID panels will go here -->
-                </div>
-            </div>
-        `;
-        hitsDiv.appendChild(ipPanel);
+        hitsDiv.innerHTML = '';
 
-        const uidsDiv = document.getElementById(`uids-${ipIndex}`);
-        const sortedUids = [...uids].sort((a, b) => {
-            const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
-            const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
-            return bLast - aLast;
-        });
+        Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
+            const ipPanel = document.createElement('div');
+            ipPanel.className = 'panel panel-default';
+            const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
+            const ipLabel = ip;
+            const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
 
-        sortedUids.forEach((uid, uidIndex) => {
-            const uidPanel = document.createElement('div');
-            uidPanel.className = 'panel panel-info';
-            const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
-            const uidLabel = uid;
-            const uidMeta = uidTimestamp
-                ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
-                : '';
-            uidPanel.innerHTML = `
+            // IP accordion
+            ipPanel.innerHTML = `
                 <div class="panel-heading">
-                    <h5 class="panel-title">
-                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
-                            ${uidLabel}
+                    <h4 class="panel-title">
+                        <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
+                            ${ipLabel}
                         </a>
-                        ${uidMeta}
-                    </h5>
+                        <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
+                            <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                        </button>
+                        ${ipMeta}
+                    </h4>
                 </div>
-                <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
+                <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
+                    <div class="panel-body" id="uids-${ipIndex}">
+                        <!-- UID panels will go here -->
+                    </div>
+                </div>
             `;
-            uidsDiv.appendChild(uidPanel);
+            hitsDiv.appendChild(ipPanel);
+
+            const uidsDiv = document.getElementById(`uids-${ipIndex}`);
+            const sortedUids = [...uids].sort((a, b) => {
+                const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
+                const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
+                return bLast - aLast;
+            });
+
+            sortedUids.forEach((uid, uidIndex) => {
+                const uidPanel = document.createElement('div');
+                uidPanel.className = 'panel panel-info';
+                const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
+                const uidLabel = uid;
+                const uidMeta = uidTimestamp
+                    ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
+                    : '';
+                uidPanel.innerHTML = `
+                    <div class="panel-heading">
+                        <h5 class="panel-title">
+                            <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
+                                ${uidLabel}
+                            </a>
+                            ${uidMeta}
+                        </h5>
+                    </div>
+                    <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
+                `;
+                uidsDiv.appendChild(uidPanel);
+            });
         });
-    });
+    } catch (error) {
+        console.error('KV search failed', error);
+        errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${error?.message || 'Unexpected error'}</div>`;
+        infoDiv.innerHTML = '';
+        hitsDiv.innerHTML = '';
+    } finally {
+        setSearchLoading(false);
+    }
 }
 
 async function loadUid(uid, targetId) {
@@ -163,6 +271,26 @@ async function loadUid(uid, targetId) {
 }
 .timestamp-chip i {
     font-size: 0.9em;
+}
+.ip-quick-link {
+    margin-left: 0.6rem;
+    color: #337ab7;
+    font-size: 1rem;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+}
+.ip-quick-link:hover,
+.ip-quick-link:focus {
+    color: #23527c;
+    text-decoration: none;
+    outline: none;
+}
+.ip-quick-link.copied {
+    color: #3c763d;
 }
 .kvrocks-table-wrapper {
     display: flex;
@@ -243,13 +371,18 @@ async function loadUid(uid, targetId) {
         <div class="col-12 col-md-10">
             <input type="text" id="query" class="form-control" placeholder="Query...">
         </div>
-        <div class="col-12 col-md-2">
-            <button class="btn btn-primary w-100" onclick="search()">Search</button>
+        <div class="col-12 col-md-2 d-flex flex-column align-items-stretch">
+            <button type="button" id="search-btn" class="btn btn-primary w-100" onclick="search()">Search</button>
+            <div id="download-button-container" class="mt-2 w-100"></div>
         </div>
     </div>
 </div>
 
 <div id="info" class="mt-2"></div>
+<div id="info-spinner" class="text-muted mt-1" role="status" aria-live="polite" style="display:none;">
+    <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+    <span style="margin-left:0.35rem;">Searching...</span>
+</div>
 <div id="msg_error" class="panel-group mt-2"></div>
 <div id="hits" class="panel-group mt-2"></div>
 {{ lib.panel_end() }}
