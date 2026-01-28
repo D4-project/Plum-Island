@@ -167,34 +167,47 @@ async function loadUid(uid, targetId) {
 .kvrocks-table-wrapper {
     display: flex;
     justify-content: center;
-    margin: 2rem auto 1rem;
-    padding: 0 1rem;
+    margin: 2rem auto 1.5rem;
+    padding: 0 1.25rem;
 }
 .kvrocks-table {
     border-collapse: collapse;
     font-family: "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
-    font-size: 0.85rem;
-    min-width: 320px;
-    max-width: 520px;
+    font-size: 0.88rem;
+    min-width: 420px;
+    max-width: 940px;
     width: 100%;
-    text-align: center;
+    text-align: left;
     background: #fff;
     border-radius: 10px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
     overflow: hidden;
     border: 1px solid rgba(51, 122, 183, 0.25);
 }
-.kvrocks-table th,
+.kvrocks-table th {
+    padding: 0.35rem 0.8rem;
+}
 .kvrocks-table td {
-    padding: 0.65rem 0.9rem;
+    padding: 0.6rem 0.85rem;
 }
 .kvrocks-table thead {
     background: #337ab7;
     color: #fff;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
     font-weight: 600;
     border-bottom: 2px solid #265a88;
+}
+.kvrocks-table th,
+.kvrocks-table td {
+    text-align: left;
+}
+.kvrocks-table th:nth-child(4),
+.kvrocks-table td:nth-child(4) {
+    border-left: 2px solid rgba(51, 122, 183, 0.25);
+}
+.kvrocks-table td:nth-child(n+4) {
+    padding-left: 1.1rem;
 }
 .kvrocks-table tbody tr:nth-child(even) {
     background: #f5f8fb;
@@ -205,16 +218,23 @@ async function loadUid(uid, targetId) {
 .kvrocks-table tbody tr:hover {
     background: rgba(51, 122, 183, 0.11);
 }
-.kvrocks-table td:first-child {
+.kvrocks-table td:first-child,
+.kvrocks-table td:nth-child(4) {
     font-weight: 600;
     color: #24527a;
 }
-.kvrocks-table td:nth-child(2) {
+.kvrocks-table td:nth-child(2),
+.kvrocks-table td:nth-child(5) {
     color: #4d6172;
 }
-.kvrocks-table td:nth-child(3) {
+.kvrocks-table td:nth-child(3),
+.kvrocks-table td:nth-child(6) {
     color: #2f353a;
-    text-align: left;
+}
+.kvrocks-table td.kvrocks-empty {
+    padding: 0;
+    border: none;
+    color: transparent;
 }
 </style>
 
@@ -235,107 +255,100 @@ async function loadUid(uid, targetId) {
 {{ lib.panel_end() }}
 
 <div class="kvrocks-table-wrapper">
-<table class="kvrocks-table">
-  <thead>
-    <tr>
-      <th>Keyword</th>
-      <th>Modifier</th>
-      <th>Description</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>ip</td>
-      <td></td>
-      <td>IP of the host</td>
-    </tr>
-    <tr>
-      <td>net</td>
-      <td></td>
-      <td>Cidr network, from /16 to /24</td>
-    </tr>
-    <tr>
-      <td>fqdn</td>
-      <td>lk, bg</td>
-      <td>fully qualified domain name</td>
-    </tr>
-    <tr>
-      <td>host</td>
-      <td>lk, bg</td>
-      <td>hostname, the subdomain part</td>
-    </tr>
-    <tr>
-      <td>domain</td>
-      <td>lk, bg</td>
-      <td>Dns domain</td>
-    </tr>
-    <tr>
-      <td>tld</td>
-      <td>lk, bg</td>
-      <td>Top level domain</td>
-    </tr>
-    <tr>
-      <td>port</td>
-      <td></td>
-      <td>Open port</td>
-    </tr>
-    <tr>
-      <td>http_title</td>
-      <td>lk, bg</td>
-      <td>html title tag</td>
-    </tr>
-    <tr>
-      <td>http_cookiename</td>
-      <td>lk, bg</td>
-      <td>Http set cookie keyname</td>
-    </tr>
-    <tr>
-      <td>http_etag</td>
-      <td>lk, bg</td>
-      <td>http etag value</td>
-    </tr>
-    <tr>
-      <td>http_server</td>
-      <td>lk, bg</td>
-      <td>http serveur value</td>
-    </tr>
-    <tr>
-      <td>banner</td>
-      <td>lk, bg</td>
-      <td>Services banner value</td>
-    </tr>
-    <tr>
-      <td>x509_issuer</td>
-      <td>lk, bg</td>
-      <td></td>
-    </tr>
-    <tr>
-      <td>x509_md5</td>
-      <td></td>
-      <td>md5sum of the tls certificate public signature</td>
-    </tr>
-    <tr>
-      <td>x509_sha1</td>
-      <td></td>
-      <td>sha1sum of the tls certificate public signature</td>
-    </tr>
-    <tr>
-      <td>x509_sha256</td>
-      <td></td>
-      <td>sha256sum of the tls certificate public signature</td>
-    </tr>
-    <tr>
-      <td>x509_subject</td>
-      <td>lk, bg</td>
-      <td>tls certificate common name</td>
-    </tr>
-    <tr>
-      <td>x509_san</td>
-      <td>lk, bg</td>
-      <td>tls certificate subject alternatives name</td>
-    </tr>
-  </tbody>
-</table>
+    <table class="kvrocks-table">
+        <thead>
+            <tr>
+                <th>Keyword</th>
+                <th>Modifier</th>
+                <th>Description</th>
+                <th>Keyword</th>
+                <th>Modifier</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>ip</td>
+                <td></td>
+                <td>IP of the host</td>
+                <td>http_title</td>
+                <td>lk, bg</td>
+                <td>HTML title tag</td>
+            </tr>
+            <tr>
+                <td>net</td>
+                <td></td>
+                <td>CIDR network, from /16 to /24</td>
+                <td>http_cookiename</td>
+                <td>lk, bg</td>
+                <td>HTTP Set-Cookie key name</td>
+            </tr>
+            <tr>
+                <td>fqdn</td>
+                <td>lk, bg</td>
+                <td>Fully qualified domain name</td>
+                <td>http_etag</td>
+                <td>lk, bg</td>
+                <td>HTTP ETag value</td>
+            </tr>
+            <tr>
+                <td>host</td>
+                <td>lk, bg</td>
+                <td>Hostname, the subdomain part</td>
+                <td>http_server</td>
+                <td>lk, bg</td>
+                <td>HTTP server header</td>
+            </tr>
+            <tr>
+                <td>domain</td>
+                <td>lk, bg</td>
+                <td>DNS domain</td>
+                <td>x509_issuer</td>
+                <td>lk, bg</td>
+                <td>TLS certificate issuer</td>
+            </tr>
+            <tr>
+                <td>tld</td>
+                <td>lk, bg</td>
+                <td>Top level domain</td>
+                <td>x509_subject</td>
+                <td>lk, bg</td>
+                <td>TLS certificate common name</td>
+            </tr>
+            <tr>
+                <td>port</td>
+                <td></td>
+                <td>Open port</td>
+                <td>x509_san</td>
+                <td>lk, bg</td>
+                <td>TLS certificate subject alternative names</td>
+            </tr>
+            <tr>
+                <td>banner</td>
+                <td>lk, bg</td>
+                <td>Service banner value</td>
+                <td>x509_md5</td>
+                <td></td>
+                <td>MD5 of the TLS certificate public signature</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td>x509_sha1</td>
+                <td></td>
+                <td>SHA1 of the TLS certificate public signature</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td>x509_sha256</td>
+                <td></td>
+                <td>SHA256 of the TLS certificate public signature</td>
+            </tr>
+        </tbody>
+    </table>
 </div>
 
 {% endblock content %}
