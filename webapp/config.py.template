@@ -37,6 +37,28 @@ SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(basedir, "app.db")
 # SQLALCHEMY_DATABASE_URI = 'mysql://myapp@localhost/myapp'
 # SQLALCHEMY_DATABASE_URI = 'postgresql://root:password@localhost/myapp'
 
+# Domain Detection Guard:
+# When a host a fqdn or a domain is detected.
+# This domain is only take in considerations for indexation if 
+# the TLD is a known one.
+#
+# You have two methode to detect the domain
+#
+# False
+# Detection is done with the library py-faup-rs
+# This method is fast and offline.
+#
+# True
+# This method use the TLD list from
+# This list is refreshed at each start of Plum Island
+
+# What method do you need ?
+ONLINETLD=False
+
+# You may specify additional domains to add to the index.
+TLDADD=["local"]
+
+
 # Flask-WTF flag for CSRF
 CSRF_ENABLED = True
 

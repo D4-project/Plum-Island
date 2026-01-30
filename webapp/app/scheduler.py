@@ -382,9 +382,12 @@ client = meilisearch.Client(
     db.app.config.get("MEILI_KEY"),
 )
 
-# Download https://data.iana.org/TLD/tlds-alpha-by-domain.txt and create an array of TLDs
-db.app.config["TLDS"] = fetch_tlds
-
+# If the method is online fetch the TLDs.
+db.app.config["TLDS"] = []
+if db.app.config["ONLINETLD"]:
+    # Download https://data.iana.org/TLD/tlds-alpha-by-domain.txt and create an array of TLDs
+    db.app.config["TLDS"] = fetch_tlds()
+db.app.config["TLDS"] += db.app.config["TLDADD"]  # Append to the list the custom TLDs.
 
 client.create_index("plum")
 index = client.index("plum")

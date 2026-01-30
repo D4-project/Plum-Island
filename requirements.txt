@@ -4,7 +4,7 @@ APScheduler
 netaddr
 meilisearch
 redis
-pyfaup-rs
+pyfaup-rs==0.2.0
 pybgpranking2
 pyipasnhistory
 

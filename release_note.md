@@ -7,6 +7,7 @@
 - Add Sheet Cheat on search page
 - Add Timescan display in the KV search
 - Add Search result Download function
+- Validate TLD using faup-rs lib or data.iana.org
 
 ## Bugfix
 - Improve document storage to avoid lock 

@@ -21,7 +21,7 @@ For now far from performance issues anyway.
 import re
 from pyfaup import Url
 
-TLDS = []
+DB_CONF = {}
 
 # B -> Body.XXXX Subsearch
 # P -> Body.ports.XXXX Per Port Search
@@ -175,14 +175,25 @@ def get_hosts(data: dict, target: str):
                     url = Url(f"http://{str.lower(host)}")
                     subdomain = url.subdomain  # Host
                     suffix = url.suffix  # TLD
-                    if suffix:  # Validate if TLD is known by a ROOT server
-                        suffix = url.suffix.lower()  # TLD
-                        if suffix in TLDS:
-                            fqdn_hosts.append(str.lower(host))
-                            if subdomain:
-                                hosts.append(str.lower(subdomain))
-                            tlds.append(str.lower(url.suffix))
-                            domains.append(str.lower(url.domain))
+
+                    parse = False
+                    if suffix:
+                        suffix_str = str(url.suffix).lower()  # TLD
+                        if DB_CONF["ONLINETLD"]:
+                            if suffix.is_known():
+                                parse = True
+                        else:
+                            if suffix_str in DB_CONF["TLDS"]:
+                                parse = True
+
+                    if (
+                        parse or suffix_str in DB_CONF["TLDADD"]
+                    ):  # Validate if TLD is known by a ROOT server
+                        fqdn_hosts.append(str.lower(host))
+                        if subdomain:
+                            hosts.append(str.lower(subdomain))
+                        tlds.append(suffix_str)
+                        domains.append(str.lower(url.domain))
                 except (ValueError, TypeError):
                     pass
 
@@ -242,11 +253,10 @@ def fuse_dicts(d1, d2):
     return fused
 
 
-def parse_json(doc, tlds):
+def parse_json(doc, db_conf_local):
 
-    # Save TLDS
-    global TLDS
-    TLDS = tlds
+    global DB_CONF
+    DB_CONF = db_conf_local
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
