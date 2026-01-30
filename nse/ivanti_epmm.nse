@@ -3,7 +3,7 @@ description = [[
 Author: Paul JUNG/CIRCL - 2026
 Licence:  GNU AFFERO GENERAL PUBLIC LICENSE
 
-Checks for Ivanti MDM by requesting a known API endpoint.
+Checks for Ivanti EPPM MDM by requesting a known API endpoint.
 Detection requires:
 - HTTP 401 on known API endpoint
 - Presence of Server header with value "server"
