@@ -186,10 +186,11 @@ def get_hosts(data: dict, target: str):
                             if suffix_str in DB_CONF["TLDS"]:
                                 parse = True
 
-                    if (
-                        parse or suffix_str in DB_CONF["TLDADD"]
-                    ):  # Validate if TLD is known by a ROOT server
-                        fqdn_hosts.append(str.lower(host))
+                    if parse:
+                        if (
+                            suffix_str in DB_CONF["TLDADD"]
+                        ):  # Validate if TLD is known by a ROOT server
+                            fqdn_hosts.append(str.lower(host))
                         if subdomain:
                             hosts.append(str.lower(subdomain))
                         tlds.append(suffix_str)
