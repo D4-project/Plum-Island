@@ -33,6 +33,7 @@ def task_master_of_puppets():
     task_create_jobs()  # Create Jobs for the Scanner
     task_export_to_dbs()  # Export New Received reports.
     task_cleanup_jobs()  # Delete both Jobs from DB and Files
+    task_cleanup_export_jobs()  # Delete stale asynchronous search exports.
 
 
 def check_json_storage(json_folder):
@@ -364,6 +365,42 @@ def task_cleanup_jobs():
         logger.debug("Cleanup removed %s jobs", deleted_jobs)
     else:
         logger.debug("No jobs eligible for cleanup")
+
+
+def task_cleanup_export_jobs():
+    """
+    Delete old asynchronous export files from the export jobs directory.
+    """
+    export_jobs_folder = os.path.expanduser(db.app.config.get("EXPORT_JOBS_FOLDER"))
+    retention_days = int(db.app.config.get("EXPORT_JOBS_RETENTION_DAYS", 10))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    deleted_files = 0
+
+    os.makedirs(export_jobs_folder, exist_ok=True)
+
+    for filename in os.listdir(export_jobs_folder):
+        filepath = os.path.join(export_jobs_folder, filename)
+        try:
+            modified_at = datetime.fromtimestamp(
+                os.path.getmtime(filepath), tz=timezone.utc
+            )
+        except FileNotFoundError:
+            continue
+
+        if modified_at > cutoff:
+            continue
+
+        try:
+            if os.path.isdir(filepath):
+                shutil.rmtree(filepath)
+            else:
+                os.remove(filepath)
+            deleted_files += 1
+        except OSError as err:
+            logger.error("Unable to delete export job artifact %s: %s", filepath, err)
+
+    if deleted_files:
+        logger.debug("Cleanup removed %s export job artifacts", deleted_files)
 
 
 # INIT of the Program..

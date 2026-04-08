@@ -15,6 +15,17 @@ logging.getLogger().setLevel(logging.DEBUG)
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+
+
+def prepare_export_jobs_folder(export_jobs_folder):
+    """
+    Ensure the export jobs directory exists on app boot.
+    """
+    os.makedirs(export_jobs_folder, exist_ok=True)
+
+
+prepare_export_jobs_folder(app.config["EXPORT_JOBS_FOLDER"])
+
 db = SQLA(app)
 appbuilder = AppBuilder(app, db.session, security_manager_class=CustomSecurityManager)
 

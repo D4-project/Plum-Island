@@ -12,14 +12,19 @@ import json
 import shlex
 import time
 import logging
+import os
+import threading
+import uuid
+from datetime import datetime, timezone
 
 
-from flask import render_template, redirect, make_response
+from flask import render_template, redirect, make_response, send_file
 from flask import request, jsonify
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
 from flask_appbuilder import BaseView
+from flask_login import current_user
 from meilisearch import Client
 
 from wtforms import TextAreaField, SubmitField
@@ -37,6 +42,8 @@ from .utils.ip2asn import get_asn_description_for_ip
 from . import appbuilder, db
 
 logger = logging.getLogger("flask_appbuilder")
+EXPORT_JOB_STATES = {}
+EXPORT_JOB_STATES_LOCK = threading.Lock()
 
 
 def get_job_uid(pk):
@@ -131,6 +138,152 @@ class KVSearchView(BaseView):
     """
 
     default_view = "search"
+
+    @staticmethod
+    def _get_export_jobs_folder():
+        export_jobs_folder = db.app.config["EXPORT_JOBS_FOLDER"]
+        os.makedirs(export_jobs_folder, exist_ok=True)
+        return export_jobs_folder
+
+    @staticmethod
+    def _serialize_job_state(job_state):
+        elapsed_seconds = max(
+            0.0,
+            time.time() - job_state["created_ts"],
+        )
+        return {
+            "job_id": job_state["job_id"],
+            "status": job_state["status"],
+            "query": job_state["query"],
+            "processed_uids": job_state["processed_uids"],
+            "total_uids": job_state["total_uids"],
+            "progress_percent": job_state["progress_percent"],
+            "elapsed_seconds": elapsed_seconds,
+            "download_ready": bool(job_state["file_path"])
+            and job_state["status"] == "done",
+            "error": job_state["error"],
+        }
+
+    @staticmethod
+    def _set_job_state(job_id, **updates):
+        with EXPORT_JOB_STATES_LOCK:
+            job_state = EXPORT_JOB_STATES.get(job_id)
+            if not job_state:
+                return None
+            job_state.update(updates)
+            total_uids = job_state.get("total_uids", 0) or 0
+            processed_uids = job_state.get("processed_uids", 0) or 0
+            if total_uids > 0:
+                job_state["progress_percent"] = min(
+                    100.0, (processed_uids / total_uids) * 100.0
+                )
+            elif job_state.get("status") == "done":
+                job_state["progress_percent"] = 100.0
+            else:
+                job_state["progress_percent"] = 0.0
+            return dict(job_state)
+
+    @staticmethod
+    def _get_job_state(job_id):
+        with EXPORT_JOB_STATES_LOCK:
+            job_state = EXPORT_JOB_STATES.get(job_id)
+            return dict(job_state) if job_state else None
+
+    @staticmethod
+    def _get_owned_job(job_id):
+        job_state = KVSearchView._get_job_state(job_id)
+        if not job_state:
+            return None
+        if job_state["owner_user_id"] != getattr(current_user, "id", None):
+            return False
+        return job_state
+
+    @staticmethod
+    def _build_full_export_payload(query, results):
+        index = client.index("plum")
+        export_payload = {
+            "query": query,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "results": {},
+        }
+
+        total_uids = sum(len(uids) for uids in results["results"].values())
+        return export_payload, index, total_uids
+
+    @staticmethod
+    def _run_full_export_job(job_id):
+        with app.app_context():
+            job_state = KVSearchView._get_job_state(job_id)
+            if not job_state:
+                return
+
+            query = job_state["query"]
+            results = KVSearchView().execute_search(query)
+            if not results["status"]:
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="error",
+                    error=results.get("msg_error") or "Invalid query",
+                )
+                return
+
+            export_payload, index, total_uids = KVSearchView._build_full_export_payload(
+                query, results
+            )
+            KVSearchView._set_job_state(
+                job_id,
+                status="running",
+                total_uids=total_uids,
+                processed_uids=0,
+                error="",
+            )
+
+            processed_uids = 0
+            try:
+                for ip, uids in sorted(results["results"].items()):
+                    ip_timestamps = results["timestamps"].get(ip, {})
+                    export_payload["results"][ip] = []
+                    for uid in uids:
+                        result = index.get_document(uid)
+                        export_payload["results"][ip].append(
+                            {
+                                "uid": uid,
+                                "first_seen": ip_timestamps.get(uid, {}).get(
+                                    "first_seen"
+                                ),
+                                "last_seen": ip_timestamps.get(uid, {}).get(
+                                    "last_seen"
+                                ),
+                                "document": vars(result),
+                            }
+                        )
+                        processed_uids += 1
+                        KVSearchView._set_job_state(
+                            job_id,
+                            processed_uids=processed_uids,
+                        )
+
+                export_jobs_folder = KVSearchView._get_export_jobs_folder()
+                file_path = os.path.join(export_jobs_folder, f"{job_id}.json")
+                tmp_path = f"{file_path}.tmp"
+                with open(tmp_path, "w", encoding="utf-8") as export_file:
+                    json.dump(export_payload, export_file, indent=2)
+                os.replace(tmp_path, file_path)
+
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="done",
+                    processed_uids=processed_uids,
+                    file_path=file_path,
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+            except Exception as error:
+                logger.exception("Full export job %s failed", job_id)
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="error",
+                    error=str(error),
+                )
 
     def parse_query(self, query):
         """
@@ -248,6 +401,7 @@ class KVSearchView(BaseView):
         }
 
     @expose("/query")
+    @has_access
     def query(self):
         """
         This Function send the query back to KVRocks
@@ -257,6 +411,7 @@ class KVSearchView(BaseView):
         return jsonify(results)
 
     @expose("/export")
+    @has_access
     def export(self):
         """
         Export plain-text list of IPs for a search query.
@@ -278,6 +433,82 @@ class KVSearchView(BaseView):
         response.headers["Content-Type"] = "text/plain; charset=utf-8"
         response.headers["Content-Disposition"] = "attachment; filename=ip_list.txt"
         return response
+
+    @expose("/export_full_start", methods=["POST"])
+    @has_access
+    def export_full_start(self):
+        """
+        Start an asynchronous export of the current filtered data set.
+        """
+        payload = request.get_json(silent=True) or {}
+        query = payload.get("q", "").strip()
+        if not query:
+            return jsonify({"error": "Missing query"}), 400
+
+        job_id = str(uuid.uuid4())
+        owner_user_id = getattr(current_user, "id", None)
+        owner_username = getattr(current_user, "username", "")
+        with EXPORT_JOB_STATES_LOCK:
+            EXPORT_JOB_STATES[job_id] = {
+                "job_id": job_id,
+                "owner_user_id": owner_user_id,
+                "owner_username": owner_username,
+                "status": "queued",
+                "query": query,
+                "created_ts": time.time(),
+                "processed_uids": 0,
+                "total_uids": 0,
+                "progress_percent": 0.0,
+                "file_path": None,
+                "error": "",
+                "finished_at": None,
+            }
+
+        worker = threading.Thread(
+            target=self._run_full_export_job,
+            args=(job_id,),
+            daemon=True,
+        )
+        worker.start()
+        return jsonify({"job_id": job_id})
+
+    @expose("/export_full_status")
+    @has_access
+    def export_full_status(self):
+        """
+        Return asynchronous export job state for the current user.
+        """
+        job_id = request.args.get("job_id", "")
+        job_state = self._get_owned_job(job_id)
+        if job_state is None:
+            return jsonify({"error": "Unknown export job"}), 404
+        if job_state is False:
+            return jsonify({"error": "Forbidden"}), 403
+        return jsonify(self._serialize_job_state(job_state))
+
+    @expose("/export_full_download")
+    @has_access
+    def export_full_download(self):
+        """
+        Download the completed asynchronous export file.
+        """
+        job_id = request.args.get("job_id", "")
+        job_state = self._get_owned_job(job_id)
+        if job_state is None:
+            return make_response("Unknown export job", 404)
+        if job_state is False:
+            return make_response("Forbidden", 403)
+        if job_state["status"] != "done" or not job_state.get("file_path"):
+            return make_response("Export not ready", 409)
+        if not os.path.exists(job_state["file_path"]):
+            return make_response("Export file missing", 410)
+
+        return send_file(
+            job_state["file_path"],
+            as_attachment=True,
+            download_name=f"plum_export_{job_id}.json",
+            mimetype="application/json",
+        )
 
     @expose("/search")
     def search(self):

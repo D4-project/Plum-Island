@@ -6,6 +6,7 @@
 
 <script>
 let lastSuccessfulQuery = null;
+let exportStatusPoller = null;
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -101,7 +102,7 @@ function copyIpToClipboard(ip, triggerEl) {
 }
 
 function setDownloadButtonState(enabled) {
-    const container = document.getElementById('download-button-container');
+    const container = document.getElementById('download-buttons-container');
     if (!container) {
         return;
     }
@@ -117,8 +118,17 @@ function setDownloadButtonState(enabled) {
     button.setAttribute('aria-label', 'Download IP List');
     button.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>';
     button.addEventListener('click', downloadIps);
-    container.innerHTML = '<br>';
     container.appendChild(button);
+
+    const fullButton = document.createElement('button');
+    fullButton.type = 'button';
+    fullButton.id = 'download-full-export-btn';
+    fullButton.className = 'btn btn-outline-secondary w-100 mt-2';
+    fullButton.title = 'Download JSON';
+    fullButton.setAttribute('aria-label', 'Download JSON');
+    fullButton.innerHTML = '<i class="fa-solid fa-file-arrow-down" aria-hidden="true"></i>';
+    fullButton.addEventListener('click', startFullExport);
+    container.appendChild(fullButton);
 }
 
 function setSearchLoading(isLoading) {
@@ -148,6 +158,115 @@ function downloadIps() {
     document.body.appendChild(tmpLink);
     tmpLink.click();
     document.body.removeChild(tmpLink);
+}
+
+function resetExportModal() {
+    const progressBar = document.getElementById('export-progress-bar');
+    const statusEl = document.getElementById('export-status-text');
+    const counterEl = document.getElementById('export-progress-count');
+    const elapsedEl = document.getElementById('export-elapsed');
+    const errorEl = document.getElementById('export-error');
+    progressBar.style.width = '0%';
+    progressBar.setAttribute('aria-valuenow', '0');
+    progressBar.textContent = '0%';
+    statusEl.textContent = 'Preparing export...';
+    counterEl.textContent = '0 / 0 documents';
+    elapsedEl.textContent = '0.0s';
+    errorEl.innerHTML = '';
+}
+
+function stopExportPolling() {
+    if (exportStatusPoller) {
+        clearInterval(exportStatusPoller);
+        exportStatusPoller = null;
+    }
+}
+
+function updateExportModal(data) {
+    const progressBar = document.getElementById('export-progress-bar');
+    const statusEl = document.getElementById('export-status-text');
+    const counterEl = document.getElementById('export-progress-count');
+    const elapsedEl = document.getElementById('export-elapsed');
+    const errorEl = document.getElementById('export-error');
+    const percent = Number(data.progress_percent || 0).toFixed(1);
+
+    progressBar.style.width = `${percent}%`;
+    progressBar.setAttribute('aria-valuenow', percent);
+    progressBar.textContent = `${percent}%`;
+    counterEl.textContent = `${data.processed_uids || 0} / ${data.total_uids || 0} documents`;
+    elapsedEl.textContent = `${Number(data.elapsed_seconds || 0).toFixed(1)}s`;
+    errorEl.innerHTML = '';
+
+    if (data.status === 'queued') {
+        statusEl.textContent = 'Queued...';
+    } else if (data.status === 'running') {
+        statusEl.textContent = 'Preparing filtered export...';
+    } else if (data.status === 'done') {
+        statusEl.textContent = 'Export ready. Starting download...';
+    } else if (data.status === 'error') {
+        statusEl.textContent = 'Export failed';
+        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${data.error || 'Unexpected error'}</div>`;
+    }
+}
+
+async function pollFullExport(jobId) {
+    try {
+        const res = await fetch(`/kvsearchview/export_full_status?job_id=${encodeURIComponent(jobId)}`);
+        const data = await readJsonResponse(res);
+        updateExportModal(data);
+
+        if (data.status === 'done' && data.download_ready) {
+            stopExportPolling();
+            const tmpLink = document.createElement('a');
+            tmpLink.href = `/kvsearchview/export_full_download?job_id=${encodeURIComponent(jobId)}`;
+            tmpLink.style.display = 'none';
+            document.body.appendChild(tmpLink);
+            tmpLink.click();
+            document.body.removeChild(tmpLink);
+            setTimeout(() => {
+                $('#export-full-modal').modal('hide');
+            }, 800);
+        } else if (data.status === 'error') {
+            stopExportPolling();
+        }
+    } catch (error) {
+        stopExportPolling();
+        const errorEl = document.getElementById('export-error');
+        document.getElementById('export-status-text').textContent = 'Export failed';
+        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${error?.message || 'Unexpected error'}</div>`;
+    }
+}
+
+async function startFullExport() {
+    if (!lastSuccessfulQuery) {
+        return;
+    }
+
+    stopExportPolling();
+    resetExportModal();
+    $('#export-full-modal').modal({
+        backdrop: 'static',
+        keyboard: false
+    });
+    $('#export-full-modal').modal('show');
+
+    try {
+        const res = await fetch('/kvsearchview/export_full_start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ q: lastSuccessfulQuery })
+        });
+        const data = await readJsonResponse(res);
+        await pollFullExport(data.job_id);
+        exportStatusPoller = setInterval(() => {
+            pollFullExport(data.job_id);
+        }, 1000);
+    } catch (error) {
+        document.getElementById('export-status-text').textContent = 'Export failed';
+        document.getElementById('export-error').innerHTML = `<div class="alert alert-danger mt-2" role="alert">${error?.message || 'Unexpected error'}</div>`;
+    }
 }
 
 async function search() {
@@ -377,16 +496,56 @@ async function loadUid(uid, targetId) {
     border: none;
     color: transparent;
 }
+.export-stats {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 0.75rem;
+    color: #4d6172;
+    font-size: 0.92rem;
+}
+.search-toolbar {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.45rem;
+}
+.search-toolbar-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.search-toolbar-actions {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    padding-right: 30px;
+    box-sizing: border-box;
+}
+.search-toolbar-actions > div {
+    width: auto;
+}
+@media (max-width: 767px) {
+    .search-toolbar {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+    .search-toolbar-actions {
+        flex: 1 1 auto;
+        width: 100%;
+        align-items: stretch;
+        padding-right: 0;
+    }
+}
 </style>
 
 <div class="container mt-2">
-    <div class="row g-2">
-        <div class="col-12 col-md-10">
+    <div class="search-toolbar">
+        <div class="search-toolbar-input">
             <input type="text" id="query" class="form-control" placeholder="Query...">
         </div>
-        <div class="col-12 col-md-2 d-flex flex-column align-items-stretch">
-            <button type="button" id="search-btn" class="btn btn-primary w-100" onclick="search()">Search</button>
-            <div id="download-button-container" class="mt-2 w-100"></div>
+        <div class="search-toolbar-actions">
+            <button type="button" id="search-btn" class="btn btn-primary" onclick="search()">Search</button>
+            <div id="download-buttons-container" class="mt-2"></div>
         </div>
     </div>
 </div>
@@ -399,6 +558,38 @@ async function loadUid(uid, targetId) {
 <div id="msg_error" class="panel-group mt-2"></div>
 <div id="hits" class="panel-group mt-2"></div>
 {{ lib.panel_end() }}
+
+<div class="modal fade" id="export-full-modal" tabindex="-1" role="dialog" aria-labelledby="export-full-modal-label">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="export-full-modal-label">Preparing Export</h4>
+            </div>
+            <div class="modal-body">
+                <p id="export-status-text">Preparing export...</p>
+                <div class="progress">
+                    <div
+                        id="export-progress-bar"
+                        class="progress-bar progress-bar-striped active"
+                        role="progressbar"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                        style="width: 0%;"
+                    >0%</div>
+                </div>
+                <div class="export-stats">
+                    <span id="export-progress-count">0 / 0 documents</span>
+                    <span>Elapsed: <span id="export-elapsed">0.0s</span></span>
+                </div>
+                <div id="export-error"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" onclick="stopExportPolling(); $('#export-full-modal').modal('hide');">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="kvrocks-table-wrapper">
     <table class="kvrocks-table">
