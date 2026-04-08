@@ -5,6 +5,15 @@ IN_KVROCKS_PORT: 6666
 IN_KVROCKS_HOST: localhost
 OUT_KVROCKS_PORT: 6666
 OUT_KVROCKS_HOST: localhost
+ONLINETLD: false
+TLDADD:
+  - "local"
+# Optional when ONLINETLD is false:
+# TLDS:
+#   - "com"
+#   - "net"
+#   - "org"
+#   - "lu"
 # Plum API Interactions
 PLUMISLAND: "https://localhost:5001"
 PLUMAPIUSER: "myuser"

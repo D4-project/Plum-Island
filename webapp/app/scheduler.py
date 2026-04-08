@@ -269,7 +269,7 @@ def task_export_to_dbs():
                     }
                     pending_meili.append(object_to_save)
                     pending_kvrocks.append(
-                        parse_json(object_to_save, db.app.config["TLDS"])
+                        parse_json(object_to_save, db.app.config)
                     )
                     pending_job_refs.append(job["id"])
                     outstanding_docs[job["id"]] += 1

@@ -23,6 +23,27 @@ from pyfaup import Url
 
 DB_CONF = {}
 
+
+def normalize_db_conf(db_conf_local):
+    """
+    Accept either the full config dict or a legacy plain TLD list.
+    """
+    if isinstance(db_conf_local, dict):
+        conf = dict(db_conf_local)
+        conf.setdefault("ONLINETLD", False)
+        conf.setdefault("TLDS", [])
+        conf.setdefault("TLDADD", [])
+        return conf
+
+    if isinstance(db_conf_local, list):
+        return {
+            "ONLINETLD": False,
+            "TLDS": db_conf_local,
+            "TLDADD": [],
+        }
+
+    raise TypeError("parse_json expects a config dict or a TLD list")
+
 # B -> Body.XXXX Subsearch
 # P -> Body.ports.XXXX Per Port Search
 
@@ -180,17 +201,17 @@ def get_hosts(data: dict, target: str):
                     if suffix:
                         suffix_str = str(url.suffix).lower()  # TLD
                         if DB_CONF["ONLINETLD"]:
-                            if suffix.is_known():
-                                parse = True
-                        else:
                             if suffix_str in DB_CONF["TLDS"]:
                                 parse = True
+                        else:
+                            if suffix.is_known():
+                                parse = True
+
+                        if suffix_str in DB_CONF["TLDADD"]:
+                            parse = True
 
                     if parse:
-                        if (
-                            suffix_str in DB_CONF["TLDADD"]
-                        ):  # Validate if TLD is known by a ROOT server
-                            fqdn_hosts.append(str.lower(host))
+                        fqdn_hosts.append(str.lower(host))
                         if subdomain:
                             hosts.append(str.lower(subdomain))
                         tlds.append(suffix_str)
@@ -257,7 +278,7 @@ def fuse_dicts(d1, d2):
 def parse_json(doc, db_conf_local):
 
     global DB_CONF
-    DB_CONF = db_conf_local
+    DB_CONF = normalize_db_conf(db_conf_local)
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:

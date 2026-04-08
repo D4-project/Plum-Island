@@ -7,6 +7,17 @@
 <script>
 let lastSuccessfulQuery = null;
 
+async function readJsonResponse(res) {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        return await res.json();
+    }
+
+    const rawText = await res.text();
+    const snippet = rawText.trim().slice(0, 300) || `HTTP ${res.status}`;
+    throw new Error(snippet);
+}
+
 function formatTimestamp(ts) {
     if (ts === null || ts === undefined) {
         return '';
@@ -102,7 +113,9 @@ function setDownloadButtonState(enabled) {
     button.type = 'button';
     button.id = 'download-ips-btn';
     button.className = 'btn btn-outline-secondary w-100 mt-2';
-    button.textContent = 'Download';
+    button.title = 'Download IP List';
+    button.setAttribute('aria-label', 'Download IP List');
+    button.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>';
     button.addEventListener('click', downloadIps);
     container.innerHTML = '<br>';
     container.appendChild(button);
@@ -147,7 +160,7 @@ async function search() {
     setSearchLoading(true);
     try {
         const res = await fetch(`/kvsearchview/query?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
+        const data = await readJsonResponse(res);
 
         const time = (data.processingTimeMs || 0).toFixed(3);
         infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
@@ -234,7 +247,7 @@ async function loadUid(uid, targetId) {
     const target = document.getElementById(targetId);
     if (target.style.display === 'none' || target.innerHTML === '') {
         const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
-        const data = await res.json();
+        const data = await readJsonResponse(res);
         let json = JSON.stringify(data, null, 2);
         // garde l'indentation devant les lignes ajoutées
         json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>

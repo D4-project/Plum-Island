@@ -39,6 +39,17 @@
 
 
 <script>
+async function readJsonResponse(res) {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        return await res.json();
+    }
+
+    const rawText = await res.text();
+    const snippet = rawText.trim().slice(0, 300) || `HTTP ${res.status}`;
+    throw new Error(snippet);
+}
+
     window.addEventListener('DOMContentLoaded', async () => {
   await search();
 });
@@ -46,7 +57,7 @@
 
 async function search() {
     const res = await fetch(`/kvsearchview/query?q={{get_target_value(pk) | safe}}`);
-    const data = await res.json();
+    const data = await readJsonResponse(res);
 
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
@@ -104,7 +115,7 @@ async function loadUid(uid, targetId) {
     const target = document.getElementById(targetId);
     if (target.style.display === 'none' || target.innerHTML === '') {
         const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
-        const data = await res.json();
+        const data = await readJsonResponse(res);
         let json = JSON.stringify(data, null, 2);
         // garde l'indentation devant les lignes ajoutées
         json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>

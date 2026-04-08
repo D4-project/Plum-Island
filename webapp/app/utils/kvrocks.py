@@ -197,7 +197,9 @@ class KVrocksIndexer:
         """
 
         remaining_criteria = dict(criteria)  # dict with all the key to seach.
-        print(remaining_criteria)
+
+        if not remaining_criteria:
+            return []
 
         partial_result = None  # The Result space that will be intersected.
 
@@ -262,15 +264,25 @@ class KVrocksIndexer:
 
                 # avoid using port as search ( as is retrieve everything.)
                 # if only port.modifier is given, it will still be used
+                field = None
                 for field, values in remaining_criteria.items():
                     if not field.startswith("port."):
                         break
+
+                if field is None:
+                    return []
 
                 base_field = field.split(".")[0]
                 logger.debug(
                     "No usable criteria get uid list from Base field: %s", base_field
                 )
-                partial_result = self.r.sunion(*self.r.keys(f"{base_field}:*"))
+                matching_keys = self.r.keys(f"{base_field}:*")
+                if not matching_keys:
+                    return []
+                partial_result = self.r.sunion(*matching_keys)
+
+        if partial_result is None:
+            return []
 
         # 3) Finally using the rest of criterais.
         for field, values in remaining_criteria.items():
@@ -312,7 +324,7 @@ class KVrocksIndexer:
                     partial_result = partial_result.intersection(uids)
 
         # return an list of UUIDs
-        return list(partial_result)
+        return list(partial_result or [])
 
     def get_ip_info(self, ip):
         """

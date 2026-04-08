@@ -18,20 +18,28 @@ with open("config.yaml", "r") as f:
     config = yaml.safe_load(f)
 KVROCKS_PORT = config.get("OUT_KVROCKS_PORT")
 KVROCKS_HOST = config.get("OUT_KVROCKS_HOST")
+PARSER_CONF = {
+    "ONLINETLD": config.get("ONLINETLD", config.get("PARSER_ONLINETLD", False)),
+    "TLDS": [],
+    "TLDADD": config.get("TLDADD", config.get("PARSER_TLDADD", ["local"])),
+}
 
 
 def json_import(json_file):
     print(f"Importing {json_file}")
     with open(json_file, "r", encoding="utf-8") as f:
         doc = json.loads(f.read())
-        return parse_json(doc,tlds)
+        return parse_json(doc, PARSER_CONF)
 
 
 INPUT_DIR = "meili_dump"
 indexer = KVrocksIndexer(KVROCKS_HOST, KVROCKS_PORT)
 max_per_folder = 10000
 max_per_folder = 1
-tlds = fetch_tlds()
+if PARSER_CONF["ONLINETLD"]:
+    PARSER_CONF["TLDS"] = fetch_tlds()
+else:
+    PARSER_CONF["TLDS"] = config.get("TLDS", config.get("PARSER_TLDS", []))
 for folder in "abcdef0123456789":
     objects_to_index = []
     path = os.path.join(INPUT_DIR, folder)
