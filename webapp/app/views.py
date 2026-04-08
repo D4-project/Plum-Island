@@ -285,9 +285,28 @@ class KVSearchView(BaseView):
                     error=str(error),
                 )
 
-    def parse_query(self, query):
+    def split_query_groups(self, query):
         """
-        This function parse the query string.
+        Split a query into AND groups separated by explicit OR tokens.
+        """
+        parts = shlex.split(query or "")
+        if not parts:
+            return [""]
+
+        groups = []
+        current_group = []
+        for part in parts:
+            if part.upper() == "OR":
+                groups.append(" ".join(current_group))
+                current_group = []
+            else:
+                current_group.append(part)
+        groups.append(" ".join(current_group))
+        return groups
+
+    def parse_query_group(self, query):
+        """
+        This function parse one AND-only query group.
         It validate if we got a good syntax and use only authorised keyywords.
 
         """
@@ -364,6 +383,28 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
+    def parse_query(self, query):
+        """
+        Parse the full query, supporting explicit OR between AND groups.
+        """
+        query_groups = self.split_query_groups(query)
+        parsed_groups = []
+        error_messages = []
+
+        for idx, group in enumerate(query_groups, start=1):
+            if not group.strip():
+                error_messages.append(f"Empty query group around OR at segment {idx}")
+                continue
+
+            criteria, status, msg_error = self.parse_query_group(group)
+            if not status:
+                error_messages.append(msg_error or f"Invalid query group {idx}")
+                continue
+            parsed_groups.append(criteria)
+
+        status = len(error_messages) == 0
+        return parsed_groups, status, " | ".join(error_messages)
+
     def execute_search(self, query):
         """
         Shared search executor used by both JSON and export endpoints.
@@ -373,19 +414,53 @@ class KVSearchView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
-        criteria, status, msg_error = self.parse_query(query)
+        criteria_groups, status, msg_error = self.parse_query(query)
         count_objects = indexer.objects_count()  # Get object count in db
         results_ip = {}
         timestamp_array = {}
 
         if status:
-            criteria = lowercase_dict(criteria)
-            logger.debug(criteria)
-            uids = indexer.get_uids_by_criteria(criteria)
-            results_ip = indexer.get_ip_from_uids(uids)
+            merged_ip_map = {}
+            for criteria in criteria_groups:
+                criteria = lowercase_dict(criteria)
+                logger.debug(criteria)
+                uids = indexer.get_uids_by_criteria(criteria)
+                group_ip_map = indexer.get_ip_from_uids(uids)
+
+                for ip, group_uids in group_ip_map.items():
+                    if ip not in merged_ip_map:
+                        merged_ip_map[ip] = []
+                    for uid in group_uids:
+                        if uid not in merged_ip_map[ip]:
+                            merged_ip_map[ip].append(uid)
+
+            results_ip = merged_ip_map
 
             for ip in results_ip:
-                timestamp_array[ip] = indexer.get_timestamp_for_ip(ip)
+                ip_timestamps = indexer.get_timestamp_for_ip(ip)
+                filtered_timestamps = {
+                    uid: ip_timestamps[uid]
+                    for uid in results_ip[ip]
+                    if uid in ip_timestamps
+                }
+
+                min_seen = None
+                max_seen = None
+                for uid_data in filtered_timestamps.values():
+                    first_seen = uid_data.get("first_seen")
+                    last_seen = uid_data.get("last_seen")
+                    if first_seen is not None:
+                        min_seen = first_seen if min_seen is None else min(
+                            min_seen, first_seen
+                        )
+                    if last_seen is not None:
+                        max_seen = last_seen if max_seen is None else max(
+                            max_seen, last_seen
+                        )
+
+                filtered_timestamps["min_seen"] = min_seen
+                filtered_timestamps["max_seen"] = max_seen
+                timestamp_array[ip] = filtered_timestamps
 
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
