@@ -8,6 +8,7 @@
 This module contains all code related to the GUI.
 """
 
+import hashlib
 import json
 import shlex
 import time
@@ -18,7 +19,7 @@ import uuid
 from datetime import datetime, timezone
 
 
-from flask import render_template, redirect, make_response, send_file
+from flask import render_template, redirect, make_response, send_file, flash, url_for
 from flask import request, jsonify
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelView, action, has_access
@@ -29,8 +30,11 @@ from meilisearch import Client
 
 from wtforms import TextAreaField, SubmitField
 from flask_wtf import FlaskForm
+from flask_wtf.file import FileField, FileAllowed
+from flask_appbuilder.filemanager import FileManager
 from werkzeug.security import generate_password_hash
 from sqlalchemy.exc import IntegrityError
+from wtforms.validators import Optional
 from app import app
 from .models import Bots, Targets, Jobs, ApiKeys, Nses, Protos, ScanProfiles, Ports
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
@@ -861,6 +865,127 @@ class NsesView(ModelView):
 
     datamodel = SQLAInterface(Nses)
     add_template = "add_nsesview.html"  # Custom Show view with results
+    add_columns = ["filebody"]
+    edit_columns = ["name", "hash", "replacement_file", "scanprofiles"]
+    edit_form_extra_fields = {
+        "replacement_file": FileField(
+            "Replace NSE File",
+            validators=[
+                Optional(),
+                FileAllowed(["nse"], "Only .nse files are allowed"),
+            ],
+        )
+    }
+    label_columns = {
+        "filebody": "NSE File",
+        "name": "Filename",
+        "hash": "SHA256",
+        "replacement_file": "Replace NSE File",
+    }
+
+    def _validate_nse_upload(self, upload):
+        if not upload or not getattr(upload, "filename", ""):
+            raise ValueError("An .nse file is required")
+
+        filename = os.path.basename(upload.filename)
+        if not filename.lower().endswith(".nse"):
+            raise ValueError("Only .nse files are allowed")
+        return upload, filename
+
+    def _resolve_existing_nse(self, filename, sha256sum, current_id=None):
+        match_by_hash = db.session.query(Nses).filter(Nses.hash == sha256sum).one_or_none()
+        match_by_name = db.session.query(Nses).filter(Nses.name == filename).one_or_none()
+
+        if current_id is not None:
+            if match_by_hash is not None and match_by_hash.id == current_id:
+                match_by_hash = None
+            if match_by_name is not None and match_by_name.id == current_id:
+                match_by_name = None
+
+        if (
+            match_by_hash is not None
+            and match_by_name is not None
+            and match_by_hash.id != match_by_name.id
+        ):
+            raise ValueError(
+                "Upload conflict: this filename and this file hash match two different NSE entries"
+            )
+
+        return match_by_hash or match_by_name
+
+    def _replace_nse_file(self, item, upload):
+        upload, filename = self._validate_nse_upload(upload)
+        file_bytes = upload.read()
+        upload.stream.seek(0)
+        sha256sum = hashlib.sha256(file_bytes).hexdigest()
+        conflicting_item = self._resolve_existing_nse(filename, sha256sum, current_id=item.id)
+
+        if conflicting_item is not None:
+            raise ValueError(
+                "Upload conflict: this filename or this file hash already belongs to another NSE entry"
+            )
+
+        file_manager = FileManager()
+        if item.filebody:
+            file_manager.delete_file(item.filebody)
+
+        stored_name = file_manager.generate_name(item, upload)
+        item.filebody = file_manager.save_file(upload, stored_name)
+        item.name = filename
+        item.hash = sha256sum
+
+    def pre_update(self, item):
+        replacement_file = getattr(item, "replacement_file", None)
+        if replacement_file and getattr(replacement_file, "filename", ""):
+            self._replace_nse_file(item, replacement_file)
+        return self
+
+    @expose("/add", methods=["GET", "POST"])
+    @has_access
+    def add(self):
+        is_valid_form = True
+        self.update_redirect()
+        form = self.add_form.refresh()
+
+        if request.method == "POST":
+            if form.validate():
+                self.process_form(form, True)
+                try:
+                    upload, filename = self._validate_nse_upload(form.filebody.data)
+                    file_bytes = upload.read()
+                    upload.stream.seek(0)
+                    sha256sum = hashlib.sha256(file_bytes).hexdigest()
+                    item = self._resolve_existing_nse(filename, sha256sum)
+                    is_new = item is None
+                    if is_new:
+                        item = self.datamodel.obj()
+
+                    item.name = filename
+                    item.hash = sha256sum
+                    form.populate_obj(item)
+
+                    if is_new:
+                        self.pre_add(item)
+                        success = self.datamodel.add(item)
+                    else:
+                        self.pre_update(item)
+                        success = self.datamodel.edit(item)
+                        if success:
+                            self.datamodel.message = ("NSE updated", "success")
+                except Exception as e:
+                    flash(str(e), "danger")
+                else:
+                    flash(*self.datamodel.message)
+                    if success:
+                        return redirect(url_for(f"{self.__class__.__name__}.list"))
+                is_valid_form = False
+            else:
+                is_valid_form = False
+
+        widgets = self._get_add_widget(form=form)
+        return self.render_template(
+            self.add_template, title=self.add_title, widgets=widgets
+        )
 
 
 class ScanprofilesView(ModelView):
