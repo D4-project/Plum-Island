@@ -15,6 +15,7 @@ from netaddr import IPNetwork, cidr_merge
 import meilisearch
 from meilisearch.errors import MeilisearchApiError
 from requests.exceptions import HTTPError
+from sqlalchemy import text
 from . import db
 from .models import Targets, Jobs, ScanProfiles, TargetScanStates
 from .utils.mutils import is_valid_fqdn, fetch_tlds
@@ -31,10 +32,17 @@ def task_master_of_puppets():
     """
     Sequentially run Scheduled tasks
     """
-    task_create_jobs()  # Create Jobs for the Scanner
-    task_export_to_dbs()  # Export New Received reports.
-    task_cleanup_jobs()  # Delete both Jobs from DB and Files
-    task_cleanup_export_jobs()  # Delete stale asynchronous search exports.
+    # External migration scripts and manual SQL maintenance can modify the
+    # sqlite database outside this process. Start each tick from a fresh ORM
+    # session so scheduler decisions use the current persisted state.
+    db.session.remove()
+    try:
+        task_create_jobs()  # Create Jobs for the Scanner
+        task_export_to_dbs()  # Export New Received reports.
+        task_cleanup_jobs()  # Delete both Jobs from DB and Files
+        task_cleanup_export_jobs()  # Delete stale asynchronous search exports.
+    finally:
+        db.session.remove()
 
 
 def check_json_storage(json_folder):
@@ -81,6 +89,47 @@ def _resolve_profiles_for_target(target, apply_to_all_profiles):
     return list(profiles.values())
 
 
+def _release_orphaned_working_states():
+    """
+    Release target/profile states stuck in working mode without unfinished jobs.
+    """
+    released_states = db.session.execute(
+        text(
+            """
+            UPDATE target_scan_states
+               SET working = 0
+             WHERE working = 1
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM jobs_targets_assoc AS jta
+                      JOIN jobs AS j ON j.id = jta.job_id
+                     WHERE jta.target_id = target_scan_states.target_id
+                       AND j.scanprofile_id = target_scan_states.scanprofile_id
+                       AND j.finished = 0
+               )
+            """
+        )
+    ).rowcount or 0
+    db.session.execute(
+        text(
+            """
+            UPDATE targets
+               SET working = CASE
+                   WHEN EXISTS (
+                        SELECT 1
+                          FROM target_scan_states AS tss
+                         WHERE tss.target_id = targets.id
+                           AND tss.working = 1
+                   ) THEN 1
+                   ELSE 0
+               END
+            """
+        )
+    )
+    db.session.flush()
+    return released_states
+
+
 def task_create_jobs():
     """
     This function will;
@@ -92,6 +141,7 @@ def task_create_jobs():
             unset working if no more pending jobs -> Could also be done when job received.
 
     """
+    released_states = _release_orphaned_working_states()
     range_chunks_by_profile = defaultdict(list)
     hostname_chunks_by_profile = defaultdict(list)
     small_ranges_by_profile = defaultdict(list)
@@ -115,6 +165,13 @@ def task_create_jobs():
     state_created_count = 0
     state_already_working_count = 0
     state_recently_scanned_count = 0
+    profiles_without_ports_skipped = 0
+
+    if released_states:
+        logger.warning(
+            "Create Job TASK: released %s orphan target/profile working states before scheduling",
+            released_states,
+        )
 
     for target in db.session.query(Targets).filter(Targets.active == True).yield_per(100):
         active_targets_processed += 1
@@ -211,6 +268,7 @@ def task_create_jobs():
         scan_nses = _serialize_profile_nses(profile)
         if not scan_ports:
             logger.warning("Skipping profile %s because it has no ports", profile.name)
+            profiles_without_ports_skipped += 1
             for chunk in chunks:
                 for state in chunk["states"]:
                     state.working = False
@@ -240,6 +298,7 @@ def task_create_jobs():
         scan_nses = _serialize_profile_nses(profile)
         if not scan_ports:
             logger.warning("Skipping profile %s because it has no ports", profile.name)
+            profiles_without_ports_skipped += 1
             for chunk in hostname_chunks:
                 for state in chunk["states"]:
                     state.working = False
@@ -277,11 +336,13 @@ def task_create_jobs():
         for stats in profile_stats.values()
         if stats["range_jobs"] or stats["host_jobs"]
     )
-    logger.info(
+    summary_log = (
         "Create Job TASK: %s jobs created across %s profiles (%s range, %s host); "
         "%s active targets processed; %s target/profile states scheduled; "
         "%s states skipped as already working; %s states skipped as recently scanned; "
-        "%s state rows created",
+        "%s state rows created; %s orphan states released; %s profiles skipped without ports"
+    )
+    summary_args = (
         total_jobs_created,
         active_profiles_with_jobs,
         range_job_count,
@@ -291,7 +352,13 @@ def task_create_jobs():
         state_already_working_count,
         state_recently_scanned_count,
         state_created_count,
+        released_states,
+        profiles_without_ports_skipped,
     )
+    if total_jobs_created == 0:
+        logger.warning(summary_log, *summary_args)
+    else:
+        logger.info(summary_log, *summary_args)
 
     profile_summaries = []
     for profile_id, stats in profile_stats.items():
