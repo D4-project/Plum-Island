@@ -8,6 +8,7 @@ import logging
 import shutil
 import uuid
 import json
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -28,6 +29,18 @@ logger = logging.getLogger("flask_appbuilder")
 job = []
 
 
+def _run_scheduler_step(step_label, step_func):
+    """
+    Log start/end timing for one scheduler step.
+    """
+    started_at = time.perf_counter()
+    logger.info("Scheduler TASK: starting %s", step_label)
+    step_func()
+    elapsed = time.perf_counter() - started_at
+    logger.info("Scheduler TASK: finished %s in %.2fs", step_label, elapsed)
+    return elapsed
+
+
 def task_master_of_puppets():
     """
     Sequentially run Scheduled tasks
@@ -35,12 +48,27 @@ def task_master_of_puppets():
     # External migration scripts and manual SQL maintenance can modify the
     # sqlite database outside this process. Start each tick from a fresh ORM
     # session so scheduler decisions use the current persisted state.
+    scheduler_started_at = time.perf_counter()
+    logger.info("Scheduler TASK: tick start")
     db.session.remove()
     try:
-        task_create_jobs()  # Create Jobs for the Scanner
-        task_export_to_dbs()  # Export New Received reports.
-        task_cleanup_jobs()  # Delete both Jobs from DB and Files
-        task_cleanup_export_jobs()  # Delete stale asynchronous search exports.
+        step_durations = {
+            "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
+            "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
+            "cleanup_jobs": _run_scheduler_step("cleanup_jobs", task_cleanup_jobs),
+            "cleanup_export_jobs": _run_scheduler_step(
+                "cleanup_export_jobs", task_cleanup_export_jobs
+            ),
+        }
+        total_elapsed = time.perf_counter() - scheduler_started_at
+        logger.info(
+            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, export_to_dbs=%.2fs, cleanup_jobs=%.2fs, cleanup_export_jobs=%.2fs)",
+            total_elapsed,
+            step_durations["create_jobs"],
+            step_durations["export_to_dbs"],
+            step_durations["cleanup_jobs"],
+            step_durations["cleanup_export_jobs"],
+        )
     finally:
         db.session.remove()
 
