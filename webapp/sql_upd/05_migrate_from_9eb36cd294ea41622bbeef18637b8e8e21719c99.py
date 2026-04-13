@@ -179,6 +179,30 @@ def column_exists(cursor, table_name, column_name):
     return any(row[1] == column_name for row in cursor.fetchall())
 
 
+def assert_sqlite_integrity(cursor):
+    """
+    Fail fast on corrupted sqlite files with an actionable message.
+    """
+    try:
+        cursor.execute("PRAGMA quick_check")
+        row = cursor.fetchone()
+    except sqlite3.DatabaseError as exc:
+        raise RuntimeError(
+            "SQLite integrity check failed before migration. "
+            "The database file is corrupted or was copied inconsistently. "
+            "If this backup was taken while Plum-Island was running in WAL mode, "
+            "restore app.db together with app.db-wal/app.db-shm, or rebuild a backup "
+            "using 'sqlite3 app.db .backup backup.db' after stopping the app."
+        ) from exc
+
+    if not row or row[0] != "ok":
+        raise RuntimeError(
+            "SQLite quick_check failed before migration: "
+            f"{row[0] if row else 'unknown error'}. "
+            "Restore a consistent backup before running migration 05."
+        )
+
+
 def ensure_tcp_proto(cursor):
     """
     Ensure the TCP protocol row exists and return its id.
@@ -402,6 +426,7 @@ def reset_scheduler_runtime_state(cursor):
 
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
+assert_sqlite_integrity(cursor)
 
 default_scan_cycle_minutes = load_scan_delay_hours() * 60
 legacy_ports = load_legacy_nmap_ports()
