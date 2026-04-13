@@ -27,6 +27,7 @@ from .utils.timeutils import utcnow_aware, utcnow_naive, ensure_utc_naive
 logger = logging.getLogger("flask_appbuilder")
 
 job = []
+MAX_TARGETS_PER_SCHEDULER_RUN = 4096
 
 
 def _run_scheduler_step(step_label, step_func):
@@ -117,6 +118,51 @@ def _resolve_profiles_for_target(target, apply_to_all_profiles):
     return list(profiles.values())
 
 
+def _get_target_batch_size():
+    """
+    Return the scheduler batch size, hard-capped to keep one tick bounded.
+    """
+    try:
+        configured = int(
+            db.app.config.get(
+                "SCHEDULER_TARGET_BATCH_SIZE", MAX_TARGETS_PER_SCHEDULER_RUN
+            )
+        )
+    except (TypeError, ValueError):
+        configured = MAX_TARGETS_PER_SCHEDULER_RUN
+
+    if configured <= 0:
+        configured = MAX_TARGETS_PER_SCHEDULER_RUN
+
+    return min(configured, MAX_TARGETS_PER_SCHEDULER_RUN)
+
+
+def _load_target_batch(batch_size):
+    """
+    Load one rotating batch of active targets ordered by id.
+    """
+    cursor_id = db.app.config.get("scheduler_target_cursor_id", 0)
+    query = (
+        db.session.query(Targets)
+        .filter(Targets.active == True)
+        .order_by(Targets.id.asc())
+    )
+
+    batch = query.filter(Targets.id > cursor_id).limit(batch_size).all()
+    wrapped = False
+
+    if cursor_id and not batch:
+        batch = query.limit(batch_size).all()
+        wrapped = True
+
+    if batch:
+        db.app.config["scheduler_target_cursor_id"] = batch[-1].id
+    else:
+        db.app.config["scheduler_target_cursor_id"] = 0
+
+    return batch, cursor_id, wrapped
+
+
 def _release_orphaned_working_states():
     """
     Release target/profile states stuck in working mode without unfinished jobs.
@@ -183,11 +229,20 @@ def task_create_jobs():
     apply_to_all_profiles = (
         db.session.query(ScanProfiles).filter(ScanProfiles.apply_to_all == True).all()
     )
-    state_cache = {
-        (state.target_id, state.scanprofile_id): state
-        for state in db.session.query(TargetScanStates).all()
-    }
     now = utcnow_naive()
+    batch_size = _get_target_batch_size()
+    target_batch, starting_cursor_id, batch_wrapped = _load_target_batch(batch_size)
+    target_ids = [target.id for target in target_batch]
+    state_cache = {}
+    states_by_target = defaultdict(list)
+    if target_ids:
+        for state in (
+            db.session.query(TargetScanStates)
+            .filter(TargetScanStates.target_id.in_(target_ids))
+            .all()
+        ):
+            state_cache[(state.target_id, state.scanprofile_id)] = state
+            states_by_target[state.target_id].append(state)
     active_targets_processed = 0
     state_created_count = 0
     state_already_working_count = 0
@@ -200,8 +255,19 @@ def task_create_jobs():
             "Create Job TASK: released %s orphan target/profile working states before scheduling",
             released_states,
         )
+    if target_batch:
+        logger.info(
+            "Create Job TASK: processing target batch of %s/%s max active targets (cursor_start=%s, cursor_end=%s, wrapped=%s)",
+            len(target_batch),
+            batch_size,
+            starting_cursor_id,
+            target_batch[-1].id,
+            batch_wrapped,
+        )
+    else:
+        logger.info("Create Job TASK: no active targets available for scheduling")
 
-    for target in db.session.query(Targets).filter(Targets.active == True).yield_per(100):
+    for target in target_batch:
         active_targets_processed += 1
         target_working = False
         resolved_profiles = _resolve_profiles_for_target(target, apply_to_all_profiles)
@@ -212,6 +278,7 @@ def task_create_jobs():
                 state = TargetScanStates(target=target, scanprofile=profile)
                 db.session.add(state)
                 state_cache[(target.id, profile.id)] = state
+                states_by_target[target.id].append(state)
                 state_created_count += 1
 
             if state.working:
@@ -363,8 +430,8 @@ def task_create_jobs():
             host_job_count += 1
             profile_stats[profile_id]["host_jobs"] += 1
 
-    for target in db.session.query(Targets).filter(Targets.active == True).yield_per(100):
-        target.working = any(state.working for state in target.scan_states)
+    for target in target_batch:
+        target.working = any(state.working for state in states_by_target[target.id])
 
     db.session.commit()
     total_jobs_created = range_job_count + host_job_count
@@ -375,7 +442,7 @@ def task_create_jobs():
     )
     summary_log = (
         "Create Job TASK: %s jobs created across %s profiles (%s range, %s host); "
-        "%s active targets processed; %s target/profile states scheduled; "
+        "%s targets processed this tick; %s target/profile states scheduled; "
         "%s states skipped as already working; %s states skipped as recently scanned; "
         "%s state rows created; %s orphan states released; %s profiles skipped without ports; "
         "%s target/profile evaluations skipped without scan frequency"
