@@ -620,7 +620,7 @@ def task_cleanup_jobs():
     missing_job_files = 0
     file_delete_errors = 0
 
-    for job_data in (
+    job_snapshots = list(
         db.session.query(Jobs.id, Jobs.uid)
         .filter(
             Jobs.active == False,
@@ -628,8 +628,9 @@ def task_cleanup_jobs():
             Jobs.finished == True,
             Jobs.job_end <= utcnow_naive() - timedelta(days=job_scavenge),
         )
-        .yield_per(100)
-    ):
+    )
+
+    for job_data in job_snapshots:
         filepath = os.path.join(
             json_folder,
             job_data.uid[0],
@@ -644,13 +645,18 @@ def task_cleanup_jobs():
             file_delete_errors += 1
             logger.error("Unable to delete job file %s: %s", filepath, err)
 
+    stale_job_ids = [job_data.id for job_data in job_snapshots]
+    if stale_job_ids:
         db.session.execute(
-            assoc_jobs_targets.delete().where(assoc_jobs_targets.c.job_id == job_data.id)
+            assoc_jobs_targets.delete().where(
+                assoc_jobs_targets.c.job_id.in_(stale_job_ids)
+            )
         )
-        db.session.query(Jobs).filter(Jobs.id == job_data.id).delete(
-            synchronize_session=False
+        deleted_jobs = (
+            db.session.query(Jobs)
+            .filter(Jobs.id.in_(stale_job_ids))
+            .delete(synchronize_session=False)
         )
-        deleted_jobs += 1
 
     if deleted_jobs:
         db.session.commit()
