@@ -526,6 +526,7 @@ class Api(BaseApi):
                     .join(Jobs, assoc.c.job_id == Jobs.id, isouter=True)
                     .filter(
                         assoc.c.target_id == target.id,
+                        Jobs.id != job_bot.id,
                         Jobs.finished == False,
                         Jobs.scanprofile_id == job_bot.scanprofile_id,
                     )
