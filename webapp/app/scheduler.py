@@ -18,7 +18,7 @@ from meilisearch.errors import MeilisearchApiError
 from requests.exceptions import HTTPError
 from sqlalchemy import text
 from . import db
-from .models import Targets, Jobs, ScanProfiles, TargetScanStates
+from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
 from .utils.mutils import is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json
@@ -644,6 +644,9 @@ def task_cleanup_jobs():
             file_delete_errors += 1
             logger.error("Unable to delete job file %s: %s", filepath, err)
 
+        db.session.execute(
+            assoc_jobs_targets.delete().where(assoc_jobs_targets.c.job_id == job_data.id)
+        )
         db.session.query(Jobs).filter(Jobs.id == job_data.id).delete(
             synchronize_session=False
         )

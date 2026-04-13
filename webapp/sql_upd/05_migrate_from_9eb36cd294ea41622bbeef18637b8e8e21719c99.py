@@ -361,6 +361,19 @@ def purge_unfinished_jobs(cursor):
     cursor.execute(
         """
         DELETE FROM jobs_targets_assoc
+         WHERE job_id NOT IN (
+            SELECT id
+              FROM jobs
+         )
+            OR target_id NOT IN (
+            SELECT id
+              FROM targets
+         )
+        """
+    )
+    cursor.execute(
+        """
+        DELETE FROM jobs_targets_assoc
          WHERE job_id IN (
             SELECT id
               FROM jobs
