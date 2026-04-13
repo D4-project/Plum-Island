@@ -12,6 +12,7 @@ import base64
 import os
 import json
 import logging
+import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi, has_access
 from flask_appbuilder.api import BaseApi, expose, safe, protect
@@ -453,6 +454,7 @@ class Api(BaseApi):
 
         Return a JobTodo.
         """
+        request_started = time.perf_counter()
         try:
             data = request.get_json(force=True)
             if not isinstance(data, dict):
@@ -473,11 +475,17 @@ class Api(BaseApi):
         logger.debug("Agent UID %s send back a JOB", botinfo.get("UID"))
 
         # Tell the JOB that we finished
+        lookup_started = time.perf_counter()
         job_bot = (
             db.session.query(Jobs)
             .filter(Jobs.uid == botinfo.get("JOB_UID"))
             .limit("1")
             .scalar()
+        )
+        logger.debug(
+            "sndjob debug: loaded job %s in %.2fs",
+            botinfo.get("JOB_UID"),
+            time.perf_counter() - lookup_started,
         )
         job_bot.finished = True
         job_bot.active = False
@@ -497,46 +505,65 @@ class Api(BaseApi):
         # Check if we release the Target as Ready for a new Turn
         # Tell the JOB that we finished
 
-        for target in job_bot.targets:
-            logger.debug("target_id candidate to clean: %s", target.id)
-            logger.debug("target_id candidate last scan %s", target.last_scan)
-            previous_scan = ensure_utc_naive(target.last_scan)
-            # Alias for association table
-            assoc = assoc_jobs_targets.alias()
-
-            # requete SQLAlchemy
-            count_query = (
-                db.session.query(func.count(distinct(Jobs.id)))
-                .select_from(assoc)
-                .join(Jobs, assoc.c.job_id == Jobs.id, isouter=True)
-                .filter(
-                    assoc.c.target_id == target.id,
-                    Jobs.finished == False,
-                    Jobs.scanprofile_id == job_bot.scanprofile_id,
-                )
+        sync_started = time.perf_counter()
+        with db.session.no_autoflush:
+            logger.debug(
+                "sndjob debug: syncing %s targets for job %s",
+                len(job_bot.targets),
+                job_bot.uid,
             )
+            for target in job_bot.targets:
+                logger.debug("target_id candidate to clean: %s", target.id)
+                logger.debug("target_id candidate last scan %s", target.last_scan)
+                previous_scan = ensure_utc_naive(target.last_scan)
+                # Alias for association table
+                assoc = assoc_jobs_targets.alias()
 
-            scan_state = (
-                db.session.query(TargetScanStates)
-                .filter(
-                    TargetScanStates.target_id == target.id,
-                    TargetScanStates.scanprofile_id == job_bot.scanprofile_id,
+                # requete SQLAlchemy
+                count_query = (
+                    db.session.query(func.count(distinct(Jobs.id)))
+                    .select_from(assoc)
+                    .join(Jobs, assoc.c.job_id == Jobs.id, isouter=True)
+                    .filter(
+                        assoc.c.target_id == target.id,
+                        Jobs.finished == False,
+                        Jobs.scanprofile_id == job_bot.scanprofile_id,
+                    )
                 )
-                .one_or_none()
-            )
 
-            if count_query.scalar() == 0:
-                completion_time = utcnow_naive()
-                if scan_state is not None:
-                    scan_state.working = False
-                    scan_state.last_previous_scan = ensure_utc_naive(scan_state.last_scan)
-                    scan_state.last_scan = completion_time
-                target.last_previous_scan = previous_scan
-                target.last_scan = completion_time
+                scan_state = (
+                    db.session.query(TargetScanStates)
+                    .filter(
+                        TargetScanStates.target_id == target.id,
+                        TargetScanStates.scanprofile_id == job_bot.scanprofile_id,
+                    )
+                    .one_or_none()
+                )
 
-            target.working = any(state.working for state in target.scan_states)
-            db.session.merge(target)  # ensure attached
+                if count_query.scalar() == 0:
+                    completion_time = utcnow_naive()
+                    if scan_state is not None:
+                        scan_state.working = False
+                        scan_state.last_previous_scan = ensure_utc_naive(scan_state.last_scan)
+                        scan_state.last_scan = completion_time
+                    target.last_previous_scan = previous_scan
+                    target.last_scan = completion_time
+
+                target.working = any(state.working for state in target.scan_states)
+                db.session.merge(target)  # ensure attached
+        logger.debug(
+            "sndjob debug: target sync for job %s completed in %.2fs",
+            job_bot.uid,
+            time.perf_counter() - sync_started,
+        )
+        commit_started = time.perf_counter()
         db.session.commit()
+        logger.debug(
+            "sndjob debug: commit for job %s completed in %.2fs (total_request=%.2fs)",
+            job_bot.uid,
+            time.perf_counter() - commit_started,
+            time.perf_counter() - request_started,
+        )
         return self.response(200, message="ready")
 
 

@@ -184,23 +184,23 @@ def _release_orphaned_working_states():
             """
         )
     ).rowcount or 0
-    db.session.execute(
-        text(
-            """
-            UPDATE targets
-               SET working = CASE
-                   WHEN EXISTS (
+    if released_states:
+        db.session.execute(
+            text(
+                """
+                UPDATE targets
+                   SET working = 0
+                 WHERE working = 1
+                   AND NOT EXISTS (
                         SELECT 1
                           FROM target_scan_states AS tss
                          WHERE tss.target_id = targets.id
                            AND tss.working = 1
-                   ) THEN 1
-                   ELSE 0
-               END
-            """
+                   )
+                """
+            )
         )
-    )
-    db.session.flush()
+        db.session.commit()
     return released_states
 
 
@@ -215,7 +215,13 @@ def task_create_jobs():
             unset working if no more pending jobs -> Could also be done when job received.
 
     """
+    phase_started = time.perf_counter()
     released_states = _release_orphaned_working_states()
+    logger.debug(
+        "Create Job TASK debug: orphan-state release completed in %.2fs (released_states=%s)",
+        time.perf_counter() - phase_started,
+        released_states,
+    )
     range_chunks_by_profile = defaultdict(list)
     hostname_chunks_by_profile = defaultdict(list)
     small_ranges_by_profile = defaultdict(list)
@@ -229,6 +235,9 @@ def task_create_jobs():
     apply_to_all_profiles = (
         db.session.query(ScanProfiles).filter(ScanProfiles.apply_to_all == True).all()
     )
+    profile_map = {
+        profile.id: profile for profile in db.session.query(ScanProfiles).yield_per(100)
+    }
     now = utcnow_naive()
     batch_size = _get_target_batch_size()
     target_batch, starting_cursor_id, batch_wrapped = _load_target_batch(batch_size)
@@ -243,6 +252,13 @@ def task_create_jobs():
         ):
             state_cache[(state.target_id, state.scanprofile_id)] = state
             states_by_target[state.target_id].append(state)
+    logger.debug(
+        "Create Job TASK debug: loaded batch metadata in %.2fs (targets=%s, existing_states=%s, profiles=%s)",
+        time.perf_counter() - phase_started,
+        len(target_batch),
+        len(state_cache),
+        len(profile_map),
+    )
     active_targets_processed = 0
     state_created_count = 0
     state_already_working_count = 0
@@ -267,6 +283,7 @@ def task_create_jobs():
     else:
         logger.info("Create Job TASK: no active targets available for scheduling")
 
+    evaluation_started = time.perf_counter()
     for target in target_batch:
         active_targets_processed += 1
         target_working = False
@@ -328,7 +345,17 @@ def task_create_jobs():
             profile_stats[profile.id]["scheduled_states"] += 1
 
         target.working = target_working
+    logger.debug(
+        "Create Job TASK debug: target evaluation completed in %.2fs (targets=%s, scheduled_states=%s, already_working=%s, recently_scanned=%s, no_cycle=%s)",
+        time.perf_counter() - evaluation_started,
+        active_targets_processed,
+        sum(stats["scheduled_states"] for stats in profile_stats.values()),
+        state_already_working_count,
+        state_recently_scanned_count,
+        profiles_without_cycle_skipped,
+    )
 
+    merge_started = time.perf_counter()
     for profile_id, small_ranges in small_ranges_by_profile.items():
         current_block = []
         current_targets = {}
@@ -358,11 +385,14 @@ def task_create_jobs():
                     "states": list(current_states.values()),
                 }
             )
+    logger.debug(
+        "Create Job TASK debug: small-range merge completed in %.2fs (range_profiles=%s, hostname_profiles=%s)",
+        time.perf_counter() - merge_started,
+        len(range_chunks_by_profile),
+        len(hostname_chunks_by_profile),
+    )
 
-    profile_map = {
-        profile.id: profile for profile in db.session.query(ScanProfiles).yield_per(100)
-    }
-
+    job_build_started = time.perf_counter()
     range_job_count = 0
     for profile_id, chunks in range_chunks_by_profile.items():
         profile = profile_map.get(profile_id)
@@ -429,11 +459,22 @@ def task_create_jobs():
             db.session.add(new_job)
             host_job_count += 1
             profile_stats[profile_id]["host_jobs"] += 1
+    logger.debug(
+        "Create Job TASK debug: job staging completed in %.2fs (range_jobs=%s, host_jobs=%s)",
+        time.perf_counter() - job_build_started,
+        range_job_count,
+        host_job_count,
+    )
 
     for target in target_batch:
         target.working = any(state.working for state in states_by_target[target.id])
 
+    commit_started = time.perf_counter()
     db.session.commit()
+    logger.debug(
+        "Create Job TASK debug: commit completed in %.2fs",
+        time.perf_counter() - commit_started,
+    )
     total_jobs_created = range_job_count + host_job_count
     active_profiles_with_jobs = sum(
         1
