@@ -23,7 +23,7 @@ from sqlalchemy import (
 )
 from flask_appbuilder.models.mixins import FileColumn
 from sqlalchemy import func
-from sqlalchemy.orm import relationship, object_session
+from sqlalchemy.orm import relationship, object_session, validates
 from .utils.timeutils import utcnow_naive
 
 
@@ -121,6 +121,18 @@ class Jobs(Model):
     targets = relationship(
         "Targets", secondary=assoc_jobs_targets, back_populates="jobs"
     )
+
+    @validates("priority")
+    def validate_priority(self, key, value):
+        """
+        Restrict job priority to the three supported queues: 0, 1, 2.
+        """
+        if value is None:
+            return 0
+        value = int(value)
+        if value < 0 or value > 2:
+            raise ValueError("Priority must be between 0 and 2")
+        return value
 
     def __repr__(self):
         return self.job
@@ -385,6 +397,18 @@ class ScanProfiles(Model):
     scan_states = relationship(
         "TargetScanStates", back_populates="scanprofile", cascade="all, delete-orphan"
     )
+
+    @validates("priority")
+    def validate_priority(self, key, value):
+        """
+        Restrict scan profile priority to the three supported queues: 0, 1, 2.
+        """
+        if value is None:
+            return 0
+        value = int(value)
+        if value < 0 or value > 2:
+            raise ValueError("Priority must be between 0 and 2")
+        return value
 
     def __repr__(self):
         return self.name

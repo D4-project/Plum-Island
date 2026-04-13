@@ -28,14 +28,14 @@ from flask_appbuilder import BaseView
 from flask_login import current_user
 from meilisearch import Client
 
-from wtforms import TextAreaField, SubmitField, Field, ValidationError
+from wtforms import TextAreaField, SubmitField, Field, ValidationError, IntegerField
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
 from flask_appbuilder.filemanager import FileManager
 from werkzeug.security import generate_password_hash
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import or_
-from wtforms.validators import Optional
+from wtforms.validators import Optional, NumberRange
 from wtforms.widgets import html_params
 from app import app
 from .models import (
@@ -61,6 +61,32 @@ from . import appbuilder, db
 logger = logging.getLogger("flask_appbuilder")
 EXPORT_JOB_STATES = {}
 EXPORT_JOB_STATES_LOCK = threading.Lock()
+
+
+def build_priority_field(label="Priority"):
+    """
+    Shared priority field limited to the three supported queues: 0, 1, 2.
+    """
+    return IntegerField(
+        label,
+        validators=[
+            Optional(),
+            NumberRange(min=0, max=2, message="Priority must be between 0 and 2"),
+        ],
+        default=0,
+    )
+
+
+def normalize_priority(item):
+    """
+    Apply the supported priority range server-side as a last safety net.
+    """
+    if getattr(item, "priority", None) is None:
+        item.priority = 0
+    item.priority = int(item.priority)
+    if item.priority < 0 or item.priority > 2:
+        raise ValueError("Priority must be between 0 and 2")
+    return item.priority
 
 
 class RemoteSelect2ManyWidget:
@@ -1133,6 +1159,9 @@ class JobsView(ModelView):
         "finished",
     ]
     edit_columns = ["targets", "active", "finished", "exported", "priority"]
+    edit_form_extra_fields = {
+        "priority": build_priority_field(),
+    }
     base_order = ("job_creation", "desc")  # Latest finished on top.
 
     show_template = "show_jobview.html"  # Custom Show view with results
@@ -1182,6 +1211,10 @@ class JobsView(ModelView):
         self.datamodel.delete_all(items)
         self.update_redirect()
         return redirect(self.get_redirect())
+
+    def pre_update(self, item):
+        normalize_priority(item)
+        return self
 
     @expose("/file_get/<uid>")
     @has_access  # Tout authenticated people.
@@ -1383,6 +1416,7 @@ class ScanprofilesView(ModelView):
         )
     }
     add_form_extra_fields = {
+        "priority": build_priority_field(),
         "ports": RemoteRelatedMultipleField(
             "Ports",
             validators=[Optional()],
@@ -1406,6 +1440,7 @@ class ScanprofilesView(ModelView):
         )
     }
     edit_form_extra_fields = {
+        "priority": build_priority_field(),
         "ports": RemoteRelatedMultipleField(
             "Ports",
             validators=[Optional()],
@@ -1436,6 +1471,7 @@ class ScanprofilesView(ModelView):
     }
 
     def pre_add(self, item):
+        normalize_priority(item)
         if len(item.ports) == 0:
             raise ValueError("At least one port is mandatory")
         if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
@@ -1443,6 +1479,7 @@ class ScanprofilesView(ModelView):
         return self
 
     def pre_update(self, item):
+        normalize_priority(item)
         if len(item.ports) == 0:
             raise ValueError("At least one port is mandatory")
         if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
