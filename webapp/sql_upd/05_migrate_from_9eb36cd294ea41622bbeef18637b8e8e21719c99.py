@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = BASE_DIR.parent
 DB_PATH = BASE_DIR / "app.db"
 CONFIG_PATH = BASE_DIR / "config.py"
 DEFAULT_NMAP_PORTS = [21, 22, 23, 25, 80, 110, 143, 443, 993, 995, 3389, 8080, 8443]
@@ -23,6 +24,10 @@ COMMON_NMAP_SCRIPT_DIRS = [
     Path("/usr/share/nmap/scripts"),
     Path("/usr/local/share/nmap/scripts"),
     Path("/opt/homebrew/share/nmap/scripts"),
+]
+LOCAL_NSE_FALLBACK_DIRS = [
+    PROJECT_ROOT / "nse",
+    BASE_DIR / "nse",
 ]
 
 
@@ -123,6 +128,20 @@ def load_nmap_script_dirs():
     return unique_dirs
 
 
+def load_local_nse_fallback_dirs():
+    """
+    Resolve local repository fallback directories for bundled NSE scripts.
+    """
+    unique_dirs = []
+    seen = set()
+    for directory in LOCAL_NSE_FALLBACK_DIRS:
+        resolved = directory.expanduser()
+        if resolved not in seen:
+            seen.add(resolved)
+            unique_dirs.append(resolved)
+    return unique_dirs
+
+
 def find_nmap_script(script_name):
     """
     Resolve an NSE script path from the local Nmap distribution.
@@ -131,6 +150,10 @@ def find_nmap_script(script_name):
     if not normalized_name:
         return None
     for script_dir in load_nmap_script_dirs():
+        candidate = script_dir / normalized_name
+        if candidate.is_file():
+            return candidate
+    for script_dir in load_local_nse_fallback_dirs():
         candidate = script_dir / normalized_name
         if candidate.is_file():
             return candidate
@@ -314,8 +337,8 @@ def ensure_profile_nses(cursor, profile_id, upload_folder, script_names):
 
 def backfill_legacy_jobs(cursor, default_profile_id, scan_ports_csv, scan_nses_csv):
     """
-    Populate the new job columns for pre-migration jobs so existing queues keep
-    working after the code upgrade.
+    Populate the new job columns for finished pre-migration jobs so job history
+    remains coherent after the code upgrade.
     """
     cursor.execute(
         """
@@ -329,6 +352,39 @@ def backfill_legacy_jobs(cursor, default_profile_id, scan_ports_csv, scan_nses_c
         """,
         (default_profile_id, scan_ports_csv, scan_nses_csv),
     )
+
+
+def purge_unfinished_jobs(cursor):
+    """
+    Drop every waiting or running job so the scheduler can rebuild clean queues.
+    """
+    cursor.execute(
+        """
+        DELETE FROM jobs_targets_assoc
+         WHERE job_id IN (
+            SELECT id
+              FROM jobs
+             WHERE finished = 0
+         )
+        """
+    )
+    cursor.execute("DELETE FROM jobs WHERE finished = 0")
+    cursor.execute("UPDATE bots SET running = 0")
+
+
+def reset_scheduler_runtime_state(cursor):
+    """
+    Reset scheduler runtime flags so every target/profile can be scheduled again.
+    """
+    cursor.execute(
+        """
+        UPDATE target_scan_states
+           SET working = 0,
+               last_previous_scan = COALESCE(last_scan, last_previous_scan),
+               last_scan = NULL
+        """
+    )
+    cursor.execute("UPDATE targets SET working = 0")
 
 
 conn = sqlite3.connect(DB_PATH)
@@ -386,6 +442,7 @@ cursor.execute(
 default_profile_id = ensure_default_profile(cursor, default_scan_cycle_minutes)
 scan_ports_csv = ensure_profile_ports(cursor, default_profile_id, legacy_ports)
 scan_nses_csv = ensure_profile_nses(cursor, default_profile_id, upload_folder, legacy_nses)
+purge_unfinished_jobs(cursor)
 backfill_legacy_jobs(cursor, default_profile_id, scan_ports_csv, scan_nses_csv)
 
 cursor.execute(
@@ -395,6 +452,7 @@ cursor.execute(
       FROM scanprofiles_targets_assoc
     """
 )
+reset_scheduler_runtime_state(cursor)
 
 conn.commit()
 conn.close()
