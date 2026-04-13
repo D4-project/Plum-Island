@@ -476,6 +476,48 @@ cursor.execute(
         ON target_scan_states(target_id, scanprofile_id);
     """
 )
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_target_scan_states_due
+        ON target_scan_states(scanprofile_id, working, last_scan, target_id);
+    """
+)
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_targets_active_id
+        ON targets(active, id);
+    """
+)
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_scanprofiles_targets_assoc_profile_target
+        ON scanprofiles_targets_assoc(scanprofile_id, target_id);
+    """
+)
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_jobs_waiting_profile_priority_creation
+        ON jobs(active, finished, scanprofile_id, priority, job_creation);
+    """
+)
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_jobs_cleanup_window
+        ON jobs(active, exported, finished, job_end);
+    """
+)
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_jobs_targets_assoc_target_job
+        ON jobs_targets_assoc(target_id, job_id);
+    """
+)
+cursor.execute(
+    """
+    CREATE INDEX IF NOT EXISTS idx_jobs_targets_assoc_job_target
+        ON jobs_targets_assoc(job_id, target_id);
+    """
+)
 
 default_profile_id = ensure_default_profile(cursor, default_scan_cycle_minutes)
 scan_ports_csv = ensure_profile_ports(cursor, default_profile_id, legacy_ports)
@@ -486,8 +528,21 @@ backfill_legacy_jobs(cursor, default_profile_id, scan_ports_csv, scan_nses_csv)
 cursor.execute(
     """
     INSERT OR IGNORE INTO target_scan_states (target_id, scanprofile_id, working)
-    SELECT target_id, scanprofile_id, 0
-      FROM scanprofiles_targets_assoc
+    SELECT spta.target_id, spta.scanprofile_id, 0
+      FROM scanprofiles_targets_assoc AS spta
+      JOIN targets AS t
+        ON t.id = spta.target_id
+     WHERE t.active = 1
+    """
+)
+cursor.execute(
+    """
+    INSERT OR IGNORE INTO target_scan_states (target_id, scanprofile_id, working)
+    SELECT t.id, sp.id, 0
+      FROM targets AS t
+      JOIN scanprofiles AS sp
+        ON sp.apply_to_all = 1
+     WHERE t.active = 1
     """
 )
 reset_scheduler_runtime_state(cursor)

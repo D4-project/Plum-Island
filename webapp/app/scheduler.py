@@ -17,17 +17,22 @@ import meilisearch
 from meilisearch.errors import MeilisearchApiError
 from requests.exceptions import HTTPError
 from sqlalchemy import text
+from sqlalchemy.orm import joinedload
 from . import db
 from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
 from .utils.mutils import is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json
-from .utils.timeutils import utcnow_aware, utcnow_naive, ensure_utc_naive
+from .utils.timeutils import utcnow_aware, utcnow_naive
 
 logger = logging.getLogger("flask_appbuilder")
 
 job = []
-MAX_TARGETS_PER_SCHEDULER_RUN = 4096
+DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE = 256
+DEFAULT_QUEUE_STATE_BATCH_SIZE = 128
+DEFAULT_STATE_SYNC_BATCH_SIZE = 2048
+DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
+DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 
 
 def _run_scheduler_step(step_label, step_func):
@@ -108,59 +113,15 @@ def _serialize_profile_nses(profile):
     return ",".join(values)
 
 
-def _resolve_profiles_for_target(target, apply_to_all_profiles):
+def _get_scheduler_int_config(name, default_value, minimum=1):
     """
-    Return the effective scan profiles for one target.
-    """
-    profiles = {profile.id: profile for profile in target.scanprofiles}
-    for profile in apply_to_all_profiles:
-        profiles.setdefault(profile.id, profile)
-    return list(profiles.values())
-
-
-def _get_target_batch_size():
-    """
-    Return the scheduler batch size, hard-capped to keep one tick bounded.
+    Read an integer scheduler setting with a minimum guardrail.
     """
     try:
-        configured = int(
-            db.app.config.get(
-                "SCHEDULER_TARGET_BATCH_SIZE", MAX_TARGETS_PER_SCHEDULER_RUN
-            )
-        )
+        value = int(db.app.config.get(name, default_value))
     except (TypeError, ValueError):
-        configured = MAX_TARGETS_PER_SCHEDULER_RUN
-
-    if configured <= 0:
-        configured = MAX_TARGETS_PER_SCHEDULER_RUN
-
-    return min(configured, MAX_TARGETS_PER_SCHEDULER_RUN)
-
-
-def _load_target_batch(batch_size):
-    """
-    Load one rotating batch of active targets ordered by id.
-    """
-    cursor_id = db.app.config.get("scheduler_target_cursor_id", 0)
-    query = (
-        db.session.query(Targets)
-        .filter(Targets.active == True)
-        .order_by(Targets.id.asc())
-    )
-
-    batch = query.filter(Targets.id > cursor_id).limit(batch_size).all()
-    wrapped = False
-
-    if cursor_id and not batch:
-        batch = query.limit(batch_size).all()
-        wrapped = True
-
-    if batch:
-        db.app.config["scheduler_target_cursor_id"] = batch[-1].id
-    else:
-        db.app.config["scheduler_target_cursor_id"] = 0
-
-    return batch, cursor_id, wrapped
+        value = default_value
+    return max(value, minimum)
 
 
 def _release_orphaned_working_states():
@@ -204,322 +165,528 @@ def _release_orphaned_working_states():
     return released_states
 
 
-def task_create_jobs():
+def _should_run_orphan_state_release():
     """
-    This function will;
-        for each non scanned network cidr
-            create small jobs of 256 hosts
-            set the network in working state
-
-        for each currently scanned cidr
-            unset working if no more pending jobs -> Could also be done when job received.
-
+    Run the expensive orphan sweep only periodically.
     """
-    phase_started = time.perf_counter()
-    released_states = _release_orphaned_working_states()
-    logger.debug(
-        "Create Job TASK debug: orphan-state release completed in %.2fs (released_states=%s)",
-        time.perf_counter() - phase_started,
-        released_states,
+    now_ts = time.time()
+    interval_seconds = _get_scheduler_int_config(
+        "SCHEDULER_ORPHAN_SWEEP_INTERVAL_SECONDS",
+        DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS,
+        minimum=60,
     )
-    range_chunks_by_profile = defaultdict(list)
-    hostname_chunks_by_profile = defaultdict(list)
-    small_ranges_by_profile = defaultdict(list)
-    profile_stats = defaultdict(
-        lambda: {
-            "scheduled_states": 0,
-            "range_jobs": 0,
-            "host_jobs": 0,
-        }
+    last_run_ts = db.app.config.get("scheduler_last_orphan_state_release_ts", 0)
+    if now_ts - last_run_ts < interval_seconds:
+        return False
+    db.app.config["scheduler_last_orphan_state_release_ts"] = now_ts
+    return True
+
+
+def _sync_missing_scan_states():
+    """
+    Seed missing target/profile runtime rows in bounded batches.
+    """
+    batch_limit = _get_scheduler_int_config(
+        "SCHEDULER_STATE_SYNC_BATCH_SIZE",
+        DEFAULT_STATE_SYNC_BATCH_SIZE,
     )
-    apply_to_all_profiles = (
-        db.session.query(ScanProfiles).filter(ScanProfiles.apply_to_all == True).all()
+    inserted_states = 0
+
+    explicit_inserted = (
+        db.session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO target_scan_states (target_id, scanprofile_id, working)
+                SELECT spta.target_id, spta.scanprofile_id, 0
+                  FROM scanprofiles_targets_assoc AS spta
+                  JOIN targets AS t
+                    ON t.id = spta.target_id
+                 WHERE t.active = 1
+                   AND NOT EXISTS (
+                        SELECT 1
+                          FROM target_scan_states AS tss
+                         WHERE tss.target_id = spta.target_id
+                           AND tss.scanprofile_id = spta.scanprofile_id
+                   )
+                 ORDER BY spta.scanprofile_id ASC, spta.target_id ASC
+                 LIMIT :limit
+                """
+            ),
+            {"limit": batch_limit},
+        ).rowcount
+        or 0
     )
-    profile_map = {
-        profile.id: profile for profile in db.session.query(ScanProfiles).yield_per(100)
-    }
-    now = utcnow_naive()
-    batch_size = _get_target_batch_size()
-    target_batch, starting_cursor_id, batch_wrapped = _load_target_batch(batch_size)
-    target_ids = [target.id for target in target_batch]
-    state_cache = {}
-    states_by_target = defaultdict(list)
-    if target_ids:
-        for state in (
-            db.session.query(TargetScanStates)
-            .filter(TargetScanStates.target_id.in_(target_ids))
+    inserted_states += explicit_inserted
+    remaining = batch_limit - explicit_inserted
+
+    if remaining > 0:
+        apply_all_profiles = (
+            db.session.query(ScanProfiles.id)
+            .filter(ScanProfiles.apply_to_all == True)
+            .order_by(ScanProfiles.priority.desc(), ScanProfiles.id.asc())
             .all()
-        ):
-            state_cache[(state.target_id, state.scanprofile_id)] = state
-            states_by_target[state.target_id].append(state)
-    logger.debug(
-        "Create Job TASK debug: loaded batch metadata in %.2fs (targets=%s, existing_states=%s, profiles=%s)",
-        time.perf_counter() - phase_started,
-        len(target_batch),
-        len(state_cache),
-        len(profile_map),
-    )
-    active_targets_processed = 0
-    state_created_count = 0
-    state_already_working_count = 0
-    state_recently_scanned_count = 0
-    profiles_without_ports_skipped = 0
-    profiles_without_cycle_skipped = 0
-
-    if released_states:
-        logger.warning(
-            "Create Job TASK: released %s orphan target/profile working states before scheduling",
-            released_states,
         )
-    if target_batch:
-        logger.info(
-            "Create Job TASK: processing target batch of %s/%s max active targets (cursor_start=%s, cursor_end=%s, wrapped=%s)",
-            len(target_batch),
-            batch_size,
-            starting_cursor_id,
-            target_batch[-1].id,
-            batch_wrapped,
+        for row in apply_all_profiles:
+            profile_id = row[0]
+            if remaining <= 0:
+                break
+            created_for_profile = (
+                db.session.execute(
+                    text(
+                        """
+                        INSERT OR IGNORE INTO target_scan_states (target_id, scanprofile_id, working)
+                        SELECT t.id, :profile_id, 0
+                          FROM targets AS t
+                         WHERE t.active = 1
+                           AND NOT EXISTS (
+                                SELECT 1
+                                  FROM target_scan_states AS tss
+                                 WHERE tss.target_id = t.id
+                                   AND tss.scanprofile_id = :profile_id
+                           )
+                         ORDER BY t.id ASC
+                         LIMIT :limit
+                        """
+                    ),
+                    {"profile_id": profile_id, "limit": remaining},
+                ).rowcount
+                or 0
+            )
+            inserted_states += created_for_profile
+            remaining -= created_for_profile
+
+    if inserted_states:
+        db.session.commit()
+    return inserted_states
+
+
+def _get_waiting_job_counts_by_profile():
+    """
+    Return queued job counts keyed by scanprofile id.
+    """
+    waiting_counts = defaultdict(int)
+    rows = db.session.execute(
+        text(
+            """
+            SELECT scanprofile_id, COUNT(*) AS waiting_jobs
+              FROM jobs
+             WHERE active = 0
+               AND finished = 0
+               AND scanprofile_id IS NOT NULL
+             GROUP BY scanprofile_id
+            """
         )
-    else:
-        logger.info("Create Job TASK: no active targets available for scheduling")
+    ).fetchall()
+    for scanprofile_id, waiting_jobs in rows:
+        waiting_counts[scanprofile_id] = waiting_jobs
+    return waiting_counts
 
-    evaluation_started = time.perf_counter()
-    for target in target_batch:
-        active_targets_processed += 1
-        target_working = False
-        resolved_profiles = _resolve_profiles_for_target(target, apply_to_all_profiles)
 
-        for profile in resolved_profiles:
-            state = state_cache.get((target.id, profile.id))
-            if state is None:
-                state = TargetScanStates(target=target, scanprofile=profile)
-                db.session.add(state)
-                state_cache[(target.id, profile.id)] = state
-                states_by_target[target.id].append(state)
-                state_created_count += 1
+def _rotate_profiles_for_tick(profiles):
+    """
+    Rotate profile evaluation order across ticks to avoid starving later profiles.
+    """
+    if not profiles:
+        db.app.config["scheduler_profile_cursor_id"] = 0
+        return profiles
 
-            if state.working:
-                target_working = True
-                state_already_working_count += 1
-                continue
+    cursor_profile_id = db.app.config.get("scheduler_profile_cursor_id", 0)
+    start_index = 0
 
-            cycle_minutes = profile.scan_cycle_minutes
-            if not cycle_minutes or cycle_minutes <= 0:
-                profiles_without_cycle_skipped += 1
-                logger.warning(
-                    "Skipping profile %s for target %s because scan_cycle_minutes is not set",
-                    profile.name,
-                    target.value,
-                )
-                state.working = False
-                continue
-            last_scan = ensure_utc_naive(state.last_scan)
-            if last_scan and last_scan >= now - timedelta(minutes=cycle_minutes):
-                state_recently_scanned_count += 1
-                continue
+    if cursor_profile_id:
+        for index, profile in enumerate(profiles):
+            if profile.id > cursor_profile_id:
+                start_index = index
+                break
+        else:
+            start_index = 0
 
-            if is_valid_fqdn(target.value):
-                hostname_chunks_by_profile[profile.id].append(
-                    {"hosts": [target.value], "targets": [target], "states": [state]}
-                )
-            else:
-                net = IPNetwork(target.value)
-                if net.size > 256:
-                    ips = list(net)
-                    for i in range(0, len(ips), 256):
-                        block = ips[i : i + 256]
-                        range_chunks_by_profile[profile.id].append(
-                            {
-                                "cidrs": [str(c) for c in cidr_merge(block)],
-                                "targets": [target],
-                                "states": [state],
-                            }
-                        )
-                else:
-                    small_ranges_by_profile[profile.id].append(
-                        {"ips": list(net), "target": target, "state": state}
-                    )
+    if start_index == 0:
+        return profiles
+    return profiles[start_index:] + profiles[:start_index]
 
-            state.working = True
-            target_working = True
-            profile_stats[profile.id]["scheduled_states"] += 1
 
-        target.working = target_working
-    logger.debug(
-        "Create Job TASK debug: target evaluation completed in %.2fs (targets=%s, scheduled_states=%s, already_working=%s, recently_scanned=%s, no_cycle=%s)",
-        time.perf_counter() - evaluation_started,
-        active_targets_processed,
-        sum(stats["scheduled_states"] for stats in profile_stats.values()),
-        state_already_working_count,
-        state_recently_scanned_count,
-        profiles_without_cycle_skipped,
+def _load_due_states_for_profile(profile, now_utc, state_limit):
+    """
+    Load due target/profile states for one profile, oldest first.
+    """
+    cutoff = now_utc - timedelta(minutes=profile.scan_cycle_minutes)
+    due_state_ids_sql = """
+        SELECT tss.id
+          FROM target_scan_states AS tss
+          JOIN targets AS t
+            ON t.id = tss.target_id
+         WHERE tss.scanprofile_id = :profile_id
+           AND t.active = 1
+           AND tss.working = 0
+           AND (tss.last_scan IS NULL OR tss.last_scan <= :cutoff)
+    """
+    if not profile.apply_to_all:
+        due_state_ids_sql += """
+           AND EXISTS (
+                SELECT 1
+                  FROM scanprofiles_targets_assoc AS spta
+                 WHERE spta.scanprofile_id = tss.scanprofile_id
+                   AND spta.target_id = tss.target_id
+           )
+        """
+    due_state_ids_sql += """
+         ORDER BY CASE WHEN tss.last_scan IS NULL THEN 0 ELSE 1 END ASC,
+                  tss.last_scan ASC,
+                  tss.target_id ASC
+         LIMIT :limit
+    """
+
+    state_ids = [
+        row[0]
+        for row in db.session.execute(
+            text(due_state_ids_sql),
+            {"profile_id": profile.id, "cutoff": cutoff, "limit": state_limit},
+        ).fetchall()
+    ]
+    if not state_ids:
+        return []
+
+    states = (
+        db.session.query(TargetScanStates)
+        .options(joinedload(TargetScanStates.target))
+        .filter(TargetScanStates.id.in_(state_ids))
+        .all()
     )
+    states_by_id = {state.id: state for state in states}
+    return [states_by_id[state_id] for state_id in state_ids if state_id in states_by_id]
 
-    merge_started = time.perf_counter()
-    for profile_id, small_ranges in small_ranges_by_profile.items():
-        current_block = []
-        current_targets = {}
-        current_states = {}
-        for record in sorted(small_ranges, key=lambda x: x["ips"][0]):
-            for ip in record["ips"]:
-                current_block.append(ip)
-                current_targets[record["target"].id] = record["target"]
-                current_states[id(record["state"])] = record["state"]
-                if len(current_block) == 256:
-                    range_chunks_by_profile[profile_id].append(
-                        {
-                            "cidrs": [str(c) for c in cidr_merge(current_block)],
-                            "targets": list(current_targets.values()),
-                            "states": list(current_states.values()),
-                        }
-                    )
-                    current_block = []
-                    current_targets = {}
-                    current_states = {}
 
-        if current_block:
-            range_chunks_by_profile[profile_id].append(
+def _append_large_network_chunks(target, state, range_chunks):
+    """
+    Split large networks into /24-sized job chunks without materializing the whole network.
+    """
+    current_block = []
+    for ip in IPNetwork(target.value):
+        current_block.append(ip)
+        if len(current_block) == 256:
+            range_chunks.append(
                 {
-                    "cidrs": [str(c) for c in cidr_merge(current_block)],
-                    "targets": list(current_targets.values()),
-                    "states": list(current_states.values()),
+                    "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
+                    "targets": [target],
+                    "states": [state],
                 }
             )
-    logger.debug(
-        "Create Job TASK debug: small-range merge completed in %.2fs (range_profiles=%s, hostname_profiles=%s)",
-        time.perf_counter() - merge_started,
-        len(range_chunks_by_profile),
-        len(hostname_chunks_by_profile),
-    )
+            current_block = []
+    if current_block:
+        range_chunks.append(
+            {
+                "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
+                "targets": [target],
+                "states": [state],
+            }
+        )
 
-    job_build_started = time.perf_counter()
+
+def _merge_small_ranges_into_chunks(small_ranges, range_chunks):
+    """
+    Merge small IP ranges across states into 256-IP jobs.
+    """
+    current_block = []
+    current_targets = {}
+    current_states = {}
+
+    for record in sorted(small_ranges, key=lambda item: item["ips"][0]):
+        for ip in record["ips"]:
+            current_block.append(ip)
+            current_targets[record["target"].id] = record["target"]
+            current_states[id(record["state"])] = record["state"]
+            if len(current_block) == 256:
+                range_chunks.append(
+                    {
+                        "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
+                        "targets": list(current_targets.values()),
+                        "states": list(current_states.values()),
+                    }
+                )
+                current_block = []
+                current_targets = {}
+                current_states = {}
+
+    if current_block:
+        range_chunks.append(
+            {
+                "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
+                "targets": list(current_targets.values()),
+                "states": list(current_states.values()),
+            }
+        )
+
+
+def _stage_jobs_for_profile(profile, due_states, scan_ports, scan_nses):
+    """
+    Convert due states into queued jobs for one profile.
+    """
+    range_chunks = []
+    hostname_chunks = []
+    small_ranges = []
+
+    for state in due_states:
+        target = state.target
+        if target is None:
+            continue
+        if is_valid_fqdn(target.value):
+            hostname_chunks.append(
+                {"hosts": [target.value], "targets": [target], "states": [state]}
+            )
+        else:
+            net = IPNetwork(target.value)
+            if net.size > 256:
+                _append_large_network_chunks(target, state, range_chunks)
+            else:
+                small_ranges.append({"ips": list(net), "target": target, "state": state})
+
+        state.working = True
+        target.working = True
+
+    if small_ranges:
+        _merge_small_ranges_into_chunks(small_ranges, range_chunks)
+
     range_job_count = 0
-    for profile_id, chunks in range_chunks_by_profile.items():
-        profile = profile_map.get(profile_id)
-        if profile is None:
-            continue
-        scan_ports = _serialize_profile_ports(profile)
-        scan_nses = _serialize_profile_nses(profile)
-        if not scan_ports:
-            logger.warning("Skipping profile %s because it has no ports", profile.name)
-            profiles_without_ports_skipped += 1
-            for chunk in chunks:
-                for state in chunk["states"]:
-                    state.working = False
-            continue
-
-        for chunk in chunks:
-            new_job = Jobs()
-            new_job.uid = str(uuid.uuid4())
-            new_job.job = ",".join(str(cidr) for cidr in cidr_merge(chunk["cidrs"]))
-            new_job.scanprofile = profile
-            new_job.scan_ports = scan_ports
-            new_job.scan_nses = scan_nses
-            new_job.priority = profile.priority or 0
-            for target in chunk["targets"]:
-                new_job.targets.append(target)
-                target.working = True
-            db.session.add(new_job)
-            range_job_count += 1
-            profile_stats[profile_id]["range_jobs"] += 1
+    for chunk in range_chunks:
+        new_job = Jobs()
+        new_job.uid = str(uuid.uuid4())
+        new_job.job = ",".join(str(cidr) for cidr in cidr_merge(chunk["cidrs"]))
+        new_job.scanprofile = profile
+        new_job.scan_ports = scan_ports
+        new_job.scan_nses = scan_nses
+        new_job.priority = profile.priority or 0
+        for target in chunk["targets"]:
+            new_job.targets.append(target)
+            target.working = True
+        db.session.add(new_job)
+        range_job_count += 1
 
     host_job_count = 0
-    for profile_id, hostname_chunks in hostname_chunks_by_profile.items():
-        profile = profile_map.get(profile_id)
-        if profile is None:
-            continue
+    for i in range(0, len(hostname_chunks), 256):
+        chunk256 = hostname_chunks[i : i + 256]
+        new_job = Jobs()
+        new_job.uid = str(uuid.uuid4())
+        final_hosts = []
+        targets = {}
+        for item in chunk256:
+            final_hosts.extend(item["hosts"])
+            for target in item["targets"]:
+                targets[target.id] = target
+        new_job.job = ",".join(final_hosts)
+        new_job.scanprofile = profile
+        new_job.scan_ports = scan_ports
+        new_job.scan_nses = scan_nses
+        new_job.priority = profile.priority or 0
+        for target in targets.values():
+            new_job.targets.append(target)
+            target.working = True
+        db.session.add(new_job)
+        host_job_count += 1
+
+    return {
+        "scheduled_states": len(due_states),
+        "range_jobs": range_job_count,
+        "host_jobs": host_job_count,
+    }
+
+
+def task_create_jobs():
+    """
+    Keep per-profile waiting queues filled without sweeping the whole target set.
+    """
+    started_at = time.perf_counter()
+    released_states = 0
+    seeded_states = 0
+
+    orphan_started = time.perf_counter()
+    if _should_run_orphan_state_release():
+        released_states = _release_orphaned_working_states()
+        logger.debug(
+            "Create Job TASK debug: orphan-state release completed in %.2fs (released_states=%s)",
+            time.perf_counter() - orphan_started,
+            released_states,
+        )
+    else:
+        logger.debug(
+            "Create Job TASK debug: orphan-state release skipped (cooldown active)"
+        )
+
+    sync_started = time.perf_counter()
+    seeded_states = _sync_missing_scan_states()
+    logger.debug(
+        "Create Job TASK debug: state sync completed in %.2fs (seeded_states=%s)",
+        time.perf_counter() - sync_started,
+        seeded_states,
+    )
+
+    queue_target = _get_scheduler_int_config(
+        "SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE",
+        DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE,
+    )
+    state_batch_size = _get_scheduler_int_config(
+        "SCHEDULER_QUEUE_STATE_BATCH_SIZE",
+        DEFAULT_QUEUE_STATE_BATCH_SIZE,
+    )
+    max_new_jobs_per_tick = _get_scheduler_int_config(
+        "SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK",
+        DEFAULT_MAX_NEW_JOBS_PER_TICK,
+    )
+
+    metadata_started = time.perf_counter()
+    profiles = (
+        db.session.query(ScanProfiles)
+        .order_by(ScanProfiles.priority.desc(), ScanProfiles.id.asc())
+        .all()
+    )
+    waiting_counts = _get_waiting_job_counts_by_profile()
+    now = utcnow_naive()
+    logger.debug(
+        "Create Job TASK debug: loaded queue metadata in %.2fs (profiles=%s, queued_profiles=%s)",
+        time.perf_counter() - metadata_started,
+        len(profiles),
+        len(waiting_counts),
+    )
+    profiles = _rotate_profiles_for_tick(profiles)
+
+    totals = {
+        "scheduled_states": 0,
+        "range_jobs": 0,
+        "host_jobs": 0,
+    }
+    profiles_with_jobs = 0
+    profiles_without_ports = 0
+    profiles_without_cycle = 0
+    profiles_already_full = 0
+    profiles_without_due_states = 0
+    budget_exhausted = False
+    profile_summaries = []
+    last_processed_profile_id = 0
+
+    fill_started = time.perf_counter()
+    for profile in profiles:
+        last_processed_profile_id = profile.id
         scan_ports = _serialize_profile_ports(profile)
-        scan_nses = _serialize_profile_nses(profile)
         if not scan_ports:
-            logger.warning("Skipping profile %s because it has no ports", profile.name)
-            profiles_without_ports_skipped += 1
-            for chunk in hostname_chunks:
-                for state in chunk["states"]:
-                    state.working = False
+            profiles_without_ports += 1
+            logger.warning("Create Job TASK: skipping profile %s because it has no ports", profile.name)
             continue
 
-        for i in range(0, len(hostname_chunks), 256):
-            chunk256 = hostname_chunks[i : i + 256]
-            new_job = Jobs()
-            new_job.uid = str(uuid.uuid4())
-            final = []
-            targets = {}
-            for item in chunk256:
-                final.extend(item["hosts"])
-                for target in item["targets"]:
-                    targets[target.id] = target
-            new_job.job = ",".join(final)
-            new_job.scanprofile = profile
-            new_job.scan_ports = scan_ports
-            new_job.scan_nses = scan_nses
-            new_job.priority = profile.priority or 0
-            for target in targets.values():
-                new_job.targets.append(target)
-                target.working = True
-            db.session.add(new_job)
-            host_job_count += 1
-            profile_stats[profile_id]["host_jobs"] += 1
-    logger.debug(
-        "Create Job TASK debug: job staging completed in %.2fs (range_jobs=%s, host_jobs=%s)",
-        time.perf_counter() - job_build_started,
-        range_job_count,
-        host_job_count,
-    )
+        cycle_minutes = profile.scan_cycle_minutes
+        if not cycle_minutes or cycle_minutes <= 0:
+            profiles_without_cycle += 1
+            logger.warning(
+                "Create Job TASK: skipping profile %s because scan_cycle_minutes is not set",
+                profile.name,
+            )
+            continue
 
-    for target in target_batch:
-        target.working = any(state.working for state in states_by_target[target.id])
+        waiting_before = waiting_counts.get(profile.id, 0)
+        queue_deficit = queue_target - waiting_before
+        if queue_deficit <= 0:
+            profiles_already_full += 1
+            continue
 
-    commit_started = time.perf_counter()
-    db.session.commit()
+        state_limit = max(1, min(state_batch_size, queue_deficit))
+        due_started = time.perf_counter()
+        due_states = _load_due_states_for_profile(profile, now, state_limit)
+        due_elapsed = time.perf_counter() - due_started
+        if not due_states:
+            profiles_without_due_states += 1
+            logger.debug(
+                "Create Job TASK debug: profile %s has no due states (waiting=%s, deficit=%s, load=%.2fs)",
+                profile.name,
+                waiting_before,
+                queue_deficit,
+                due_elapsed,
+            )
+            continue
+
+        stage_started = time.perf_counter()
+        job_counts = _stage_jobs_for_profile(
+            profile,
+            due_states,
+            scan_ports,
+            _serialize_profile_nses(profile),
+        )
+        stage_elapsed = time.perf_counter() - stage_started
+
+        commit_started = time.perf_counter()
+        db.session.commit()
+        commit_elapsed = time.perf_counter() - commit_started
+
+        new_jobs = job_counts["range_jobs"] + job_counts["host_jobs"]
+        waiting_counts[profile.id] = waiting_before + new_jobs
+        totals["scheduled_states"] += job_counts["scheduled_states"]
+        totals["range_jobs"] += job_counts["range_jobs"]
+        totals["host_jobs"] += job_counts["host_jobs"]
+
+        if new_jobs > 0:
+            profiles_with_jobs += 1
+            profile_summaries.append(
+                f"{profile.name}={new_jobs}"
+                f"(range:{job_counts['range_jobs']},host:{job_counts['host_jobs']},states:{job_counts['scheduled_states']},queued:{waiting_counts[profile.id]})"
+            )
+
+        logger.debug(
+            "Create Job TASK debug: profile %s filled in %.2fs (due_load=%.2fs, stage=%.2fs, commit=%.2fs, states=%s, new_jobs=%s, waiting_before=%s, waiting_after=%s)",
+            profile.name,
+            due_elapsed + stage_elapsed + commit_elapsed,
+            due_elapsed,
+            stage_elapsed,
+            commit_elapsed,
+            job_counts["scheduled_states"],
+            new_jobs,
+            waiting_before,
+            waiting_counts[profile.id],
+        )
+
+        if totals["range_jobs"] + totals["host_jobs"] >= max_new_jobs_per_tick:
+            budget_exhausted = True
+            break
+
     logger.debug(
-        "Create Job TASK debug: commit completed in %.2fs",
-        time.perf_counter() - commit_started,
+        "Create Job TASK debug: queue fill completed in %.2fs",
+        time.perf_counter() - fill_started,
     )
-    total_jobs_created = range_job_count + host_job_count
-    active_profiles_with_jobs = sum(
-        1
-        for stats in profile_stats.values()
-        if stats["range_jobs"] or stats["host_jobs"]
-    )
+    if last_processed_profile_id:
+        db.app.config["scheduler_profile_cursor_id"] = last_processed_profile_id
+
+    total_jobs_created = totals["range_jobs"] + totals["host_jobs"]
     summary_log = (
         "Create Job TASK: %s jobs created across %s profiles (%s range, %s host); "
-        "%s targets processed this tick; %s target/profile states scheduled; "
-        "%s states skipped as already working; %s states skipped as recently scanned; "
-        "%s state rows created; %s orphan states released; %s profiles skipped without ports; "
-        "%s target/profile evaluations skipped without scan frequency"
+        "%s target/profile states scheduled; queue_target=%s; state_batch=%s; "
+        "%s state rows seeded; %s orphan states released; %s profiles already full; "
+        "%s profiles had no due states; %s profiles skipped without ports; "
+        "%s profiles skipped without scan frequency; budget_exhausted=%s"
     )
     summary_args = (
         total_jobs_created,
-        active_profiles_with_jobs,
-        range_job_count,
-        host_job_count,
-        active_targets_processed,
-        sum(stats["scheduled_states"] for stats in profile_stats.values()),
-        state_already_working_count,
-        state_recently_scanned_count,
-        state_created_count,
+        profiles_with_jobs,
+        totals["range_jobs"],
+        totals["host_jobs"],
+        totals["scheduled_states"],
+        queue_target,
+        state_batch_size,
+        seeded_states,
         released_states,
-        profiles_without_ports_skipped,
-        profiles_without_cycle_skipped,
+        profiles_already_full,
+        profiles_without_due_states,
+        profiles_without_ports,
+        profiles_without_cycle,
+        budget_exhausted,
     )
     if total_jobs_created == 0:
         logger.warning(summary_log, *summary_args)
     else:
         logger.info(summary_log, *summary_args)
 
-    profile_summaries = []
-    for profile_id, stats in profile_stats.items():
-        total_profile_jobs = stats["range_jobs"] + stats["host_jobs"]
-        if total_profile_jobs == 0:
-            continue
-        profile = profile_map.get(profile_id)
-        profile_name = profile.name if profile is not None else str(profile_id)
-        profile_summaries.append(
-            f"{profile_name}={total_profile_jobs}"
-            f"(range:{stats['range_jobs']},host:{stats['host_jobs']},states:{stats['scheduled_states']})"
-        )
     if profile_summaries:
         logger.info("Create Job TASK profiles: %s", "; ".join(profile_summaries))
+    logger.debug(
+        "Create Job TASK debug: total create_jobs runtime %.2fs",
+        time.perf_counter() - started_at,
+    )
 
 
 def task_export_to_dbs():
