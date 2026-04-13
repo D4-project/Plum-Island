@@ -160,12 +160,12 @@ def task_create_jobs():
         for state in db.session.query(TargetScanStates).all()
     }
     now = utcnow_naive()
-    default_cycle_minutes = int(db.app.config.get("SCAN_DELAY", 12)) * 60
     active_targets_processed = 0
     state_created_count = 0
     state_already_working_count = 0
     state_recently_scanned_count = 0
     profiles_without_ports_skipped = 0
+    profiles_without_cycle_skipped = 0
 
     if released_states:
         logger.warning(
@@ -191,7 +191,16 @@ def task_create_jobs():
                 state_already_working_count += 1
                 continue
 
-            cycle_minutes = profile.scan_cycle_minutes or default_cycle_minutes
+            cycle_minutes = profile.scan_cycle_minutes
+            if not cycle_minutes or cycle_minutes <= 0:
+                profiles_without_cycle_skipped += 1
+                logger.warning(
+                    "Skipping profile %s for target %s because scan_cycle_minutes is not set",
+                    profile.name,
+                    target.value,
+                )
+                state.working = False
+                continue
             last_scan = ensure_utc_naive(state.last_scan)
             if last_scan and last_scan >= now - timedelta(minutes=cycle_minutes):
                 state_recently_scanned_count += 1
@@ -340,7 +349,8 @@ def task_create_jobs():
         "Create Job TASK: %s jobs created across %s profiles (%s range, %s host); "
         "%s active targets processed; %s target/profile states scheduled; "
         "%s states skipped as already working; %s states skipped as recently scanned; "
-        "%s state rows created; %s orphan states released; %s profiles skipped without ports"
+        "%s state rows created; %s orphan states released; %s profiles skipped without ports; "
+        "%s target/profile evaluations skipped without scan frequency"
     )
     summary_args = (
         total_jobs_created,
@@ -354,6 +364,7 @@ def task_create_jobs():
         state_created_count,
         released_states,
         profiles_without_ports_skipped,
+        profiles_without_cycle_skipped,
     )
     if total_jobs_created == 0:
         logger.warning(summary_log, *summary_args)
