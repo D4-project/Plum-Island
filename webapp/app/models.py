@@ -8,13 +8,23 @@
 This is the module containing all the data models
 """
 
-from datetime import datetime, timezone
 from flask_appbuilder import Model
 from flask import Markup as Esc
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Table
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 from flask_appbuilder.models.mixins import FileColumn
 from sqlalchemy import func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, object_session
+from .utils.timeutils import utcnow_naive
 
 
 class ApiKeys(Model):
@@ -44,9 +54,7 @@ class Bots(Model):
     country = Column(String(150), nullable=False)  # Last Bot Geoloc
     active = Column(Boolean, default=True)  # This bot is active
     running = Column(Boolean, default=False)  # This bot is currently Scanning
-    last_seen = Column(
-        DateTime, default=datetime.now(timezone.utc)
-    )  # Last Bot connection
+    last_seen = Column(DateTime, default=utcnow_naive)  # Last Bot connection
     device_model = Column(String(128), nullable=False)  # Python Version
     agent_version = Column(String(128), nullable=False)
     system_version = Column(String(128), nullable=False)
@@ -104,8 +112,12 @@ class Jobs(Model):
     exported = Column(Boolean, default=False)  # True if result was exported
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
-    job_creation = Column(DateTime, default=func.now())  # Timestamp of job creation
+    job_creation = Column(DateTime, default=utcnow_naive)  # Timestamp of job creation
     priority = Column(Integer, default=0)  # Priority, by default LOW
+    scanprofile_id = Column(Integer, ForeignKey("scanprofiles.id"), nullable=True)
+    scan_ports = Column(Text, nullable=True)
+    scan_nses = Column(Text, nullable=True)
+    scanprofile = relationship("ScanProfiles", back_populates="jobs")
     targets = relationship(
         "Targets", secondary=assoc_jobs_targets, back_populates="jobs"
     )
@@ -132,6 +144,42 @@ class Jobs(Model):
             html += f'<span class="label label-default">{tag}</span> '
         return Esc(html)
 
+    @staticmethod
+    def _render_compact_badges(values, limit=4, label_class="label-default"):
+        """
+        Render a compact badge list with an overflow indicator.
+        """
+        values = [str(value) for value in values if str(value).strip()]
+        if not values:
+            return Esc("")
+
+        html = ""
+        for value in values[:limit]:
+            html += f'<span class="label {label_class}">{value}</span> '
+
+        remaining = len(values) - limit
+        if remaining > 0:
+            html += (
+                f'<span class="label label-info">+{remaining} more '
+                f'({len(values)} total)</span>'
+            )
+
+        return Esc(html)
+
+    def job_summary_html(self):
+        """
+        Compact list-friendly rendering of scan items.
+        """
+        tags = []
+        if self.job:
+            for tag in self.job.split(","):
+                if tag.endswith("/32"):
+                    tag = tag[0:-3]
+                if tag.endswith("/128"):
+                    tag = tag[0:-4]
+                tags.append(tag)
+        return self._render_compact_badges(tags)
+
     def targets_html(self):
         """
         Display Targets as HTML Tags
@@ -145,6 +193,48 @@ class Jobs(Model):
                 tags.append(tag)
         for tag in tags:
             html += f'<span class="label label-default">{tag}</span> '
+        return Esc(html)
+
+    def targets_count_html(self):
+        """
+        Compact list-friendly rendering of linked target count.
+        """
+        session = object_session(self)
+        target_count = None
+        if session is not None and self.id is not None:
+            target_count = (
+                session.query(func.count(assoc_jobs_targets.c.target_id))
+                .filter(assoc_jobs_targets.c.job_id == self.id)
+                .scalar()
+            )
+        elif self.targets is not None:
+            target_count = len(self.targets)
+
+        if not target_count:
+            return Esc('<span class="label label-default">0 targets</span>')
+        return Esc(
+            f'<span class="label label-default">{target_count} target'
+            f'{"s" if target_count != 1 else ""}</span>'
+        )
+
+    def scan_ports_html(self):
+        """
+        Display Nmap port list as HTML Tags
+        """
+        html = ""
+        if self.scan_ports:
+            for port in self.scan_ports.split(","):
+                html += f'<span class="label label-info">{port}</span> '
+        return Esc(html)
+
+    def scan_nses_html(self):
+        """
+        Display NSE names as HTML Tags
+        """
+        html = ""
+        if self.scan_nses:
+            for nse in self.scan_nses.split(","):
+                html += f'<span class="label label-primary">{nse}</span> '
         return Esc(html)
 
     def duration_html(self):
@@ -214,6 +304,52 @@ class Nses(Model):
         return self.name
 
 
+class TargetScanStates(Model):
+    """
+    Runtime state of one ScanProfile applied to one Target.
+    """
+
+    __tablename__ = "target_scan_states"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_id",
+            "scanprofile_id",
+            name="uq_target_scan_states_target_profile",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    target_id = Column(Integer, ForeignKey("targets.id"), nullable=False)
+    scanprofile_id = Column(Integer, ForeignKey("scanprofiles.id"), nullable=False)
+    working = Column(Boolean, default=False)
+    last_scan = Column(DateTime, default=None)
+    last_previous_scan = Column(DateTime, default=None)
+
+    target = relationship("Targets", back_populates="scan_states")
+    scanprofile = relationship("ScanProfiles", back_populates="scan_states")
+
+    def __repr__(self):
+        return f"{self.target} :: {self.scanprofile}"
+
+    def duration_html(self):
+        """
+        Compute cycle duration for this target/profile pair.
+        """
+        if self.last_scan and self.last_previous_scan:
+            diff = self.last_scan - self.last_previous_scan
+            total_seconds = int(diff.total_seconds())
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+
+            if hours:
+                return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            elif minutes:
+                return f"{minutes:02d}:{seconds:02d}"
+            else:
+                return f"{seconds}s"
+        return "∞"
+
+
 class ScanProfiles(Model):
     """
     A Scan profile define for a target range which are the
@@ -244,6 +380,11 @@ class ScanProfiles(Model):
     )
 
     priority = Column(Integer, default=0)
+    scan_cycle_minutes = Column(Integer, default=720)
+    jobs = relationship("Jobs", back_populates="scanprofile")
+    scan_states = relationship(
+        "TargetScanStates", back_populates="scanprofile", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         return self.name
@@ -267,6 +408,9 @@ class Targets(Model):
         DateTime, default=None
     )  # Previous Last Scan to have an idea of time for a cycle.
     jobs = relationship("Jobs", secondary=assoc_jobs_targets, back_populates="targets")
+    scan_states = relationship(
+        "TargetScanStates", back_populates="target", cascade="all, delete-orphan"
+    )
 
     as_bgp = Column(Integer, default=0)  # BGP AS Number
     as_description = Column(String(256))  # AS Description.

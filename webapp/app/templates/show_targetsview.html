@@ -25,8 +25,48 @@
         {{ widgets.get('show')()|safe }}
     </div>
 
-   <div class="container">
-      <div class="row">
+<div class="plum-target-show-panels">
+
+<div class="panel panel-info">
+  <div class="panel-heading">
+    <h4 class="panel-title">Profile Scan Stats</h4>
+  </div>
+  <div class="panel-body">
+    {% set profile_stats = get_target_profile_stats(pk) %}
+    {% if profile_stats %}
+    <div class="table-responsive">
+      <table class="table table-condensed table-hover">
+        <thead>
+          <tr>
+            <th>Profile</th>
+            <th>Frequency (min)</th>
+            <th>Apply All</th>
+            <th>Working</th>
+            <th>Last Scan</th>
+            <th>Previous Scan</th>
+            <th>Cycle</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in profile_stats %}
+          <tr>
+            <td><a href="{{ url_for('ScanprofilesView.show', pk=row.profile_id) }}">{{ row.profile_name }}</a></td>
+            <td>{{ row.scan_cycle_minutes }}</td>
+            <td>{{ row.apply_to_all }}</td>
+            <td>{{ row.working }}</td>
+            <td>{{ row.last_scan or '-' }}</td>
+            <td>{{ row.last_previous_scan or '-' }}</td>
+            <td>{{ row.duration }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info" role="alert">No scan profile applies to this target.</div>
+    {% endif %}
+  </div>
+</div>
 
 <div class="panel panel-primary">
   <div class="panel-heading">
@@ -131,7 +171,6 @@ async function loadUid(uid, targetId) {
 </div>
 
 </div>
-</div>
 
 {% endblock show_form %}
 {% if related_views is defined %}</div>{% endif %}
@@ -140,4 +179,14 @@ async function loadUid(uid, targetId) {
 {% endblock content %}
 {% block add_tail_js %}
 <script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+<style nonce="{{ baselib.get_nonce() }}">
+  .plum-target-show-panels {
+    width: 100%;
+    margin-top: 15px;
+  }
+
+  .plum-target-show-panels .panel {
+    margin-bottom: 20px;
+  }
+</style>
 {% endblock %}

@@ -1,0 +1,30 @@
+{% extends "appbuilder/general/model/edit.html" %}
+
+{% block add_tail_js %}
+{{ super() }}
+<script nonce="{{ baselib.get_nonce() }}">
+$(function () {
+  $(".plum-select2-remote").each(function () {
+    const $el = $(this);
+    $el.select2({
+      theme: "bootstrap",
+      placeholder: $el.data("placeholder") || "Select Value",
+      allowClear: true,
+      minimumInputLength: 1,
+      ajax: {
+        url: $el.data("remote-url"),
+        dataType: "json",
+        delay: 250,
+        data: function (params) {
+          return {q: params.term || "", limit: 30};
+        },
+        processResults: function (data) {
+          return {results: data};
+        },
+        cache: true
+      }
+    });
+  });
+});
+</script>
+{% endblock %}

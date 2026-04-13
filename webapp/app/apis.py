@@ -8,8 +8,8 @@
 This module contains all code related to API's.
 """
 
+import base64
 import os
-from datetime import datetime, timezone
 import json
 import logging
 from flask_appbuilder.models.sqla.interface import SQLAInterface
@@ -21,9 +21,18 @@ from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from werkzeug.security import check_password_hash
 from marshmallow import Schema, fields, validates, ValidationError
-from .models import Targets, Bots, ApiKeys, Jobs, assoc_jobs_targets
+from .models import (
+    Targets,
+    Bots,
+    ApiKeys,
+    Jobs,
+    Nses,
+    TargetScanStates,
+    assoc_jobs_targets,
+)
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
+from .utils.timeutils import utcnow_naive, ensure_utc_naive
 from .views import TargetsView
 
 
@@ -60,6 +69,12 @@ class BotInfoSchema(Schema):
     JOB_UID = fields.String(
         required=False,
         metadata={"description": "Uid of the scan"},
+    )
+    NSE_HASHES = fields.Dict(
+        required=False,
+        keys=fields.String(),
+        values=fields.String(),
+        metadata={"description": "Cached NSE SHA256 hashes keyed by NSE filename"},
     )
 
     # Custom validator for the parameters
@@ -125,6 +140,50 @@ class BulkTargetsSchema(Schema):
 
 
 logger = logging.getLogger("flask_appbuilder")
+
+
+def _nse_file_path(nse):
+    """
+    Resolve the uploaded NSE file path on disk.
+    """
+    return os.path.join(db.app.config.get("UPLOAD_FOLDER"), nse.filebody)
+
+
+def _build_job_nse_payload(scan_nses, agent_nse_hashes):
+    """
+    Build the job NSE payload and only include file contents when the agent cache
+    does not already have the expected hash.
+    """
+    requested_names = [name.strip() for name in (scan_nses or "").split(",") if name.strip()]
+    if not requested_names:
+        return [], []
+
+    nse_by_name = {
+        nse.name: nse
+        for nse in db.session.query(Nses).filter(Nses.name.in_(requested_names)).all()
+    }
+    agent_nse_hashes = agent_nse_hashes or {}
+
+    effective_names = []
+    nse_payload = []
+    for nse_name in requested_names:
+        nse = nse_by_name.get(nse_name)
+        if nse is None:
+            logger.warning("Job references missing NSE script %s", nse_name)
+            continue
+
+        descriptor = {"name": nse.name, "hash": nse.hash}
+        agent_hash = str(agent_nse_hashes.get(nse.name, "")).strip().lower()
+        if agent_hash != nse.hash:
+            with open(_nse_file_path(nse), "rb") as nse_file:
+                descriptor["content_b64"] = base64.b64encode(nse_file.read()).decode(
+                    "ascii"
+                )
+
+        effective_names.append(nse.name)
+        nse_payload.append(descriptor)
+
+    return effective_names, nse_payload
 
 
 class PublicTargetsApi(ModelRestApi):
@@ -264,7 +323,7 @@ class Api(BaseApi):
             db.session.rollback()
             db.session.query(Bots).filter_by(uid=botinfo.get("UID")).update(
                 {
-                    Bots.last_seen: datetime.now(timezone.utc),
+                    Bots.last_seen: utcnow_naive(),
                     Bots.ip: botinfo.get("EXT_IP"),
                     Bots.device_model: botinfo.get("DEVICE_MODEL"),
                     Bots.agent_version: botinfo.get("AGENT_VERSION"),
@@ -346,17 +405,33 @@ class Api(BaseApi):
 
         # Now whe have maybe a job to launch.
         if job_todo:
+            try:
+                nmap_nse, nse_scripts = _build_job_nse_payload(
+                    job_todo.scan_nses,
+                    botinfo.get("NSE_HASHES"),
+                )
+            except OSError as error:
+                logger.exception(
+                    "Unable to prepare NSE payloads for job %s", job_todo.uid
+                )
+                return self.response_400(
+                    message=f"Unable to prepare NSE payloads: {error}"
+                )
+
             job_todo.active = True  # Set the Job to Active.
             job_bot.running = True  # Set the Bot to Active too
-            job_todo.job_start = datetime.now(timezone.utc)
-            job_bot.last_seen = datetime.now(timezone.utc)
+            job_todo.job_start = utcnow_naive()
+            job_bot.last_seen = utcnow_naive()
             job_todo.bot_id = job_bot.id  # Link Job and Bot.
             ret_msg = {
                 "message": "ready",
                 "job": job_todo.job,
                 "job_uid": job_todo.uid,
-                "nmap_nse": db.app.config.get("NMAP_NSE"),
-                "nmap_ports": db.app.config.get("NMAP_PORTS"),
+                "nmap_nse": nmap_nse,
+                "nse_scripts": nse_scripts,
+                "nmap_ports": (
+                    job_todo.scan_ports.split(",") if job_todo.scan_ports else []
+                ),
             }
 
             # Finally ... reset the counter if > 10
@@ -406,7 +481,7 @@ class Api(BaseApi):
         )
         job_bot.finished = True
         job_bot.active = False
-        job_bot.job_end = datetime.now(timezone.utc)
+        job_bot.job_end = utcnow_naive()
 
         # Save the Job
         # Build path
@@ -425,7 +500,7 @@ class Api(BaseApi):
         for target in job_bot.targets:
             logger.debug("target_id candidate to clean: %s", target.id)
             logger.debug("target_id candidate last scan %s", target.last_scan)
-            previous_scan = target.last_scan
+            previous_scan = ensure_utc_naive(target.last_scan)
             # Alias for association table
             assoc = assoc_jobs_targets.alias()
 
@@ -434,15 +509,33 @@ class Api(BaseApi):
                 db.session.query(func.count(distinct(Jobs.id)))
                 .select_from(assoc)
                 .join(Jobs, assoc.c.job_id == Jobs.id, isouter=True)
-                .filter(assoc.c.target_id == target.id, Jobs.finished == False)
+                .filter(
+                    assoc.c.target_id == target.id,
+                    Jobs.finished == False,
+                    Jobs.scanprofile_id == job_bot.scanprofile_id,
+                )
+            )
+
+            scan_state = (
+                db.session.query(TargetScanStates)
+                .filter(
+                    TargetScanStates.target_id == target.id,
+                    TargetScanStates.scanprofile_id == job_bot.scanprofile_id,
+                )
+                .one_or_none()
             )
 
             if count_query.scalar() == 0:
-                # When we have done "All" jobs for a specific target.
-                target.working = False  # The target is not working.
+                completion_time = utcnow_naive()
+                if scan_state is not None:
+                    scan_state.working = False
+                    scan_state.last_previous_scan = ensure_utc_naive(scan_state.last_scan)
+                    scan_state.last_scan = completion_time
                 target.last_previous_scan = previous_scan
-                target.last_scan = datetime.now(timezone.utc)  # target last_scan
-                db.session.merge(target)  # ensure attached
+                target.last_scan = completion_time
+
+            target.working = any(state.working for state in target.scan_states)
+            db.session.merge(target)  # ensure attached
         db.session.commit()
         return self.response(200, message="ready")
 

@@ -5,7 +5,7 @@ This is the main module for searching using kvrocks.
 It contains all the logic to find something.
 """
 
-import datetime
+from .timeutils import utcnow_iso
 import logging
 import redis
 from netaddr import IPNetwork
@@ -27,7 +27,7 @@ class KVrocksIndexer:
         """
         Return a timedate that kvrosk is happy with.
         """
-        return datetime.utcnow().isoformat() + "Z"
+        return utcnow_iso()
 
     def flushdb(self):
         """

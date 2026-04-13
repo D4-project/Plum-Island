@@ -16,11 +16,11 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
 
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
 from flask import request, jsonify
+from markupsafe import Markup, escape
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
@@ -28,19 +28,32 @@ from flask_appbuilder import BaseView
 from flask_login import current_user
 from meilisearch import Client
 
-from wtforms import TextAreaField, SubmitField
+from wtforms import TextAreaField, SubmitField, Field, ValidationError
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
 from flask_appbuilder.filemanager import FileManager
 from werkzeug.security import generate_password_hash
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_
 from wtforms.validators import Optional
+from wtforms.widgets import html_params
 from app import app
-from .models import Bots, Targets, Jobs, ApiKeys, Nses, Protos, ScanProfiles, Ports
+from .models import (
+    Bots,
+    Targets,
+    Jobs,
+    ApiKeys,
+    Nses,
+    Protos,
+    ScanProfiles,
+    Ports,
+    TargetScanStates,
+)
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
 from .utils.ip2asn import get_asn_description_for_ip
+from .utils.timeutils import ensure_utc_naive, utcnow_iso
 
 
 from . import appbuilder, db
@@ -48,6 +61,190 @@ from . import appbuilder, db
 logger = logging.getLogger("flask_appbuilder")
 EXPORT_JOB_STATES = {}
 EXPORT_JOB_STATES_LOCK = threading.Lock()
+
+
+class RemoteSelect2ManyWidget:
+    """
+    Render a multiple select fed by remote Select2 calls.
+    """
+
+    def __init__(self, endpoint, placeholder="Select Value"):
+        self.endpoint = endpoint
+        self.placeholder = placeholder
+
+    def __call__(self, field, **kwargs):
+        kwargs.setdefault("id", field.id)
+        kwargs.setdefault("name", field.name)
+        kwargs["class"] = "plum-select2-remote form-control"
+        kwargs["multiple"] = "multiple"
+        kwargs["data-placeholder"] = self.placeholder
+        endpoint = self.endpoint
+        if not endpoint.startswith("/"):
+            endpoint = url_for(endpoint)
+        kwargs["data-remote-url"] = endpoint
+
+        options = []
+        for value, label in field.selected_options():
+            options.append(
+                f'<option value="{escape(value)}" selected="selected">{escape(label)}</option>'
+            )
+
+        return Markup(
+            f"<select {html_params(**kwargs)}>{''.join(options)}</select>"
+        )
+
+
+class RemoteSelect2Widget:
+    """
+    Render a single select fed by remote Select2 calls.
+    """
+
+    def __init__(self, endpoint, placeholder="Select Value"):
+        self.endpoint = endpoint
+        self.placeholder = placeholder
+
+    def __call__(self, field, **kwargs):
+        kwargs.setdefault("id", field.id)
+        kwargs.setdefault("name", field.name)
+        kwargs["class"] = "plum-select2-remote form-control"
+        kwargs["data-placeholder"] = self.placeholder
+        endpoint = self.endpoint
+        if not endpoint.startswith("/"):
+            endpoint = url_for(endpoint)
+        kwargs["data-remote-url"] = endpoint
+
+        options = ['<option value=""></option>']
+        for value, label in field.selected_options():
+            options.append(
+                f'<option value="{escape(value)}" selected="selected">{escape(label)}</option>'
+            )
+
+        return Markup(
+            f"<select {html_params(**kwargs)}>{''.join(options)}</select>"
+        )
+
+
+class RemoteRelatedMultipleField(Field):
+    """
+    Lightweight remote-loaded relation field for many-to-many selections.
+    """
+
+    def __init__(
+        self,
+        label=None,
+        validators=None,
+        datamodel=None,
+        col_name=None,
+        endpoint=None,
+        **kwargs,
+    ):
+        super().__init__(label, validators, **kwargs)
+        self.datamodel = datamodel
+        self.col_name = col_name
+        self._invalid_formdata = []
+        self.widget = RemoteSelect2ManyWidget(endpoint)
+
+    def _get_related_interface(self):
+        return self.datamodel.get_related_interface(self.col_name)
+
+    def process_data(self, value):
+        self.data = list(value) if value else []
+
+    def process_formdata(self, valuelist):
+        rel_datamodel = self._get_related_interface()
+        self._invalid_formdata = []
+        if not valuelist:
+            self.data = []
+            return
+
+        items = []
+        for raw_value in valuelist:
+            obj = rel_datamodel.get(raw_value)
+            if obj is None:
+                self._invalid_formdata.append(raw_value)
+            else:
+                items.append(obj)
+        self.data = items
+
+    def pre_validate(self, form):
+        if self._invalid_formdata:
+            raise ValidationError("Not a valid choice")
+
+    def selected_options(self):
+        rel_datamodel = self._get_related_interface()
+        for obj in self.data or []:
+            yield str(rel_datamodel.get_pk_value(obj)), str(obj)
+
+
+class RemoteRelatedField(Field):
+    """
+    Lightweight remote-loaded relation field for single-value selections.
+    """
+
+    def __init__(
+        self,
+        label=None,
+        validators=None,
+        datamodel=None,
+        col_name=None,
+        endpoint=None,
+        **kwargs,
+    ):
+        super().__init__(label, validators, **kwargs)
+        self.datamodel = datamodel
+        self.col_name = col_name
+        self._invalid_formdata = []
+        self.widget = RemoteSelect2Widget(endpoint)
+
+    def _get_related_interface(self):
+        return self.datamodel.get_related_interface(self.col_name)
+
+    def process_data(self, value):
+        if not value:
+            self.data = None
+            return
+
+        if hasattr(value, "__table__"):
+            self.data = value
+            return
+
+        rel_datamodel = self._get_related_interface()
+        lookup_value = int(value) if str(value).isdigit() else value
+        self.data = rel_datamodel.get(lookup_value)
+
+    def process_formdata(self, valuelist):
+        rel_datamodel = self._get_related_interface()
+        self._invalid_formdata = []
+
+        raw_value = None
+        for candidate in valuelist or []:
+            candidate = str(candidate).strip()
+            if candidate:
+                raw_value = candidate
+                break
+
+        if raw_value is None:
+            self.data = None
+            return
+
+        lookup_value = int(raw_value) if raw_value.isdigit() else raw_value
+        obj = rel_datamodel.get(lookup_value)
+        if obj is None:
+            self._invalid_formdata.append(raw_value)
+            self.data = None
+            return
+
+        self.data = obj
+
+    def pre_validate(self, form):
+        if self._invalid_formdata:
+            raise ValidationError("Not a valid choice")
+
+    def selected_options(self):
+        rel_datamodel = self._get_related_interface()
+        if self.data is None:
+            return
+        yield str(rel_datamodel.get_pk_value(self.data)), str(self.data)
 
 
 def get_job_uid(pk):
@@ -70,9 +267,87 @@ def get_target_value(pk):
     return result
 
 
+def _format_datetime_for_ui(value):
+    """
+    Render datetimes consistently on helper-backed templates.
+    """
+    value = ensure_utc_naive(value)
+    if value is None:
+        return None
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _format_scan_duration(last_scan, previous_scan):
+    """
+    Compute a human-readable duration from two timestamps.
+    """
+    last_scan = ensure_utc_naive(last_scan)
+    previous_scan = ensure_utc_naive(previous_scan)
+    if not last_scan or not previous_scan:
+        return "∞"
+
+    diff = last_scan - previous_scan
+    total_seconds = int(diff.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    if minutes:
+        return f"{minutes:02d}:{seconds:02d}"
+    return f"{seconds}s"
+
+
+def get_target_profile_stats(pk):
+    """
+    Return the effective profile runtime stats for one target.
+    """
+    target = db.session.query(Targets).filter(Targets.id == pk).one_or_none()
+    if target is None:
+        return []
+
+    profiles = {profile.id: profile for profile in target.scanprofiles}
+    apply_all_profiles = (
+        db.session.query(ScanProfiles)
+        .filter(ScanProfiles.apply_to_all == True)
+        .order_by(ScanProfiles.name.asc())
+        .all()
+    )
+    for profile in apply_all_profiles:
+        profiles.setdefault(profile.id, profile)
+
+    states = {
+        state.scanprofile_id: state
+        for state in db.session.query(TargetScanStates)
+        .filter(TargetScanStates.target_id == pk)
+        .all()
+    }
+
+    rows = []
+    for profile in sorted(profiles.values(), key=lambda item: (item.name or "").lower()):
+        state = states.get(profile.id)
+        last_scan = ensure_utc_naive(state.last_scan) if state else None
+        previous_scan = ensure_utc_naive(state.last_previous_scan) if state else None
+        rows.append(
+            {
+                "profile_id": profile.id,
+                "profile_name": profile.name,
+                "scan_cycle_minutes": profile.scan_cycle_minutes,
+                "apply_to_all": profile.apply_to_all,
+                "working": bool(state.working) if state else False,
+                "last_scan": _format_datetime_for_ui(last_scan),
+                "last_previous_scan": _format_datetime_for_ui(previous_scan),
+                "duration": _format_scan_duration(last_scan, previous_scan),
+            }
+        )
+
+    return rows
+
+
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
 app.jinja_env.globals["get_target_value"] = get_target_value
+app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
 
 
 @appbuilder.app.errorhandler(404)
@@ -207,7 +482,7 @@ class KVSearchView(BaseView):
         index = client.index("plum")
         export_payload = {
             "query": query,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": utcnow_iso(),
             "results": {},
         }
 
@@ -279,7 +554,7 @@ class KVSearchView(BaseView):
                     status="done",
                     processed_uids=processed_uids,
                     file_path=file_path,
-                    finished_at=datetime.now(timezone.utc).isoformat(),
+                    finished_at=utcnow_iso(),
                 )
             except Exception as error:
                 logger.exception("Full export job %s failed", job_id)
@@ -612,11 +887,42 @@ class TargetsView(ModelView):
     """
 
     datamodel = SQLAInterface(Targets)
+    add_template = "add_targetsview.html"
+    edit_template = "edit_targetsview.html"
+    list_template = "list_targetsview.html"
     list_columns = ["value", "description", "last_scan", "active", "working"]
+    search_columns = ["value", "description", "active", "working", "scanprofiles"]
     label_columns = {
         "value": "CIDR/Host",
         "scanprofiles": "Scan profiles",
         "duration_html": "Scan Cycle",
+    }
+    search_form_extra_fields = {
+        "scanprofiles": RemoteRelatedMultipleField(
+            "Scan profiles",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="scanprofiles",
+            endpoint="TargetsView.scanprofiles_remote",
+        )
+    }
+    add_form_extra_fields = {
+        "scanprofiles": RemoteRelatedMultipleField(
+            "Scan profiles",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="scanprofiles",
+            endpoint="TargetsView.scanprofiles_remote",
+        )
+    }
+    edit_form_extra_fields = {
+        "scanprofiles": RemoteRelatedMultipleField(
+            "Scan profiles",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="scanprofiles",
+            endpoint="TargetsView.scanprofiles_remote",
+        )
     }
     add_columns = ["value", "description", "active", "scanprofiles"]
     edit_columns = ["value", "description", "active", "working", "scanprofiles"]
@@ -632,6 +938,62 @@ class TargetsView(ModelView):
     search_exclude_columns = ["jobs"]
     base_order = ("last_scan", "desc")  # Latest finished on top.
     show_template = "show_targetsview.html"  # Custom Show view with results
+
+    @staticmethod
+    def _remote_limit():
+        try:
+            return min(int(request.args.get("limit", 30)), 100)
+        except (TypeError, ValueError):
+            return 30
+
+    @staticmethod
+    def _remote_ids():
+        raw_ids = []
+        if request.args.get("ids"):
+            raw_ids.extend(request.args.get("ids", "").split(","))
+        raw_ids.extend(request.args.getlist("ids"))
+
+        ids = []
+        for raw_id in raw_ids:
+            raw_id = str(raw_id).strip()
+            if raw_id.isdigit():
+                ids.append(int(raw_id))
+        return list(dict.fromkeys(ids))
+
+    @staticmethod
+    def _json_results(items):
+        return jsonify([{"id": item.id, "text": str(item)} for item in items])
+
+    @expose("/scanprofiles_remote", methods=["GET"])
+    @has_access
+    def scanprofiles_remote(self):
+        """
+        AJAX endpoint for scan profile lookup on target forms and filters.
+        """
+        query = request.args.get("q", "").strip()
+        limit = self._remote_limit()
+        selected_ids = self._remote_ids()
+
+        if selected_ids:
+            items = (
+                db.session.query(ScanProfiles)
+                .filter(ScanProfiles.id.in_(selected_ids))
+                .order_by(ScanProfiles.name.asc())
+                .all()
+            )
+            return self._json_results(items)
+
+        if len(query) < 1:
+            return jsonify([])
+
+        items = (
+            db.session.query(ScanProfiles)
+            .filter(ScanProfiles.name.ilike(f"%{query}%"))
+            .order_by(ScanProfiles.name.asc())
+            .limit(limit)
+            .all()
+        )
+        return self._json_results(items)
 
     @action(
         "mulresolvehwois",
@@ -745,7 +1107,10 @@ class JobsView(ModelView):
     datamodel = SQLAInterface(Jobs)
     show_columns = [
         "uid",
+        "scanprofile",
         "job_html",
+        "scan_ports_html",
+        "scan_nses_html",
         "bot_id",
         "job_creation",
         "job_start",
@@ -759,10 +1124,11 @@ class JobsView(ModelView):
     ]
     list_columns = [
         "job_creation",
+        "scanprofile",
         "job_start",
         "job_end",
-        "job_html",
-        "targets_html",
+        "job_summary_html",
+        "targets_count_html",
         "active",
         "finished",
     ]
@@ -773,8 +1139,13 @@ class JobsView(ModelView):
     list_template = "list_jobview.html"  # Custom Show view with results
     search_exclude_columns = ["targets"]
     label_columns = {
+        "scanprofile": "Scan Profile",
         "job_html": "Scan Jobs",
+        "job_summary_html": "Scan Jobs",
+        "scan_ports_html": "Ports",
+        "scan_nses_html": "NSE Scripts",
         "targets_html": "Targets",
+        "targets_count_html": "Targets",
         "duration_html": "Duration",
     }
 
@@ -994,17 +1365,319 @@ class ScanprofilesView(ModelView):
     """
 
     datamodel = SQLAInterface(ScanProfiles)
-    list_columns = {"name", "ports", "nses", "apply_to_all"}
+    add_template = "add_scanprofilesview.html"
+    edit_template = "edit_scanprofilesview.html"
+    list_template = "list_scanprofilesview.html"
+    list_columns = {"name", "scan_cycle_minutes", "ports", "nses", "apply_to_all"}
+    search_columns = ["name", "scan_cycle_minutes", "priority", "apply_to_all", "targets"]
+    add_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
+    edit_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
+    show_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
+    search_form_extra_fields = {
+        "targets": RemoteRelatedMultipleField(
+            "Apply on Target",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="targets",
+            endpoint="ScanprofilesView.targets_remote",
+        )
+    }
+    add_form_extra_fields = {
+        "ports": RemoteRelatedMultipleField(
+            "Ports",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="ports",
+            endpoint="ScanprofilesView.ports_remote",
+        ),
+        "nses": RemoteRelatedMultipleField(
+            "Nse Scripts",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="nses",
+            endpoint="ScanprofilesView.nses_remote",
+        ),
+        "targets": RemoteRelatedMultipleField(
+            "Apply on Target",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="targets",
+            endpoint="ScanprofilesView.targets_remote",
+        )
+    }
+    edit_form_extra_fields = {
+        "ports": RemoteRelatedMultipleField(
+            "Ports",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="ports",
+            endpoint="ScanprofilesView.ports_remote",
+        ),
+        "nses": RemoteRelatedMultipleField(
+            "Nse Scripts",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="nses",
+            endpoint="ScanprofilesView.nses_remote",
+        ),
+        "targets": RemoteRelatedMultipleField(
+            "Apply on Target",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="targets",
+            endpoint="ScanprofilesView.targets_remote",
+        )
+    }
     label_columns = {
         "nses": "Nse Scripts",
         "apply_to_all": "Apply to all scans",
         "targets": "Apply on Target",
+        "scan_cycle_minutes": "Scan Frequency (min)",
     }
 
     def pre_add(self, item):
         if len(item.ports) == 0:
             raise ValueError("At least one port is mandatory")
+        if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
+            raise ValueError("Scan frequency must be greater than 0 minute")
         return self
+
+    def pre_update(self, item):
+        if len(item.ports) == 0:
+            raise ValueError("At least one port is mandatory")
+        if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
+            raise ValueError("Scan frequency must be greater than 0 minute")
+        return self
+
+    @staticmethod
+    def _remote_limit():
+        try:
+            return min(int(request.args.get("limit", 30)), 100)
+        except (TypeError, ValueError):
+            return 30
+
+    @staticmethod
+    def _remote_ids():
+        raw_ids = []
+        if request.args.get("ids"):
+            raw_ids.extend(request.args.get("ids", "").split(","))
+        raw_ids.extend(request.args.getlist("ids"))
+
+        ids = []
+        for raw_id in raw_ids:
+            raw_id = str(raw_id).strip()
+            if raw_id.isdigit():
+                ids.append(int(raw_id))
+        return list(dict.fromkeys(ids))
+
+    @staticmethod
+    def _json_results(items):
+        return jsonify([{"id": item.id, "text": str(item)} for item in items])
+
+    @expose("/ports_remote", methods=["GET"])
+    @has_access
+    def ports_remote(self):
+        """
+        AJAX endpoint for port lookup on scan profile forms.
+        """
+        query = request.args.get("q", "").strip()
+        limit = self._remote_limit()
+        selected_ids = self._remote_ids()
+
+        if selected_ids:
+            items = (
+                db.session.query(Ports)
+                .filter(Ports.id.in_(selected_ids))
+                .order_by(Ports.value.asc())
+                .all()
+            )
+            return self._json_results(items)
+
+        if len(query) < 1:
+            return jsonify([])
+
+        filters = [
+            Ports.name.ilike(f"%{query}%"),
+            Ports.proto_to_port.ilike(f"%{query}%"),
+        ]
+        if query.isdigit():
+            filters.append(Ports.value == int(query))
+
+        items = (
+            db.session.query(Ports)
+            .filter(or_(*filters))
+            .order_by(Ports.value.asc())
+            .limit(limit)
+            .all()
+        )
+        return self._json_results(items)
+
+    @expose("/nses_remote", methods=["GET"])
+    @has_access
+    def nses_remote(self):
+        """
+        AJAX endpoint for NSE lookup on scan profile forms.
+        """
+        query = request.args.get("q", "").strip()
+        limit = self._remote_limit()
+        selected_ids = self._remote_ids()
+
+        if selected_ids:
+            items = (
+                db.session.query(Nses)
+                .filter(Nses.id.in_(selected_ids))
+                .order_by(Nses.name.asc())
+                .all()
+            )
+            return self._json_results(items)
+
+        if len(query) < 1:
+            return jsonify([])
+
+        items = (
+            db.session.query(Nses)
+            .filter(or_(Nses.name.ilike(f"%{query}%"), Nses.hash.ilike(f"%{query}%")))
+            .order_by(Nses.name.asc())
+            .limit(limit)
+            .all()
+        )
+        return self._json_results(items)
+
+    @expose("/targets_remote", methods=["GET"])
+    @has_access
+    def targets_remote(self):
+        """
+        AJAX endpoint for target lookup on scan profile forms.
+        """
+        query = request.args.get("q", "").strip()
+        limit = self._remote_limit()
+        selected_ids = self._remote_ids()
+
+        if selected_ids:
+            items = (
+                db.session.query(Targets)
+                .filter(Targets.id.in_(selected_ids))
+                .order_by(Targets.value.asc())
+                .all()
+            )
+            return self._json_results(items)
+
+        if len(query) < 1:
+            return jsonify([])
+
+        items = (
+            db.session.query(Targets)
+            .filter(
+                or_(
+                    Targets.value.ilike(f"%{query}%"),
+                    Targets.description.ilike(f"%{query}%"),
+                )
+            )
+            .order_by(Targets.value.asc())
+            .limit(limit)
+            .all()
+        )
+        return self._json_results(items)
+
+
+class TargetScanStatesView(ModelView):
+    """
+    Status view for Target/Profile scan state.
+    """
+
+    datamodel = SQLAInterface(TargetScanStates)
+    list_template = "list_targetscanstatesview.html"
+    base_permissions = ["can_list", "can_show"]
+    list_columns = ["target", "scanprofile", "working", "last_scan", "duration_html"]
+    search_columns = ["target", "scanprofile", "working"]
+    show_columns = [
+        "target",
+        "scanprofile",
+        "working",
+        "last_scan",
+        "last_previous_scan",
+        "duration_html",
+    ]
+    edit_columns = []
+    add_columns = []
+    base_order = ("last_scan", "desc")
+    search_form_extra_fields = {
+        "target": RemoteRelatedField(
+            "Target",
+            validators=[Optional()],
+            datamodel=datamodel,
+            col_name="target",
+            endpoint="TargetScanStatesView.targets_remote",
+        )
+    }
+    label_columns = {
+        "target": "Target",
+        "scanprofile": "Scan Profile",
+        "last_scan": "Last Scan",
+        "last_previous_scan": "Previous Scan",
+        "duration_html": "Scan Cycle",
+    }
+
+    @staticmethod
+    def _remote_limit():
+        try:
+            return min(int(request.args.get("limit", 30)), 100)
+        except (TypeError, ValueError):
+            return 30
+
+    @staticmethod
+    def _remote_ids():
+        raw_ids = []
+        if request.args.get("ids"):
+            raw_ids.extend(request.args.get("ids", "").split(","))
+        raw_ids.extend(request.args.getlist("ids"))
+
+        ids = []
+        for raw_id in raw_ids:
+            raw_id = str(raw_id).strip()
+            if raw_id.isdigit():
+                ids.append(int(raw_id))
+        return list(dict.fromkeys(ids))
+
+    @staticmethod
+    def _json_results(items):
+        return jsonify([{"id": item.id, "text": str(item)} for item in items])
+
+    @expose("/targets_remote", methods=["GET"])
+    @has_access
+    def targets_remote(self):
+        """
+        AJAX endpoint for target lookup on target scan state filters.
+        """
+        query = request.args.get("q", "").strip()
+        limit = self._remote_limit()
+        selected_ids = self._remote_ids()
+
+        if selected_ids:
+            items = (
+                db.session.query(Targets)
+                .filter(Targets.id.in_(selected_ids))
+                .order_by(Targets.value.asc())
+                .all()
+            )
+            return self._json_results(items)
+
+        if len(query) < 1:
+            return jsonify([])
+
+        items = (
+            db.session.query(Targets)
+            .filter(
+                or_(
+                    Targets.value.ilike(f"%{query}%"),
+                    Targets.description.ilike(f"%{query}%"),
+                )
+            )
+            .order_by(Targets.value.asc())
+            .limit(limit)
+            .all()
+        )
+        return self._json_results(items)
 
 
 class ProtosView(ModelView):
@@ -1072,5 +1745,8 @@ appbuilder.add_view(NsesView, "Nse Scripts", icon="fa-folder-open-o", category="
 appbuilder.add_view(ProtosView, "Protocols", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(PortsView, "Ports", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(JobsView, "Jobs", icon="fa-chart-bar", category="Status")
+appbuilder.add_view(
+    TargetScanStatesView, "Profile Scans", icon="fa-chart-bar", category="Status"
+)
 appbuilder.add_view(BotsView, "Bots", icon="fa-folder-open-o", category="Status")
 db.create_all()

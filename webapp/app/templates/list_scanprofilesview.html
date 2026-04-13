@@ -1,0 +1,61 @@
+{% extends "appbuilder/general/model/list.html" %}
+{% import 'appbuilder/baselib.html' as baselib %}
+
+{% block add_tail_js %}
+{{ super() }}
+<script nonce="{{ baselib.get_nonce() }}">
+(function ($) {
+  function initPlumRemoteSelect(root) {
+    $(root).find(".plum-select2-remote").each(function () {
+      const $el = $(this);
+      if ($el.data("plumRemoteInit")) {
+        return;
+      }
+      $el.data("plumRemoteInit", true);
+
+      const remoteUrl = $el.data("remote-url");
+      $el.select2({
+        theme: "bootstrap",
+        placeholder: $el.data("placeholder") || "Select Value",
+        allowClear: true,
+        minimumInputLength: 1,
+        ajax: {
+          url: remoteUrl,
+          dataType: "json",
+          delay: 250,
+          data: function (params) {
+            return {q: params.term || "", limit: 30};
+          },
+          processResults: function (data) {
+            return {results: data};
+          },
+          cache: true
+        }
+      });
+
+      const selectedValues = $el.val();
+      if (selectedValues && selectedValues.length && $el.find("option").length === 0) {
+        $.getJSON(remoteUrl, {ids: selectedValues.join(",")}, function (data) {
+          $.each(data, function (_, item) {
+            const option = new Option(item.text, item.id, true, true);
+            $el.append(option);
+          });
+          $el.trigger("change");
+        });
+      }
+    });
+  }
+
+  $(function () {
+    initPlumRemoteSelect(document);
+
+    const filterContainer = document.querySelector("#filter_form .filters");
+    if (filterContainer && window.MutationObserver) {
+      new MutationObserver(function () {
+        initPlumRemoteSelect(filterContainer);
+      }).observe(filterContainer, {childList: true, subtree: true});
+    }
+  });
+})(jQuery);
+</script>
+{% endblock %}

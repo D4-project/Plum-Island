@@ -4,8 +4,11 @@ This is the init module of the flask appbuilder application.
 
 import logging
 import os
+import sqlite3
 from flask import Flask
 from flask_appbuilder import AppBuilder, SQLA
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from .security import CustomSecurityManager  # Custom Security menu
 
 # Loggin configuration
@@ -15,6 +18,23 @@ logging.getLogger().setLevel(logging.DEBUG)
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+
+
+@event.listens_for(Engine, "connect")
+def configure_sqlite_connection(dbapi_connection, connection_record):
+    """
+    Reduce SQLite lock errors when the background scheduler writes concurrently.
+    """
+    _ = connection_record
+    if not isinstance(dbapi_connection, sqlite3.Connection):
+        return
+
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
 
 
 def prepare_export_jobs_folder(export_jobs_folder):
