@@ -59,6 +59,7 @@ default_parsing = [
     "get_hosts:p.ssl-cert.extensions.X509v3_Subject_Alternative_Name",
     "get_hosts:p.banner.output",
     "get_banner:p.banner.output",
+    "get_favicon:p.http-mm-sha-favicon",
 ]
 
 # Authorised data harversting methods.
@@ -71,12 +72,27 @@ ALLOW = [
     "get_banner",
     "get_ssl_info",
     "hsh",
+    "get_favicon",
 ]
 
 fqdn_regex = re.compile(
     r"""(?:^|[\s(\/<>|@'"=\:])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-_]{2,})+)(?=$|[\?\s#&\/<>'",)])""",
     re.MULTILINE,
 )
+
+favicon_field_regex = re.compile(
+    r"^\s*(?:\|_?\s*)?"
+    r"(favicon_(?:file|mmhash|md5|sha256))"
+    r"\s*:\s*(.*?)\s*$",
+    re.MULTILINE,
+)
+
+favicon_field_map = {
+    "favicon_file": "http_favicon_path",
+    "favicon_mmhash": "http_favicon_mmhash",
+    "favicon_md5": "http_favicon_md5",
+    "favicon_sha256": "http_favicon_sha256",
+}
 
 
 def insensitive(input_list):
@@ -244,6 +260,61 @@ def get_banner(data: dict, target: str):
     return {"banner": banner}
 
 
+def add_favicon_value(result: dict, key: str, value):
+    """
+    Add a favicon field value while normalising NSE field names.
+    """
+    result_key = favicon_field_map.get(key.replace("-", "_").replace(" ", "_").lower())
+    if not result_key or value is None:
+        return
+
+    value = str(value).strip()
+    if value and value not in result[result_key]:
+        result[result_key].append(value)
+
+
+def parse_favicon_text(result: dict, text: str):
+    """
+    Extract favicon fields from a text NSE output.
+    """
+    for match in favicon_field_regex.finditer(text):
+        add_favicon_value(result, match.group(1), match.group(2))
+
+
+def parse_favicon_object(result: dict, data):
+    """
+    Extract favicon fields from structured NSE output or nested text output.
+    """
+    if isinstance(data, dict):
+        for key, value in data.items():
+            add_favicon_value(result, key, value)
+            if isinstance(value, (dict, list)):
+                parse_favicon_object(result, value)
+            elif isinstance(value, str):
+                parse_favicon_text(result, value)
+    elif isinstance(data, list):
+        for item in data:
+            parse_favicon_object(result, item)
+    elif isinstance(data, str):
+        parse_favicon_text(result, data)
+
+
+def get_favicon(data: dict, target: str):
+    """
+    Extract favicon hashes and the path that produced the favicon.
+    """
+    body = get_body(data, target)
+    result = {
+        "http_favicon_path": [],
+        "http_favicon_mmhash": [],
+        "http_favicon_md5": [],
+        "http_favicon_sha256": [],
+    }
+    if body:
+        parse_favicon_object(result, body)
+    return result
+
+
 def get_http_server(data: dict, target: str):
     # Parse http server header
     body = get_body(data, target)
@@ -309,6 +380,7 @@ def parse_json(doc, db_conf_local):
                     parse_result = globals()[action](
                         script, target
                     )  # Call the function given in the action variable.
+                    final_result = fuse_dicts(final_result, parse_result)
 
         elif section == "p":
             for port in doc.get("body").get("ports"):  # for each ports,
@@ -317,8 +389,7 @@ def parse_json(doc, db_conf_local):
                         parse_result = globals()[action](
                             script, target
                         )  # Call the function given in the action variable.
-
-        final_result = fuse_dicts(final_result, parse_result)
+                        final_result = fuse_dicts(final_result, parse_result)
 
     ports = []
     for port in doc.get("body").get("ports"):

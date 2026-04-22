@@ -77,6 +77,10 @@ The following keywords can be used to explore the data:
 | http_cookiename | like, begin | Http set cookie keyname |
 | http_etag | like, begin | http etag value |
 | http_server | like, begin | http serveur value |
+| http_favicon_path | like, begin | favicon source path |
+| http_favicon_mmhash | | favicon MurmurHash value |
+| http_favicon_md5 | | md5sum of the favicon |
+| http_favicon_sha256 | | sha256sum of the favicon |
 | banner | like, begin | Services banner server value |
 | x509_issuer | like, begin | 
 | x509_md5 | | md5sum of the tls  certificate public signature   

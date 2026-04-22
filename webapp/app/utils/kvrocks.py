@@ -49,7 +49,7 @@ class KVrocksIndexer:
         """
         insert documents into the kvrocks.
         Each doc: dict with keys:
-          uid, ip, favicon_hashes (list), http_servers (list), http_cookies (list)
+          uid, ip, parsed search fields
 
         it does "batch insertions", up to 10K per insert by default
         """
@@ -70,10 +70,10 @@ class KVrocksIndexer:
             "port",
             # "protocol",
             "http_title",
-            # "http_favicon_hash",
-            # "http_favicon_sha256",
-            # "http_favicon_sha1",
-            # "http_favicon",
+            "http_favicon_path",
+            "http_favicon_mmhash",
+            "http_favicon_md5",
+            "http_favicon_sha256",
             # "http_filename",
             "http_cookiename",
             "http_etag",
@@ -99,7 +99,6 @@ class KVrocksIndexer:
                 uid = doc["uid"]
                 ip = doc["ip"]
 
-                # favicons = doc.get("http_favicon", [])
                 # http_servers = doc.get("http_servers, [])
                 # http_cookies = doc.get("http_cookies", [])
                 # http_titles = doc.get("http_titles", [])
