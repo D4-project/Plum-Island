@@ -5,8 +5,31 @@
 {{ lib.panel_begin(title, "Query Scans") }}
 
 <script>
-let lastSuccessfulQuery = null;
+let lastSuccessfulSearch = null;
 let exportStatusPoller = null;
+let activeExportConfig = null;
+const SEARCH_PAGE_SIZE = 100;
+const MAX_SEARCH_WINDOW_DAYS = 4096;
+const EXPORT_CONFIGS = {
+    ips: {
+        title: 'Preparing IP Export',
+        counterUnit: 'IPs',
+        initialText: 'Preparing IP export...',
+        runningText: 'Preparing filtered IP list...',
+        startUrl: '/kvsearchview/export_ips_start',
+        statusUrl: '/kvsearchview/export_ips_status',
+        downloadUrl: '/kvsearchview/export_ips_download'
+    },
+    json: {
+        title: 'Preparing JSON Export',
+        counterUnit: 'documents',
+        initialText: 'Preparing JSON export...',
+        runningText: 'Preparing filtered export...',
+        startUrl: '/kvsearchview/export_full_start',
+        statusUrl: '/kvsearchview/export_full_status',
+        downloadUrl: '/kvsearchview/export_full_download'
+    }
+};
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -117,7 +140,7 @@ function setDownloadButtonState(enabled) {
     button.title = 'Download IP List';
     button.setAttribute('aria-label', 'Download IP List');
     button.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>';
-    button.addEventListener('click', downloadIps);
+    button.addEventListener('click', startIpExport);
     container.appendChild(button);
 
     const fullButton = document.createElement('button');
@@ -131,14 +154,14 @@ function setDownloadButtonState(enabled) {
     container.appendChild(fullButton);
 }
 
-function setSearchLoading(isLoading) {
+function setSearchLoading(isLoading, showSpinner = true) {
     const spinner = document.getElementById('info-spinner');
     const searchBtn = document.getElementById('search-btn');
     if (!spinner || !searchBtn) {
         return;
     }
     if (isLoading) {
-        spinner.style.display = 'inline-flex';
+        spinner.style.display = showSpinner ? 'inline-flex' : 'none';
         searchBtn.disabled = true;
     } else {
         spinner.style.display = 'none';
@@ -146,33 +169,126 @@ function setSearchLoading(isLoading) {
     }
 }
 
-function downloadIps() {
-    if (!lastSuccessfulQuery) {
+function setLoadMoreLoading(isLoading) {
+    const container = document.getElementById('load-more-container');
+    if (!container || !isLoading) {
         return;
     }
-    const url = `/kvsearchview/export?q=${encodeURIComponent(lastSuccessfulQuery)}`;
-    const tmpLink = document.createElement('a');
-    tmpLink.href = url;
-    tmpLink.style.display = 'none';
-    tmpLink.setAttribute('download', 'ip_list.txt');
-    document.body.appendChild(tmpLink);
-    tmpLink.click();
-    document.body.removeChild(tmpLink);
+    container.innerHTML = `
+        <span class="text-muted" role="status" aria-live="polite">
+            <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+        </span>
+    `;
 }
 
-function resetExportModal() {
+function padDatePart(value) {
+    return String(value).padStart(2, '0');
+}
+
+function formatDateInput(date) {
+    return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function setDefaultTimeRange() {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    if (!fromInput || !toInput) {
+        return;
+    }
+    const toDate = new Date();
+    const fromDate = new Date(toDate);
+    fromDate.setMonth(fromDate.getMonth() - 3);
+    fromInput.value = formatDateInput(fromDate);
+    toInput.value = formatDateInput(toDate);
+}
+
+function getSearchTimeRange() {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromDate = new Date(`${fromInput.value}T00:00:00`);
+    const toDate = new Date(`${toInput.value}T23:59:59`);
+
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+        throw new Error('Invalid time range');
+    }
+    if (fromDate.getTime() > toDate.getTime()) {
+        throw new Error('Start time must be before end time');
+    }
+
+    return {
+        fromTs: Math.floor(fromDate.getTime() / 1000),
+        toTs: Math.floor(toDate.getTime() / 1000)
+    };
+}
+
+function openDatePicker(inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) {
+        return;
+    }
+    input.focus();
+    if (typeof input.showPicker === 'function') {
+        try {
+            input.showPicker();
+            return;
+        } catch (error) {
+            // Fall through to click for browsers that gate showPicker differently.
+        }
+    }
+    input.click();
+}
+
+function buildSearchParams(query, timeRange, cursorTs = null, seenIps = [], limit = SEARCH_PAGE_SIZE, windowDays = 1) {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    params.set('from_ts', String(timeRange.fromTs));
+    params.set('to_ts', String(timeRange.toTs));
+    params.set('limit', String(limit));
+    params.set('window_days', String(windowDays));
+    if (cursorTs !== null && cursorTs !== undefined) {
+        params.set('cursor_ts', String(cursorTs));
+    }
+    if (seenIps.length > 0) {
+        params.set('seen_ips', seenIps.join(','));
+    }
+    return params;
+}
+
+function buildExportPayload() {
+    if (!lastSuccessfulSearch) {
+        return null;
+    }
+    return {
+        q: lastSuccessfulSearch.query,
+        from_ts: lastSuccessfulSearch.fromTs,
+        to_ts: lastSuccessfulSearch.toTs
+    };
+}
+
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value === null || value === undefined ? '' : String(value);
+    return div.innerHTML;
+}
+
+function resetExportModal(config) {
+    activeExportConfig = config;
+    const titleEl = document.getElementById('export-full-modal-label');
     const progressBar = document.getElementById('export-progress-bar');
     const statusEl = document.getElementById('export-status-text');
     const counterEl = document.getElementById('export-progress-count');
     const elapsedEl = document.getElementById('export-elapsed');
     const errorEl = document.getElementById('export-error');
+    const warningEl = document.getElementById('export-warning');
+    titleEl.textContent = config.title;
     progressBar.style.width = '0%';
     progressBar.setAttribute('aria-valuenow', '0');
     progressBar.textContent = '0%';
-    statusEl.textContent = 'Preparing export...';
-    counterEl.textContent = '0 / 0 documents';
+    statusEl.textContent = config.initialText;
+    counterEl.textContent = `0 / 0 ${config.counterUnit}`;
     elapsedEl.textContent = '0.0s';
     errorEl.innerHTML = '';
+    warningEl.innerHTML = '';
 }
 
 function stopExportPolling() {
@@ -182,7 +298,35 @@ function stopExportPolling() {
     }
 }
 
-function updateExportModal(data) {
+function updateExportWarnings(data) {
+    const warningEl = document.getElementById('export-warning');
+    if (!warningEl) {
+        return;
+    }
+    const warnings = data.warnings || [];
+    const warningCount = Number(data.warning_count || warnings.length || 0);
+    if (warningCount <= 0) {
+        warningEl.innerHTML = '';
+        return;
+    }
+
+    const visibleWarnings = warnings
+        .map((warning) => `<li>${escapeHtml(warning)}</li>`)
+        .join('');
+    const hiddenCount = Math.max(0, warningCount - warnings.length);
+    const hiddenText = hiddenCount > 0
+        ? `<p class="mb-0">${hiddenCount} additional warnings not shown.</p>`
+        : '';
+    warningEl.innerHTML = `
+        <div class="alert alert-warning mt-2" role="alert">
+            <strong>${warningCount} warning${warningCount > 1 ? 's' : ''}</strong>
+            ${visibleWarnings ? `<ul class="mb-0">${visibleWarnings}</ul>` : ''}
+            ${hiddenText}
+        </div>
+    `;
+}
+
+function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.json) {
     const progressBar = document.getElementById('export-progress-bar');
     const statusEl = document.getElementById('export-status-text');
     const counterEl = document.getElementById('export-progress-count');
@@ -193,14 +337,15 @@ function updateExportModal(data) {
     progressBar.style.width = `${percent}%`;
     progressBar.setAttribute('aria-valuenow', percent);
     progressBar.textContent = `${percent}%`;
-    counterEl.textContent = `${data.processed_uids || 0} / ${data.total_uids || 0} documents`;
+    counterEl.textContent = `${data.processed_uids || 0} / ${data.total_uids || 0} ${config.counterUnit}`;
     elapsedEl.textContent = `${Number(data.elapsed_seconds || 0).toFixed(1)}s`;
     errorEl.innerHTML = '';
+    updateExportWarnings(data);
 
     if (data.status === 'queued') {
         statusEl.textContent = 'Queued...';
     } else if (data.status === 'running') {
-        statusEl.textContent = 'Preparing filtered export...';
+        statusEl.textContent = config.runningText;
     } else if (data.status === 'done') {
         statusEl.textContent = 'Export ready. Starting download...';
     } else if (data.status === 'error') {
@@ -209,41 +354,51 @@ function updateExportModal(data) {
     }
 }
 
-async function pollFullExport(jobId) {
+async function pollExport(jobId, config) {
     try {
-        const res = await fetch(`/kvsearchview/export_full_status?job_id=${encodeURIComponent(jobId)}`);
+        const res = await fetch(`${config.statusUrl}?job_id=${encodeURIComponent(jobId)}`);
         const data = await readJsonResponse(res);
-        updateExportModal(data);
+        updateExportModal(data, config);
 
         if (data.status === 'done' && data.download_ready) {
             stopExportPolling();
+            const hasWarnings = Number(data.warning_count || 0) > 0;
             const tmpLink = document.createElement('a');
-            tmpLink.href = `/kvsearchview/export_full_download?job_id=${encodeURIComponent(jobId)}`;
+            tmpLink.href = `${config.downloadUrl}?job_id=${encodeURIComponent(jobId)}`;
             tmpLink.style.display = 'none';
             document.body.appendChild(tmpLink);
             tmpLink.click();
             document.body.removeChild(tmpLink);
-            setTimeout(() => {
-                $('#export-full-modal').modal('hide');
-            }, 800);
+            if (!hasWarnings) {
+                setTimeout(() => {
+                    $('#export-full-modal').modal('hide');
+                }, 800);
+            }
         } else if (data.status === 'error') {
             stopExportPolling();
         }
+        return data.status;
     } catch (error) {
         stopExportPolling();
         const errorEl = document.getElementById('export-error');
         document.getElementById('export-status-text').textContent = 'Export failed';
         errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${error?.message || 'Unexpected error'}</div>`;
+        return 'error';
     }
 }
 
-async function startFullExport() {
-    if (!lastSuccessfulQuery) {
+async function startExport(config) {
+    if (!lastSuccessfulSearch) {
+        return;
+    }
+
+    const payload = buildExportPayload();
+    if (!payload) {
         return;
     }
 
     stopExportPolling();
-    resetExportModal();
+    resetExportModal(config);
     $('#export-full-modal').modal({
         backdrop: 'static',
         keyboard: false
@@ -251,112 +406,245 @@ async function startFullExport() {
     $('#export-full-modal').modal('show');
 
     try {
-        const res = await fetch('/kvsearchview/export_full_start', {
+        const res = await fetch(config.startUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ q: lastSuccessfulQuery })
+            body: JSON.stringify(payload)
         });
         const data = await readJsonResponse(res);
-        await pollFullExport(data.job_id);
-        exportStatusPoller = setInterval(() => {
-            pollFullExport(data.job_id);
-        }, 1000);
+        if (!res.ok || data.error) {
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        const status = await pollExport(data.job_id, config);
+        if (status !== 'done' && status !== 'error') {
+            exportStatusPoller = setInterval(() => {
+                pollExport(data.job_id, config);
+            }, 1000);
+        }
     } catch (error) {
         document.getElementById('export-status-text').textContent = 'Export failed';
         document.getElementById('export-error').innerHTML = `<div class="alert alert-danger mt-2" role="alert">${error?.message || 'Unexpected error'}</div>`;
     }
 }
 
+async function startIpExport() {
+    await startExport(EXPORT_CONFIGS.ips);
+}
+
+async function startFullExport() {
+    await startExport(EXPORT_CONFIGS.json);
+}
+
 async function search() {
+    await runSearchPage(null, false);
+}
+
+async function loadMoreResults() {
+    if (!lastSuccessfulSearch) {
+        return;
+    }
+    await runSearchPage(lastSuccessfulSearch.nextCursor, true);
+}
+
+function renderSearchChunk(data, baseIndex, hitsDiv) {
+    const returnedIps = Object.keys(data.results || {});
+
+    Object.entries(data.results || {}).forEach(([ip, uids], ipIndex) => {
+        const resultIndex = baseIndex + ipIndex;
+        const ipPanel = document.createElement('div');
+        ipPanel.className = 'panel panel-default';
+        const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
+        const ipLabel = ip;
+        const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
+
+        // IP accordion
+        ipPanel.innerHTML = `
+            <div class="panel-heading">
+                <h4 class="panel-title">
+                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${resultIndex}">
+                        ${ipLabel}
+                    </a>
+                    <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
+                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                    </button>
+                    ${ipMeta}
+                </h4>
+            </div>
+            <div id="collapse-ip-${resultIndex}" class="panel-collapse collapse">
+                <div class="panel-body" id="uids-${resultIndex}">
+                    <!-- UID panels will go here -->
+                </div>
+            </div>
+        `;
+        hitsDiv.appendChild(ipPanel);
+
+        const uidsDiv = document.getElementById(`uids-${resultIndex}`);
+        const sortedUids = [...uids].sort((a, b) => {
+            const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
+            const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
+            return bLast - aLast;
+        });
+
+        sortedUids.forEach((uid, uidIndex) => {
+            const uidPanel = document.createElement('div');
+            uidPanel.className = 'panel panel-info';
+            const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
+            const uidLabel = uid;
+            const uidMeta = uidTimestamp
+                ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
+                : '';
+            uidPanel.innerHTML = `
+                <div class="panel-heading">
+                    <h5 class="panel-title">
+                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${resultIndex}-${uidIndex}'); return false;">
+                            ${uidLabel}
+                        </a>
+                        ${uidMeta}
+                    </h5>
+                </div>
+                <div id="uid-body-${resultIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
+            `;
+            uidsDiv.appendChild(uidPanel);
+        });
+    });
+
+    return returnedIps;
+}
+
+function renderLoadMoreButton(loadMoreDiv) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-default';
+    button.textContent = 'Load more';
+    button.addEventListener('click', loadMoreResults);
+    loadMoreDiv.appendChild(button);
+}
+
+async function runSearchPage(cursorTs, append) {
     const query = document.getElementById('query').value;
-    lastSuccessfulQuery = null;
-    setDownloadButtonState(false);
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
     const errorDiv = document.getElementById('msg_error');
-    setSearchLoading(true);
-    try {
-        const res = await fetch(`/kvsearchview/query?q=${encodeURIComponent(query)}`);
-        const data = await readJsonResponse(res);
+    const loadMoreDiv = document.getElementById('load-more-container');
 
-        const time = (data.processingTimeMs || 0).toFixed(3);
-        infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
-
-        errorDiv.innerHTML = ``;
-        if (data.status === false) {
-            errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
-        }
-        if (data.status && Object.keys(data.results || {}).length > 0) {
-            lastSuccessfulQuery = query;
-            setDownloadButtonState(true);
-        }
-
+    if (append) {
+        setLoadMoreLoading(true);
+    }
+    if (!append) {
+        lastSuccessfulSearch = null;
+        setDownloadButtonState(false);
         hitsDiv.innerHTML = '';
+        loadMoreDiv.innerHTML = '';
+    }
+    let seenIps = append && lastSuccessfulSearch ? [...(lastSuccessfulSearch.seenIps || [])] : [];
+    let renderedCount = append && lastSuccessfulSearch ? lastSuccessfulSearch.renderedCount || 0 : 0;
+    let nextCursor = cursorTs;
+    let windowDays = append && lastSuccessfulSearch ? lastSuccessfulSearch.nextWindowDays || 1 : 1;
 
-        Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
-            const ipPanel = document.createElement('div');
-            ipPanel.className = 'panel panel-default';
-            const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
-            const ipLabel = ip;
-            const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
+    let timeRange;
+    try {
+        timeRange = getSearchTimeRange();
+    } catch (error) {
+        errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${error?.message || 'Invalid time range'}</div>`;
+        infoDiv.innerHTML = '';
+        if (!append) {
+            hitsDiv.innerHTML = '';
+        }
+        loadMoreDiv.innerHTML = '';
+        return;
+    }
+    setSearchLoading(true, !append);
+    try {
+        if (!append) {
+            loadMoreDiv.innerHTML = '';
+        }
+        errorDiv.innerHTML = '';
 
-            // IP accordion
-            ipPanel.innerHTML = `
-                <div class="panel-heading">
-                    <h4 class="panel-title">
-                        <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
-                            ${ipLabel}
-                        </a>
-                        <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
-                            <i class="fa-regular fa-copy" aria-hidden="true"></i>
-                        </button>
-                        ${ipMeta}
-                    </h4>
-                </div>
-                <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
-                    <div class="panel-body" id="uids-${ipIndex}">
-                        <!-- UID panels will go here -->
-                    </div>
-                </div>
-            `;
-            hitsDiv.appendChild(ipPanel);
+        let addedThisRun = 0;
+        let hasMore = true;
+        let totalProcessingTime = 0;
+        let scannedDays = 0;
+        let lastData = null;
 
-            const uidsDiv = document.getElementById(`uids-${ipIndex}`);
-            const sortedUids = [...uids].sort((a, b) => {
-                const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
-                const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
-                return bLast - aLast;
-            });
+        while (addedThisRun < SEARCH_PAGE_SIZE && hasMore) {
+            const remaining = SEARCH_PAGE_SIZE - addedThisRun;
+            const cursorBefore = nextCursor;
+            const params = buildSearchParams(
+                query,
+                timeRange,
+                nextCursor,
+                seenIps,
+                remaining,
+                windowDays
+            );
+            const res = await fetch(`/kvsearchview/query?${params.toString()}`);
+            const data = await readJsonResponse(res);
+            lastData = data;
 
-            sortedUids.forEach((uid, uidIndex) => {
-                const uidPanel = document.createElement('div');
-                uidPanel.className = 'panel panel-info';
-                const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
-                const uidLabel = uid;
-                const uidMeta = uidTimestamp
-                    ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
-                    : '';
-                uidPanel.innerHTML = `
-                    <div class="panel-heading">
-                        <h5 class="panel-title">
-                            <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
-                                ${uidLabel}
-                            </a>
-                            ${uidMeta}
-                        </h5>
-                    </div>
-                    <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
-                `;
-                uidsDiv.appendChild(uidPanel);
-            });
-        });
+            const pagination = data.pagination || {};
+            totalProcessingTime += Number(data.processingTimeMs || 0);
+            scannedDays += Number(pagination.scanned_days || 0);
+
+            if (data.status === false) {
+                errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
+                hasMore = false;
+                break;
+            }
+
+            const returnedIps = renderSearchChunk(data, renderedCount, hitsDiv);
+            if (returnedIps.length > 0) {
+                renderedCount += returnedIps.length;
+                addedThisRun += returnedIps.length;
+                seenIps = [...seenIps, ...returnedIps];
+                setDownloadButtonState(true);
+            }
+
+            hasMore = Boolean(data.status && pagination.has_more);
+            nextCursor = pagination.next_cursor;
+            if (returnedIps.length === 0) {
+                windowDays = Math.min(windowDays * 2, MAX_SEARCH_WINDOW_DAYS);
+            } else if (pagination.stopped_in_window) {
+                windowDays = Number(pagination.window_days || windowDays || 1);
+            } else {
+                windowDays = 1;
+            }
+            lastSuccessfulSearch = {
+                query,
+                fromTs: timeRange.fromTs,
+                toTs: timeRange.toTs,
+                nextCursor,
+                nextWindowDays: windowDays,
+                seenIps,
+                renderedCount
+            };
+
+            const time = totalProcessingTime.toFixed(3);
+            infoDiv.innerHTML = `Showing ${renderedCount} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts; scanned ${scannedDays} day${scannedDays > 1 ? 's' : ''}`;
+
+            if (!hasMore) {
+                break;
+            }
+            if (nextCursor === null || nextCursor === undefined || String(nextCursor) === String(cursorBefore)) {
+                break;
+            }
+
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+
+        loadMoreDiv.innerHTML = '';
+        if (lastData && lastData.status && hasMore) {
+            renderLoadMoreButton(loadMoreDiv);
+        }
     } catch (error) {
         console.error('KV search failed', error);
         errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${error?.message || 'Unexpected error'}</div>`;
         infoDiv.innerHTML = '';
-        hitsDiv.innerHTML = '';
+        if (!append) {
+            hitsDiv.innerHTML = '';
+        }
+        loadMoreDiv.innerHTML = '';
     } finally {
         setSearchLoading(false);
     }
@@ -378,6 +666,8 @@ async function loadUid(uid, targetId) {
         target.style.display = 'none';
     }
 }
+
+document.addEventListener('DOMContentLoaded', setDefaultTimeRange);
 
 </script>
 <style>
@@ -513,6 +803,35 @@ async function loadUid(uid, targetId) {
     flex: 1 1 auto;
     min-width: 0;
 }
+.search-time-range {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    justify-content: flex-start;
+}
+.search-date-field {
+    flex: 0 0 auto;
+    width: 14rem;
+    max-width: 14rem;
+}
+.search-date-field .input-group-btn .btn {
+    color: #4d6172;
+    background: #f5f8fb;
+    border-color: #ccc;
+}
+.search-date-field input {
+    width: 100%;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+.search-date-field input[type="date"]::-webkit-calendar-picker-indicator {
+    display: none;
+    -webkit-appearance: none;
+}
+.search-date-field input[type="date"]::-webkit-inner-spin-button,
+.search-date-field input[type="date"]::-webkit-clear-button {
+    display: none;
+}
 .search-toolbar-actions {
     flex: 0 0 auto;
     display: flex;
@@ -523,6 +842,15 @@ async function loadUid(uid, targetId) {
 }
 .search-toolbar-actions > div {
     width: auto;
+}
+#load-more-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 2.4rem;
+}
+#load-more-container .btn {
+    min-width: 9rem;
 }
 @media (max-width: 767px) {
     .search-toolbar {
@@ -535,6 +863,13 @@ async function loadUid(uid, targetId) {
         align-items: stretch;
         padding-right: 0;
     }
+    .search-time-range {
+        flex-direction: column;
+    }
+    .search-date-field {
+        width: 100%;
+        max-width: 100%;
+    }
 }
 </style>
 
@@ -542,6 +877,24 @@ async function loadUid(uid, targetId) {
     <div class="search-toolbar">
         <div class="search-toolbar-input">
             <input type="text" id="query" class="form-control" placeholder="Query...">
+            <div class="search-time-range">
+                <div class="input-group search-date-field">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-default" onclick="openDatePicker('time-from')" title="Select start date" aria-label="Select start date">
+                            <i class="fa fa-calendar" aria-hidden="true"></i>
+                        </button>
+                    </span>
+                    <input type="date" id="time-from" class="form-control" title="Start date" aria-label="Start date">
+                </div>
+                <div class="input-group search-date-field">
+                    <span class="input-group-btn">
+                        <button type="button" class="btn btn-default" onclick="openDatePicker('time-to')" title="Select end date" aria-label="Select end date">
+                            <i class="fa fa-calendar" aria-hidden="true"></i>
+                        </button>
+                    </span>
+                    <input type="date" id="time-to" class="form-control" title="End date" aria-label="End date">
+                </div>
+            </div>
         </div>
         <div class="search-toolbar-actions">
             <button type="button" id="search-btn" class="btn btn-primary" onclick="search()">Search</button>
@@ -561,6 +914,7 @@ async function loadUid(uid, targetId) {
 </div>
 <div id="msg_error" class="panel-group mt-2"></div>
 <div id="hits" class="panel-group mt-2"></div>
+<div id="load-more-container" class="mt-2"></div>
 {{ lib.panel_end() }}
 
 <div class="modal fade" id="export-full-modal" tabindex="-1" role="dialog" aria-labelledby="export-full-modal-label">
@@ -587,6 +941,7 @@ async function loadUid(uid, targetId) {
                     <span>Elapsed: <span id="export-elapsed">0.0s</span></span>
                 </div>
                 <div id="export-error"></div>
+                <div id="export-warning"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-default" onclick="stopExportPolling(); $('#export-full-modal').modal('hide');">Close</button>

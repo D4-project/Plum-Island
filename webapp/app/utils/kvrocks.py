@@ -5,7 +5,11 @@ This is the main module for searching using kvrocks.
 It contains all the logic to find something.
 """
 
-from .timeutils import utcnow_iso
+try:
+    from .timeutils import utcnow_iso
+except ImportError:
+    from timeutils import utcnow_iso
+from datetime import datetime, timezone
 import logging
 import redis
 from netaddr import IPNetwork
@@ -28,6 +32,58 @@ class KVrocksIndexer:
         Return a timedate that kvrosk is happy with.
         """
         return utcnow_iso()
+
+    @staticmethod
+    def normalize_timestamp(value):
+        """
+        Convert known timestamp formats to epoch seconds.
+        """
+        if value is None:
+            return None
+
+        if isinstance(value, (int, float)):
+            timestamp = float(value)
+        else:
+            value = str(value).strip()
+            if not value:
+                return None
+
+            try:
+                timestamp = float(value)
+            except ValueError:
+                try:
+                    if value.endswith("Z"):
+                        value = f"{value[:-1]}+00:00"
+                    date_value = datetime.fromisoformat(value)
+                    if date_value.tzinfo is None:
+                        date_value = date_value.replace(tzinfo=timezone.utc)
+                    timestamp = date_value.timestamp()
+                except ValueError:
+                    return None
+
+        if timestamp > 1_000_000_000_000:
+            timestamp = timestamp / 1000
+        if timestamp < 0:
+            return None
+        return int(timestamp)
+
+    @classmethod
+    def normalize_seen_range(cls, first_seen, last_seen):
+        """
+        Normalize first_seen/last_seen as an ordered epoch-second interval.
+        """
+        first_seen = cls.normalize_timestamp(first_seen)
+        last_seen = cls.normalize_timestamp(last_seen)
+
+        if first_seen is None and last_seen is None:
+            return None, None
+        if first_seen is None:
+            first_seen = last_seen
+        if last_seen is None:
+            last_seen = first_seen
+        if first_seen > last_seen:
+            first_seen, last_seen = last_seen, first_seen
+        return first_seen, last_seen
 
     def flushdb(self):
         """
@@ -94,8 +150,13 @@ class KVrocksIndexer:
 
         for i in range(0, len(docs), batch_size):
             batch = docs[i : i + batch_size]
-            pipe = self.r.pipeline(transaction=False)
+            existing_pipe = self.r.pipeline(transaction=False)
             for doc in batch:
+                existing_pipe.hgetall(f"doc:{doc['uid']}")
+            existing_docs = existing_pipe.execute()
+
+            pipe = self.r.pipeline(transaction=False)
+            for doc, existing in zip(batch, existing_docs):
                 uid = doc["uid"]
                 ip = doc["ip"]
 
@@ -106,29 +167,44 @@ class KVrocksIndexer:
                 last_seen = doc.get("last_seen")  # Document last time scanned.
 
                 uid_key = f"doc:{uid}"
-                existing = self.r.hgetall(uid_key)
                 first_seen = doc.get("first_seen", last_seen)
+                first_seen, last_seen = self.normalize_seen_range(first_seen, last_seen)
 
                 if existing:
                     # For the same UID ( meaning same scan result hsh256)
                     # we recompute last seen and first seen.
                     # We do like that because if case of insert bulk
-                    first_seen = min(existing.get("first_seen", first_seen), first_seen)
-                    last_seen = max(existing.get("last_seen", last_seen), last_seen)
+                    existing_first_seen = self.normalize_timestamp(
+                        existing.get("first_seen")
+                    )
+                    existing_last_seen = self.normalize_timestamp(existing.get("last_seen"))
+                    if existing_first_seen is not None:
+                        first_seen = (
+                            existing_first_seen
+                            if first_seen is None
+                            else min(existing_first_seen, first_seen)
+                        )
+                    if existing_last_seen is not None:
+                        last_seen = (
+                            existing_last_seen
+                            if last_seen is None
+                            else max(existing_last_seen, last_seen)
+                        )
+                    first_seen, last_seen = self.normalize_seen_range(
+                        first_seen, last_seen
+                    )
 
                 # Set the "LastSeen/FirstSeen" Index
-                pipe.zadd("last_seen_index", {uid: last_seen})
-                pipe.zadd("first_seen_index", {uid: first_seen})
+                if first_seen is not None and last_seen is not None:
+                    pipe.zadd("last_seen_index", {uid: last_seen})
+                    pipe.zadd("first_seen_index", {uid: first_seen})
 
                 # Store hashset uid
-                pipe.hset(
-                    uid_key,
-                    mapping={
-                        "first_seen": first_seen,
-                        "last_seen": last_seen,
-                        "ip": ip,
-                    },
-                )
+                doc_mapping = {"ip": ip}
+                if first_seen is not None and last_seen is not None:
+                    doc_mapping["first_seen"] = str(first_seen)
+                    doc_mapping["last_seen"] = str(last_seen)
+                pipe.hset(uid_key, mapping=doc_mapping)
 
                 # Index IP
                 pipe.sadd("all_ips", ip)  # Generic Spaces all IP
@@ -156,6 +232,31 @@ class KVrocksIndexer:
                             pipe.sadd(f"{field}:{v}", uid)
                             pipe.sadd(f"{field}s:{uid}", v)
             pipe.execute()
+
+    def get_uids_by_time_range(self, from_ts, to_ts):
+        """
+        Return document UIDs whose [first_seen, last_seen] overlaps the range.
+        """
+        from_ts, to_ts = self.normalize_seen_range(from_ts, to_ts)
+        if from_ts is None or to_ts is None:
+            return set()
+
+        seen_after_start = set(
+            self.r.zrangebyscore("last_seen_index", from_ts, "+inf")
+        )
+        started_before_end = set(
+            self.r.zrangebyscore("first_seen_index", "-inf", to_ts)
+        )
+        return seen_after_start.intersection(started_before_end)
+
+    def get_uids_by_last_seen_range(self, from_ts, to_ts):
+        """
+        Return document UIDs whose last_seen is inside the range.
+        """
+        from_ts, to_ts = self.normalize_seen_range(from_ts, to_ts)
+        if from_ts is None or to_ts is None:
+            return set()
+        return set(self.r.zrangebyscore("last_seen_index", from_ts, to_ts))
 
     def get_uids_by_criteria(self, criteria: dict):
         """
@@ -325,6 +426,68 @@ class KVrocksIndexer:
         # return an list of UUIDs
         return list(partial_result or [])
 
+    def get_uids_by_criteria_scoped(self, criteria: dict, scoped_uids):
+        """
+        Return UIDs matching criteria inside an already selected UID scope.
+        """
+        partial_result = set(scoped_uids or [])
+        if not criteria or not partial_result:
+            return []
+
+        remaining_criteria = dict(criteria)
+        scoped_base = set()
+
+        if "ip" in remaining_criteria:
+            ip_vals = remaining_criteria.pop("ip")
+            if not isinstance(ip_vals, list):
+                ip_vals = [ip_vals]
+            for ip in ip_vals:
+                scoped_base.update(self.r.smembers(f"ip:{ip}"))
+
+        if "net" in remaining_criteria:
+            net_vals = remaining_criteria.pop("net")
+            if not isinstance(net_vals, list):
+                net_vals = [net_vals]
+            for net_val in net_vals:
+                scoped_base.update(self.r.smembers(f"net:{net_val}"))
+
+        if scoped_base:
+            partial_result = partial_result.intersection(scoped_base)
+            if not partial_result:
+                return []
+
+        for field, values in remaining_criteria.items():
+            if not isinstance(values, list):
+                values = [values]
+
+            field_uids = set()
+            for value in values:
+                parts = field.split(".")
+                base_field = parts[0]
+                suffix = parts[1] if len(parts) > 1 else ""
+
+                if suffix in ("like", "lk", "begin", "bg", "not", "nt"):
+                    for key in self.r.scan_iter(f"{base_field}:*"):
+                        val = key.split(":", 2)[1]
+                        if (suffix in ("like", "lk") and value in val) or (
+                            suffix in ("begin", "bg") and val.startswith(value)
+                        ):
+                            field_uids.update(
+                                self.r.smembers(key).intersection(partial_result)
+                            )
+                else:
+                    field_uids.update(
+                        self.r.smembers(f"{base_field}:{value}").intersection(
+                            partial_result
+                        )
+                    )
+
+            partial_result = partial_result.intersection(field_uids)
+            if not partial_result:
+                break
+
+        return list(partial_result or [])
+
     def get_ip_info(self, ip):
         """
         Get info for a given IP
@@ -338,8 +501,8 @@ class KVrocksIndexer:
         results = {}
         for uid, data in zip(uids, results_raw):
             results[uid] = {
-                "first_seen": data.get("first_seen"),
-                "last_seen": data.get("last_seen"),
+                "first_seen": self.normalize_timestamp(data.get("first_seen")),
+                "last_seen": self.normalize_timestamp(data.get("last_seen")),
             }
         return results
 
@@ -388,10 +551,14 @@ class KVrocksIndexer:
         pipe = self.r.pipeline()
         pipe.hgetall(f"doc:{uid}")
         results_raw = pipe.execute()
-        result = {}
-        result["first_seen"] = int(data.get("first_seen"))
-        result["last_seen"] = int(data.get("last_seen"))
-        return result
+        data = results_raw[0] if results_raw else {}
+        first_seen, last_seen = self.normalize_seen_range(
+            data.get("first_seen"), data.get("last_seen")
+        )
+        return {
+            "first_seen": first_seen,
+            "last_seen": last_seen,
+        }
 
     def get_timestamp_for_ip(self, ip):
         """
@@ -418,16 +585,17 @@ class KVrocksIndexer:
         results_raw = pipe.execute()
         results = {}
         for uid, data in zip(uids, results_raw):
+            first_seen, last_seen = self.normalize_seen_range(
+                data.get("first_seen"), data.get("last_seen")
+            )
             results[uid] = {
-                "first_seen": int(data.get("first_seen")),
-                "last_seen": int(data.get("last_seen")),
+                "first_seen": first_seen,
+                "last_seen": last_seen,
             }
-            max_first_seen = min(
-                int(data.get("first_seen", max_first_seen)), max_first_seen
-            )
-            max_last_seen = max(
-                int(data.get("last_seen", max_last_seen)), max_last_seen
-            )
-        results["max_seen"] = max_last_seen
-        results["min_seen"] = max_first_seen
+            if first_seen is not None:
+                max_first_seen = min(first_seen, max_first_seen)
+            if last_seen is not None:
+                max_last_seen = max(last_seen, max_last_seen)
+        results["max_seen"] = max_last_seen if max_last_seen != -1 else None
+        results["min_seen"] = max_first_seen if max_first_seen != 9999999999999 else None
         return results

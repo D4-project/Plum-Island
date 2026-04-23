@@ -9,6 +9,7 @@ This module contains all code related to the GUI.
 """
 
 import hashlib
+import calendar
 import json
 import shlex
 import time
@@ -17,6 +18,7 @@ import os
 import threading
 import uuid
 
+from datetime import datetime, timezone
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
 from flask import request, jsonify
@@ -27,6 +29,7 @@ from flask_appbuilder.api import expose
 from flask_appbuilder import BaseView
 from flask_login import current_user
 from meilisearch import Client
+from meilisearch.errors import MeilisearchApiError
 
 from wtforms import TextAreaField, SubmitField, Field, ValidationError, IntegerField
 from flask_wtf import FlaskForm
@@ -443,6 +446,116 @@ class KVSearchView(BaseView):
     """
 
     default_view = "search"
+    DEFAULT_SEARCH_MONTHS = 3
+    SEARCH_PAGE_LIMIT = 100
+    SEARCH_WINDOW_SECONDS = 24 * 60 * 60
+    MAX_EXPORT_WARNINGS = 20
+
+    @staticmethod
+    def _subtract_months(date_value, months):
+        """
+        Subtract whole calendar months while keeping the date valid.
+        """
+        month = date_value.month - months
+        year = date_value.year + (month - 1) // 12
+        month = (month - 1) % 12 + 1
+        day = min(date_value.day, calendar.monthrange(year, month)[1])
+        return date_value.replace(year=year, month=month, day=day)
+
+    @staticmethod
+    def _timestamp_to_iso(timestamp):
+        """
+        Format epoch seconds as UTC ISO for API responses.
+        """
+        return (
+            datetime.fromtimestamp(timestamp, timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+
+    @classmethod
+    def _default_time_range(cls):
+        """
+        Return the default search range: now back to three calendar months.
+        """
+        to_date = datetime.now(timezone.utc)
+        from_date = cls._subtract_months(to_date, cls.DEFAULT_SEARCH_MONTHS)
+        return int(from_date.timestamp()), int(to_date.timestamp())
+
+    @classmethod
+    def _resolve_time_range(cls, from_value=None, to_value=None):
+        """
+        Parse and validate request-provided timestamps.
+        """
+        default_from, default_to = cls._default_time_range()
+        from_ts = KVrocksIndexer.normalize_timestamp(from_value)
+        to_ts = KVrocksIndexer.normalize_timestamp(to_value)
+
+        if from_value in (None, ""):
+            from_ts = default_from
+        if to_value in (None, ""):
+            to_ts = default_to
+
+        if from_ts is None or to_ts is None:
+            return None, False, "Invalid time range"
+        if from_ts > to_ts:
+            return None, False, "Start time must be before end time"
+
+        return {
+            "from_ts": from_ts,
+            "to_ts": to_ts,
+            "from_iso": cls._timestamp_to_iso(from_ts),
+            "to_iso": cls._timestamp_to_iso(to_ts),
+        }, True, None
+
+    @staticmethod
+    def _build_timestamp_array(indexer, results_ip):
+        """
+        Build per-IP timestamp metadata for a search result map.
+        """
+        timestamp_array = {}
+        for ip in results_ip:
+            ip_timestamps = indexer.get_timestamp_for_ip(ip)
+            filtered_timestamps = {
+                uid: ip_timestamps[uid]
+                for uid in results_ip[ip]
+                if uid in ip_timestamps
+            }
+
+            min_seen = None
+            max_seen = None
+            for uid_data in filtered_timestamps.values():
+                first_seen = uid_data.get("first_seen")
+                last_seen = uid_data.get("last_seen")
+                if first_seen is not None:
+                    min_seen = first_seen if min_seen is None else min(
+                        min_seen, first_seen
+                    )
+                if last_seen is not None:
+                    max_seen = last_seen if max_seen is None else max(
+                        max_seen, last_seen
+                    )
+
+            filtered_timestamps["min_seen"] = min_seen
+            filtered_timestamps["max_seen"] = max_seen
+            timestamp_array[ip] = filtered_timestamps
+        return timestamp_array
+
+    def _get_matching_uids(self, indexer, criteria_groups, scoped_uids=None):
+        """
+        Resolve OR query groups into one UID set before time slicing.
+        """
+        matching_uids = set()
+        for criteria in criteria_groups:
+            criteria = lowercase_dict(criteria)
+            logger.debug(criteria)
+            if scoped_uids is None:
+                matching_uids.update(indexer.get_uids_by_criteria(criteria))
+            else:
+                matching_uids.update(
+                    indexer.get_uids_by_criteria_scoped(criteria, scoped_uids)
+                )
+        return matching_uids
 
     @staticmethod
     def _get_export_jobs_folder():
@@ -459,7 +572,10 @@ class KVSearchView(BaseView):
         return {
             "job_id": job_state["job_id"],
             "status": job_state["status"],
+            "export_type": job_state.get("export_type", "full_json"),
             "query": job_state["query"],
+            "from_ts": job_state.get("from_ts"),
+            "to_ts": job_state.get("to_ts"),
             "processed_uids": job_state["processed_uids"],
             "total_uids": job_state["total_uids"],
             "progress_percent": job_state["progress_percent"],
@@ -467,6 +583,10 @@ class KVSearchView(BaseView):
             "download_ready": bool(job_state["file_path"])
             and job_state["status"] == "done",
             "error": job_state["error"],
+            "warnings": job_state.get("warnings", []),
+            "warning_count": job_state.get(
+                "warning_count", len(job_state.get("warnings", []))
+            ),
         }
 
     @staticmethod
@@ -489,6 +609,18 @@ class KVSearchView(BaseView):
             return dict(job_state)
 
     @staticmethod
+    def _add_job_warning(job_id, message):
+        with EXPORT_JOB_STATES_LOCK:
+            job_state = EXPORT_JOB_STATES.get(job_id)
+            if not job_state:
+                return None
+            warnings = job_state.setdefault("warnings", [])
+            job_state["warning_count"] = job_state.get("warning_count", 0) + 1
+            if len(warnings) < KVSearchView.MAX_EXPORT_WARNINGS:
+                warnings.append(message)
+            return dict(job_state)
+
+    @staticmethod
     def _get_job_state(job_id):
         with EXPORT_JOB_STATES_LOCK:
             job_state = EXPORT_JOB_STATES.get(job_id)
@@ -508,12 +640,17 @@ class KVSearchView(BaseView):
         index = client.index("plum")
         export_payload = {
             "query": query,
+            "time_range": results.get("time_range"),
             "generated_at": utcnow_iso(),
             "results": {},
         }
 
         total_uids = sum(len(uids) for uids in results["results"].values())
         return export_payload, index, total_uids
+
+    @staticmethod
+    def _is_missing_meili_document(error):
+        return "document_not_found" in str(error)
 
     @staticmethod
     def _run_full_export_job(job_id):
@@ -523,7 +660,9 @@ class KVSearchView(BaseView):
                 return
 
             query = job_state["query"]
-            results = KVSearchView().execute_search(query)
+            results = KVSearchView().execute_search(
+                query, job_state.get("from_ts"), job_state.get("to_ts")
+            )
             if not results["status"]:
                 KVSearchView._set_job_state(
                     job_id,
@@ -549,19 +688,35 @@ class KVSearchView(BaseView):
                     ip_timestamps = results["timestamps"].get(ip, {})
                     export_payload["results"][ip] = []
                     for uid in uids:
-                        result = index.get_document(uid)
-                        export_payload["results"][ip].append(
-                            {
-                                "uid": uid,
-                                "first_seen": ip_timestamps.get(uid, {}).get(
-                                    "first_seen"
-                                ),
-                                "last_seen": ip_timestamps.get(uid, {}).get(
-                                    "last_seen"
-                                ),
-                                "document": vars(result),
-                            }
-                        )
+                        warning = None
+                        document = None
+                        try:
+                            result = index.get_document(uid)
+                            document = vars(result)
+                        except MeilisearchApiError as error:
+                            if not KVSearchView._is_missing_meili_document(error):
+                                raise
+                            warning = "document_not_found"
+                            warning_message = (
+                                f"Document {uid} is indexed in Kvrocks but missing "
+                                "from Meilisearch; exported metadata only."
+                            )
+                            logger.warning(warning_message)
+                            KVSearchView._add_job_warning(job_id, warning_message)
+
+                        export_entry = {
+                            "uid": uid,
+                            "first_seen": ip_timestamps.get(uid, {}).get(
+                                "first_seen"
+                            ),
+                            "last_seen": ip_timestamps.get(uid, {}).get(
+                                "last_seen"
+                            ),
+                            "document": document,
+                        }
+                        if warning:
+                            export_entry["warning"] = warning
+                        export_payload["results"][ip].append(export_entry)
                         processed_uids += 1
                         KVSearchView._set_job_state(
                             job_id,
@@ -590,23 +745,81 @@ class KVSearchView(BaseView):
                     error=str(error),
                 )
 
+    @staticmethod
+    def _run_ip_export_job(job_id):
+        with app.app_context():
+            job_state = KVSearchView._get_job_state(job_id)
+            if not job_state:
+                return
+
+            query = job_state["query"]
+            KVSearchView._set_job_state(job_id, status="running", error="")
+            try:
+                results = KVSearchView().execute_search(
+                    query, job_state.get("from_ts"), job_state.get("to_ts")
+                )
+                if not results["status"]:
+                    KVSearchView._set_job_state(
+                        job_id,
+                        status="error",
+                        error=results.get("msg_error") or "Invalid query",
+                    )
+                    return
+
+                ips = sorted(results["results"].keys())
+                KVSearchView._set_job_state(
+                    job_id,
+                    total_uids=len(ips),
+                    processed_uids=0,
+                )
+
+                export_jobs_folder = KVSearchView._get_export_jobs_folder()
+                file_path = os.path.join(export_jobs_folder, f"{job_id}.txt")
+                tmp_path = f"{file_path}.tmp"
+                processed_ips = 0
+                with open(tmp_path, "w", encoding="utf-8") as export_file:
+                    for ip in ips:
+                        export_file.write(f"{ip}\n")
+                        processed_ips += 1
+                        if processed_ips % 100 == 0 or processed_ips == len(ips):
+                            KVSearchView._set_job_state(
+                                job_id,
+                                processed_uids=processed_ips,
+                            )
+                os.replace(tmp_path, file_path)
+
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="done",
+                    processed_uids=processed_ips,
+                    file_path=file_path,
+                    finished_at=utcnow_iso(),
+                )
+            except Exception as error:
+                logger.exception("IP export job %s failed", job_id)
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="error",
+                    error=str(error),
+                )
+
     def split_query_groups(self, query):
         """
         Split a query into AND groups separated by explicit OR tokens.
         """
         parts = shlex.split(query or "")
         if not parts:
-            return [""]
+            return [[]]
 
         groups = []
         current_group = []
         for part in parts:
             if part.upper() == "OR":
-                groups.append(" ".join(current_group))
+                groups.append(current_group)
                 current_group = []
             else:
                 current_group.append(part)
-        groups.append(" ".join(current_group))
+        groups.append(current_group)
         return groups
 
     def parse_query_group(self, query):
@@ -658,7 +871,13 @@ class KVSearchView(BaseView):
 
         result = {}
         msg_error = None
-        parts = shlex.split(query)
+        if isinstance(query, (list, tuple)):
+            parts = list(query)
+        else:
+            try:
+                parts = shlex.split(query or "")
+            except ValueError as error:
+                return {}, False, f"Invalid query syntax: {error}"
         for part in parts:
             if ":" not in part:
                 msg_error = f"Bad keyword/value: {part}"
@@ -692,12 +911,15 @@ class KVSearchView(BaseView):
         """
         Parse the full query, supporting explicit OR between AND groups.
         """
-        query_groups = self.split_query_groups(query)
+        try:
+            query_groups = self.split_query_groups(query)
+        except ValueError as error:
+            return [], False, f"Invalid query syntax: {error}"
         parsed_groups = []
         error_messages = []
 
         for idx, group in enumerate(query_groups, start=1):
-            if not group.strip():
+            if not group:
                 error_messages.append(f"Empty query group around OR at segment {idx}")
                 continue
 
@@ -710,7 +932,7 @@ class KVSearchView(BaseView):
         status = len(error_messages) == 0
         return parsed_groups, status, " | ".join(error_messages)
 
-    def execute_search(self, query):
+    def execute_search(self, query, from_ts=None, to_ts=None):
         """
         Shared search executor used by both JSON and export endpoints.
         """
@@ -719,56 +941,46 @@ class KVSearchView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
-        criteria_groups, status, msg_error = self.parse_query(query)
         count_objects = indexer.objects_count()  # Get object count in db
+        time_range, time_status, time_error = self._resolve_time_range(from_ts, to_ts)
+        if not time_status:
+            end_time = time.time()
+            return {
+                "status": False,
+                "results": {},
+                "timestamps": {},
+                "msg_error": time_error or "Invalid time range",
+                "processingTimeMs": (end_time - start_time) * 1000,
+                "uid_count": count_objects.get("uid_count"),
+                "ip_count": count_objects.get("ip_count"),
+                "time_range": {},
+            }
+
+        criteria_groups, status, msg_error = self.parse_query(query)
         results_ip = {}
         timestamp_array = {}
 
         if status:
-            merged_ip_map = {}
-            for criteria in criteria_groups:
-                criteria = lowercase_dict(criteria)
-                logger.debug(criteria)
-                uids = indexer.get_uids_by_criteria(criteria)
-                group_ip_map = indexer.get_ip_from_uids(uids)
+            time_uids = indexer.get_uids_by_time_range(
+                time_range["from_ts"], time_range["to_ts"]
+            )
+            uids = list(self._get_matching_uids(indexer, criteria_groups).intersection(time_uids))
+            results_ip = indexer.get_ip_from_uids(uids)
+            timestamp_array = self._build_timestamp_array(indexer, results_ip)
 
-                for ip, group_uids in group_ip_map.items():
-                    if ip not in merged_ip_map:
-                        merged_ip_map[ip] = []
-                    for uid in group_uids:
-                        if uid not in merged_ip_map[ip]:
-                            merged_ip_map[ip].append(uid)
-
-            results_ip = merged_ip_map
-
-            for ip in results_ip:
-                ip_timestamps = indexer.get_timestamp_for_ip(ip)
-                filtered_timestamps = {
-                    uid: ip_timestamps[uid]
-                    for uid in results_ip[ip]
-                    if uid in ip_timestamps
-                }
-
-                min_seen = None
-                max_seen = None
-                for uid_data in filtered_timestamps.values():
-                    first_seen = uid_data.get("first_seen")
-                    last_seen = uid_data.get("last_seen")
-                    if first_seen is not None:
-                        min_seen = first_seen if min_seen is None else min(
-                            min_seen, first_seen
-                        )
-                    if last_seen is not None:
-                        max_seen = last_seen if max_seen is None else max(
-                            max_seen, last_seen
-                        )
-
-                filtered_timestamps["min_seen"] = min_seen
-                filtered_timestamps["max_seen"] = max_seen
-                timestamp_array[ip] = filtered_timestamps
+            sorted_ips = sorted(
+                results_ip,
+                key=lambda ip: (
+                    -(timestamp_array.get(ip, {}).get("max_seen") or -1),
+                    ip,
+                ),
+            )
+            results_ip = {ip: results_ip[ip] for ip in sorted_ips}
+            timestamp_array = {ip: timestamp_array[ip] for ip in sorted_ips}
 
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
+        returned_results = len(results_ip) if status else 0
 
         return {
             "status": status,
@@ -778,6 +990,146 @@ class KVSearchView(BaseView):
             "processingTimeMs": processingtimems,
             "uid_count": count_objects.get("uid_count"),
             "ip_count": count_objects.get("ip_count"),
+            "time_range": time_range,
+            "pagination": {
+                "offset": 0,
+                "limit": None,
+                "returned": returned_results,
+                "total": returned_results,
+                "has_more": False,
+                "next_offset": returned_results,
+            },
+        }
+
+    def execute_search_page(
+        self,
+        query,
+        from_ts=None,
+        to_ts=None,
+        cursor_ts=None,
+        seen_ips=None,
+        limit=None,
+        window_days=None,
+    ):
+        """
+        Fast UI search: inspect one last_seen window backwards from cursor_ts.
+        """
+        start_time = time.time()
+        query = query or ""
+        limit = limit or self.SEARCH_PAGE_LIMIT
+        probe_limit = limit + 1
+        seen_ips = set(seen_ips or [])
+        try:
+            window_days = max(1, min(int(window_days or 1), 4096))
+        except (TypeError, ValueError):
+            window_days = 1
+        window_seconds = window_days * self.SEARCH_WINDOW_SECONDS
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        count_objects = indexer.objects_count()
+        time_range, time_status, time_error = self._resolve_time_range(from_ts, to_ts)
+        if not time_status:
+            return {
+                "status": False,
+                "results": {},
+                "timestamps": {},
+                "msg_error": time_error or "Invalid time range",
+                "processingTimeMs": (time.time() - start_time) * 1000,
+                "uid_count": count_objects.get("uid_count"),
+                "ip_count": count_objects.get("ip_count"),
+                "time_range": {},
+                "pagination": {},
+            }
+
+        criteria_groups, status, msg_error = self.parse_query(query)
+        results_ip = {}
+        timestamp_array = {}
+        scanned_days = 0
+        exhausted = True
+
+        cursor_ts = KVrocksIndexer.normalize_timestamp(cursor_ts)
+        if cursor_ts is None or cursor_ts > time_range["to_ts"]:
+            cursor_ts = time_range["to_ts"]
+        if cursor_ts < time_range["from_ts"]:
+            cursor_ts = time_range["from_ts"] - 1
+
+        next_cursor = cursor_ts
+        stopped_in_window = False
+        if status and cursor_ts >= time_range["from_ts"]:
+            current_to = cursor_ts
+            current_from = max(
+                current_to - window_seconds + 1,
+                time_range["from_ts"],
+            )
+            scanned_days = max(
+                1,
+                int((current_to - current_from) / self.SEARCH_WINDOW_SECONDS) + 1,
+            )
+            window_uids = indexer.get_uids_by_last_seen_range(
+                current_from, current_to
+            )
+            page_uids = self._get_matching_uids(
+                indexer, criteria_groups, scoped_uids=window_uids
+            )
+            day_ip_map = indexer.get_ip_from_uids(page_uids)
+            day_timestamps = self._build_timestamp_array(indexer, day_ip_map)
+            sorted_ips = sorted(
+                day_ip_map,
+                key=lambda ip: (
+                    -(day_timestamps.get(ip, {}).get("max_seen") or -1),
+                    ip,
+                ),
+            )
+
+            for ip in sorted_ips:
+                if ip in seen_ips or ip in results_ip:
+                    continue
+                results_ip[ip] = day_ip_map[ip]
+                timestamp_array[ip] = day_timestamps[ip]
+                if len(results_ip) >= probe_limit:
+                    stopped_in_window = True
+                    break
+
+            if stopped_in_window:
+                next_cursor = current_to
+                exhausted = False
+            else:
+                next_cursor = current_from - 1
+                exhausted = next_cursor < time_range["from_ts"]
+
+        processingtimems = (time.time() - start_time) * 1000
+        has_more = bool(status and not exhausted)
+        if status and len(results_ip) > limit:
+            displayed_ips = list(results_ip)[:limit]
+            results_ip = {ip: results_ip[ip] for ip in displayed_ips}
+            timestamp_array = {
+                ip: timestamp_array[ip]
+                for ip in displayed_ips
+                if ip in timestamp_array
+            }
+        returned_results = len(results_ip) if status else 0
+        shown_count = len(seen_ips) + returned_results
+
+        return {
+            "status": status,
+            "results": results_ip if status else {},
+            "timestamps": timestamp_array if status else {},
+            "msg_error": msg_error or "",
+            "processingTimeMs": processingtimems,
+            "uid_count": count_objects.get("uid_count"),
+            "ip_count": count_objects.get("ip_count"),
+            "time_range": time_range,
+            "pagination": {
+                "limit": limit,
+                "returned": returned_results,
+                "shown": shown_count,
+                "has_more": has_more,
+                "next_cursor": next_cursor,
+                "scanned_days": scanned_days,
+                "window_days": window_days,
+                "stopped_in_window": stopped_in_window,
+            },
         }
 
     @expose("/query")
@@ -787,7 +1139,24 @@ class KVSearchView(BaseView):
         This Function send the query back to KVRocks
         """
         query = request.args.get("q", "")
-        results = self.execute_search(query)
+        seen_ips = [
+            ip.strip()
+            for ip in request.args.get("seen_ips", "").split(",")
+            if ip.strip()
+        ]
+        try:
+            limit = min(max(int(request.args.get("limit", 100)), 1), 500)
+        except (TypeError, ValueError):
+            return jsonify({"status": False, "msg_error": "Invalid pagination"}), 400
+        results = self.execute_search_page(
+            query,
+            request.args.get("from_ts"),
+            request.args.get("to_ts"),
+            cursor_ts=request.args.get("cursor_ts"),
+            seen_ips=seen_ips,
+            limit=limit,
+            window_days=request.args.get("window_days"),
+        )
         return jsonify(results)
 
     @expose("/export")
@@ -800,7 +1169,9 @@ class KVSearchView(BaseView):
         if not query:
             return make_response("Missing 'q' parameter", 400)
 
-        results = self.execute_search(query)
+        results = self.execute_search(
+            query, request.args.get("from_ts"), request.args.get("to_ts")
+        )
         if not results["status"]:
             msg = results.get("msg_error") or "Invalid query"
             return make_response(msg, 400)
@@ -825,22 +1196,33 @@ class KVSearchView(BaseView):
         if not query:
             return jsonify({"error": "Missing query"}), 400
 
+        time_range, time_status, time_error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts")
+        )
+        if not time_status:
+            return jsonify({"error": time_error or "Invalid time range"}), 400
+
         job_id = str(uuid.uuid4())
         owner_user_id = getattr(current_user, "id", None)
         owner_username = getattr(current_user, "username", "")
         with EXPORT_JOB_STATES_LOCK:
             EXPORT_JOB_STATES[job_id] = {
                 "job_id": job_id,
+                "export_type": "full_json",
                 "owner_user_id": owner_user_id,
                 "owner_username": owner_username,
                 "status": "queued",
                 "query": query,
+                "from_ts": time_range["from_ts"],
+                "to_ts": time_range["to_ts"],
                 "created_ts": time.time(),
                 "processed_uids": 0,
                 "total_uids": 0,
                 "progress_percent": 0.0,
                 "file_path": None,
                 "error": "",
+                "warnings": [],
+                "warning_count": 0,
                 "finished_at": None,
             }
 
@@ -852,11 +1234,74 @@ class KVSearchView(BaseView):
         worker.start()
         return jsonify({"job_id": job_id})
 
+    @expose("/export_ips_start", methods=["POST"])
+    @has_access
+    def export_ips_start(self):
+        """
+        Start an asynchronous export of the current filtered IP list.
+        """
+        payload = request.get_json(silent=True) or {}
+        query = payload.get("q", "").strip()
+        if not query:
+            return jsonify({"error": "Missing query"}), 400
+
+        time_range, time_status, time_error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts")
+        )
+        if not time_status:
+            return jsonify({"error": time_error or "Invalid time range"}), 400
+
+        job_id = str(uuid.uuid4())
+        owner_user_id = getattr(current_user, "id", None)
+        owner_username = getattr(current_user, "username", "")
+        with EXPORT_JOB_STATES_LOCK:
+            EXPORT_JOB_STATES[job_id] = {
+                "job_id": job_id,
+                "export_type": "ip_list",
+                "owner_user_id": owner_user_id,
+                "owner_username": owner_username,
+                "status": "queued",
+                "query": query,
+                "from_ts": time_range["from_ts"],
+                "to_ts": time_range["to_ts"],
+                "created_ts": time.time(),
+                "processed_uids": 0,
+                "total_uids": 0,
+                "progress_percent": 0.0,
+                "file_path": None,
+                "error": "",
+                "warnings": [],
+                "warning_count": 0,
+                "finished_at": None,
+            }
+
+        worker = threading.Thread(
+            target=self._run_ip_export_job,
+            args=(job_id,),
+            daemon=True,
+        )
+        worker.start()
+        return jsonify({"job_id": job_id})
+
     @expose("/export_full_status")
     @has_access
     def export_full_status(self):
         """
         Return asynchronous export job state for the current user.
+        """
+        job_id = request.args.get("job_id", "")
+        job_state = self._get_owned_job(job_id)
+        if job_state is None:
+            return jsonify({"error": "Unknown export job"}), 404
+        if job_state is False:
+            return jsonify({"error": "Forbidden"}), 403
+        return jsonify(self._serialize_job_state(job_state))
+
+    @expose("/export_ips_status")
+    @has_access
+    def export_ips_status(self):
+        """
+        Return asynchronous IP export job state for the current user.
         """
         job_id = request.args.get("job_id", "")
         job_state = self._get_owned_job(job_id)
@@ -878,6 +1323,8 @@ class KVSearchView(BaseView):
             return make_response("Unknown export job", 404)
         if job_state is False:
             return make_response("Forbidden", 403)
+        if job_state.get("export_type") != "full_json":
+            return make_response("Wrong export type", 409)
         if job_state["status"] != "done" or not job_state.get("file_path"):
             return make_response("Export not ready", 409)
         if not os.path.exists(job_state["file_path"]):
@@ -888,6 +1335,32 @@ class KVSearchView(BaseView):
             as_attachment=True,
             download_name=f"plum_export_{job_id}.json",
             mimetype="application/json",
+        )
+
+    @expose("/export_ips_download")
+    @has_access
+    def export_ips_download(self):
+        """
+        Download the completed asynchronous IP export file.
+        """
+        job_id = request.args.get("job_id", "")
+        job_state = self._get_owned_job(job_id)
+        if job_state is None:
+            return make_response("Unknown export job", 404)
+        if job_state is False:
+            return make_response("Forbidden", 403)
+        if job_state.get("export_type") != "ip_list":
+            return make_response("Wrong export type", 409)
+        if job_state["status"] != "done" or not job_state.get("file_path"):
+            return make_response("Export not ready", 409)
+        if not os.path.exists(job_state["file_path"]):
+            return make_response("Export file missing", 410)
+
+        return send_file(
+            job_state["file_path"],
+            as_attachment=True,
+            download_name="ip_list.txt",
+            mimetype="text/plain",
         )
 
     @expose("/search")
