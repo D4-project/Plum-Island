@@ -69,7 +69,10 @@ CSRF_ENABLED = True
 APP_NAME = "P.L.U.M."
 
 # Uncomment to setup Setup an App icon
-# APP_ICON = "static/img/logo.jpg"
+# APP_ICON = "/static/favicon.ico"
+
+# Base template used by Flask-AppBuilder pages.
+FAB_BASE_TEMPLATE = "plum_baselayout.html"
 
 # Activate the Swagger URI
 # http://...../swagger/v1

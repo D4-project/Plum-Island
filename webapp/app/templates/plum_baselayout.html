@@ -1,0 +1,7 @@
+{% extends "appbuilder/baselayout.html" %}
+
+{% block head_css %}
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  {{ super() }}
+{% endblock %}
