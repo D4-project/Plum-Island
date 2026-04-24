@@ -466,6 +466,9 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
                     <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${resultIndex}">
                         ${ipLabel}
                     </a>
+                    <a class="ip-detail-link" href="/ip/${encodeURIComponent(ipLabel)}" title="Open details for ${ipLabel}">
+                        <i class="fa fa-info-circle" aria-hidden="true"></i>
+                    </a>
                     <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
                         <i class="fa-regular fa-copy" aria-hidden="true"></i>
                     </button>
@@ -713,6 +716,25 @@ document.addEventListener('DOMContentLoaded', setDefaultTimeRange);
 }
 .ip-quick-link.copied {
     color: #3c763d;
+}
+.ip-detail-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.85rem;
+    height: 1.85rem;
+    margin-left: 0.45rem;
+    margin-right: 0.25rem;
+    color: #337ab7;
+    font-size: 1.15rem;
+    border-radius: 4px;
+    vertical-align: middle;
+}
+.ip-detail-link:hover,
+.ip-detail-link:focus {
+    color: #23527c;
+    background-color: rgba(51, 122, 183, 0.08);
+    text-decoration: none;
 }
 .kvrocks-table-wrapper {
     display: flex;

@@ -82,7 +82,7 @@ fqdn_regex = re.compile(
 
 favicon_field_regex = re.compile(
     r"^\s*(?:\|_?\s*)?"
-    r"(favicon_(?:file|mmhash|md5|sha256))"
+    r"(favicon_(?:file|mmhash|md5|sha256)|faviconhash|sha256)"
     r"\s*:\s*(.*?)\s*$",
     re.MULTILINE,
 )
@@ -90,8 +90,10 @@ favicon_field_regex = re.compile(
 favicon_field_map = {
     "favicon_file": "http_favicon_path",
     "favicon_mmhash": "http_favicon_mmhash",
+    "faviconhash": "http_favicon_mmhash",
     "favicon_md5": "http_favicon_md5",
     "favicon_sha256": "http_favicon_sha256",
+    "sha256": "http_favicon_sha256",
 }
 
 
@@ -380,7 +382,6 @@ def parse_json(doc, db_conf_local):
                     parse_result = globals()[action](
                         script, target
                     )  # Call the function given in the action variable.
-                    final_result = fuse_dicts(final_result, parse_result)
 
         elif section == "p":
             for port in doc.get("body").get("ports"):  # for each ports,
@@ -389,7 +390,8 @@ def parse_json(doc, db_conf_local):
                         parse_result = globals()[action](
                             script, target
                         )  # Call the function given in the action variable.
-                        final_result = fuse_dicts(final_result, parse_result)
+
+        final_result = fuse_dicts(final_result, parse_result)
 
     ports = []
     for port in doc.get("body").get("ports"):

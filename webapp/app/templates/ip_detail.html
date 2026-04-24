@@ -1,0 +1,518 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "IP Detail") }}
+
+<style>
+.ip-detail-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.ip-detail-title {
+    margin: 0;
+    font-size: 1.8rem;
+    font-weight: 600;
+}
+.ip-detail-meta {
+    color: #5f6b76;
+    font-size: 0.95rem;
+    margin-top: 0.35rem;
+}
+.ip-port-card {
+    margin-bottom: 1rem;
+}
+.ip-port-summary {
+    margin-top: 0.35rem;
+    color: #5f6b76;
+    font-size: 0.92rem;
+}
+.ip-port-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid #ddd;
+}
+.ip-port-tabs > li {
+    float: none;
+    margin-bottom: -1px;
+}
+.ip-port-tabs > li > a {
+    white-space: normal;
+    word-break: break-word;
+    max-width: 15rem;
+    padding: 0.45rem 0.75rem;
+}
+.ip-port-tab-content {
+    border: 1px solid #e5e5e5;
+    border-top: 0;
+    padding: 1rem;
+}
+.ip-port-tab-pane pre,
+.ip-unmapped-doc pre {
+    margin: 0.75rem 0 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.ip-port-observation-meta,
+.ip-unmapped-meta {
+    color: #4d5963;
+    line-height: 1.6;
+}
+.ip-port-extra {
+    margin-top: 0.45rem;
+    color: #4d5963;
+}
+.ip-hosts-block {
+    margin-top: 0.55rem;
+    margin-bottom: 0.75rem;
+}
+.ip-hosts-title {
+    font-weight: 600;
+    color: #2f3a44;
+    margin-bottom: 0.2rem;
+}
+.ip-hosts-box {
+    background: #f7f7f9;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.65rem 0.8rem;
+}
+.ip-host-line {
+    color: #4d5963;
+    line-height: 1.5;
+}
+.ip-script-block + .ip-script-block {
+    margin-top: 1rem;
+}
+.ip-script-title {
+    font-weight: 600;
+    color: #2f3a44;
+    margin-bottom: 0.35rem;
+}
+.ip-ptr-icon {
+    color: #6b7781;
+    margin-left: 0.35rem;
+}
+.ip-detail-warning {
+    margin-top: 0.75rem;
+}
+.ip-unmapped-doc {
+    margin-bottom: 0.75rem;
+}
+.ip-info-panel {
+    margin-top: 1rem;
+}
+.ip-info-entry + .ip-info-entry {
+    margin-top: 1rem;
+}
+.ip-info-title {
+    font-weight: 600;
+    color: #2f3a44;
+    margin-bottom: 0.35rem;
+}
+.ip-info-box {
+    background: #f7f7f9;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.8rem 0.9rem;
+}
+.ip-info-grid {
+    display: grid;
+    grid-template-columns: minmax(9rem, 12rem) 1fr;
+    gap: 0.45rem 0.9rem;
+    align-items: start;
+}
+.ip-info-label {
+    font-weight: 600;
+    color: #2f3a44;
+}
+.ip-info-value {
+    color: #4d5963;
+    word-break: break-word;
+}
+.ip-pdns-panel {
+    margin-top: 1.5rem;
+}
+.ip-pdns-title {
+    font-weight: 600;
+    color: #2f3a44;
+    margin-bottom: 0.35rem;
+}
+.ip-pdns-box {
+    background: #f7f7f9;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.8rem 0.9rem;
+}
+.ip-pdns-row + .ip-pdns-row {
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid #e6e9ed;
+}
+.ip-pdns-grid {
+    display: grid;
+    grid-template-columns: minmax(8rem, 10rem) 1fr;
+    gap: 0.4rem 0.8rem;
+}
+.ip-pdns-label {
+    font-weight: 600;
+    color: #2f3a44;
+}
+.ip-pdns-value {
+    color: #4d5963;
+    word-break: break-word;
+}
+</style>
+
+<div class="ip-detail-toolbar">
+    <div>
+        <h2 class="ip-detail-title">{{ ip }}</h2>
+        <div class="ip-detail-meta">
+            {{ total_documents }} scan{% if total_documents != 1 %}s{% endif %}
+            | {{ total_ports }} port{% if total_ports != 1 %}s{% endif %}
+            {% if first_seen or last_seen %}
+                | First seen: {{ first_seen or "N/A" }}
+                | Last seen: {{ last_seen or "N/A" }}
+            {% endif %}
+        </div>
+    </div>
+    <div>
+        <a class="btn btn-default" href="/kvsearchview/search">
+            <i class="fa fa-arrow-left" aria-hidden="true"></i>
+        </a>
+    </div>
+</div>
+
+<ul class="nav nav-tabs" role="tablist">
+    <li role="presentation" class="active">
+        <a href="#ip-scans-results" aria-controls="ip-scans-results" role="tab" data-toggle="tab">
+            Scans Results
+        </a>
+    </li>
+    <li role="presentation">
+        <a href="#ip-informations" aria-controls="ip-informations" role="tab" data-toggle="tab">
+            Informations
+        </a>
+    </li>
+</ul>
+
+<div class="tab-content">
+<div role="tabpanel" class="tab-pane active" id="ip-scans-results">
+{% if warnings %}
+<div class="alert alert-warning" role="alert">
+    <strong>{{ warnings|length }} warning{% if warnings|length > 1 %}s{% endif %}</strong>
+    <ul class="ip-detail-warning">
+        {% for warning in warnings %}
+        <li>{{ warning }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if not port_cards and not unmapped_documents %}
+<div class="alert alert-info" role="alert">
+    No document found for this IP.
+</div>
+{% endif %}
+
+{% for port_card in port_cards %}
+{% set port_idx = loop.index0 %}
+<div class="panel panel-default ip-port-card">
+    <div class="panel-heading">
+        <h4 class="panel-title">
+            {{ port_card.protocol | upper }}/{{ port_card.portid }}
+            {% if port_card.service_names %}
+            <small>
+                {% if port_card.service_names|length == 1 %}
+                    {{ port_card.service_names[0] }}
+                {% else %}
+                    {{ port_card.service_names | join(", ") }}
+                {% endif %}
+            </small>
+            {% endif %}
+        </h4>
+        <div class="ip-port-summary">
+            {{ port_card.observation_count }} observation{% if port_card.observation_count != 1 %}s{% endif %}
+        </div>
+    </div>
+    <div class="panel-body">
+        <ul class="nav nav-tabs ip-port-tabs" role="tablist">
+            {% for observation in port_card.observations %}
+            <li role="presentation" class="{% if loop.last %}active{% endif %}">
+                <a
+                    href="#port-{{ port_idx }}-{{ loop.index0 }}"
+                    aria-controls="port-{{ port_idx }}-{{ loop.index0 }}"
+                    role="tab"
+                    data-toggle="tab"
+                    title="{{ observation.tab_label }}"
+                >
+                    {{ observation.tab_label }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+
+        <div class="tab-content ip-port-tab-content">
+            {% for observation in port_card.observations %}
+            <div
+                role="tabpanel"
+                class="tab-pane {% if loop.last %}active{% endif %}"
+                id="port-{{ port_idx }}-{{ loop.index0 }}"
+            >
+                <div class="ip-port-observation-meta">
+                    First seen: {{ observation.first_seen or "N/A" }}
+                    | Last seen: {{ observation.last_seen or "N/A" }}
+                </div>
+                {% if observation.resolved_hosts or observation.ptr_records %}
+                <div class="ip-hosts-block">
+                    <div class="ip-hosts-title">Hosts:</div>
+                    <div class="ip-hosts-box">
+                    {% if observation.resolved_hosts %}
+                        {% for host in observation.resolved_hosts %}
+                        <div class="ip-host-line">{{ host }}</div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if observation.ptr_records %}
+                        {% for host in observation.ptr_records %}
+                        <div class="ip-host-line">{{ host }} <span class="ip-ptr-icon" title="PTR"><i class="fa fa-backward" aria-hidden="true"></i></span></div>
+                        {% endfor %}
+                    {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                {% if observation.port.scripts %}
+                    {% for script in observation.port.scripts %}
+                    <div class="ip-script-block">
+                        <div class="ip-script-title">{{ script.id or "script" }}</div>
+                        {% if script.output %}
+                        <pre>{{ script.output }}</pre>
+                        {% else %}
+                        <div class="text-muted">No output.</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                <div class="text-muted">Port Open, no other details.</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+{% if unmapped_documents %}
+<div class="panel panel-warning">
+    <div class="panel-heading">
+        <h4 class="panel-title">
+            Documents without port detail
+        </h4>
+    </div>
+    <div class="panel-body">
+        {% for item in unmapped_documents %}
+        <div class="ip-unmapped-doc">
+            <div class="ip-unmapped-meta">
+                First seen: {{ item.first_seen or "N/A" }}
+                | Last seen: {{ item.last_seen or "N/A" }}
+            </div>
+            <div class="alert alert-warning" role="alert">
+                {{ item.warning }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+</div>
+<div role="tabpanel" class="tab-pane" id="ip-informations">
+    <div class="ip-info-panel">
+        <div id="ip-info-loading" class="text-muted">Loading...</div>
+        <div id="ip-info-error" class="alert alert-warning" role="alert" style="display: none;"></div>
+        <div id="ip-info-results"></div>
+    </div>
+    <div class="ip-pdns-panel">
+        <div class="ip-pdns-title">Passive DNS</div>
+        <div class="ip-pdns-box">
+            <div id="ip-pdns-loading" class="text-muted">Loading...</div>
+            <div id="ip-pdns-error" class="alert alert-warning" role="alert" style="display: none; margin-bottom: 0;"></div>
+            <div id="ip-pdns-results"></div>
+        </div>
+    </div>
+</div>
+</div>
+
+<script>
+(function () {
+    const ip = {{ ip | tojson }};
+    const loadingEl = document.getElementById('ip-info-loading');
+    const errorEl = document.getElementById('ip-info-error');
+    const resultsEl = document.getElementById('ip-info-results');
+    const pdnsLoadingEl = document.getElementById('ip-pdns-loading');
+    const pdnsErrorEl = document.getElementById('ip-pdns-error');
+    const pdnsResultsEl = document.getElementById('ip-pdns-results');
+
+    function appendInfoRow(container, label, value) {
+        if (value === null || value === undefined || value === '') {
+            return;
+        }
+        const labelEl = document.createElement('div');
+        labelEl.className = 'ip-info-label';
+        labelEl.textContent = label;
+
+        const valueEl = document.createElement('div');
+        valueEl.className = 'ip-info-value';
+        valueEl.textContent = String(value);
+
+        container.appendChild(labelEl);
+        container.appendChild(valueEl);
+    }
+
+    function renderEntry(entry, index) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'ip-info-entry';
+
+        const title = document.createElement('div');
+        title.className = 'ip-info-title';
+
+        const box = document.createElement('div');
+        box.className = 'ip-info-box';
+        const grid = document.createElement('div');
+        grid.className = 'ip-info-grid';
+        const countryInfo = entry && entry.country_info ? entry.country_info : {};
+        const country = entry && entry.country ? entry.country : {};
+        const hasAsInfo = Boolean(
+            country['AutonomousSystemNumber'] || country['AutonomousSystemOrganization']
+        );
+
+        title.textContent = hasAsInfo
+            ? 'Autonomous System Informations'
+            : 'Ip Informations';
+
+        appendInfoRow(grid, 'IP', entry ? entry.ip : '');
+        appendInfoRow(grid, 'Country', countryInfo['Country']);
+        appendInfoRow(grid, 'ISO Code', country.iso_code || countryInfo['Alpha-2 code']);
+        appendInfoRow(grid, 'Alpha-3', countryInfo['Alpha-3 code']);
+        appendInfoRow(grid, 'Numeric Code', countryInfo['Numeric code']);
+        appendInfoRow(grid, 'ASN', country['AutonomousSystemNumber']);
+        appendInfoRow(grid, 'AS Name', country['AutonomousSystemOrganization']);
+        appendInfoRow(grid, 'Latitude', countryInfo['Latitude (average)']);
+        appendInfoRow(grid, 'Longitude', countryInfo['Longitude (average)']);
+
+        if (!grid.children.length) {
+            appendInfoRow(grid, 'Data', JSON.stringify(entry || {}, null, 2));
+        }
+
+        wrapper.appendChild(title);
+        box.appendChild(grid);
+        wrapper.appendChild(box);
+        return wrapper;
+    }
+
+    function appendPdnsRow(container, label, value) {
+        if (value === null || value === undefined || value === '') {
+            return;
+        }
+        const labelEl = document.createElement('div');
+        labelEl.className = 'ip-pdns-label';
+        labelEl.textContent = label;
+
+        const valueEl = document.createElement('div');
+        valueEl.className = 'ip-pdns-value';
+        valueEl.textContent = String(value);
+
+        container.appendChild(labelEl);
+        container.appendChild(valueEl);
+    }
+
+    function formatShortDate(value) {
+        if (!value) {
+            return '';
+        }
+        const date = new Date(Number(value) * 1000);
+        if (Number.isNaN(date.getTime())) {
+            return String(value);
+        }
+        const day = String(date.getUTCDate()).padStart(2, '0');
+        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const year = String(date.getUTCFullYear()).slice(-2);
+        return `${day}/${month}/${year}`;
+    }
+
+    function renderPdnsRecord(record) {
+        const row = document.createElement('div');
+        row.className = 'ip-pdns-row';
+
+        const grid = document.createElement('div');
+        grid.className = 'ip-pdns-grid';
+
+        appendPdnsRow(grid, 'RRType', record.rrtype);
+        appendPdnsRow(grid, 'RRName', record.rrname);
+        appendPdnsRow(grid, 'RData', record.rdata);
+        appendPdnsRow(grid, 'Count', record.count);
+        appendPdnsRow(grid, 'First Seen', formatShortDate(record.time_first));
+        appendPdnsRow(grid, 'Last Seen', formatShortDate(record.time_last));
+
+        row.appendChild(grid);
+        return row;
+    }
+
+    fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
+        .then((response) => {
+            if (!response.ok) {
+                throw new Error(`Lookup failed (${response.status})`);
+            }
+            return response.json();
+        })
+        .then((payload) => {
+            loadingEl.style.display = 'none';
+            const entries = Array.isArray(payload) ? payload : [payload];
+            if (!entries.length) {
+                resultsEl.innerHTML = '<div class="text-muted">No information returned.</div>';
+                return;
+            }
+            entries.forEach((entry, index) => {
+                resultsEl.appendChild(renderEntry(entry, index));
+            });
+        })
+        .catch((error) => {
+            loadingEl.style.display = 'none';
+            errorEl.textContent = error.message;
+            errorEl.style.display = 'block';
+        });
+
+    fetch(`/ip/pdns/${encodeURIComponent(ip)}`)
+        .then((response) => response.json().then((payload) => ({ ok: response.ok, payload, status: response.status })))
+        .then(({ ok, payload, status }) => {
+            pdnsLoadingEl.style.display = 'none';
+            if (payload && payload.disabled) {
+                pdnsResultsEl.innerHTML = `<div class="text-muted">${payload.message}</div>`;
+                return;
+            }
+            if (!ok) {
+                throw new Error(payload && payload.error ? payload.error : `Passive DNS lookup failed (${status})`);
+            }
+            const records = Array.isArray(payload) ? payload : [];
+            if (!records.length) {
+                pdnsResultsEl.innerHTML = '<div class="text-muted">No Passive DNS data returned.</div>';
+                return;
+            }
+            records.forEach((record) => {
+                pdnsResultsEl.appendChild(renderPdnsRecord(record));
+            });
+        })
+        .catch((error) => {
+            pdnsLoadingEl.style.display = 'none';
+            pdnsErrorEl.textContent = error.message;
+            pdnsErrorEl.style.display = 'block';
+        });
+})();
+</script>
+
+{{ lib.panel_end() }}
+{% endblock content %}

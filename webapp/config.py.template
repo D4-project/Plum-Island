@@ -31,6 +31,8 @@ MEILI_DATABASE_URI = "http://localhost:7700"
 # Your App secret key
 KVROCKS_HOST = "localhost"
 KVROCKS_PORT = 6666
+PASSIVE_USER = ""
+PASSIVE_PWD = ""
 
 # The SQLAlchemy connection string.
 SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(basedir, "app.db")

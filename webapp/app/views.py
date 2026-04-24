@@ -17,6 +17,7 @@ import logging
 import os
 import threading
 import uuid
+import requests
 
 from datetime import datetime, timezone
 
@@ -653,6 +654,24 @@ class KVSearchView(BaseView):
         return "document_not_found" in str(error)
 
     @staticmethod
+    def _load_meili_document(index, uid):
+        """
+        Load one Meilisearch document, tolerating missing documents.
+        """
+        try:
+            result = index.get_document(uid)
+            return vars(result), None, None
+        except MeilisearchApiError as error:
+            if not KVSearchView._is_missing_meili_document(error):
+                raise
+            warning = "document_not_found"
+            warning_message = (
+                f"Document {uid} is indexed in Kvrocks but missing "
+                "from Meilisearch; exported metadata only."
+            )
+            return None, warning, warning_message
+
+    @staticmethod
     def _run_full_export_job(job_id):
         with app.app_context():
             job_state = KVSearchView._get_job_state(job_id)
@@ -688,19 +707,10 @@ class KVSearchView(BaseView):
                     ip_timestamps = results["timestamps"].get(ip, {})
                     export_payload["results"][ip] = []
                     for uid in uids:
-                        warning = None
-                        document = None
-                        try:
-                            result = index.get_document(uid)
-                            document = vars(result)
-                        except MeilisearchApiError as error:
-                            if not KVSearchView._is_missing_meili_document(error):
-                                raise
-                            warning = "document_not_found"
-                            warning_message = (
-                                f"Document {uid} is indexed in Kvrocks but missing "
-                                "from Meilisearch; exported metadata only."
-                            )
+                        document, warning, warning_message = (
+                            KVSearchView._load_meili_document(index, uid)
+                        )
+                        if warning_message:
                             logger.warning(warning_message)
                             KVSearchView._add_job_warning(job_id, warning_message)
 
@@ -1369,6 +1379,308 @@ class KVSearchView(BaseView):
         This fuction display the search page
         """
         return self.render_template("search_kvrocks.html")
+
+
+class IPDetailView(BaseView):
+    """
+    Display the cumulative details for one IP without time filtering.
+    """
+
+    route_base = "/ip"
+    default_view = "detail"
+
+    @staticmethod
+    def _safe_timestamp_to_iso(timestamp):
+        """
+        Convert epoch-like values to UTC ISO when possible.
+        """
+        if timestamp in (None, ""):
+            return None
+        try:
+            return KVSearchView._timestamp_to_iso(int(timestamp))
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+
+    @staticmethod
+    def _safe_timestamp_to_display(timestamp):
+        """
+        Convert epoch-like values to DD/MM/YY when possible.
+        """
+        if timestamp in (None, ""):
+            return None
+        try:
+            return datetime.fromtimestamp(int(timestamp), timezone.utc).strftime(
+                "%d/%m/%y"
+            )
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+
+    @staticmethod
+    def _port_group_sort_key(group):
+        """
+        Sort ports by protocol then numeric port when available.
+        """
+        portid = str(group.get("portid") or "")
+        if portid.isdigit():
+            return (group.get("protocol") or "", 0, int(portid), portid)
+        return (group.get("protocol") or "", 1, portid)
+
+    @staticmethod
+    def _extract_hostname_details(hostnames):
+        """
+        Split Nmap hostname entries into PTR and generic resolved names.
+        """
+        ptr_records = []
+        resolved_hosts = []
+        seen_ptr = set()
+        seen_hosts = set()
+
+        for entry in hostnames or []:
+            if isinstance(entry, dict):
+                name = (entry.get("name") or entry.get("hostname") or "").strip()
+                record_type = str(entry.get("type") or "").upper()
+            else:
+                name = str(entry).strip()
+                record_type = ""
+
+            if not name:
+                continue
+
+            if record_type == "PTR":
+                if name not in seen_ptr:
+                    ptr_records.append(name)
+                    seen_ptr.add(name)
+                continue
+
+            if name not in seen_hosts:
+                resolved_hosts.append(name)
+                seen_hosts.add(name)
+
+        return ptr_records, resolved_hosts
+
+    @staticmethod
+    def _strip_geolookup_meta(payload):
+        """
+        Remove CIRCL geolookup metadata from the response payload.
+        """
+        entries = payload if isinstance(payload, list) else [payload]
+        cleaned = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                cleaned.append({key: value for key, value in entry.items() if key != "meta"})
+            else:
+                cleaned.append(entry)
+        return cleaned
+
+    @staticmethod
+    def _parse_pdns_ndjson(payload):
+        """
+        Parse CIRCL Passive DNS NDJSON payload into a list of records.
+        """
+        records = []
+        for line in (payload or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+        return records
+
+    @expose("/pdns/<string:ip>")
+    @has_access
+    def passive_dns(self, ip):
+        """
+        Same-origin proxy for CIRCL Passive DNS.
+        """
+        if not is_valid_ip(ip):
+            return jsonify({"error": "Invalid IP"}), 400
+
+        passive_user = db.app.config.get("PASSIVE_USER", "")
+        passive_pwd = db.app.config.get("PASSIVE_PWD", "")
+        if not passive_user:
+            return jsonify(
+                {
+                    "disabled": True,
+                    "message": "CIRCL Passive DNS Disabled in configuration",
+                }
+            )
+        if not passive_pwd:
+            return jsonify({"error": "Passive DNS password is not configured"}), 503
+
+        try:
+            response = requests.get(
+                f"https://www.circl.lu/pdns/query/{ip}",
+                auth=(passive_user, passive_pwd),
+                headers={"dribble-disable-active-query": "1"},
+                timeout=15,
+            )
+            response.raise_for_status()
+        except requests.RequestException as error:
+            logger.warning("CIRCL passive DNS failed for %s: %s", ip, error)
+            return jsonify({"error": "Passive DNS lookup failed"}), 502
+
+        records = self._parse_pdns_ndjson(response.text)
+        return jsonify(records)
+
+    @expose("/geolookup/<string:ip>")
+    @has_access
+    def geolookup(self, ip):
+        """
+        Same-origin proxy for CIRCL geolookup to avoid browser CORS issues.
+        """
+        if not is_valid_ip(ip):
+            return jsonify({"error": "Invalid IP"}), 400
+
+        try:
+            response = requests.get(
+                f"https://ip.circl.lu/geolookup/{ip}",
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException as error:
+            logger.warning("CIRCL geolookup failed for %s: %s", ip, error)
+            return jsonify({"error": "Lookup failed"}), 502
+        except ValueError as error:
+            logger.warning("CIRCL geolookup returned invalid JSON for %s: %s", ip, error)
+            return jsonify({"error": "Invalid lookup response"}), 502
+
+        return jsonify(self._strip_geolookup_meta(payload))
+
+    @expose("/<string:ip>")
+    @has_access
+    def detail(self, ip):
+        """
+        Render a fully expanded detail page for one IP.
+        """
+        if not is_valid_ip(ip):
+            return make_response("Invalid IP", 400)
+
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        ip_timestamps = indexer.get_timestamp_for_ip(ip)
+        uids = [
+            uid
+            for uid in ip_timestamps.keys()
+            if uid not in ("min_seen", "max_seen")
+        ]
+        sorted_uids = sorted(
+            uids,
+            key=lambda uid: (
+                -(ip_timestamps.get(uid, {}).get("last_seen") or -1),
+                uid,
+            ),
+        )
+
+        index = client.index("plum")
+        port_groups = {}
+        unmapped_documents = []
+        warnings = []
+        for uid in sorted_uids:
+            uid_timestamps = ip_timestamps.get(uid, {})
+            first_seen = self._safe_timestamp_to_display(
+                uid_timestamps.get("first_seen")
+            )
+            last_seen = self._safe_timestamp_to_display(
+                uid_timestamps.get("last_seen")
+            )
+            document, warning, warning_message = KVSearchView._load_meili_document(
+                index, uid
+            )
+            if warning_message:
+                warnings.append(warning_message)
+                logger.warning(warning_message)
+                unmapped_documents.append(
+                    {
+                        "uid": uid,
+                        "first_seen": first_seen,
+                        "last_seen": last_seen,
+                        "warning": warning_message,
+                    }
+                )
+                continue
+
+            body = document.get("body") or {}
+            ports = body.get("ports") or []
+            if not ports:
+                unmapped_documents.append(
+                    {
+                        "uid": uid,
+                        "first_seen": first_seen,
+                        "last_seen": last_seen,
+                        "warning": "Document has no port details.",
+                    }
+                )
+                continue
+
+            scan_start = self._safe_timestamp_to_display(body.get("starttime"))
+            scan_end = self._safe_timestamp_to_display(body.get("endtime"))
+            ptr_records, resolved_hosts = self._extract_hostname_details(
+                body.get("hostnames") or []
+            )
+            for port in ports:
+                protocol = str(port.get("protocol") or "unknown").lower()
+                portid = str(port.get("portid") or "?")
+                group_key = f"{protocol}:{portid}"
+                service_name = ((port.get("service") or {}).get("name")) or None
+                group = port_groups.setdefault(
+                    group_key,
+                    {
+                        "protocol": protocol,
+                        "portid": portid,
+                        "service_names": set(),
+                        "observations": [],
+                    },
+                )
+                if service_name:
+                    group["service_names"].add(service_name)
+                group["observations"].append(
+                    {
+                        "uid": uid,
+                        "first_seen": first_seen,
+                        "last_seen": last_seen,
+                        "tab_label": last_seen or first_seen or uid,
+                        "timestamp_sort": uid_timestamps.get("last_seen")
+                        or uid_timestamps.get("first_seen")
+                        or 0,
+                        "scan_start": scan_start,
+                        "scan_end": scan_end,
+                        "ptr_records": ptr_records,
+                        "resolved_hosts": resolved_hosts,
+                        "port": port,
+                    }
+                )
+
+        port_cards = []
+        for group in port_groups.values():
+            group["service_names"] = sorted(group["service_names"])
+            group["observations"].sort(
+                key=lambda item: ((item.get("timestamp_sort") or 0), item["uid"])
+            )
+            group["observation_count"] = len(group["observations"])
+            port_cards.append(group)
+        port_cards.sort(key=self._port_group_sort_key)
+
+        return self.render_template(
+            "ip_detail.html",
+            ip=ip,
+            total_documents=len(sorted_uids),
+            total_ports=len(port_cards),
+            first_seen=(
+                self._safe_timestamp_to_display(ip_timestamps.get("min_seen"))
+            ),
+            last_seen=(
+                self._safe_timestamp_to_display(ip_timestamps.get("max_seen"))
+            ),
+            port_cards=port_cards,
+            unmapped_documents=unmapped_documents,
+            warnings=warnings,
+        )
 
 
 class BulkImportForm(FlaskForm):
@@ -2237,6 +2549,7 @@ appbuilder.add_view(
 appbuilder.add_view(
     KVSearchView, "Header Search", icon="fa-magnifying-glass", category="Analytics"
 )
+appbuilder.add_view_no_menu(IPDetailView)
 appbuilder.add_view(
     ApiKeysView, name="", category=None
 )  # See Security.py for additional conf.
