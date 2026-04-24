@@ -322,9 +322,10 @@
                 </small>
                 {% endif %}
             </h4>
-            {% set has_https = 'https' in port_card.service_names %}
+            {% set has_https = 'https' in port_card.service_names or 'https-alt' in port_card.service_names %}
             {% set has_http = 'http' in port_card.service_names %}
-            {% if has_https or has_http %}
+            {% set has_http_proxy = 'http-proxy' in port_card.service_names %}
+            {% if has_https or has_http or has_http_proxy %}
             <div class="ip-port-title-actions">
                 <button
                     type="button"

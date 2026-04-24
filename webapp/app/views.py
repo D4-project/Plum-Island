@@ -923,9 +923,12 @@ class KVSearchView(BaseView):
         groups = []
         current_group = []
         for part in parts:
-            if part.upper() == "OR":
+            normalized_part = part.upper()
+            if normalized_part == "OR":
                 groups.append(current_group)
                 current_group = []
+            elif normalized_part == "AND":
+                continue
             else:
                 current_group.append(part)
         groups.append(current_group)
@@ -989,6 +992,8 @@ class KVSearchView(BaseView):
             except ValueError as error:
                 return {}, False, f"Invalid query syntax: {error}"
         for part in parts:
+            if str(part).upper() == "AND":
+                continue
             if ":" not in part:
                 msg_error = f"Bad keyword/value: {part}"
                 continue
