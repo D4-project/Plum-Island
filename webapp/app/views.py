@@ -47,6 +47,7 @@ from .models import (
     Jobs,
     ApiKeys,
     Nses,
+    TagRules,
     Protos,
     ScanProfiles,
     Ports,
@@ -56,6 +57,10 @@ from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
 from .utils.ip2asn import get_asn_description_for_ip
+from .utils.tagrules import (
+    compile_tag_rule_definition,
+    normalize_tag_rule_fields,
+)
 from .utils.timeutils import ensure_utc_naive, utcnow_iso
 
 
@@ -459,6 +464,9 @@ class KVSearchView(BaseView):
     SEARCH_WINDOW_SECONDS = 24 * 60 * 60
     MAX_EXPORT_WARNINGS = 20
     SEARCH_SESSION_TTL_SECONDS = 3600
+    TAG_SUGGEST_LIMIT = 12
+    TAG_SUGGEST_SCAN_LIMIT = 4096
+    TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
 
     @staticmethod
     def _subtract_months(date_value, months):
@@ -549,6 +557,177 @@ class KVSearchView(BaseView):
             filtered_timestamps["max_seen"] = max_seen
             timestamp_array[ip] = filtered_timestamps
         return timestamp_array
+
+    @classmethod
+    def _sort_tag_namespaces(cls, namespaces):
+        """
+        Sort namespaces with the preferred helper order first.
+        """
+        preferred_index = {
+            value: index for index, value in enumerate(cls.TAG_NAMESPACE_PREFERRED_ORDER)
+        }
+        return sorted(
+            namespaces,
+            key=lambda value: (preferred_index.get(value, len(preferred_index)), value),
+        )
+
+    @staticmethod
+    def _collect_rule_tags():
+        """
+        Return distinct lowercase tags from active DB-backed rules.
+        """
+        tags = []
+        seen = set()
+        for rule in (
+            db.session.query(TagRules)
+            .filter(TagRules.active == True)
+            .order_by(TagRules.id.asc())
+            .all()
+        ):
+            for tag in rule.tags_list():
+                candidate = str(tag).strip().lower()
+                if not candidate or candidate in seen:
+                    continue
+                seen.add(candidate)
+                tags.append(candidate)
+        return tags
+
+    @classmethod
+    def _collect_tag_suggestion_values(cls, prefix=""):
+        """
+        Prefer live Kvrocks tags, then merge active rule tags as fallback.
+        """
+        values = []
+        try:
+            indexer = KVrocksIndexer(
+                db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+            )
+            values = indexer.get_indexed_values(
+                "tag",
+                limit=cls.TAG_SUGGEST_SCAN_LIMIT,
+            )
+        except Exception:
+            logger.exception("Unable to load tag suggestions from Kvrocks")
+        seen = set(values)
+        for tag in cls._collect_rule_tags():
+            if tag in seen:
+                continue
+            seen.add(tag)
+            values.append(tag)
+        return values
+
+    @staticmethod
+    def _sort_tag_matches(tags, needle="", namespace=""):
+        """
+        Sort tag matches by closeness to the searched suffix fragment.
+        """
+        needle = str(needle or "").strip().lower()
+        namespace = str(namespace or "").strip().lower()
+
+        def sort_key(tag):
+            candidate = str(tag).strip().lower()
+            suffix = candidate.split(":", 1)[1] if ":" in candidate else candidate
+            suffix_index = suffix.find(needle) if needle else 0
+            full_index = candidate.find(needle) if needle else 0
+            suffix_starts = 0 if needle and suffix.startswith(needle) else 1
+            exact_namespace = 0 if namespace and candidate.startswith(f"{namespace}:") else 1
+            return (
+                exact_namespace,
+                suffix_starts,
+                suffix_index if suffix_index >= 0 else 9999,
+                full_index if full_index >= 0 else 9999,
+                len(candidate),
+                candidate,
+            )
+
+        return sorted(tags, key=sort_key)
+
+    @classmethod
+    def _build_tag_suggestions(cls, raw_term):
+        """
+        Build tag helper suggestions for the current query token.
+        """
+        term = str(raw_term or "").strip().lower()
+        if not term.startswith("tag:"):
+            return []
+
+        tag_fragment = term[4:]
+        all_tags = cls._collect_tag_suggestion_values(prefix=tag_fragment)
+        if not all_tags:
+            all_tags = cls._collect_rule_tags()
+
+        if ":" not in tag_fragment:
+            namespace_prefix = tag_fragment
+            namespaces = []
+            seen_namespaces = set()
+            for tag in all_tags:
+                namespace = tag.split(":", 1)[0].strip().lower()
+                if not namespace:
+                    continue
+                if namespace_prefix and not namespace.startswith(namespace_prefix):
+                    continue
+                if namespace in seen_namespaces:
+                    continue
+                seen_namespaces.add(namespace)
+                namespaces.append(namespace)
+
+            suggestions = []
+            for namespace in cls._sort_tag_namespaces(namespaces)[: cls.TAG_SUGGEST_LIMIT]:
+                suggestions.append(
+                    {
+                        "label": namespace,
+                        "value": f"tag:{namespace}:",
+                        "kind": "namespace",
+                    }
+                )
+            if namespace_prefix:
+                matching_tags = []
+                for tag in all_tags:
+                    suffix = tag.split(":", 1)[1] if ":" in tag else tag
+                    if namespace_prefix not in suffix and namespace_prefix not in tag:
+                        continue
+                    matching_tags.append(tag)
+
+                remaining_slots = cls.TAG_SUGGEST_LIMIT - len(suggestions)
+                for tag in cls._sort_tag_matches(matching_tags, needle=namespace_prefix)[
+                    :remaining_slots
+                ]:
+                    suggestions.append(
+                        {
+                            "label": tag,
+                            "value": f"tag:{tag}",
+                            "kind": "tag",
+                        }
+                    )
+            return suggestions
+
+        namespace, suffix_prefix = tag_fragment.split(":", 1)
+        namespace = namespace.strip().lower()
+        suffix_prefix = suffix_prefix.strip().lower()
+        if not namespace:
+            return []
+
+        matching_tags = []
+        for tag in all_tags:
+            if not tag.startswith(f"{namespace}:"):
+                continue
+            suffix = tag.split(":", 1)[1]
+            if suffix_prefix and suffix_prefix not in suffix:
+                continue
+            matching_tags.append(tag)
+
+        return [
+            {
+                "label": tag,
+                "value": f"tag:{tag}",
+                "kind": "tag",
+            }
+            for tag in cls._sort_tag_matches(
+                matching_tags,
+                needle=suffix_prefix,
+                namespace=namespace,
+            )[: cls.TAG_SUGGEST_LIMIT]
+        ]
 
     def _get_matching_uids(self, indexer, criteria_groups, scoped_uids=None):
         """
@@ -954,6 +1133,7 @@ class KVSearchView(BaseView):
             "host",
             "domain",
             "tld",
+            "tag",
             # "url_path",
             "port",
             # "protocol",
@@ -981,6 +1161,7 @@ class KVSearchView(BaseView):
         ]
 
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
+        exact_only_keywords = {"tag"}
 
         result = {}
         msg_error = None
@@ -1002,13 +1183,18 @@ class KVSearchView(BaseView):
             key = key.lower()
             # Determine base key without modifier
             base_key = key
+            matched_suffix = ""
             for suf in valid_modifiers:
                 if key.endswith(suf):
                     base_key = key[: -len(suf)]
+                    matched_suffix = suf
                     break
 
             if base_key not in valid_keywords:
                 msg_error = f"Bad keyword: {key}"
+                continue
+            if base_key in exact_only_keywords and matched_suffix:
+                msg_error = f"Bad modifier for keyword: {key}"
                 continue
 
             # store values in list to allow multiple occurrences
@@ -1326,6 +1512,20 @@ class KVSearchView(BaseView):
             self._touch_search_session(search_id, seen_ips=updated_seen_ips)
         results["search_id"] = search_id
         return jsonify(results)
+
+    @expose("/tag_suggest")
+    @has_access
+    def tag_suggest(self):
+        """
+        AJAX helper for tag: query autocompletion.
+        """
+        return jsonify(
+            {
+                "suggestions": self._build_tag_suggestions(
+                    request.args.get("term", "")
+                )
+            }
+        )
 
     @expose("/export")
     @has_access
@@ -2350,6 +2550,73 @@ class NsesView(ModelView):
         )
 
 
+class TagRulesView(ModelView):
+    """
+    CRUD interface for search-backed tagging rules.
+    """
+
+    datamodel = SQLAInterface(TagRules)
+    list_columns = [
+        "id",
+        "active",
+        "name",
+        "description",
+        "tags_html",
+        "updated_at",
+    ]
+    show_columns = [
+        "active",
+        "name",
+        "description",
+        "query",
+        "tags",
+        "tags_html",
+        "created_at",
+        "updated_at",
+    ]
+    add_columns = ["name", "active", "description", "query", "tags"]
+    edit_columns = ["name", "active", "description", "query", "tags"]
+    search_columns = ["name", "description", "query", "tags"]
+    base_order = ("updated_at", "desc")
+    label_columns = {
+        "id": "ID",
+        "name": "Rule Name",
+        "active": "Active",
+        "description": "Description",
+        "query": "Search",
+        "tags": "Tags",
+        "tags_html": "Tags",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+
+    def _normalize_tag_rule_item(self, item):
+        item.name = str(item.name or "").strip()
+        if not item.name:
+            raise ValueError("Rule name is required")
+        normalized_rule = normalize_tag_rule_fields(
+            item.description,
+            item.query,
+            item.tags,
+        )
+        compile_tag_rule_definition(
+            item.name,
+            normalized_rule["description"],
+            normalized_rule["query"],
+            normalized_rule["tags"],
+        )
+        item.description = normalized_rule["description"]
+        item.query = normalized_rule["query"]
+        item.tags = normalized_rule["tags_text"]
+        return item
+
+    def pre_add(self, item):
+        return self._normalize_tag_rule_item(item)
+
+    def pre_update(self, item):
+        return self._normalize_tag_rule_item(item)
+
+
 class ScanprofilesView(ModelView):
     """
     This class implements GUI for
@@ -2738,6 +3005,7 @@ appbuilder.add_view(
     ScanprofilesView, "Scan Profiles", icon="fa-folder-open-o", category="Config"
 )
 appbuilder.add_view(NsesView, "Nse Scripts", icon="fa-folder-open-o", category="Config")
+appbuilder.add_view(TagRulesView, "Tag Rules", icon="fa-tags", category="Config")
 appbuilder.add_view(ProtosView, "Protocols", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(PortsView, "Ports", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(JobsView, "Jobs", icon="fa-chart-bar", category="Status")

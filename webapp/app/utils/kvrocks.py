@@ -101,6 +101,28 @@ class KVrocksIndexer:
         }
         return all_counts
 
+    def get_indexed_values(self, field, prefix="", limit=100):
+        """
+        Return distinct indexed values for one field, optionally filtered by prefix.
+        """
+        field = str(field or "").strip().lower()
+        if not field:
+            return []
+
+        prefix = str(prefix or "").strip().lower()
+        pattern = f"{field}:{prefix}*" if prefix else f"{field}:*"
+        values = []
+        seen = set()
+        for key in self.r.scan_iter(match=pattern, count=min(max(limit, 1), 1000)):
+            value = key.split(":", 1)[1].strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+            if len(values) >= limit:
+                break
+        return values
+
     def add_documents_batch(self, docs, batch_size=10000):
         """
         insert documents into the kvrocks.
@@ -123,6 +145,7 @@ class KVrocksIndexer:
             "host",
             "domain",
             "tld",
+            "tag",
             # "url_path",
             "port",
             # "protocol",
@@ -231,6 +254,61 @@ class KVrocksIndexer:
                             # print(f"{field} - {v} - {uid}")
                             pipe.sadd(f"{field}:{v}", uid)
                             pipe.sadd(f"{field}s:{uid}", v)
+            pipe.execute()
+
+    def replace_field_values_batch(self, field, docs, batch_size=10000):
+        """
+        Replace one multi-value field index for existing documents.
+
+        This is used for lightweight reindex operations such as recomputing
+        tags without touching the rest of the stored Kvrocks document indexes.
+        """
+        field = str(field or "").strip()
+        if not field:
+            raise ValueError("Field name is required")
+
+        for i in range(0, len(docs), batch_size):
+            normalized_batch = []
+            for doc in docs[i : i + batch_size]:
+                uid = str(doc.get("uid") or "").strip()
+                if not uid:
+                    continue
+
+                raw_values = doc.get(field, []) or []
+                if not isinstance(raw_values, list):
+                    raw_values = [raw_values]
+
+                values = []
+                seen = set()
+                for value in raw_values:
+                    candidate = str(value).strip().lower()
+                    if not candidate or candidate in seen:
+                        continue
+                    seen.add(candidate)
+                    values.append(candidate)
+
+                normalized_batch.append({"uid": uid, field: values})
+
+            if not normalized_batch:
+                continue
+
+            existing_pipe = self.r.pipeline(transaction=False)
+            for doc in normalized_batch:
+                existing_pipe.smembers(f"{field}s:{doc['uid']}")
+            existing_values = existing_pipe.execute()
+
+            pipe = self.r.pipeline(transaction=False)
+            for doc, previous_values in zip(normalized_batch, existing_values):
+                uid = doc["uid"]
+                for value in previous_values or []:
+                    candidate = str(value).strip().lower()
+                    if candidate:
+                        pipe.srem(f"{field}:{candidate}", uid)
+
+                pipe.delete(f"{field}s:{uid}")
+                for value in doc[field]:
+                    pipe.sadd(f"{field}:{value}", uid)
+                    pipe.sadd(f"{field}s:{uid}", value)
             pipe.execute()
 
     def get_uids_by_time_range(self, from_ts, to_ts):

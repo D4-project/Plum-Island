@@ -1,0 +1,4 @@
+description: "NetScaler Gateway"
+query: 'http_favicon_path.bg:"/vpn/images/AccessGateway.ico" OR http_title.bg:"NetScaler Gateway"'
+tags:
+  - soft:netscaler

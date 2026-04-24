@@ -11,6 +11,7 @@ let activeExportConfig = null;
 let searchPageUnloading = false;
 const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_WINDOW_DAYS = 4096;
+const TAG_SUGGEST_DEBOUNCE_MS = 120;
 const EXPORT_CONFIGS = {
     ips: {
         title: 'Preparing IP Export',
@@ -31,6 +32,11 @@ const EXPORT_CONFIGS = {
         downloadUrl: '/kvsearchview/export_full_download'
     }
 };
+let tagSuggestAbortController = null;
+let tagSuggestDebounceTimer = null;
+let tagSuggestItems = [];
+let tagSuggestSelectedIndex = -1;
+let tagSuggestContext = null;
 
 window.addEventListener('pagehide', () => {
     searchPageUnloading = true;
@@ -301,6 +307,238 @@ function buildSearchParams(query, timeRange, cursorTs = null, searchId = null, l
         params.set('search_id', searchId);
     }
     return params;
+}
+
+function getTagSuggestMenu() {
+    return document.getElementById('query-tag-suggest');
+}
+
+function hideTagSuggestions() {
+    if (tagSuggestAbortController) {
+        tagSuggestAbortController.abort();
+        tagSuggestAbortController = null;
+    }
+    if (tagSuggestDebounceTimer) {
+        clearTimeout(tagSuggestDebounceTimer);
+        tagSuggestDebounceTimer = null;
+    }
+    const menu = getTagSuggestMenu();
+    if (menu) {
+        menu.style.display = 'none';
+        menu.innerHTML = '';
+    }
+    tagSuggestItems = [];
+    tagSuggestSelectedIndex = -1;
+    tagSuggestContext = null;
+}
+
+function getQueryTagContext() {
+    const input = document.getElementById('query');
+    if (!input) {
+        return null;
+    }
+    const caretStart = input.selectionStart;
+    const caretEnd = input.selectionEnd;
+    if (caretStart === null || caretEnd === null || caretStart !== caretEnd) {
+        return null;
+    }
+
+    const value = input.value || '';
+    let tokenStart = caretStart;
+    while (tokenStart > 0 && !/\s/.test(value.charAt(tokenStart - 1))) {
+        tokenStart -= 1;
+    }
+
+    let tokenEnd = caretStart;
+    while (tokenEnd < value.length && !/\s/.test(value.charAt(tokenEnd))) {
+        tokenEnd += 1;
+    }
+
+    const token = value.slice(tokenStart, tokenEnd);
+    if (!token.toLowerCase().startsWith('tag:')) {
+        return null;
+    }
+
+    return {
+        input,
+        token,
+        tokenStart,
+        tokenEnd
+    };
+}
+
+function updateTagSuggestionSelection(nextIndex) {
+    const menu = getTagSuggestMenu();
+    if (!menu || !tagSuggestItems.length) {
+        tagSuggestSelectedIndex = -1;
+        return;
+    }
+    const buttons = [...menu.querySelectorAll('.tag-suggest-item')];
+    if (!buttons.length) {
+        tagSuggestSelectedIndex = -1;
+        return;
+    }
+
+    const boundedIndex = Math.max(0, Math.min(nextIndex, buttons.length - 1));
+    tagSuggestSelectedIndex = boundedIndex;
+    buttons.forEach((button, index) => {
+        button.classList.toggle('active', index === boundedIndex);
+    });
+    buttons[boundedIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function applyTagSuggestion(index) {
+    if (!tagSuggestContext || !tagSuggestItems[index]) {
+        return;
+    }
+
+    const suggestion = tagSuggestItems[index];
+    const input = tagSuggestContext.input;
+    const currentValue = input.value || '';
+    const before = currentValue.slice(0, tagSuggestContext.tokenStart);
+    const after = currentValue.slice(tagSuggestContext.tokenEnd);
+    const needsTrailingSpace = suggestion.kind === 'tag' && (after === '' || !/^\s/.test(after));
+    const replacement = `${suggestion.value}${needsTrailingSpace ? ' ' : ''}`;
+    input.value = `${before}${replacement}${after}`;
+    const nextCaret = before.length + replacement.length;
+    input.focus();
+    input.setSelectionRange(nextCaret, nextCaret);
+
+    if (suggestion.kind === 'namespace') {
+        scheduleTagSuggestionFetch();
+        return;
+    }
+    hideTagSuggestions();
+}
+
+function renderTagSuggestions(suggestions, context) {
+    const menu = getTagSuggestMenu();
+    if (!menu) {
+        return;
+    }
+    if (!suggestions.length) {
+        hideTagSuggestions();
+        return;
+    }
+
+    tagSuggestItems = suggestions;
+    tagSuggestContext = context;
+    menu.innerHTML = suggestions
+        .map((suggestion, index) => `
+            <button
+                type="button"
+                class="tag-suggest-item"
+                data-index="${index}"
+            >
+                <span class="tag-suggest-label">${escapeHtml(suggestion.label)}</span>
+                <span class="tag-suggest-kind">${escapeHtml(suggestion.kind)}</span>
+            </button>
+        `)
+        .join('');
+    menu.style.display = 'block';
+
+    [...menu.querySelectorAll('.tag-suggest-item')].forEach((button) => {
+        button.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+        });
+        button.addEventListener('click', () => {
+            applyTagSuggestion(Number(button.dataset.index));
+        });
+    });
+    updateTagSuggestionSelection(0);
+}
+
+async function fetchTagSuggestions(context) {
+    if (tagSuggestAbortController) {
+        tagSuggestAbortController.abort();
+    }
+    tagSuggestAbortController = new AbortController();
+
+    try {
+        const params = new URLSearchParams();
+        params.set('term', context.token);
+        const res = await fetch(`/kvsearchview/tag_suggest?${params.toString()}`, {
+            signal: tagSuggestAbortController.signal
+        });
+        const data = await readJsonResponse(res);
+        const latestContext = getQueryTagContext();
+        if (!latestContext || latestContext.token !== context.token || latestContext.tokenStart !== context.tokenStart) {
+            return;
+        }
+        renderTagSuggestions(data.suggestions || [], latestContext);
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            return;
+        }
+        hideTagSuggestions();
+    }
+}
+
+function scheduleTagSuggestionFetch() {
+    if (tagSuggestDebounceTimer) {
+        clearTimeout(tagSuggestDebounceTimer);
+    }
+
+    const context = getQueryTagContext();
+    if (!context) {
+        hideTagSuggestions();
+        return;
+    }
+
+    tagSuggestDebounceTimer = setTimeout(() => {
+        fetchTagSuggestions(context);
+    }, TAG_SUGGEST_DEBOUNCE_MS);
+}
+
+function handleQueryKeydown(event) {
+    if (event.isComposing) {
+        return;
+    }
+
+    const menu = getTagSuggestMenu();
+    const isOpen = menu && menu.style.display !== 'none' && tagSuggestItems.length > 0;
+    if (!isOpen) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            search();
+        }
+        return;
+    }
+
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        updateTagSuggestionSelection(tagSuggestSelectedIndex + 1);
+    } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        updateTagSuggestionSelection(tagSuggestSelectedIndex - 1);
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        applyTagSuggestion(tagSuggestSelectedIndex >= 0 ? tagSuggestSelectedIndex : 0);
+    } else if (event.key === 'Escape') {
+        event.preventDefault();
+        hideTagSuggestions();
+    }
+}
+
+function bindQueryTagHelper() {
+    const input = document.getElementById('query');
+    if (!input) {
+        return;
+    }
+
+    input.addEventListener('input', scheduleTagSuggestionFetch);
+    input.addEventListener('click', scheduleTagSuggestionFetch);
+    input.addEventListener('keydown', handleQueryKeydown);
+    input.addEventListener('blur', () => {
+        setTimeout(() => {
+            const activeElement = document.activeElement;
+            const menu = getTagSuggestMenu();
+            if (menu && menu.contains(activeElement)) {
+                return;
+            }
+            hideTagSuggestions();
+        }, 120);
+    });
 }
 
 function buildExportPayload() {
@@ -734,6 +972,7 @@ async function loadUid(uid, targetId) {
 document.addEventListener('DOMContentLoaded', () => {
     bindDateInput('time-from');
     bindDateInput('time-to');
+    bindQueryTagHelper();
     setDefaultTimeRange();
 });
 
@@ -890,6 +1129,55 @@ document.addEventListener('DOMContentLoaded', () => {
     flex: 1 1 auto;
     min-width: 0;
 }
+.search-query-wrapper {
+    position: relative;
+}
+.tag-suggest-menu {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    display: none;
+    background: #fff;
+    border: 1px solid rgba(51, 122, 183, 0.25);
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+.tag-suggest-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.65rem 0.85rem;
+    background: #fff;
+    border: none;
+    border-bottom: 1px solid rgba(51, 122, 183, 0.12);
+    text-align: left;
+    cursor: pointer;
+}
+.tag-suggest-item:last-child {
+    border-bottom: none;
+}
+.tag-suggest-item:hover,
+.tag-suggest-item:focus,
+.tag-suggest-item.active {
+    background: #f5f8fb;
+    color: #24527a;
+    outline: none;
+}
+.tag-suggest-label {
+    font-family: "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
+    font-weight: 500;
+}
+.tag-suggest-kind {
+    color: #6c757d;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
 .search-time-range {
     display: flex;
     gap: 0.5rem;
@@ -991,7 +1279,10 @@ document.addEventListener('DOMContentLoaded', () => {
 <div class="container mt-2">
     <div class="search-toolbar">
         <div class="search-toolbar-input">
-            <input type="text" id="query" class="form-control" placeholder="Query {{ total_scan_count }} scans...">
+            <div class="search-query-wrapper">
+                <input type="text" id="query" class="form-control" placeholder="Query {{ total_scan_count }} scans...">
+                <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Tag suggestions"></div>
+            </div>
             <div class="search-time-range">
                 <div class="input-group search-date-field">
                     <span class="input-group-btn">
@@ -1160,9 +1451,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>TLS certificate common name</td>
             </tr>
             <tr>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td>tag</td>
+                <td></td>
+                <td>Computed document tag</td>
                 <td>x509_san</td>
                 <td>lk, bg</td>
                 <td>TLS certificate subject alternative names</td>

@@ -316,6 +316,50 @@ class Nses(Model):
         return self.name
 
 
+class TagRules(Model):
+    """
+    Search-backed tagging rules applied on parsed search documents.
+    """
+
+    __tablename__ = "tagrules"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(256), unique=True, nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    description = Column(String(512), nullable=False)
+    query = Column(Text, nullable=False)
+    tags = Column(Text, nullable=False, default="")
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
+        nullable=False,
+    )
+
+    def __repr__(self):
+        return self.name
+
+    def tags_list(self):
+        """
+        Return stored tags as a Python list.
+        """
+        values = []
+        for line in str(self.tags or "").replace(",", "\n").splitlines():
+            value = str(line).strip()
+            if value:
+                values.append(value)
+        return values
+
+    def tags_html(self):
+        """
+        Display tags as HTML badges.
+        """
+        html = ""
+        for tag in self.tags_list():
+            html += f'<span class="label label-default">{tag}</span> '
+        return Esc(html)
+
+
 class TargetScanStates(Model):
     """
     Runtime state of one ScanProfile applied to one Target.

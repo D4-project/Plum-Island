@@ -73,6 +73,7 @@ The following keywords can be used to explore the data:
 | host | like, begin  | hostname, the subdomain part |
 | domain | like, begin | dns domain |
 | tld | like, begin | top level domain | 
+| tag |  | Computed document tag |
 | port | | Open port |
 | http_title | like, begin | html title tag |
 | http_cookiename | like, begin | Http set cookie keyname |

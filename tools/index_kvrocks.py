@@ -26,6 +26,7 @@ INDEX_FIELDS = [
     "host",
     "domain",
     "tld",
+    "tag",
     "port",
     "http_title",
     "http_favicon_path",

@@ -20,9 +20,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 from . import db
 from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
+from .models import TagRules
 from .utils.mutils import is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json
+from .utils.tagrules import compile_tag_rule_records
 from .utils.timeutils import utcnow_aware, utcnow_naive
 
 logger = logging.getLogger("flask_appbuilder")
@@ -704,6 +706,9 @@ def task_export_to_dbs():
     input_dir = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
 
     job_snapshots = []
+    active_tag_rules = compile_tag_rule_records(
+        db.session.query(TagRules).filter(TagRules.active == True).all()
+    )
     # Select "All" Json
     for job_data in (
         db.session.query(Jobs.id, Jobs.uid)
@@ -771,10 +776,13 @@ def task_export_to_dbs():
                         "ip": item.get("addr"),
                         "body": item,
                     }
-                    pending_meili.append(object_to_save)
-                    pending_kvrocks.append(
-                        parse_json(object_to_save, db.app.config)
+                    parsed_doc = parse_json(
+                        object_to_save,
+                        db.app.config,
+                        tag_rules=active_tag_rules,
                     )
+                    pending_meili.append(object_to_save)
+                    pending_kvrocks.append(parsed_doc)
                     pending_job_refs.append(job["id"])
                     outstanding_docs[job["id"]] += 1
 

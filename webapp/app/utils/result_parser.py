@@ -21,6 +21,11 @@ For now far from performance issues anyway.
 import re
 from pyfaup import Url  # pylint: disable=no-name-in-module
 
+try:
+    from .tagrules import apply_tag_rules_to_document
+except ImportError:
+    from tagrules import apply_tag_rules_to_document
+
 DB_CONF = {}
 
 
@@ -372,7 +377,7 @@ def fuse_dicts(d1, d2):
     return fused
 
 
-def parse_json(doc, db_conf_local):
+def parse_json(doc, db_conf_local, tag_rules=None):
     """
     Parse one Nmap-like document into the Kvrocks search fields.
     """
@@ -434,5 +439,9 @@ def parse_json(doc, db_conf_local):
         "last_seen": last_seen,
         "port": ports,
     }
+
+    computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
+    if computed_tags:
+        final_result["tag"] = computed_tags
 
     return final_result
