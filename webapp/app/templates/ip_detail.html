@@ -17,6 +17,30 @@
     font-size: 1.8rem;
     font-weight: 600;
 }
+.ip-detail-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+.ip-quick-link {
+    color: #337ab7;
+    font-size: 1rem;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+}
+.ip-quick-link:hover,
+.ip-quick-link:focus {
+    color: #23527c;
+    text-decoration: none;
+    outline: none;
+}
+.ip-quick-link.copied {
+    color: #3c763d;
+}
 .ip-detail-meta {
     color: #5f6b76;
     font-size: 0.95rem;
@@ -24,6 +48,33 @@
 }
 .ip-port-card {
     margin-bottom: 1rem;
+}
+.ip-port-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+.ip-port-title-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+.ip-port-link {
+    color: #337ab7;
+    font-size: 1rem;
+    border: none;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+}
+.ip-port-link:hover,
+.ip-port-link:focus {
+    color: #23527c;
+    text-decoration: none;
+    outline: none;
 }
 .ip-port-summary {
     margin-top: 0.35rem;
@@ -184,10 +235,16 @@
 
 <div class="ip-detail-toolbar">
     <div>
-        <h2 class="ip-detail-title">{{ ip }}</h2>
+        <div class="ip-detail-title-row">
+            <h2 class="ip-detail-title">{{ ip }}</h2>
+            <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('{{ ip }}', this)" title="Copy {{ ip }}" aria-label="Copy {{ ip }}">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i>
+            </button>
+        </div>
         <div class="ip-detail-meta">
             {{ total_documents }} scan{% if total_documents != 1 %}s{% endif %}
             | {{ total_ports }} port{% if total_ports != 1 %}s{% endif %}
+            | {{ requested_hostnames|length }} virtual host{% if requested_hostnames|length != 1 %}s{% endif %}
             {% if first_seen or last_seen %}
                 | First seen: {{ first_seen or "N/A" }}
                 | Last seen: {{ last_seen or "N/A" }}
@@ -219,7 +276,9 @@
 <div class="ip-scan-filter">
     <label for="scan-hostname-filter">Requested Hostname</label>
     <select id="scan-hostname-filter" class="form-control">
+        {% if has_ip_only_filter %}
         <option value="__ip_only__">IP only</option>
+        {% endif %}
         {% for hostname in requested_hostnames %}
         <option value="{{ hostname }}">{{ hostname }}</option>
         {% endfor %}
@@ -250,20 +309,37 @@
 {% set port_idx = loop.index0 %}
 <div class="panel panel-default ip-port-card">
     <div class="panel-heading">
-        <h4 class="panel-title">
-            {{ port_card.protocol | upper }}/{{ port_card.portid }}
-            {% if port_card.service_names %}
-            <small>
-                {% if port_card.service_names|length == 1 %}
-                    {{ port_card.service_names[0] }}
-                {% else %}
-                    {{ port_card.service_names | join(", ") }}
+        <div class="ip-port-title-row">
+            <h4 class="panel-title">
+                {{ port_card.protocol | upper }}/{{ port_card.portid }}
+                {% if port_card.service_names %}
+                <small>
+                    {% if port_card.service_names|length == 1 %}
+                        {{ port_card.service_names[0] }}
+                    {% else %}
+                        {{ port_card.service_names | join(", ") }}
+                    {% endif %}
+                </small>
                 {% endif %}
-            </small>
+            </h4>
+            {% set has_https = 'https' in port_card.service_names %}
+            {% set has_http = 'http' in port_card.service_names %}
+            {% if has_https or has_http %}
+            <div class="ip-port-title-actions">
+                <button
+                    type="button"
+                    class="ip-port-link"
+                    onclick="openPortSite('{{ 'https' if has_https else 'http' }}', '{{ port_card.portid }}')"
+                    title="Open {{ 'https' if has_https else 'http' }} service"
+                    aria-label="Open {{ 'https' if has_https else 'http' }} service"
+                >
+                    <i class="fa fa-external-link" aria-hidden="true"></i>
+                </button>
+            </div>
             {% endif %}
-        </h4>
+        </div>
         <div class="ip-port-summary">
-            {{ port_card.observation_count }} observation{% if port_card.observation_count != 1 %}s{% endif %}
+            {{ port_card.observation_count }} IP observation{% if port_card.observation_count != 1 %}s{% endif %}
         </div>
     </div>
     <div class="panel-body">
@@ -541,6 +617,72 @@
             pdnsErrorEl.style.display = 'block';
         });
 
+    function copyIpToClipboard(value, triggerEl) {
+        const markCopied = () => {
+            if (!triggerEl) {
+                return;
+            }
+            triggerEl.classList.add('copied');
+            triggerEl.setAttribute('aria-label', `Copied ${value}`);
+            setTimeout(() => {
+                triggerEl.classList.remove('copied');
+                triggerEl.setAttribute('aria-label', `Copy ${value}`);
+            }, 1500);
+        };
+
+        const fallbackCopy = () => {
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'absolute';
+            textarea.style.left = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                markCopied();
+            } catch (err) {
+                console.warn('Clipboard copy failed', err);
+            } finally {
+                document.body.removeChild(textarea);
+            }
+        };
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(markCopied).catch(fallbackCopy);
+        } else {
+            fallbackCopy();
+        }
+    }
+
+    function formatUrlHost(hostValue) {
+        if (!hostValue) {
+            return ip;
+        }
+        return hostValue.includes(':') && !hostValue.startsWith('[')
+            ? `[${hostValue}]`
+            : hostValue;
+    }
+
+    function buildPortSiteUrl(scheme, port) {
+        const hostnameFilter = document.getElementById('scan-hostname-filter');
+        const selectedValue = hostnameFilter ? hostnameFilter.value : '';
+        const targetHost = selectedValue && selectedValue !== '__ip_only__' ? selectedValue : ip;
+        const normalizedHost = formatUrlHost(targetHost);
+        const numericPort = Number(port);
+        const defaultPort = scheme === 'https' ? 443 : 80;
+        const portSuffix = Number.isInteger(numericPort) && numericPort > 0 && numericPort !== defaultPort
+            ? `:${numericPort}`
+            : '';
+        return `${scheme}://${normalizedHost}${portSuffix}`;
+    }
+
+    function openPortSite(scheme, port) {
+        const url = buildPortSiteUrl(scheme, port);
+        window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    window.openPortSite = openPortSite;
+
     function getObservationHostnames(element) {
         try {
             return JSON.parse(element.getAttribute('data-user-hostnames') || '[]');
@@ -560,7 +702,7 @@
         const select = document.getElementById('scan-hostname-filter');
         const emptyState = document.getElementById('scan-filter-empty');
         const cards = Array.from(document.querySelectorAll('.ip-port-card'));
-        const selectedValue = select ? select.value : '__ip_only__';
+        const selectedValue = select ? select.value : '';
         let visibleCards = 0;
 
         cards.forEach((card) => {
@@ -603,6 +745,9 @@
         });
 
         if (emptyState) {
+            emptyState.textContent = selectedValue === '__ip_only__'
+                ? 'No scan result matches.'
+                : 'No scan result matches the selected hostname.';
             emptyState.style.display = visibleCards ? 'none' : '';
         }
     }

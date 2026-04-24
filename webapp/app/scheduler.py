@@ -62,17 +62,21 @@ def task_master_of_puppets():
             "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
             "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
             "cleanup_jobs": _run_scheduler_step("cleanup_jobs", task_cleanup_jobs),
+            "cleanup_search_sessions": _run_scheduler_step(
+                "cleanup_search_sessions", task_cleanup_search_sessions
+            ),
             "cleanup_export_jobs": _run_scheduler_step(
                 "cleanup_export_jobs", task_cleanup_export_jobs
             ),
         }
         total_elapsed = time.perf_counter() - scheduler_started_at
         logger.info(
-            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, export_to_dbs=%.2fs, cleanup_jobs=%.2fs, cleanup_export_jobs=%.2fs)",
+            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, export_to_dbs=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
             step_durations["create_jobs"],
             step_durations["export_to_dbs"],
             step_durations["cleanup_jobs"],
+            step_durations["cleanup_search_sessions"],
             step_durations["cleanup_export_jobs"],
         )
     finally:
@@ -917,6 +921,15 @@ def task_cleanup_export_jobs():
             deleted_files,
             delete_errors,
         )
+
+
+def task_cleanup_search_sessions():
+    """
+    Delete expired in-memory search pagination sessions.
+    """
+    from .views import KVSearchView
+
+    KVSearchView.cleanup_expired_search_sessions()
 
 
 # INIT of the Program..

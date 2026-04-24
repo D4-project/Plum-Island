@@ -64,6 +64,8 @@ from . import appbuilder, db
 logger = logging.getLogger("flask_appbuilder")
 EXPORT_JOB_STATES = {}
 EXPORT_JOB_STATES_LOCK = threading.Lock()
+SEARCH_SESSION_STATES = {}
+SEARCH_SESSION_STATES_LOCK = threading.Lock()
 
 
 def build_priority_field(label="Priority"):
@@ -286,14 +288,20 @@ def get_job_uid(pk):
 
 def get_target_value(pk):
     """
-    For Jinja and ajax queries, get a netword/ip search query from target ID
+    For Jinja and ajax queries, build the structured search query for a target.
     """
     result = db.session.query(Targets.value).filter(Targets.id == pk).scalar()
-    if "/" in result:
-        result = f"net:{result}"
-    else:
-        result = f"ip:{result}"
-    return result
+    if not result:
+        return ""
+
+    normalized_target = is_valid_ip_or_cidr(result)
+    if normalized_target:
+        if "/" in normalized_target:
+            return f"net:{normalized_target}"
+        return f"ip:{normalized_target}"
+
+    normalized_fqdn = str(result).strip().rstrip(".").lower()
+    return f"fqdn_requested:{normalized_fqdn}"
 
 
 def _format_datetime_for_ui(value):
@@ -450,6 +458,7 @@ class KVSearchView(BaseView):
     SEARCH_PAGE_LIMIT = 100
     SEARCH_WINDOW_SECONDS = 24 * 60 * 60
     MAX_EXPORT_WARNINGS = 20
+    SEARCH_SESSION_TTL_SECONDS = 3600
 
     @staticmethod
     def _subtract_months(date_value, months):
@@ -562,6 +571,83 @@ class KVSearchView(BaseView):
         export_jobs_folder = db.app.config["EXPORT_JOBS_FOLDER"]
         os.makedirs(export_jobs_folder, exist_ok=True)
         return export_jobs_folder
+
+    @classmethod
+    def _get_search_session_ttl_seconds(cls):
+        try:
+            configured_ttl = int(
+                db.app.config.get(
+                    "SEARCH_SESSION_TTL_SECONDS", cls.SEARCH_SESSION_TTL_SECONDS
+                )
+            )
+        except (TypeError, ValueError):
+            configured_ttl = cls.SEARCH_SESSION_TTL_SECONDS
+        return max(1, configured_ttl)
+
+    @staticmethod
+    def _create_search_session(query, from_ts, to_ts):
+        search_id = uuid.uuid4().hex
+        now_ts = time.time()
+        with SEARCH_SESSION_STATES_LOCK:
+            SEARCH_SESSION_STATES[search_id] = {
+                "search_id": search_id,
+                "owner_user_id": getattr(current_user, "id", None),
+                "query": query,
+                "from_ts": from_ts,
+                "to_ts": to_ts,
+                "seen_ips": [],
+                "created_ts": now_ts,
+                "updated_ts": now_ts,
+            }
+        return search_id
+
+    @staticmethod
+    def _get_search_session(search_id):
+        if not search_id:
+            return None
+        with SEARCH_SESSION_STATES_LOCK:
+            session_state = SEARCH_SESSION_STATES.get(search_id)
+            return dict(session_state) if session_state else None
+
+    @staticmethod
+    def _touch_search_session(search_id, **updates):
+        with SEARCH_SESSION_STATES_LOCK:
+            session_state = SEARCH_SESSION_STATES.get(search_id)
+            if not session_state:
+                return None
+            session_state.update(updates)
+            session_state["updated_ts"] = time.time()
+            return dict(session_state)
+
+    @classmethod
+    def cleanup_expired_search_sessions(cls):
+        cutoff_ts = time.time() - cls._get_search_session_ttl_seconds()
+        removed_count = 0
+        with SEARCH_SESSION_STATES_LOCK:
+            expired_ids = [
+                search_id
+                for search_id, session_state in SEARCH_SESSION_STATES.items()
+                if session_state.get("updated_ts", session_state.get("created_ts", 0))
+                < cutoff_ts
+            ]
+            for search_id in expired_ids:
+                SEARCH_SESSION_STATES.pop(search_id, None)
+                removed_count += 1
+        if removed_count:
+            logger.info(
+                "Cleanup Search Sessions TASK: %s expired search sessions removed",
+                removed_count,
+            )
+        return removed_count
+
+    @staticmethod
+    def _get_owned_search_session(search_id):
+        session_state = KVSearchView._get_search_session(search_id)
+        if not session_state:
+            return None
+        if session_state["owner_user_id"] != getattr(current_user, "id", None):
+            return False
+        return session_state
 
     @staticmethod
     def _serialize_job_state(job_state):
@@ -935,6 +1021,9 @@ class KVSearchView(BaseView):
         """
         Parse the full query, supporting explicit OR between AND groups.
         """
+        if not (query or "").strip():
+            return [], False, "Empty query"
+
         try:
             query_groups = self.split_query_groups(query)
         except ValueError as error:
@@ -1023,6 +1112,7 @@ class KVSearchView(BaseView):
                 "has_more": False,
                 "next_offset": returned_results,
             },
+            "search_id": None,
         }
 
     def execute_search_page(
@@ -1154,6 +1244,7 @@ class KVSearchView(BaseView):
                 "window_days": window_days,
                 "stopped_in_window": stopped_in_window,
             },
+            "search_id": None,
         }
 
     @expose("/query")
@@ -1163,24 +1254,72 @@ class KVSearchView(BaseView):
         This Function send the query back to KVRocks
         """
         query = request.args.get("q", "")
-        seen_ips = [
-            ip.strip()
-            for ip in request.args.get("seen_ips", "").split(",")
-            if ip.strip()
-        ]
+        search_id = request.args.get("search_id", "").strip()
         try:
             limit = min(max(int(request.args.get("limit", 100)), 1), 500)
         except (TypeError, ValueError):
             return jsonify({"status": False, "msg_error": "Invalid pagination"}), 400
+
+        if search_id:
+            search_session = self._get_owned_search_session(search_id)
+            if search_session is None:
+                return (
+                    jsonify(
+                        {
+                            "status": False,
+                            "msg_error": "Search session expired",
+                        }
+                    ),
+                    410,
+                )
+            if search_session is False:
+                return (
+                    jsonify(
+                        {
+                            "status": False,
+                            "msg_error": "Search session access denied",
+                        }
+                    ),
+                    403,
+                )
+
+            query = search_session["query"]
+            from_ts = search_session.get("from_ts")
+            to_ts = search_session.get("to_ts")
+            seen_ips = search_session.get("seen_ips", [])
+        else:
+            from_ts = request.args.get("from_ts")
+            to_ts = request.args.get("to_ts")
+            seen_ips = []
+
         results = self.execute_search_page(
             query,
-            request.args.get("from_ts"),
-            request.args.get("to_ts"),
+            from_ts,
+            to_ts,
             cursor_ts=request.args.get("cursor_ts"),
             seen_ips=seen_ips,
             limit=limit,
             window_days=request.args.get("window_days"),
         )
+        if not results.get("status"):
+            return jsonify(results)
+
+        returned_ips = list((results.get("results") or {}).keys())
+        if not search_id:
+            search_id = self._create_search_session(
+                query,
+                results.get("time_range", {}).get("from_ts"),
+                results.get("time_range", {}).get("to_ts"),
+            )
+            search_session = self._get_search_session(search_id)
+
+        if search_id and search_session:
+            updated_seen_ips = [
+                *(search_session.get("seen_ips") or []),
+                *returned_ips,
+            ]
+            self._touch_search_session(search_id, seen_ips=updated_seen_ips)
+        results["search_id"] = search_id
         return jsonify(results)
 
     @expose("/export")
@@ -1392,7 +1531,14 @@ class KVSearchView(BaseView):
         """
         This fuction display the search page
         """
-        return self.render_template("search_kvrocks.html")
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        count_objects = indexer.objects_count()
+        return self.render_template(
+            "search_kvrocks.html",
+            total_scan_count=count_objects.get("uid_count", 0),
+        )
 
 
 class IPDetailView(BaseView):
@@ -1592,6 +1738,7 @@ class IPDetailView(BaseView):
         unmapped_documents = []
         warnings = []
         requested_hostnames = set()
+        has_ip_only_filter = False
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
             first_seen = self._safe_timestamp_to_display(
@@ -1677,6 +1824,8 @@ class IPDetailView(BaseView):
                         "port": port,
                     }
                 )
+                if not user_hostnames:
+                    has_ip_only_filter = True
 
         port_cards = []
         for group in port_groups.values():
@@ -1701,6 +1850,7 @@ class IPDetailView(BaseView):
             ),
             port_cards=port_cards,
             unmapped_documents=unmapped_documents,
+            has_ip_only_filter=has_ip_only_filter,
             requested_hostnames=sorted(requested_hostnames, key=str.lower),
             warnings=warnings,
         )

@@ -79,6 +79,8 @@
 
 
 <script>
+const targetSearchQuery = {{ get_target_value(pk) | tojson }};
+
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
@@ -96,7 +98,8 @@ async function readJsonResponse(res) {
 
 
 async function search() {
-    const res = await fetch(`/kvsearchview/query?q={{get_target_value(pk) | safe}}`);
+    const params = new URLSearchParams({ q: targetSearchQuery });
+    const res = await fetch(`/kvsearchview/query?${params.toString()}`);
     const data = await readJsonResponse(res);
 
     const hitsDiv = document.getElementById('hits');

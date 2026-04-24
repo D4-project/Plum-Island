@@ -68,7 +68,8 @@ The following keywords can be used to explore the data:
 | -------- | -------- | -------- |
 | ip     |      | IP of the host  |
 | net | | Cidr network, from /16 to /24 |
-| fqdn | like, begin| fully qualified domain name|
+| fqdn | like, begin| Fully qualified domain name found |
+| fqdn_requested | like, begin | FQDN given to scanner |
 | host | like, begin  | hostname, the subdomain part |
 | domain | like, begin | dns domain |
 | tld | like, begin | top level domain | 
@@ -96,6 +97,16 @@ modifier could be abreviated;
 The query string supports `AND` by default between terms inside one group.
 You can also use explicit `OR` between groups.
 
+The structured search page also applies a date range:
+
+- by default, from today back to today minus 3 months
+- start date is evaluated at `00:00:00`
+- end date is evaluated at `23:59:59`
+
+For responsiveness, the UI shows the first 100 matching IPs, then continues with `Load more`.
+The visible page scans recent history first and grows the inspected time window when needed.
+Exports still run on the full filtered result set, not only on the currently visible 100 results.
+
 ### Example of query
 
 >domain.begin:"circl.lu" port:443 http_server.lk:nginx
@@ -107,6 +118,12 @@ Retrieve all Nginx http servers listening on port 443, with any mention to domai
 >http_server.lk:nginx OR http_server.lk:apache
 
 Retrieve hosts matching either nginx or apache.
+
+### Example with requested FQDN
+
+>fqdn_requested.lk:ttrenov.lu port:443
+
+Retrieve hosts where the user-requested hostname matches `ttrenov.lu` and port 443 is open.
 
 ## Technical requirements
 
