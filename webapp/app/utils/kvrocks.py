@@ -10,6 +10,7 @@ try:
 except ImportError:
     from timeutils import utcnow_iso
 from datetime import datetime, timezone
+import ipaddress
 import logging
 import redis
 from netaddr import IPNetwork
@@ -336,6 +337,59 @@ class KVrocksIndexer:
             return set()
         return set(self.r.zrangebyscore("last_seen_index", from_ts, to_ts))
 
+    def _filter_uids_by_network(self, uids, network):
+        """
+        Keep only UIDs whose indexed IP is inside the requested CIDR.
+        """
+        uids = list(uids or [])
+        if not uids:
+            return set()
+
+        pipe = self.r.pipeline(transaction=False)
+        for uid in uids:
+            pipe.get(f"uid:{uid}")
+        ip_values = pipe.execute()
+
+        filtered = set()
+        for uid, ip_value in zip(uids, ip_values):
+            if not ip_value:
+                continue
+            try:
+                if ipaddress.ip_address(ip_value) in network:
+                    filtered.add(uid)
+            except ValueError:
+                continue
+        return filtered
+
+    def _get_uids_for_net_value(self, net_val, scoped_uids=None):
+        """
+        Resolve one CIDR query, including masks not directly indexed in Kvrocks.
+        """
+        try:
+            network = ipaddress.ip_network(str(net_val).strip(), strict=False)
+        except ValueError:
+            return set()
+
+        candidate_uids = set()
+        prefixlen = network.prefixlen
+
+        if 16 <= prefixlen <= 24:
+            candidate_uids = set(self.r.smembers(f"net:{network.with_prefixlen}"))
+        elif prefixlen > 24:
+            parent = network.supernet(new_prefix=24)
+            candidate_uids = set(self.r.smembers(f"net:{parent.with_prefixlen}"))
+        else:
+            for subnet in network.subnets(new_prefix=16):
+                candidate_uids.update(self.r.smembers(f"net:{subnet.with_prefixlen}"))
+
+        if scoped_uids is not None:
+            candidate_uids.intersection_update(set(scoped_uids))
+
+        if prefixlen < 16 or prefixlen > 24:
+            candidate_uids = self._filter_uids_by_network(candidate_uids, network)
+
+        return candidate_uids
+
     def get_uids_by_criteria(self, criteria: dict):
         """
         multi-criteria search:
@@ -405,8 +459,7 @@ class KVrocksIndexer:
             uids_net = set()
             # For each net required, add corresponding uid it to uid_nets
             for net_val in net_vals:
-                # Get uid of the given net
-                uids_net.update(self.r.smembers(f"net:{net_val}"))
+                uids_net.update(self._get_uids_for_net_value(net_val))
 
             if partial_result is None:
                 partial_result = uids_net
@@ -520,12 +573,14 @@ class KVrocksIndexer:
             if not isinstance(net_vals, list):
                 net_vals = [net_vals]
             for net_val in net_vals:
-                scoped_base.update(self.r.smembers(f"net:{net_val}"))
+                scoped_base.update(self._get_uids_for_net_value(net_val, partial_result))
 
         if scoped_base:
             partial_result = partial_result.intersection(scoped_base)
             if not partial_result:
                 return []
+        elif "ip" in criteria or "net" in criteria:
+            return []
 
         for field, values in remaining_criteria.items():
             if not isinstance(values, list):
