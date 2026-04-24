@@ -7,20 +7,22 @@ into the Kvrocks for idexation.
 import argparse
 import json
 import sys
-import yaml
 from pathlib import Path
+
+import yaml
 
 BASE_DIR = Path(__file__).resolve().parent
 UTILS_DIR = BASE_DIR.parent / "webapp" / "app" / "utils"
 sys.path.append(str(UTILS_DIR))
 
-from kvrocks import KVrocksIndexer
-from result_parser import parse_json
-from mutils import fetch_tlds
+from kvrocks import KVrocksIndexer  # pylint: disable=wrong-import-position
+from result_parser import parse_json  # pylint: disable=wrong-import-position
+from mutils import fetch_tlds  # pylint: disable=wrong-import-position
 
 INDEX_FIELDS = [
     "net",
     "fqdn",
+    "fqdn_requested",
     "host",
     "domain",
     "tld",
@@ -47,8 +49,8 @@ REBUILD_KEY_PATTERNS = [
     "ip:*",
 ]
 
-with open(BASE_DIR / "config.yaml", "r", encoding="utf-8") as f:
-    config = yaml.safe_load(f)
+with open(BASE_DIR / "config.yaml", "r", encoding="utf-8") as config_file:
+    config = yaml.safe_load(config_file)
 KVROCKS_PORT = config.get("OUT_KVROCKS_PORT")
 KVROCKS_HOST = config.get("OUT_KVROCKS_HOST")
 BATCH_SIZE = int(config.get("KVROCKS_BATCH_SIZE", 1000))
@@ -61,8 +63,11 @@ PARSER_CONF = {
 
 
 def json_import(json_file, seen_snapshot=None):
-    with open(json_file, "r", encoding="utf-8") as f:
-        doc = json.loads(f.read())
+    """
+    Load and parse one dumped JSON document for Kvrocks.
+    """
+    with open(json_file, "r", encoding="utf-8") as json_handle:
+        doc = json.loads(json_handle.read())
         parsed_doc = parse_json(doc, PARSER_CONF)
         apply_seen_snapshot(parsed_doc, seen_snapshot)
         return parsed_doc
@@ -172,6 +177,9 @@ def rebuild_kvrocks(indexer):
 
 
 def parse_args():
+    """
+    Parse CLI arguments for Kvrocks indexing.
+    """
     parser = argparse.ArgumentParser(
         description="Import Meilisearch dump JSON files into Kvrocks."
     )
@@ -195,6 +203,9 @@ def parse_args():
 
 
 def main():
+    """
+    Rebuild or update the Kvrocks indexes from dumped JSON documents.
+    """
     args = parse_args()
     input_dir = Path(args.input_dir)
     indexer = KVrocksIndexer(KVROCKS_HOST, KVROCKS_PORT)

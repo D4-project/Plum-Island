@@ -119,6 +119,7 @@ class KVrocksIndexer:
             # "as_description",
             # "as_country",
             "fqdn",
+            "fqdn_requested",
             "host",
             "domain",
             "tld",
@@ -163,7 +164,6 @@ class KVrocksIndexer:
                 # http_servers = doc.get("http_servers, [])
                 # http_cookies = doc.get("http_cookies", [])
                 # http_titles = doc.get("http_titles", [])
-                ports = doc.get("ports", [])
                 last_seen = doc.get("last_seen")  # Document last time scanned.
 
                 uid_key = f"doc:{uid}"
@@ -400,16 +400,9 @@ class KVrocksIndexer:
                     # substring = value.rstrip("*")
                     for key in self.r.scan_iter(f"{base_field}:*"):
                         val = key.split(":", 2)[1]
-                        # If NOT is asked... we forgot this key
-                        """if suffix in ("not", "nt") and value not in val:
-                            # For NOT we need to get all the keys matching from the partials results...
-                            # Then fetch the keys from these uid that are not matching the "pattern".
-                            # print(partial_result)
-                            # print(val)
-                            matching_uids.update(
-                                self.r.smembers(key).intersection(partial_result)
-                            )
-                        """
+                        # If NOT is needed here later, use the already scoped
+                        # partial_result to subtract matching keys instead of
+                        # rescanning every UID value ad hoc.
                         # IF like or begin we select it.
                         if (suffix in ("like", "lk") and value in val) or (
                             suffix in ("begin", "bg") and val.startswith(value)

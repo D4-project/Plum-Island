@@ -8,6 +8,7 @@
 let lastSuccessfulSearch = null;
 let exportStatusPoller = null;
 let activeExportConfig = null;
+let searchPageUnloading = false;
 const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_WINDOW_DAYS = 4096;
 const EXPORT_CONFIGS = {
@@ -30,6 +31,14 @@ const EXPORT_CONFIGS = {
         downloadUrl: '/kvsearchview/export_full_download'
     }
 };
+
+window.addEventListener('pagehide', () => {
+    searchPageUnloading = true;
+});
+
+window.addEventListener('pageshow', () => {
+    searchPageUnloading = false;
+});
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -641,6 +650,9 @@ async function runSearchPage(cursorTs, append) {
             renderLoadMoreButton(loadMoreDiv);
         }
     } catch (error) {
+        if (searchPageUnloading) {
+            return;
+        }
         console.error('KV search failed', error);
         errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${error?.message || 'Unexpected error'}</div>`;
         infoDiv.innerHTML = '';
@@ -1002,100 +1014,100 @@ document.addEventListener('DOMContentLoaded', setDefaultTimeRange);
                 <td>HTTP Set-Cookie key name</td>
             </tr>
             <tr>
-                <td>fqdn</td>
+                <td>fqdn_requested</td>
                 <td>lk, bg</td>
-                <td>Fully qualified domain name</td>
+                <td>User-requested FQDN from hostnames</td>
                 <td>http_etag</td>
                 <td>lk, bg</td>
                 <td>HTTP ETag value</td>
             </tr>
             <tr>
-                <td>host</td>
+                <td>fqdn</td>
                 <td>lk, bg</td>
-                <td>Hostname, the subdomain part</td>
+                <td>Fully qualified domain name</td>
                 <td>http_server</td>
                 <td>lk, bg</td>
                 <td>HTTP server header</td>
             </tr>
             <tr>
-                <td>domain</td>
+                <td>host</td>
                 <td>lk, bg</td>
-                <td>DNS domain</td>
+                <td>Hostname, the subdomain part</td>
                 <td>http_favicon_path</td>
                 <td>lk, bg</td>
                 <td>Favicon source path</td>
             </tr>
             <tr>
-                <td>tld</td>
+                <td>domain</td>
                 <td>lk, bg</td>
-                <td>Top level domain</td>
+                <td>DNS domain</td>
                 <td>http_favicon_mmhash</td>
                 <td></td>
                 <td>Favicon MurmurHash value</td>
             </tr>
             <tr>
-                <td>port</td>
-                <td></td>
-                <td>Open port</td>
+                <td>tld</td>
+                <td>lk, bg</td>
+                <td>Top level domain</td>
                 <td>http_favicon_md5</td>
                 <td></td>
                 <td>Favicon MD5 hash</td>
             </tr>
             <tr>
-                <td>banner</td>
-                <td>lk, bg</td>
-                <td>Service banner value</td>
+                <td>port</td>
+                <td></td>
+                <td>Open port</td>
                 <td>http_favicon_sha256</td>
                 <td></td>
                 <td>Favicon SHA256 hash</td>
             </tr>
             <tr>
+                <td>banner</td>
+                <td>lk, bg</td>
+                <td>Service banner value</td>
                 <td>x509_issuer</td>
                 <td>lk, bg</td>
                 <td>TLS certificate issuer</td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
             </tr>
             <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td>x509_subject</td>
                 <td>lk, bg</td>
                 <td>TLS certificate common name</td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
             </tr>
             <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td>x509_san</td>
                 <td>lk, bg</td>
                 <td>TLS certificate subject alternative names</td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
             </tr>
             <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td>x509_md5</td>
                 <td></td>
                 <td>MD5 of the TLS certificate public signature</td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
             </tr>
             <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td>x509_sha1</td>
                 <td></td>
                 <td>SHA1 of the TLS certificate public signature</td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
             </tr>
             <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td>x509_sha256</td>
                 <td></td>
                 <td>SHA256 of the TLS certificate public signature</td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
             </tr>
         </tbody>
     </table>

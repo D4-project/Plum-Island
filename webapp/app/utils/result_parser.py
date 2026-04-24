@@ -19,7 +19,7 @@ For now far from performance issues anyway.
 """
 
 import re
-from pyfaup import Url
+from pyfaup import Url  # pylint: disable=no-name-in-module
 
 DB_CONF = {}
 
@@ -49,6 +49,7 @@ def normalize_db_conf(db_conf_local):
 
 default_parsing = [
     "get_hosts:b.hostnames",
+    "get_fqdn_requested:b.hostnames",
     "get_http_server:p.http-headers.output",
     "get_http_cookies:p.http-headers.output",
     "get_http_etag:p.http-headers.output",
@@ -66,6 +67,7 @@ default_parsing = [
 ALLOW = [
     "get_http_cookies",
     "get_hosts",
+    "get_fqdn_requested",
     "get_http_server",
     "get_http_title",
     "get_http_etag",
@@ -109,7 +111,7 @@ def insensitive(input_list):
     return combined
 
 
-def get_ssl_info(data: dict, target: str, general: bool = False):
+def get_ssl_info(data: dict, target: str, _general: bool = False):
     """
     Parse a Nmap script ssl-certs
     """
@@ -240,6 +242,25 @@ def get_hosts(data: dict, target: str):
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
 
 
+def get_fqdn_requested(data: dict, target: str):
+    """
+    Extract user-requested FQDN values from hostnames entries.
+    """
+    body = get_body(data, target)
+    fqdn_requested = []
+    for entry in body or []:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type") or "").lower() != "user":
+            continue
+
+        hostname = str(entry.get("name") or "").strip().lower()
+        if hostname and hostname not in fqdn_requested:
+            fqdn_requested.append(hostname)
+
+    return {"fqdn_requested": fqdn_requested}
+
+
 def get_http_title(data: dict, target: str):
     """
     look for http parsed titles
@@ -318,6 +339,9 @@ def get_favicon(data: dict, target: str):
 
 
 def get_http_server(data: dict, target: str):
+    """
+    Parse the HTTP Server header value.
+    """
     # Parse http server header
     body = get_body(data, target)
     http_server = []
@@ -349,9 +373,12 @@ def fuse_dicts(d1, d2):
 
 
 def parse_json(doc, db_conf_local):
+    """
+    Parse one Nmap-like document into the Kvrocks search fields.
+    """
 
-    global DB_CONF
-    DB_CONF = normalize_db_conf(db_conf_local)
+    DB_CONF.clear()
+    DB_CONF.update(normalize_db_conf(db_conf_local))
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:

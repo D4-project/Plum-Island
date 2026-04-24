@@ -8,37 +8,36 @@
 This module contains all code related to the GUI.
 """
 
-import hashlib
 import calendar
+from datetime import datetime, timezone
+import hashlib
 import json
-import shlex
-import time
 import logging
 import os
+import shlex
 import threading
+import time
 import uuid
-import requests
-
-from datetime import datetime, timezone
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
 from flask import request, jsonify
-from markupsafe import Markup, escape
-from flask_appbuilder.models.sqla.interface import SQLAInterface
+from flask_appbuilder import BaseView
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
-from flask_appbuilder import BaseView
+from flask_appbuilder.filemanager import FileManager
+from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_login import current_user
-from meilisearch import Client
-from meilisearch.errors import MeilisearchApiError
-
-from wtforms import TextAreaField, SubmitField, Field, ValidationError, IntegerField
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
-from flask_appbuilder.filemanager import FileManager
-from werkzeug.security import generate_password_hash
-from sqlalchemy.exc import IntegrityError
+from markupsafe import Markup, escape
+from meilisearch import Client
+from meilisearch.errors import MeilisearchApiError
+import requests
+
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+from werkzeug.security import generate_password_hash
+from wtforms import TextAreaField, SubmitField, Field, ValidationError, IntegerField
 from wtforms.validators import Optional, NumberRange
 from wtforms.widgets import html_params
 from app import app
@@ -672,6 +671,20 @@ class KVSearchView(BaseView):
             return None, warning, warning_message
 
     @staticmethod
+    def load_meili_document(index, uid):
+        """
+        Public wrapper for tolerant Meilisearch document loading.
+        """
+        return KVSearchView._load_meili_document(index, uid)
+
+    @staticmethod
+    def timestamp_to_iso(timestamp):
+        """
+        Public wrapper around UTC ISO timestamp formatting.
+        """
+        return KVSearchView._timestamp_to_iso(timestamp)
+
+    @staticmethod
     def _run_full_export_job(job_id):
         with app.app_context():
             job_state = KVSearchView._get_job_state(job_id)
@@ -848,6 +861,7 @@ class KVSearchView(BaseView):
             # "as_description",
             # "as_country",
             "fqdn",
+            "fqdn_requested",
             "host",
             "domain",
             "tld",
@@ -1397,7 +1411,7 @@ class IPDetailView(BaseView):
         if timestamp in (None, ""):
             return None
         try:
-            return KVSearchView._timestamp_to_iso(int(timestamp))
+            return KVSearchView.timestamp_to_iso(int(timestamp))
         except (TypeError, ValueError, OverflowError, OSError):
             return None
 
@@ -1564,11 +1578,7 @@ class IPDetailView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         ip_timestamps = indexer.get_timestamp_for_ip(ip)
-        uids = [
-            uid
-            for uid in ip_timestamps.keys()
-            if uid not in ("min_seen", "max_seen")
-        ]
+        uids = [uid for uid in ip_timestamps if uid not in ("min_seen", "max_seen")]
         sorted_uids = sorted(
             uids,
             key=lambda uid: (
@@ -1581,6 +1591,7 @@ class IPDetailView(BaseView):
         port_groups = {}
         unmapped_documents = []
         warnings = []
+        requested_hostnames = set()
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
             first_seen = self._safe_timestamp_to_display(
@@ -1589,7 +1600,7 @@ class IPDetailView(BaseView):
             last_seen = self._safe_timestamp_to_display(
                 uid_timestamps.get("last_seen")
             )
-            document, warning, warning_message = KVSearchView._load_meili_document(
+            document, _warning, warning_message = KVSearchView.load_meili_document(
                 index, uid
             )
             if warning_message:
@@ -1606,6 +1617,16 @@ class IPDetailView(BaseView):
                 continue
 
             body = document.get("body") or {}
+            user_hostnames = []
+            for hostname_entry in body.get("hostnames") or []:
+                if not isinstance(hostname_entry, dict):
+                    continue
+                if str(hostname_entry.get("type") or "").lower() != "user":
+                    continue
+                hostname = str(hostname_entry.get("name") or "").strip()
+                if hostname:
+                    requested_hostnames.add(hostname)
+                    user_hostnames.append(hostname)
             ports = body.get("ports") or []
             if not ports:
                 unmapped_documents.append(
@@ -1652,6 +1673,7 @@ class IPDetailView(BaseView):
                         "scan_end": scan_end,
                         "ptr_records": ptr_records,
                         "resolved_hosts": resolved_hosts,
+                        "user_hostnames": sorted(set(user_hostnames), key=str.lower),
                         "port": port,
                     }
                 )
@@ -1679,6 +1701,7 @@ class IPDetailView(BaseView):
             ),
             port_cards=port_cards,
             unmapped_documents=unmapped_documents,
+            requested_hostnames=sorted(requested_hostnames, key=str.lower),
             warnings=warnings,
         )
 
@@ -2011,9 +2034,8 @@ class JobsView(ModelView):
         base = db.app.config.get("JSON_FOLDER")
         try:
             is_valid_uuid(uid)
-            file = open(f"{base}/{uid[0]}/{uid}.json", "rb")
-            oobject = json.loads(file.read())
-            file.close()
+            with open(f"{base}/{uid[0]}/{uid}.json", "rb") as file_handle:
+                oobject = json.loads(file_handle.read())
         except (FileNotFoundError, ValueError):
             oobject = "{}"
 
@@ -2132,7 +2154,6 @@ class NsesView(ModelView):
     @expose("/add", methods=["GET", "POST"])
     @has_access
     def add(self):
-        is_valid_form = True
         self.update_redirect()
         form = self.add_form.refresh()
 
@@ -2167,9 +2188,6 @@ class NsesView(ModelView):
                     flash(*self.datamodel.message)
                     if success:
                         return redirect(url_for(f"{self.__class__.__name__}.list"))
-                is_valid_form = False
-            else:
-                is_valid_form = False
 
         widgets = self._get_add_widget(form=form)
         return self.render_template(

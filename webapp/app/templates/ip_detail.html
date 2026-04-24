@@ -167,6 +167,19 @@
     color: #4d5963;
     word-break: break-word;
 }
+.ip-scan-filter {
+    margin: 1rem 0 1.25rem;
+    max-width: 24rem;
+}
+.ip-scan-filter label {
+    display: block;
+    font-weight: 600;
+    color: #2f3a44;
+    margin-bottom: 0.35rem;
+}
+.ip-filter-empty {
+    margin-bottom: 1rem;
+}
 </style>
 
 <div class="ip-detail-toolbar">
@@ -203,6 +216,15 @@
 
 <div class="tab-content">
 <div role="tabpanel" class="tab-pane active" id="ip-scans-results">
+<div class="ip-scan-filter">
+    <label for="scan-hostname-filter">Requested Hostname</label>
+    <select id="scan-hostname-filter" class="form-control">
+        <option value="__ip_only__">IP only</option>
+        {% for hostname in requested_hostnames %}
+        <option value="{{ hostname }}">{{ hostname }}</option>
+        {% endfor %}
+    </select>
+</div>
 {% if warnings %}
 <div class="alert alert-warning" role="alert">
     <strong>{{ warnings|length }} warning{% if warnings|length > 1 %}s{% endif %}</strong>
@@ -219,6 +241,10 @@
     No document found for this IP.
 </div>
 {% endif %}
+
+<div id="scan-filter-empty" class="alert alert-info ip-filter-empty" role="alert" style="display: none;">
+    No scan result matches the selected hostname.
+</div>
 
 {% for port_card in port_cards %}
 {% set port_idx = loop.index0 %}
@@ -243,7 +269,11 @@
     <div class="panel-body">
         <ul class="nav nav-tabs ip-port-tabs" role="tablist">
             {% for observation in port_card.observations %}
-            <li role="presentation" class="{% if loop.last %}active{% endif %}">
+            <li
+                role="presentation"
+                class="{% if loop.last %}active{% endif %}"
+                data-user-hostnames='{{ observation.user_hostnames | tojson }}'
+            >
                 <a
                     href="#port-{{ port_idx }}-{{ loop.index0 }}"
                     aria-controls="port-{{ port_idx }}-{{ loop.index0 }}"
@@ -263,6 +293,7 @@
                 role="tabpanel"
                 class="tab-pane {% if loop.last %}active{% endif %}"
                 id="port-{{ port_idx }}-{{ loop.index0 }}"
+                data-user-hostnames='{{ observation.user_hostnames | tojson }}'
             >
                 <div class="ip-port-observation-meta">
                     First seen: {{ observation.first_seen or "N/A" }}
@@ -509,6 +540,78 @@
             pdnsErrorEl.textContent = error.message;
             pdnsErrorEl.style.display = 'block';
         });
+
+    function getObservationHostnames(element) {
+        try {
+            return JSON.parse(element.getAttribute('data-user-hostnames') || '[]');
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function observationMatchesFilter(hostnames, selectedValue) {
+        if (selectedValue === '__ip_only__') {
+            return hostnames.length === 0;
+        }
+        return hostnames.includes(selectedValue);
+    }
+
+    function updatePortFilter() {
+        const select = document.getElementById('scan-hostname-filter');
+        const emptyState = document.getElementById('scan-filter-empty');
+        const cards = Array.from(document.querySelectorAll('.ip-port-card'));
+        const selectedValue = select ? select.value : '__ip_only__';
+        let visibleCards = 0;
+
+        cards.forEach((card) => {
+            const tabs = Array.from(card.querySelectorAll('.ip-port-tabs > li'));
+            const panes = Array.from(card.querySelectorAll('.ip-port-tab-content > .tab-pane'));
+            let firstVisibleTab = null;
+            let firstVisiblePane = null;
+            let lastVisibleTab = null;
+            let lastVisiblePane = null;
+
+            tabs.forEach((tab, index) => {
+                const pane = panes[index];
+                const hostnames = getObservationHostnames(tab);
+                const visible = observationMatchesFilter(hostnames, selectedValue);
+                tab.style.display = visible ? '' : 'none';
+                if (pane) {
+                    pane.style.display = visible ? '' : 'none';
+                }
+                tab.classList.remove('active');
+                if (pane) {
+                    pane.classList.remove('active');
+                }
+                if (visible) {
+                    if (!firstVisibleTab) {
+                        firstVisibleTab = tab;
+                        firstVisiblePane = pane;
+                    }
+                    lastVisibleTab = tab;
+                    lastVisiblePane = pane;
+                }
+            });
+
+            const hasVisible = Boolean(lastVisibleTab && lastVisiblePane);
+            card.style.display = hasVisible ? '' : 'none';
+            if (hasVisible) {
+                visibleCards += 1;
+                lastVisibleTab.classList.add('active');
+                lastVisiblePane.classList.add('active');
+            }
+        });
+
+        if (emptyState) {
+            emptyState.style.display = visibleCards ? 'none' : '';
+        }
+    }
+
+    const hostnameFilter = document.getElementById('scan-hostname-filter');
+    if (hostnameFilter) {
+        hostnameFilter.addEventListener('change', updatePortFilter);
+        updatePortFilter();
+    }
 })();
 </script>
 
