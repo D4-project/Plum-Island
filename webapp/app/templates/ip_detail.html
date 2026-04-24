@@ -394,7 +394,6 @@
             ? 'Autonomous System Informations'
             : 'Ip Informations';
 
-        appendInfoRow(grid, 'IP', entry ? entry.ip : '');
         appendInfoRow(grid, 'Country', countryInfo['Country']);
         appendInfoRow(grid, 'ISO Code', country.iso_code || countryInfo['Alpha-2 code']);
         appendInfoRow(grid, 'Alpha-3', countryInfo['Alpha-3 code']);
@@ -452,7 +451,6 @@
         grid.className = 'ip-pdns-grid';
 
         appendPdnsRow(grid, 'RRType', record.rrtype);
-        appendPdnsRow(grid, 'RRName', record.rrname);
         appendPdnsRow(grid, 'RData', record.rdata);
         appendPdnsRow(grid, 'Count', record.count);
         appendPdnsRow(grid, 'First Seen', formatShortDate(record.time_first));
