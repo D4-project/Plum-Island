@@ -9,7 +9,7 @@ This module contains all code related to the GUI.
 """
 
 import calendar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -467,6 +467,7 @@ class KVSearchView(BaseView):
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
+    SINCE_PREFIX = "since:"
 
     @staticmethod
     def _subtract_months(date_value, months):
@@ -500,13 +501,77 @@ class KVSearchView(BaseView):
         return int(from_date.timestamp()), int(to_date.timestamp())
 
     @classmethod
-    def _resolve_time_range(cls, from_value=None, to_value=None):
+    def _resolve_since_time_range(cls, since_days):
+        """
+        Convert `since:N` to an inclusive UTC day range.
+        """
+        try:
+            since_days = int(since_days)
+        except (TypeError, ValueError):
+            return None, False, "since: expects a positive integer number of days"
+
+        if since_days <= 0:
+            return None, False, "since: expects a positive integer number of days"
+
+        now_utc = datetime.now(timezone.utc)
+        from_date = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+            days=since_days
+        )
+        to_date = now_utc.replace(hour=23, minute=59, second=59, microsecond=0)
+        return (
+            {
+                "from_ts": int(from_date.timestamp()),
+                "to_ts": int(to_date.timestamp()),
+                "from_iso": cls._timestamp_to_iso(int(from_date.timestamp())),
+                "to_iso": cls._timestamp_to_iso(int(to_date.timestamp())),
+            },
+            True,
+            None,
+        )
+
+    @classmethod
+    def _extract_since_days(cls, query):
+        """
+        Extract one optional `since:N` directive from a user query.
+        """
+        try:
+            parts = shlex.split(query or "")
+        except ValueError as error:
+            return None, False, f"Invalid query syntax: {error}"
+
+        since_values = []
+        for part in parts:
+            if str(part).lower().startswith(cls.SINCE_PREFIX):
+                since_values.append(part.split(":", 1)[1].strip())
+
+        if not since_values:
+            return None, True, None
+        if len(since_values) > 1:
+            return None, False, "Only one since: directive is allowed"
+
+        raw_value = since_values[0]
+        if not raw_value.isdigit() or int(raw_value) <= 0:
+            return None, False, "since: expects a positive integer number of days"
+
+        return int(raw_value), True, None
+
+    @classmethod
+    def _resolve_time_range(cls, from_value=None, to_value=None, query=None):
         """
         Parse and validate request-provided timestamps.
         """
+        since_days, since_status, since_error = cls._extract_since_days(query)
+        if not since_status:
+            return None, False, since_error
+
         default_from, default_to = cls._default_time_range()
         from_ts = KVrocksIndexer.normalize_timestamp(from_value)
         to_ts = KVrocksIndexer.normalize_timestamp(to_value)
+
+        if since_days is not None and (
+            from_value in (None, "") or to_value in (None, "")
+        ):
+            return cls._resolve_since_time_range(since_days)
 
         if from_value in (None, ""):
             from_ts = default_from
@@ -1095,7 +1160,10 @@ class KVSearchView(BaseView):
         """
         Split a query into AND groups separated by explicit OR tokens.
         """
-        parts = shlex.split(query or "")
+        if isinstance(query, (list, tuple)):
+            parts = list(query)
+        else:
+            parts = shlex.split(query or "")
         if not parts:
             return [[]]
 
@@ -1208,7 +1276,7 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
-    def parse_query(self, query):
+    def parse_query(self, query, allow_since_directive=False):
         """
         Parse the full query, supporting explicit OR between AND groups.
         """
@@ -1216,7 +1284,23 @@ class KVSearchView(BaseView):
             return [], False, "Empty query"
 
         try:
-            query_groups = self.split_query_groups(query)
+            query_parts = shlex.split(query or "")
+        except ValueError as error:
+            return [], False, f"Invalid query syntax: {error}"
+
+        if allow_since_directive:
+            filtered_parts = []
+            for part in query_parts:
+                if str(part).lower().startswith(self.SINCE_PREFIX):
+                    continue
+                filtered_parts.append(part)
+            query_parts = filtered_parts
+
+        if not query_parts:
+            return [], False, "Empty query"
+
+        try:
+            query_groups = self.split_query_groups(query_parts)
         except ValueError as error:
             return [], False, f"Invalid query syntax: {error}"
         parsed_groups = []
@@ -1246,7 +1330,9 @@ class KVSearchView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         count_objects = indexer.objects_count()  # Get object count in db
-        time_range, time_status, time_error = self._resolve_time_range(from_ts, to_ts)
+        time_range, time_status, time_error = self._resolve_time_range(
+            from_ts, to_ts, query=query
+        )
         if not time_status:
             end_time = time.time()
             return {
@@ -1260,7 +1346,9 @@ class KVSearchView(BaseView):
                 "time_range": {},
             }
 
-        criteria_groups, status, msg_error = self.parse_query(query)
+        criteria_groups, status, msg_error = self.parse_query(
+            query, allow_since_directive=True
+        )
         results_ip = {}
         timestamp_array = {}
 
@@ -1333,7 +1421,9 @@ class KVSearchView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         count_objects = indexer.objects_count()
-        time_range, time_status, time_error = self._resolve_time_range(from_ts, to_ts)
+        time_range, time_status, time_error = self._resolve_time_range(
+            from_ts, to_ts, query=query
+        )
         if not time_status:
             return {
                 "status": False,
@@ -1347,7 +1437,9 @@ class KVSearchView(BaseView):
                 "pagination": {},
             }
 
-        criteria_groups, status, msg_error = self.parse_query(query)
+        criteria_groups, status, msg_error = self.parse_query(
+            query, allow_since_directive=True
+        )
         results_ip = {}
         timestamp_array = {}
         scanned_days = 0
@@ -1565,7 +1657,7 @@ class KVSearchView(BaseView):
             return jsonify({"error": "Missing query"}), 400
 
         time_range, time_status, time_error = self._resolve_time_range(
-            payload.get("from_ts"), payload.get("to_ts")
+            payload.get("from_ts"), payload.get("to_ts"), query=query
         )
         if not time_status:
             return jsonify({"error": time_error or "Invalid time range"}), 400
@@ -1614,7 +1706,7 @@ class KVSearchView(BaseView):
             return jsonify({"error": "Missing query"}), 400
 
         time_range, time_status, time_error = self._resolve_time_range(
-            payload.get("from_ts"), payload.get("to_ts")
+            payload.get("from_ts"), payload.get("to_ts"), query=query
         )
         if not time_status:
             return jsonify({"error": time_error or "Invalid time range"}), 400

@@ -37,6 +37,8 @@ let tagSuggestDebounceTimer = null;
 let tagSuggestItems = [];
 let tagSuggestSelectedIndex = -1;
 let tagSuggestContext = null;
+let manualTimeRangeSnapshot = null;
+let sinceDirectiveModeActive = false;
 
 window.addEventListener('pagehide', () => {
     searchPageUnloading = true;
@@ -212,6 +214,192 @@ function formatDateInput(date) {
     return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
 }
 
+function tokenizeSearchQuery(query) {
+    const tokens = [];
+    let current = '';
+    let activeQuote = null;
+
+    for (let index = 0; index < (query || '').length; index += 1) {
+        const char = query[index];
+
+        if (activeQuote) {
+            current += char;
+            if (char === activeQuote) {
+                activeQuote = null;
+            }
+            continue;
+        }
+
+        if (char === '"' || char === '\'') {
+            activeQuote = char;
+            current += char;
+            continue;
+        }
+
+        if (/\s/.test(char)) {
+            if (current) {
+                tokens.push(current);
+                current = '';
+            }
+            continue;
+        }
+
+        current += char;
+    }
+
+    if (current) {
+        tokens.push(current);
+    }
+    return tokens;
+}
+
+function getSinceDirectiveState(query) {
+    const tokens = tokenizeSearchQuery(query);
+    const matches = tokens.filter((token) => token.toLowerCase().startsWith('since:'));
+
+    if (!matches.length) {
+        return {
+            active: false,
+            days: null,
+            error: null
+        };
+    }
+
+    if (matches.length > 1) {
+        return {
+            active: true,
+            days: null,
+            error: 'Only one since: directive is allowed'
+        };
+    }
+
+    const rawValue = matches[0].slice('since:'.length).trim();
+    if (!/^\d+$/.test(rawValue) || Number(rawValue) <= 0) {
+        return {
+            active: true,
+            days: null,
+            error: 'since: expects a positive integer number of days'
+        };
+    }
+
+    return {
+        active: true,
+        days: Number(rawValue),
+        error: null
+    };
+}
+
+function computeSinceTimeRange(days) {
+    const toDate = new Date();
+    toDate.setHours(23, 59, 59, 0);
+
+    const fromDate = new Date();
+    fromDate.setHours(0, 0, 0, 0);
+    fromDate.setDate(fromDate.getDate() - Number(days));
+
+    return {
+        fromDate,
+        toDate,
+        fromTs: Math.floor(fromDate.getTime() / 1000),
+        toTs: Math.floor(toDate.getTime() / 1000)
+    };
+}
+
+function readVisibleTimeRangeValues() {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    return {
+        from: fromInput ? fromInput.value : '',
+        to: toInput ? toInput.value : ''
+    };
+}
+
+function writeVisibleTimeRangeValues(fromValue, toValue) {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromPicker = document.getElementById('time-from-picker');
+    const toPicker = document.getElementById('time-to-picker');
+
+    if (fromInput) {
+        fromInput.value = fromValue || '';
+    }
+    if (toInput) {
+        toInput.value = toValue || '';
+    }
+    if (fromPicker) {
+        fromPicker.value = fromValue || '';
+    }
+    if (toPicker) {
+        toPicker.value = toValue || '';
+    }
+}
+
+function setTimeRangeInputsLocked(isLocked) {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromButton = document.getElementById('time-from-btn');
+    const toButton = document.getElementById('time-to-btn');
+    const fromField = fromInput ? fromInput.closest('.search-date-field') : null;
+    const toField = toInput ? toInput.closest('.search-date-field') : null;
+
+    if (fromInput) {
+        fromInput.disabled = isLocked;
+    }
+    if (toInput) {
+        toInput.disabled = isLocked;
+    }
+    if (fromButton) {
+        fromButton.disabled = isLocked;
+    }
+    if (toButton) {
+        toButton.disabled = isLocked;
+    }
+    if (fromField) {
+        fromField.classList.toggle('search-date-field-disabled', isLocked);
+    }
+    if (toField) {
+        toField.classList.toggle('search-date-field-disabled', isLocked);
+    }
+}
+
+function syncSinceDirectiveState() {
+    const queryInput = document.getElementById('query');
+    if (!queryInput) {
+        return {
+            active: false,
+            days: null,
+            error: null
+        };
+    }
+
+    const directive = getSinceDirectiveState(queryInput.value || '');
+
+    if (directive.active && !sinceDirectiveModeActive) {
+        manualTimeRangeSnapshot = readVisibleTimeRangeValues();
+    } else if (!directive.active && sinceDirectiveModeActive) {
+        if (manualTimeRangeSnapshot) {
+            writeVisibleTimeRangeValues(
+                manualTimeRangeSnapshot.from,
+                manualTimeRangeSnapshot.to
+            );
+        }
+        manualTimeRangeSnapshot = null;
+    }
+
+    sinceDirectiveModeActive = directive.active;
+    setTimeRangeInputsLocked(directive.active);
+
+    if (directive.active && directive.days !== null) {
+        const timeRange = computeSinceTimeRange(directive.days);
+        writeVisibleTimeRangeValues(
+            formatDateInput(timeRange.fromDate),
+            formatDateInput(timeRange.toDate)
+        );
+    }
+
+    return directive;
+}
+
 function setDefaultTimeRange() {
     const fromInput = document.getElementById('time-from');
     const toInput = document.getElementById('time-to');
@@ -234,6 +422,14 @@ function setDefaultTimeRange() {
 }
 
 function getSearchTimeRange() {
+    const sinceDirective = syncSinceDirectiveState();
+    if (sinceDirective.active) {
+        if (sinceDirective.error) {
+            throw new Error(sinceDirective.error);
+        }
+        return computeSinceTimeRange(sinceDirective.days);
+    }
+
     const fromInput = document.getElementById('time-from');
     const toInput = document.getElementById('time-to');
     const fromDate = new Date(`${fromInput.value}T00:00:00`);
@@ -260,7 +456,7 @@ function getInclusiveDayCount(fromTs, toTs) {
 function openDatePicker(inputId) {
     const visibleInput = document.getElementById(inputId);
     const pickerInput = document.getElementById(`${inputId}-picker`);
-    if (!visibleInput || !pickerInput) {
+    if (!visibleInput || !pickerInput || visibleInput.disabled) {
         return;
     }
 
@@ -526,7 +722,10 @@ function bindQueryTagHelper() {
         return;
     }
 
-    input.addEventListener('input', scheduleTagSuggestionFetch);
+    input.addEventListener('input', () => {
+        scheduleTagSuggestionFetch();
+        syncSinceDirectiveState();
+    });
     input.addEventListener('click', scheduleTagSuggestionFetch);
     input.addEventListener('keydown', handleQueryKeydown);
     input.addEventListener('blur', () => {
@@ -974,6 +1173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindDateInput('time-to');
     bindQueryTagHelper();
     setDefaultTimeRange();
+    syncSinceDirectiveState();
 });
 
 </script>
@@ -1199,6 +1399,17 @@ document.addEventListener('DOMContentLoaded', () => {
 .search-date-field input {
     width: 100%;
 }
+.search-date-field.search-date-field-disabled {
+    opacity: 0.55;
+}
+.search-date-field.search-date-field-disabled .form-control {
+    background: #f0f0f0;
+    color: #777;
+    cursor: not-allowed;
+}
+.search-date-field.search-date-field-disabled .btn {
+    cursor: not-allowed;
+}
 .search-date-input {
     font-variant-numeric: tabular-nums;
 }
@@ -1286,7 +1497,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <div class="search-time-range">
                 <div class="input-group search-date-field">
                     <span class="input-group-btn">
-                        <button type="button" class="btn btn-default" onclick="openDatePicker('time-from')" title="Select start date" aria-label="Select start date">
+                        <button type="button" id="time-from-btn" class="btn btn-default" onclick="openDatePicker('time-from')" title="Select start date" aria-label="Select start date">
                             <i class="fa fa-calendar" aria-hidden="true"></i>
                         </button>
                     </span>
@@ -1295,7 +1506,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
                 <div class="input-group search-date-field">
                     <span class="input-group-btn">
-                        <button type="button" class="btn btn-default" onclick="openDatePicker('time-to')" title="Select end date" aria-label="Select end date">
+                        <button type="button" id="time-to-btn" class="btn btn-default" onclick="openDatePicker('time-to')" title="Select end date" aria-label="Select end date">
                             <i class="fa fa-calendar" aria-hidden="true"></i>
                         </button>
                     </span>
@@ -1453,15 +1664,15 @@ document.addEventListener('DOMContentLoaded', () => {
             <tr>
                 <td>tag</td>
                 <td></td>
-                <td>Computed document tag</td>
+                <td>tagged devices</td>
                 <td>x509_san</td>
                 <td>lk, bg</td>
                 <td>TLS certificate subject alternative names</td>
             </tr>
             <tr>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td>since</td>
+                <td></td>
+                <td>set the time range in days</td>
                 <td>x509_md5</td>
                 <td></td>
                 <td>MD5 of the TLS certificate public signature</td>
