@@ -421,6 +421,7 @@ class MeiliSearchView(BaseView):
     default_view = "search"
 
     @expose("/query")
+    @has_access
     def query(self):
         """
         This Function send the query back to meilisearch.
@@ -431,6 +432,7 @@ class MeiliSearchView(BaseView):
         return jsonify(results)
 
     @expose("/search")
+    @has_access
     def search(self):
         """
         This function display the search page
@@ -438,6 +440,7 @@ class MeiliSearchView(BaseView):
         return self.render_template("search_meili.html")
 
     @expose("/getuid")
+    @has_access
     def getuid(self):
         """
         This function retrieve a document from the meili.
@@ -1824,6 +1827,7 @@ class KVSearchView(BaseView):
         )
 
     @expose("/search")
+    @has_access
     def search(self):
         """
         This fuction display the search page
@@ -2360,6 +2364,7 @@ class TargetsView(ModelView):
         return log
 
     @expose("/bulk_import", methods=["GET", "POST"])
+    @has_access
     def bulk_import(self):
         """Bulk Import Form"""
         form = BulkImportForm()
