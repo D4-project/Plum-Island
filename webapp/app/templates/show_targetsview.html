@@ -70,7 +70,7 @@
 
 <div class="panel panel-primary">
   <div class="panel-heading">
-    <h4 class="panel-title ">Results</h4>
+    <h4 class="panel-title ">Results of last scans</h4>
   </div>
   <div class="panel-body" id="addrAccordion">
 <div id="info" class="mt-2"></div>
@@ -80,6 +80,9 @@
 
 <script>
 const targetSearchQuery = {{ get_target_value(pk) | tojson }};
+const targetSearchTimeRange = {{ get_target_search_time_range(pk) | tojson }};
+const TARGET_SEARCH_PAGE_SIZE = 500;
+const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -132,13 +135,69 @@ function copyIpToClipboard(ip, triggerEl) {
 
 
 async function search() {
-    const params = new URLSearchParams({ q: targetSearchQuery });
-    const res = await fetch(`/kvsearchview/query?${params.toString()}`);
-    const data = await readJsonResponse(res);
-
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
     const errorDiv = document.getElementById('msg_error');
+    const aggregateData = {
+        status: true,
+        results: {},
+        processingTimeMs: 0,
+        uid_count: 0,
+        ip_count: 0,
+        msg_error: ''
+    };
+
+    let hasMore = true;
+    let searchId = null;
+    let nextCursor = null;
+    let windowDays = 1;
+
+    while (hasMore) {
+        const params = new URLSearchParams({
+            q: targetSearchQuery,
+            limit: String(TARGET_SEARCH_PAGE_SIZE),
+            window_days: String(windowDays)
+        });
+        if (targetSearchTimeRange.from_ts && targetSearchTimeRange.to_ts) {
+            params.set('from_ts', String(targetSearchTimeRange.from_ts));
+            params.set('to_ts', String(targetSearchTimeRange.to_ts));
+        }
+        if (searchId) {
+            params.set('search_id', searchId);
+        }
+        if (nextCursor !== null && nextCursor !== undefined) {
+            params.set('cursor_ts', String(nextCursor));
+        }
+
+        const res = await fetch(`/kvsearchview/query?${params.toString()}`);
+        const data = await readJsonResponse(res);
+        const pagination = data.pagination || {};
+
+        aggregateData.processingTimeMs += Number(data.processingTimeMs || 0);
+        aggregateData.uid_count = data.uid_count;
+        aggregateData.ip_count = data.ip_count;
+        searchId = data.search_id || searchId;
+
+        if (data.status === false) {
+            aggregateData.status = false;
+            aggregateData.msg_error = data.msg_error || 'Search failed';
+            break;
+        }
+
+        Object.assign(aggregateData.results, data.results || {});
+        hasMore = Boolean(pagination.has_more);
+        nextCursor = pagination.next_cursor;
+
+        if (Object.keys(data.results || {}).length === 0) {
+            windowDays = Math.min(windowDays * 2, MAX_TARGET_SEARCH_WINDOW_DAYS);
+        } else if (pagination.stopped_in_window) {
+            windowDays = Number(pagination.window_days || windowDays || 1);
+        } else {
+            windowDays = 1;
+        }
+    }
+
+    const data = aggregateData;
     const time = (data.processingTimeMs || 0).toFixed(3);
     infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
 
@@ -162,7 +221,7 @@ async function search() {
                         </a>
                     </h4>
                     <a class="target-ip-action" href="/ip/${encodeURIComponent(ip)}" title="Open details for ${ip}" aria-label="Open details for ${ip}">
-                        <i class="fa fa-external-link" aria-hidden="true"></i>
+                        <i class="fa fa-info-circle" aria-hidden="true"></i>
                     </a>
                     <button type="button" class="target-ip-action" onclick="copyIpToClipboard('${ip}', this)" title="Copy ${ip}" aria-label="Copy ${ip}">
                         <i class="fa-regular fa-copy" aria-hidden="true"></i>

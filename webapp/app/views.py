@@ -386,10 +386,38 @@ def get_target_profile_stats(pk):
     return rows
 
 
+def get_target_search_time_range(pk):
+    """
+    Return a search range starting one day before the oldest target scan stat.
+    """
+    timestamps = []
+    states = (
+        db.session.query(TargetScanStates)
+        .filter(TargetScanStates.target_id == pk)
+        .all()
+    )
+    for state in states:
+        for value in (state.last_scan, state.last_previous_scan):
+            timestamp_value = ensure_utc_naive(value)
+            if timestamp_value is not None:
+                timestamps.append(timestamp_value)
+
+    if not timestamps:
+        return {}
+
+    from_date = min(timestamps) - timedelta(days=1)
+    to_date = datetime.now(timezone.utc)
+    return {
+        "from_ts": int(from_date.replace(tzinfo=timezone.utc).timestamp()),
+        "to_ts": int(to_date.timestamp()),
+    }
+
+
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
 app.jinja_env.globals["get_target_value"] = get_target_value
 app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
+app.jinja_env.globals["get_target_search_time_range"] = get_target_search_time_range
 
 
 @appbuilder.app.errorhandler(404)
