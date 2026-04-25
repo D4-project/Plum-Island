@@ -174,7 +174,7 @@ def _normalized_document_values(document, field):
     if field == "ip":
         values = [document.get("ip")]
     elif field == "tag":
-        values = document.get("tag") or document.get("tags") or []
+        values = []
     else:
         values = document.get(field, [])
 
@@ -249,9 +249,9 @@ def document_matches_criteria_groups(document, criteria_groups):
 
 def apply_tag_rules_to_document(parsed_doc, tag_rules=None):
     """
-    Merge pre-existing document tags with matched rule tags.
+    Return tags computed from matched rules.
     """
-    merged_tags = normalize_tags(parsed_doc.get("tag") or parsed_doc.get("tags") or [])
+    merged_tags = []
     for compiled_rule in tag_rules or []:
         if document_matches_criteria_groups(
             parsed_doc, compiled_rule.get("criteria_groups", [])

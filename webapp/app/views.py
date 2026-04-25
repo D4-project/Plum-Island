@@ -2035,9 +2035,14 @@ class IPDetailView(BaseView):
         unmapped_documents = []
         warnings = []
         requested_hostnames = set()
+        ip_tags = set()
         has_ip_only_filter = False
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
+            for tag in indexer.r.smembers(f"tags:{uid}"):
+                tag_value = str(tag or "").strip()
+                if tag_value:
+                    ip_tags.add(tag_value)
             first_seen = self._safe_timestamp_to_display(
                 uid_timestamps.get("first_seen")
             )
@@ -2149,6 +2154,7 @@ class IPDetailView(BaseView):
             unmapped_documents=unmapped_documents,
             has_ip_only_filter=has_ip_only_filter,
             requested_hostnames=sorted(requested_hostnames, key=str.lower),
+            ip_tags=sorted(ip_tags, key=str.lower),
             warnings=warnings,
         )
 

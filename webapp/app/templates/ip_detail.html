@@ -20,7 +20,32 @@
 .ip-detail-title-row {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.6rem;
+}
+.ip-detail-tags {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.ip-detail-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
+    font-size: 1.13rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.33rem 0.87rem;
+}
+.ip-detail-tag-vuln {
+    background: #d9534f;
+}
+.ip-detail-tag-hard {
+    background: #777;
+}
+.ip-detail-tag-lang {
+    background: #5cb85c;
 }
 .ip-quick-link {
     color: #337ab7;
@@ -240,6 +265,14 @@
             <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('{{ ip }}', this)" title="Copy {{ ip }}" aria-label="Copy {{ ip }}">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i>
             </button>
+            {% if ip_tags %}
+            <div class="ip-detail-tags" aria-label="Tags">
+                {% for tag in ip_tags %}
+                {% set tag_prefix = tag.split(':', 1)[0] %}
+                <span class="ip-detail-tag{% if tag_prefix == 'vuln' %} ip-detail-tag-vuln{% elif tag_prefix == 'hard' %} ip-detail-tag-hard{% elif tag_prefix == 'lang' %} ip-detail-tag-lang{% endif %}">{{ tag }}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
         <div class="ip-detail-meta">
             {{ total_documents }} scan{% if total_documents != 1 %}s{% endif %}
@@ -252,7 +285,7 @@
         </div>
     </div>
     <div>
-        <a class="btn btn-default" href="/kvsearchview/search">
+        <a class="btn btn-default" href="/kvsearchview/search" onclick="goBackToPreviousPage(event)" title="Back">
             <i class="fa fa-arrow-left" aria-hidden="true"></i>
         </a>
     </div>
@@ -465,6 +498,14 @@
     const pdnsErrorEl = document.getElementById('ip-pdns-error');
     const pdnsResultsEl = document.getElementById('ip-pdns-results');
 
+    function goBackToPreviousPage(event) {
+        if (window.history.length > 1) {
+            event.preventDefault();
+            window.history.back();
+        }
+    }
+    window.goBackToPreviousPage = goBackToPreviousPage;
+
     function appendInfoRow(container, label, value) {
         if (value === null || value === undefined || value === '') {
             return;
@@ -655,6 +696,7 @@
             fallbackCopy();
         }
     }
+    window.copyIpToClipboard = copyIpToClipboard;
 
     function formatUrlHost(hostValue) {
         if (!hostValue) {
