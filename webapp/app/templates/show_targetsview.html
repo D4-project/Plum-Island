@@ -92,6 +92,40 @@ async function readJsonResponse(res) {
     throw new Error(snippet);
 }
 
+function copyIpToClipboard(ip, triggerEl) {
+    const markCopied = () => {
+        if (!triggerEl) {
+            return;
+        }
+        const originalTitle = triggerEl.getAttribute('title') || 'Copy IP';
+        triggerEl.classList.add('copied');
+        triggerEl.setAttribute('title', 'Copied');
+        setTimeout(() => {
+            triggerEl.classList.remove('copied');
+            triggerEl.setAttribute('title', originalTitle);
+        }, 1200);
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(ip).then(markCopied).catch(() => {});
+        return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = ip;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        markCopied();
+    } finally {
+        document.body.removeChild(textarea);
+    }
+}
+
     window.addEventListener('DOMContentLoaded', async () => {
   await search();
 });
@@ -121,11 +155,19 @@ async function search() {
         // IP accordion
         ipPanel.innerHTML = `
             <div class="panel-heading">
-                <h4 class="panel-title">
-                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
-                        ${ip}
+                <div class="target-result-title-row">
+                    <h4 class="panel-title">
+                        <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
+                            ${ip}
+                        </a>
+                    </h4>
+                    <a class="target-ip-action" href="/ip/${encodeURIComponent(ip)}" title="Open details for ${ip}" aria-label="Open details for ${ip}">
+                        <i class="fa fa-external-link" aria-hidden="true"></i>
                     </a>
-                </h4>
+                    <button type="button" class="target-ip-action" onclick="copyIpToClipboard('${ip}', this)" title="Copy ${ip}" aria-label="Copy ${ip}">
+                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                    </button>
+                </div>
             </div>
             <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
                 <div class="panel-body" id="uids-${ipIndex}">
@@ -190,6 +232,38 @@ async function loadUid(uid, targetId) {
 
   .plum-target-show-panels .panel {
     margin-bottom: 20px;
+  }
+
+  .target-result-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .target-result-title-row .panel-title {
+    margin: 0;
+  }
+
+  .target-ip-action {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: #337ab7;
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 1rem;
+    padding: 0;
+  }
+
+  .target-ip-action:hover,
+  .target-ip-action:focus {
+    color: #23527c;
+    outline: none;
+    text-decoration: none;
+  }
+
+  .target-ip-action.copied {
+    color: #3c763d;
   }
 </style>
 {% endblock %}
