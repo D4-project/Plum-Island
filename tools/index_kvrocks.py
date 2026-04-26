@@ -25,6 +25,7 @@ INDEX_FIELDS = [
     "fqdn_requested",
     "host",
     "domain",
+    "domain_requested",
     "tld",
     "tag",
     "port",

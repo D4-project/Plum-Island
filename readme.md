@@ -70,6 +70,7 @@ The following keywords can be used to explore the data:
 | net | | Cidr network, from /16 to /24 |
 | fqdn | like, begin| Fully qualified domain name found |
 | fqdn_requested | like, begin | FQDN given to scanner |
+| domain_requested | like, begin | Domain given to scanner |
 | host | like, begin  | hostname, the subdomain part |
 | domain | like, begin | dns domain |
 | tld | like, begin | top level domain | 

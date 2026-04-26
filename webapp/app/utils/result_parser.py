@@ -247,12 +247,53 @@ def get_hosts(data: dict, target: str):
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
 
 
+def _parse_valid_hostname(hostname):
+    """
+    Parse one hostname using the configured domain validation rules.
+    """
+    hostname = str(hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        return None
+
+    try:
+        url = Url(f"http://{hostname}")
+    except (ValueError, TypeError):
+        return None
+
+    suffix = url.suffix
+    if not suffix:
+        return None
+
+    suffix_str = str(suffix).lower()
+    parse = False
+    if DB_CONF["ONLINETLD"]:
+        if suffix_str in DB_CONF["TLDS"]:
+            parse = True
+    else:
+        if suffix.is_known():
+            parse = True
+
+    if suffix_str in DB_CONF["TLDADD"]:
+        parse = True
+
+    if not parse:
+        return None
+
+    return {
+        "fqdn": hostname,
+        "host": str(url.subdomain).lower() if url.subdomain else "",
+        "domain": str(url.domain).lower() if url.domain else "",
+        "tld": suffix_str,
+    }
+
+
 def get_fqdn_requested(data: dict, target: str):
     """
-    Extract user-requested FQDN values from hostnames entries.
+    Extract user-requested FQDN and domain values from hostnames entries.
     """
     body = get_body(data, target)
     fqdn_requested = []
+    domain_requested = []
     for entry in body or []:
         if not isinstance(entry, dict):
             continue
@@ -263,7 +304,17 @@ def get_fqdn_requested(data: dict, target: str):
         if hostname and hostname not in fqdn_requested:
             fqdn_requested.append(hostname)
 
-    return {"fqdn_requested": fqdn_requested}
+        parsed_hostname = _parse_valid_hostname(hostname)
+        if not parsed_hostname:
+            continue
+        domain = parsed_hostname.get("domain")
+        if domain and domain not in domain_requested:
+            domain_requested.append(domain)
+
+    return {
+        "fqdn_requested": fqdn_requested,
+        "domain_requested": domain_requested,
+    }
 
 
 def get_http_title(data: dict, target: str):

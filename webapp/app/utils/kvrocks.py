@@ -145,6 +145,7 @@ class KVrocksIndexer:
             "fqdn_requested",
             "host",
             "domain",
+            "domain_requested",
             "tld",
             "tag",
             # "url_path",
