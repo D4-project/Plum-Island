@@ -37,7 +37,14 @@ import requests
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
-from wtforms import TextAreaField, SubmitField, Field, ValidationError, IntegerField
+from wtforms import (
+    BooleanField,
+    TextAreaField,
+    SubmitField,
+    Field,
+    ValidationError,
+    IntegerField,
+)
 from wtforms.validators import Optional, NumberRange
 from wtforms.widgets import html_params
 from app import app
@@ -2804,6 +2811,12 @@ class ReportsView(ModelView):
         "schedule_hour",
     ]
     edit_columns = add_columns
+    add_form_extra_fields = {
+        "active": BooleanField("Report active", default=False),
+    }
+    edit_form_extra_fields = {
+        "active": BooleanField("Report active"),
+    }
     search_columns = ["name", "description", "query", "emails", "active"]
     base_order = ("updated_at", "desc")
     label_columns = {
@@ -2827,6 +2840,7 @@ class ReportsView(ModelView):
 
     def _normalize_report_item(self, item):
         normalize_report_fields(item)
+        item.active = bool(item.active)
         item.next_run_at = compute_next_report_run(item)
         return item
 

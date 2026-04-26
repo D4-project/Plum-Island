@@ -368,7 +368,7 @@ class Reports(Model):
     __tablename__ = "reports"
     id = Column(Integer, primary_key=True)
     name = Column(String(256), unique=True, nullable=False)
-    active = Column(Boolean, default=True, nullable=False)
+    active = Column(Boolean, default=False, nullable=False)
     description = Column(Text, nullable=False, default="")
     query = Column(Text, nullable=False)
     emails = Column(Text, nullable=False, default="")

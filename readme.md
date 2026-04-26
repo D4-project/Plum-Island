@@ -126,6 +126,60 @@ Retrieve hosts matching either nginx or apache.
 
 Retrieve hosts where the user-requested hostname matches `ttrenov.lu` and port 443 is open.
 
+## Reports
+
+Plum can generate scheduled Markdown reports from the same structured Kvrocks query syntax used by Header Search.
+
+A report is configured with:
+
+- a name and description
+- a structured search query
+- one or more recipient emails
+- a monthly schedule
+- a `Report active` flag
+
+`Report active` only controls automatic scheduled delivery. Preview and manual `Run now` actions remain available for inactive reports.
+
+### Report interval
+
+Report queries are always executed inside the report interval.
+
+For monthly reports:
+
+- if the report has already run, the interval starts at `last_run_at`
+- if the report has never run, the interval starts one calendar month before the run time
+- the interval ends at the current run time
+
+The query is the business filter, while the report interval is the time filter imposed by reporting.
+
+### Markdown content
+
+Reports are generated as Markdown. The current report body contains:
+
+- report summary
+- query and reporting period
+- number of matching IPs and scan results
+- open port summary
+- `New opened port`, comparing the current monthly interval with the previous monthly interval
+- host list sorted by numeric IP order
+- per-host tags when present
+- per-host open ports and scan result count
+- an as-is disclaimer
+
+Example host entry:
+
+```md
+- 158.64.1.27
+  - Tag: vuln:filelisting
+  - Open ports: 443
+  - Scan results: 1
+```
+
+### Email delivery
+
+SMTP delivery is controlled by the `REPORT_SMTP_*` settings in `webapp/config.py`.
+If `REPORT_SMTP_HOST` is empty, automatic report delivery is disabled.
+
 ## Technical requirements
 
 - Python 3.10 
