@@ -247,6 +247,49 @@ def collect_report_requested_fqdns(indexer, results):
     return per_ip_fqdns
 
 
+def _normalize_report_fqdn(value):
+    """
+    Normalize a report hostname candidate and reject IP literals.
+    """
+    normalized = str(value or "").strip().lower().rstrip(".")
+    if not normalized or "." not in normalized:
+        return ""
+    try:
+        ipaddress.ip_address(normalized)
+        return ""
+    except ValueError:
+        return normalized
+
+
+def collect_report_ptr_fqdns(document_loader, results):
+    """
+    Collect PTR hostnames found in the report interval documents.
+    """
+    per_ip_ptrs = {}
+    for ip, uids in (results or {}).items():
+        ip_ptrs = []
+        seen = set()
+        for uid in uids or []:
+            document = document_loader(uid)
+            if not document:
+                continue
+            body = document.get("body") or {}
+            for entry in body.get("hostnames") or []:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("type") or "").upper() != "PTR":
+                    continue
+                fqdn = _normalize_report_fqdn(
+                    entry.get("name") or entry.get("hostname")
+                )
+                if not fqdn or fqdn in seen:
+                    continue
+                seen.add(fqdn)
+                ip_ptrs.append(fqdn)
+        per_ip_ptrs[ip] = sorted(ip_ptrs, key=str.lower)
+    return per_ip_ptrs
+
+
 def _parse_pdns_ndjson(payload):
     """
     Parse CIRCL Passive DNS NDJSON payload into dictionaries.
@@ -273,15 +316,13 @@ def _extract_pdns_fqdn(record):
     if record_type and record_type.upper() != "A":
         return ""
 
-    for key in ("rrname", "name", "hostname", "fqdn"):
-        value = str((record or {}).get(key) or "").strip().lower().rstrip(".")
-        try:
-            ipaddress.ip_address(value)
-            continue
-        except ValueError:
-            pass
-        if value and "." in value:
-            return value
+    for key in ("rdata", "rrdata", "rrname", "name", "hostname", "fqdn"):
+        value = (record or {}).get(key)
+        values = value if isinstance(value, list) else [value]
+        for candidate in values:
+            fqdn = _normalize_report_fqdn(candidate)
+            if fqdn:
+                return fqdn
     return ""
 
 
@@ -370,6 +411,7 @@ def build_report_markdown(
     to_dt,
     per_ip_tags=None,
     per_ip_requested_fqdns=None,
+    per_ip_ptr_fqdns=None,
     per_ip_pdns_fqdns=None,
     new_open_ports=None,
 ):
@@ -432,6 +474,7 @@ def build_report_markdown(
             requested_fqdns = (
                 per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
             )
+            ptr_fqdns = per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else []
             pdns_fqdns = per_ip_pdns_fqdns.get(ip, []) if per_ip_pdns_fqdns else []
             ports = per_ip_ports.get(ip) or []
             ports_text = ", ".join(ports) if ports else "none"
@@ -448,16 +491,33 @@ def build_report_markdown(
                     f"  - Scan results: {len(results[ip])}",
                 ]
             )
-            associated_count = len(requested_fqdns) + len(pdns_fqdns)
+            seen_associated = set()
+            associated_entries = []
+            for fqdn in ptr_fqdns:
+                fqdn_key = str(fqdn).lower()
+                if fqdn_key in seen_associated:
+                    continue
+                seen_associated.add(fqdn_key)
+                associated_entries.append((fqdn, "ptr"))
+            for fqdn in requested_fqdns:
+                fqdn_key = str(fqdn).lower()
+                if fqdn_key in seen_associated:
+                    continue
+                seen_associated.add(fqdn_key)
+                associated_entries.append((fqdn, ""))
+            for fqdn in pdns_fqdns:
+                fqdn_key = str(fqdn).lower()
+                if fqdn_key in seen_associated:
+                    continue
+                seen_associated.add(fqdn_key)
+                associated_entries.append((fqdn, "pdns"))
+
+            associated_count = len(associated_entries)
             if associated_count:
                 lines.append(f"  - Associated FQDNs ({associated_count})")
-                shown_count = 0
-                for fqdn in requested_fqdns[:REPORT_FQDN_LIMIT]:
-                    lines.append(f"    - {fqdn}")
-                    shown_count += 1
-                for fqdn in pdns_fqdns[: max(0, REPORT_FQDN_LIMIT - shown_count)]:
-                    lines.append(f"    - {fqdn} (pdns)")
-                    shown_count += 1
+                for fqdn, source in associated_entries[:REPORT_FQDN_LIMIT]:
+                    suffix = f" ({source})" if source else ""
+                    lines.append(f"    - {fqdn}{suffix}")
                 if associated_count > REPORT_FQDN_LIMIT:
                     lines.append("    - more fqdn associated")
 

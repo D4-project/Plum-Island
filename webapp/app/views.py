@@ -74,6 +74,7 @@ from .utils.reports import (
     compute_new_open_ports,
     collect_report_ports,
     collect_report_passive_dns_fqdns,
+    collect_report_ptr_fqdns,
     collect_report_requested_fqdns,
     collect_report_tags,
     compute_next_report_run,
@@ -2987,6 +2988,11 @@ class ReportsView(ModelView):
             indexer,
             results.get("results") or {},
         )
+        meili_index = client.index("plum")
+        per_ip_ptr_fqdns = collect_report_ptr_fqdns(
+            lambda uid: KVSearchView.load_meili_document(meili_index, uid)[0],
+            results.get("results") or {},
+        )
         new_open_ports = {}
         previous_from_dt, previous_to_dt = compute_previous_report_interval(
             report,
@@ -3014,11 +3020,21 @@ class ReportsView(ModelView):
                 previous_per_ip_ports,
             )
         result_ips = list((results.get("results") or {}).keys())
+        per_ip_existing_fqdns = {}
+        for ip in result_ips:
+            per_ip_existing_fqdns[ip] = (
+                (per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else [])
+                + (
+                    per_ip_requested_fqdns.get(ip, [])
+                    if per_ip_requested_fqdns
+                    else []
+                )
+            )
         update_progress("pdns", pdns_done=0, pdns_total=len(result_ips))
         per_ip_pdns_fqdns = collect_report_passive_dns_fqdns(
             db.app.config,
             result_ips,
-            per_ip_requested_fqdns,
+            per_ip_existing_fqdns,
             progress_callback=lambda done, total: update_progress(
                 "pdns",
                 pdns_done=done,
@@ -3035,6 +3051,7 @@ class ReportsView(ModelView):
             to_dt,
             per_ip_tags=per_ip_tags,
             per_ip_requested_fqdns=per_ip_requested_fqdns,
+            per_ip_ptr_fqdns=per_ip_ptr_fqdns,
             per_ip_pdns_fqdns=per_ip_pdns_fqdns,
             new_open_ports=new_open_ports,
         )
