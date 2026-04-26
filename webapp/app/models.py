@@ -360,6 +360,82 @@ class TagRules(Model):
         return Esc(html)
 
 
+class Reports(Model):
+    """
+    Scheduled Markdown reports backed by KVrocks search queries.
+    """
+
+    __tablename__ = "reports"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(256), unique=True, nullable=False)
+    active = Column(Boolean, default=True, nullable=False)
+    description = Column(Text, nullable=False, default="")
+    query = Column(Text, nullable=False)
+    emails = Column(Text, nullable=False, default="")
+    schedule_type = Column(String(32), nullable=False, default="monthly")
+    schedule_day = Column(Integer, nullable=False, default=1)
+    schedule_hour = Column(Integer, nullable=False, default=8)
+    last_run_at = Column(DateTime, default=None)
+    next_run_at = Column(DateTime, default=None)
+    created_at = Column(DateTime, default=utcnow_naive, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
+        nullable=False,
+    )
+
+    def __repr__(self):
+        return self.name
+
+    def emails_list(self):
+        """
+        Return stored reporting emails as a Python list.
+        """
+        values = []
+        seen = set()
+        for line in str(self.emails or "").replace(",", "\n").splitlines():
+            value = str(line).strip().lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            values.append(value)
+        return values
+
+    def emails_html(self):
+        """
+        Display reporting emails as HTML badges.
+        """
+        html = ""
+        for email in self.emails_list():
+            html += f'<span class="label label-default">{email}</span> '
+        return Esc(html)
+
+    def schedule_html(self):
+        """
+        Display the configured reporting schedule.
+        """
+        if self.schedule_type == "monthly":
+            return Esc(
+                f'<span class="label label-info">monthly day '
+                f'{self.schedule_day:02d} at {self.schedule_hour:02d}:00</span>'
+            )
+        return Esc(f'<span class="label label-default">{self.schedule_type}</span>')
+
+    def actions_html(self):
+        """
+        Render report-specific actions.
+        """
+        if not self.id:
+            return Esc("")
+        return Esc(
+            f'<a class="btn btn-sm btn-default" href="/reportsview/preview/{self.id}">'
+            'Preview</a> '
+            f'<a class="btn btn-sm btn-primary" href="/reportsview/run/{self.id}">'
+            'Run now</a>'
+        )
+
+
 class TargetScanStates(Model):
     """
     Runtime state of one ScanProfile applied to one Target.

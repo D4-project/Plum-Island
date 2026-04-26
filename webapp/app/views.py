@@ -48,6 +48,7 @@ from .models import (
     ApiKeys,
     Nses,
     TagRules,
+    Reports,
     Protos,
     ScanProfiles,
     Ports,
@@ -60,6 +61,18 @@ from .utils.ip2asn import get_asn_description_for_ip
 from .utils.tagrules import (
     compile_tag_rule_definition,
     normalize_tag_rule_fields,
+)
+from .utils.reports import (
+    build_report_markdown,
+    compute_new_open_ports,
+    collect_report_ports,
+    collect_report_tags,
+    compute_next_report_run,
+    compute_report_interval,
+    compute_previous_report_interval,
+    datetime_to_epoch,
+    normalize_report_fields,
+    send_report_markdown,
 )
 from .utils.timeutils import ensure_utc_naive, utcnow_iso
 
@@ -2748,6 +2761,191 @@ class TagRulesView(ModelView):
         return self._normalize_tag_rule_item(item)
 
 
+class ReportsView(ModelView):
+    """
+    CRUD and manual execution interface for scheduled reports.
+    """
+
+    datamodel = SQLAInterface(Reports)
+    list_columns = [
+        "id",
+        "active",
+        "name",
+        "schedule_html",
+        "emails_html",
+        "last_run_at",
+        "next_run_at",
+        "actions_html",
+    ]
+    show_columns = [
+        "active",
+        "name",
+        "description",
+        "query",
+        "emails",
+        "emails_html",
+        "schedule_type",
+        "schedule_day",
+        "schedule_hour",
+        "last_run_at",
+        "next_run_at",
+        "created_at",
+        "updated_at",
+        "actions_html",
+    ]
+    add_columns = [
+        "name",
+        "active",
+        "description",
+        "query",
+        "emails",
+        "schedule_type",
+        "schedule_day",
+        "schedule_hour",
+    ]
+    edit_columns = add_columns
+    search_columns = ["name", "description", "query", "emails", "active"]
+    base_order = ("updated_at", "desc")
+    label_columns = {
+        "id": "ID",
+        "active": "Report active",
+        "name": "Report Name",
+        "description": "Description",
+        "query": "Search query",
+        "emails": "Reporting emails",
+        "emails_html": "Reporting emails",
+        "schedule_type": "Schedule type",
+        "schedule_day": "Day of month",
+        "schedule_hour": "Hour UTC",
+        "schedule_html": "Schedule",
+        "last_run_at": "Last report",
+        "next_run_at": "Next automatic report",
+        "created_at": "Created",
+        "updated_at": "Updated",
+        "actions_html": "Actions",
+    }
+
+    def _normalize_report_item(self, item):
+        normalize_report_fields(item)
+        item.next_run_at = compute_next_report_run(item)
+        return item
+
+    def pre_add(self, item):
+        return self._normalize_report_item(item)
+
+    def pre_update(self, item):
+        return self._normalize_report_item(item)
+
+    @staticmethod
+    def _build_report(report, run_at=None):
+        run_at = ensure_utc_naive(run_at)
+        from_dt, to_dt = compute_report_interval(report, run_at=run_at)
+        results = KVSearchView().execute_search(
+            report.query,
+            datetime_to_epoch(from_dt),
+            datetime_to_epoch(to_dt),
+        )
+        if not results.get("status"):
+            raise ValueError(results.get("msg_error") or "Invalid report query")
+
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        per_ip_ports, port_counter = collect_report_ports(
+            indexer,
+            results.get("results") or {},
+        )
+        per_ip_tags = collect_report_tags(
+            indexer,
+            results.get("results") or {},
+        )
+        new_open_ports = {}
+        previous_from_dt, previous_to_dt = compute_previous_report_interval(
+            report,
+            from_dt,
+            to_dt,
+        )
+        if previous_from_dt and previous_to_dt:
+            previous_results = KVSearchView().execute_search(
+                report.query,
+                datetime_to_epoch(previous_from_dt),
+                datetime_to_epoch(previous_to_dt),
+            )
+            if not previous_results.get("status"):
+                raise ValueError(
+                    previous_results.get("msg_error")
+                    or "Invalid previous report query"
+                )
+            previous_per_ip_ports, _previous_port_counter = collect_report_ports(
+                indexer,
+                previous_results.get("results") or {},
+            )
+            new_open_ports = compute_new_open_ports(
+                per_ip_ports,
+                previous_per_ip_ports,
+            )
+        markdown = build_report_markdown(
+            report,
+            results,
+            per_ip_ports,
+            port_counter,
+            from_dt,
+            to_dt,
+            per_ip_tags=per_ip_tags,
+            new_open_ports=new_open_ports,
+        )
+        return markdown, from_dt, to_dt, results
+
+    @expose("/preview/<int:pk>")
+    @has_access
+    def preview(self, pk):
+        """
+        Render the report Markdown without sending it.
+        """
+        report = db.session.query(Reports).filter(Reports.id == pk).one_or_none()
+        if report is None:
+            return make_response("Report not found", 404)
+
+        try:
+            markdown, from_dt, to_dt, _results = self._build_report(report)
+        except ValueError as error:
+            flash(str(error), "danger")
+            return redirect(url_for("ReportsView.show", pk=pk))
+
+        return self.render_template(
+            "report_preview.html",
+            report=report,
+            markdown=markdown,
+            from_dt=from_dt,
+            to_dt=to_dt,
+        )
+
+    @expose("/run/<int:pk>")
+    @has_access
+    def run(self, pk):
+        """
+        Manually send a report, regardless of automatic scheduling state.
+        """
+        report = db.session.query(Reports).filter(Reports.id == pk).one_or_none()
+        if report is None:
+            return make_response("Report not found", 404)
+
+        run_at = utcnow_iso()
+        try:
+            markdown, _from_dt, to_dt, _results = self._build_report(report)
+            send_report_markdown(db.app.config, report, markdown)
+            report.last_run_at = ensure_utc_naive(to_dt)
+            report.next_run_at = compute_next_report_run(report, now=to_dt)
+            db.session.commit()
+            flash("Report sent", "success")
+        except Exception as error:  # pylint: disable=broad-except
+            db.session.rollback()
+            flash(f"Report failed: {error}", "danger")
+            logger.exception("Manual report %s failed at %s", pk, run_at)
+
+        return redirect(url_for("ReportsView.show", pk=pk))
+
+
 class ScanprofilesView(ModelView):
     """
     This class implements GUI for
@@ -3137,6 +3335,7 @@ appbuilder.add_view(
 )
 appbuilder.add_view(NsesView, "Nse Scripts", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(TagRulesView, "Tag Rules", icon="fa-tags", category="Config")
+appbuilder.add_view(ReportsView, "Reports", icon="fa-file-text-o", category="Analytics")
 appbuilder.add_view(ProtosView, "Protocols", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(PortsView, "Ports", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(JobsView, "Jobs", icon="fa-chart-bar", category="Status")

@@ -34,6 +34,16 @@ KVROCKS_PORT = 6666
 PASSIVE_USER = ""
 PASSIVE_PWD = ""
 
+# Monthly Markdown report delivery.
+# Leave REPORT_SMTP_HOST empty to disable report email sending.
+REPORT_SMTP_HOST = ""
+REPORT_SMTP_PORT = 25
+REPORT_SMTP_USER = ""
+REPORT_SMTP_PASSWORD = ""
+REPORT_SMTP_FROM = ""
+REPORT_SMTP_USE_TLS = False
+REPORT_SMTP_USE_SSL = False
+
 # The SQLAlchemy connection string.
 SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(basedir, "app.db")
 # SQLALCHEMY_DATABASE_URI = 'mysql://myapp@localhost/myapp'

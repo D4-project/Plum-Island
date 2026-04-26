@@ -20,10 +20,22 @@ from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 from . import db
 from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
+from .models import Reports
 from .models import TagRules
 from .utils.mutils import is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json
+from .utils.reports import (
+    build_report_markdown,
+    compute_new_open_ports,
+    collect_report_ports,
+    collect_report_tags,
+    compute_next_report_run,
+    compute_report_interval,
+    compute_previous_report_interval,
+    datetime_to_epoch,
+    send_report_markdown,
+)
 from .utils.tagrules import compile_tag_rule_records
 from .utils.timeutils import utcnow_aware, utcnow_naive
 
@@ -63,6 +75,7 @@ def task_master_of_puppets():
         step_durations = {
             "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
             "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
+            "reports": _run_scheduler_step("reports", task_run_due_reports),
             "cleanup_jobs": _run_scheduler_step("cleanup_jobs", task_cleanup_jobs),
             "cleanup_search_sessions": _run_scheduler_step(
                 "cleanup_search_sessions", task_cleanup_search_sessions
@@ -73,10 +86,11 @@ def task_master_of_puppets():
         }
         total_elapsed = time.perf_counter() - scheduler_started_at
         logger.info(
-            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, export_to_dbs=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
+            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
             step_durations["create_jobs"],
             step_durations["export_to_dbs"],
+            step_durations["reports"],
             step_durations["cleanup_jobs"],
             step_durations["cleanup_search_sessions"],
             step_durations["cleanup_export_jobs"],
@@ -826,6 +840,107 @@ def task_export_to_dbs():
         logger.error("Unable to export to Meili database")
     finally:
         db.session.remove()
+
+
+def _build_due_report(report, run_at):
+    """
+    Execute a report query and return its Markdown body.
+    """
+    from .views import KVSearchView  # pylint: disable=import-outside-toplevel
+
+    from_dt, to_dt = compute_report_interval(report, run_at=run_at)
+    results = KVSearchView().execute_search(
+        report.query,
+        datetime_to_epoch(from_dt),
+        datetime_to_epoch(to_dt),
+    )
+    if not results.get("status"):
+        raise ValueError(results.get("msg_error") or "Invalid report query")
+
+    indexer = db.app.config.get("KVROCKS_IDX") or KVrocksIndexer(
+        db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+    )
+    per_ip_ports, port_counter = collect_report_ports(
+        indexer,
+        results.get("results") or {},
+    )
+    per_ip_tags = collect_report_tags(
+        indexer,
+        results.get("results") or {},
+    )
+    new_open_ports = {}
+    previous_from_dt, previous_to_dt = compute_previous_report_interval(
+        report,
+        from_dt,
+        to_dt,
+    )
+    if previous_from_dt and previous_to_dt:
+        previous_results = KVSearchView().execute_search(
+            report.query,
+            datetime_to_epoch(previous_from_dt),
+            datetime_to_epoch(previous_to_dt),
+        )
+        if not previous_results.get("status"):
+            raise ValueError(
+                previous_results.get("msg_error") or "Invalid previous report query"
+            )
+        previous_per_ip_ports, _previous_port_counter = collect_report_ports(
+            indexer,
+            previous_results.get("results") or {},
+        )
+        new_open_ports = compute_new_open_ports(
+            per_ip_ports,
+            previous_per_ip_ports,
+        )
+    markdown = build_report_markdown(
+        report,
+        results,
+        per_ip_ports,
+        port_counter,
+        from_dt,
+        to_dt,
+        per_ip_tags=per_ip_tags,
+        new_open_ports=new_open_ports,
+    )
+    return markdown, to_dt
+
+
+def task_run_due_reports():
+    """
+    Send active scheduled reports whose next run is due.
+    """
+    if not str(db.app.config.get("REPORT_SMTP_HOST", "") or "").strip():
+        return
+
+    now = utcnow_naive()
+    due_reports = (
+        db.session.query(Reports)
+        .filter(
+            Reports.active == True,
+            Reports.next_run_at != None,
+            Reports.next_run_at <= now,
+        )
+        .order_by(Reports.next_run_at.asc())
+        .all()
+    )
+    if not due_reports:
+        return
+
+    sent_reports = 0
+    for report in due_reports:
+        try:
+            markdown, to_dt = _build_due_report(report, now)
+            send_report_markdown(db.app.config, report, markdown)
+            report.last_run_at = to_dt
+            report.next_run_at = compute_next_report_run(report, now=to_dt)
+            db.session.commit()
+            sent_reports += 1
+        except Exception as error:  # pylint: disable=broad-except
+            db.session.rollback()
+            logger.exception("Scheduled report %s failed: %s", report.id, error)
+
+    if sent_reports:
+        logger.info("Reports TASK: %s scheduled reports sent", sent_reports)
 
 
 def task_cleanup_jobs():
