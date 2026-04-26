@@ -190,8 +190,15 @@ SCHEDULER_STATE_SYNC_BATCH_SIZE = 2048
 # Safety cap for new queued jobs created during one scheduler tick.
 SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK = 1024
 
+# Maximum queued jobs retagged per scan profile and scheduler tick after a
+# scan profile priority change.
+SCHEDULER_PRIORITY_RETAG_BATCH_SIZE = 1000
+
 # Expensive orphan working-state repair cadence in seconds.
 SCHEDULER_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
+
+# Maximum orphan target/profile states repaired per orphan sweep.
+SCHEDULER_ORPHAN_SWEEP_BATCH_SIZE = 2000
 
 # Job Local retention of results in days
 JOB_SCAVENGE = 60

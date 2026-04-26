@@ -127,6 +127,34 @@ Retrieve hosts matching either nginx or apache.
 
 Retrieve hosts where the user-requested hostname matches `ttrenov.lu` and port 443 is open.
 
+## Job priority
+
+Scan profiles and jobs support five priority queues:
+
+- `0`: background
+- `1`: low
+- `2`: normal
+- `3`: high
+- `4`: urgent
+
+New jobs inherit the priority of their scan profile.
+The `Priority Boost` action on an existing job raises it to priority `4`.
+When a scan profile priority changes, already queued unfinished jobs are retagged gradually by the scheduler.
+`SCHEDULER_PRIORITY_RETAG_BATCH_SIZE` controls how many queued jobs are updated per profile and scheduler tick.
+`SCHEDULER_ORPHAN_SWEEP_BATCH_SIZE` controls how many stuck target/profile working states are repaired per orphan sweep.
+
+When agents request work, Plum uses a dynamic weighted round-robin over the queues that currently have waiting jobs. The base weights are:
+
+| Priority | Weight |
+| -------- | ------ |
+| 4 | 50 |
+| 3 | 20 |
+| 2 | 15 |
+| 1 | 10 |
+| 0 | 5 |
+
+Only non-empty queues are considered, so if urgent/high queues are empty the remaining capacity is redistributed across the lower queues instead of being pinned to a fixed fallback order.
+
 ## Reports
 
 Plum can generate scheduled Markdown reports from the same structured Kvrocks query syntax used by Header Search.

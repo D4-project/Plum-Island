@@ -49,6 +49,8 @@ DEFAULT_QUEUE_STATE_BATCH_SIZE = 128
 DEFAULT_STATE_SYNC_BATCH_SIZE = 2048
 DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
+DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
+DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
 
 
 def _run_scheduler_step(step_label, step_func):
@@ -57,10 +59,32 @@ def _run_scheduler_step(step_label, step_func):
     """
     started_at = time.perf_counter()
     logger.info("Scheduler TASK: starting %s", step_label)
-    step_func()
+    summary = step_func()
     elapsed = time.perf_counter() - started_at
-    logger.info("Scheduler TASK: finished %s in %.2fs", step_label, elapsed)
-    return elapsed
+    summary_text = _format_scheduler_summary(summary)
+    if summary_text:
+        logger.info(
+            "Scheduler TASK: finished %s in %.2fs (%s)",
+            step_label,
+            elapsed,
+            summary_text,
+        )
+    else:
+        logger.info("Scheduler TASK: finished %s in %.2fs", step_label, elapsed)
+    return {"elapsed": elapsed, "summary": summary or {}}
+
+
+def _format_scheduler_summary(summary):
+    """
+    Format compact scheduler task counters for the generic finished log line.
+    """
+    if not summary:
+        return ""
+    if isinstance(summary, str):
+        return summary
+    if isinstance(summary, dict):
+        return ", ".join(f"{key}={value}" for key, value in summary.items())
+    return str(summary)
 
 
 def task_master_of_puppets():
@@ -76,6 +100,9 @@ def task_master_of_puppets():
     try:
         step_durations = {
             "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
+            "priority_retag": _run_scheduler_step(
+                "priority_retag", task_retag_queued_job_priorities
+            ),
             "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
             "reports": _run_scheduler_step("reports", task_run_due_reports),
             "cleanup_jobs": _run_scheduler_step("cleanup_jobs", task_cleanup_jobs),
@@ -88,14 +115,15 @@ def task_master_of_puppets():
         }
         total_elapsed = time.perf_counter() - scheduler_started_at
         logger.info(
-            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
+            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, priority_retag=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
-            step_durations["create_jobs"],
-            step_durations["export_to_dbs"],
-            step_durations["reports"],
-            step_durations["cleanup_jobs"],
-            step_durations["cleanup_search_sessions"],
-            step_durations["cleanup_export_jobs"],
+            step_durations["create_jobs"]["elapsed"],
+            step_durations["priority_retag"]["elapsed"],
+            step_durations["export_to_dbs"]["elapsed"],
+            step_durations["reports"]["elapsed"],
+            step_durations["cleanup_jobs"]["elapsed"],
+            step_durations["cleanup_search_sessions"]["elapsed"],
+            step_durations["cleanup_export_jobs"]["elapsed"],
         )
     finally:
         db.session.remove()
@@ -148,32 +176,80 @@ def _get_scheduler_int_config(name, default_value, minimum=1):
 
 def _release_orphaned_working_states():
     """
-    Release target/profile states stuck in working mode without unfinished jobs.
+    Release a bounded batch of target/profile states stuck in working mode
+    without unfinished jobs.
     """
-    released_states = db.session.execute(
+    batch_size = _get_scheduler_int_config(
+        "SCHEDULER_ORPHAN_SWEEP_BATCH_SIZE",
+        DEFAULT_ORPHAN_SWEEP_BATCH_SIZE,
+    )
+    cursor_id = int(db.app.config.get("scheduler_orphan_sweep_cursor_id", 0) or 0)
+    candidate_rows = db.session.execute(
         text(
             """
-            UPDATE target_scan_states
-               SET working = 0
+            SELECT id, target_id
+              FROM target_scan_states
              WHERE working = 1
+               AND id > :cursor_id
+             ORDER BY id ASC
+             LIMIT :batch_size
+            """
+        ),
+        {"cursor_id": cursor_id, "batch_size": batch_size},
+    ).fetchall()
+
+    if not candidate_rows:
+        if cursor_id:
+            db.app.config["scheduler_orphan_sweep_cursor_id"] = 0
+        return {"released_states": 0, "checked_states": 0}
+
+    db.app.config["scheduler_orphan_sweep_cursor_id"] = candidate_rows[-1][0]
+    state_ids = [int(row[0]) for row in candidate_rows]
+    placeholders = ", ".join(f":state_id_{index}" for index in range(len(state_ids)))
+    params = {
+        "batch_size": batch_size,
+        **{f"state_id_{index}": state_id for index, state_id in enumerate(state_ids)},
+    }
+    orphan_rows = db.session.execute(
+        text(
+            f"""
+            SELECT id, target_id
+              FROM target_scan_states AS tss
+             WHERE id IN ({placeholders})
                AND NOT EXISTS (
                     SELECT 1
                       FROM jobs_targets_assoc AS jta
                       JOIN jobs AS j ON j.id = jta.job_id
-                     WHERE jta.target_id = target_scan_states.target_id
-                       AND j.scanprofile_id = target_scan_states.scanprofile_id
+                     WHERE jta.target_id = tss.target_id
+                       AND j.scanprofile_id = tss.scanprofile_id
                        AND j.finished = 0
                )
+             ORDER BY id ASC
             """
-        )
-    ).rowcount or 0
-    if released_states:
+        ),
+        params,
+    ).fetchall()
+
+    if not orphan_rows:
+        return {"released_states": 0, "checked_states": len(candidate_rows)}
+
+    orphan_state_ids = [row[0] for row in orphan_rows]
+    target_ids = sorted({row[1] for row in orphan_rows})
+    released_states = (
+        db.session.query(TargetScanStates)
+        .filter(TargetScanStates.id.in_(orphan_state_ids))
+        .update({TargetScanStates.working: False}, synchronize_session=False)
+        or 0
+    )
+
+    for target_id in target_ids:
         db.session.execute(
             text(
                 """
                 UPDATE targets
                    SET working = 0
-                 WHERE working = 1
+                 WHERE id = :target_id
+                   AND working = 1
                    AND NOT EXISTS (
                         SELECT 1
                           FROM target_scan_states AS tss
@@ -181,10 +257,14 @@ def _release_orphaned_working_states():
                            AND tss.working = 1
                    )
                 """
-            )
+            ),
+            {"target_id": target_id},
         )
-        db.session.commit()
-    return released_states
+    db.session.commit()
+    return {
+        "released_states": released_states,
+        "checked_states": len(candidate_rows),
+    }
 
 
 def _should_run_orphan_state_release():
@@ -518,16 +598,17 @@ def task_create_jobs():
     Keep per-profile waiting queues filled without sweeping the whole target set.
     """
     started_at = time.perf_counter()
-    released_states = 0
+    orphan_release = {"released_states": 0, "checked_states": 0}
     seeded_states = 0
 
     orphan_started = time.perf_counter()
     if _should_run_orphan_state_release():
-        released_states = _release_orphaned_working_states()
+        orphan_release = _release_orphaned_working_states()
         logger.debug(
-            "Create Job TASK debug: orphan-state release completed in %.2fs (released_states=%s)",
+            "Create Job TASK debug: orphan-state release completed in %.2fs (checked_states=%s, released_states=%s)",
             time.perf_counter() - orphan_started,
-            released_states,
+            orphan_release["checked_states"],
+            orphan_release["released_states"],
         )
     else:
         logger.debug(
@@ -691,7 +772,7 @@ def task_create_jobs():
         queue_target,
         state_batch_size,
         seeded_states,
-        released_states,
+        orphan_release["released_states"],
         profiles_already_full,
         profiles_without_due_states,
         profiles_without_ports,
@@ -709,6 +790,109 @@ def task_create_jobs():
         "Create Job TASK debug: total create_jobs runtime %.2fs",
         time.perf_counter() - started_at,
     )
+    return {
+        "jobs_created": total_jobs_created,
+        "range_jobs": totals["range_jobs"],
+        "host_jobs": totals["host_jobs"],
+        "states_scheduled": totals["scheduled_states"],
+        "profiles_full": profiles_already_full,
+        "seeded_states": seeded_states,
+        "orphan_states_checked": orphan_release["checked_states"],
+        "orphan_states_released": orphan_release["released_states"],
+    }
+
+
+def task_retag_queued_job_priorities():
+    """
+    Gradually converge queued job priorities to their scan profile priority.
+    """
+    started_at = time.perf_counter()
+    batch_size = _get_scheduler_int_config(
+        "SCHEDULER_PRIORITY_RETAG_BATCH_SIZE",
+        DEFAULT_PRIORITY_RETAG_BATCH_SIZE,
+    )
+    profiles = (
+        db.session.query(ScanProfiles)
+        .filter(ScanProfiles.priority_retag_pending == True)
+        .order_by(ScanProfiles.priority.desc(), ScanProfiles.id.asc())
+        .all()
+    )
+    if not profiles:
+        logger.debug("Priority retag TASK: no pending profile")
+        return {"profiles_pending": 0, "jobs_retagged": 0}
+
+    total_retagged = 0
+    completed_profiles = 0
+    for profile in profiles:
+        updated = (
+            db.session.execute(
+                text(
+                    """
+                    UPDATE jobs
+                       SET priority = :priority
+                     WHERE id IN (
+                            SELECT id
+                              FROM jobs
+                             WHERE scanprofile_id = :profile_id
+                               AND active = 0
+                               AND finished = 0
+                               AND priority != :priority
+                             ORDER BY job_creation ASC
+                             LIMIT :batch_size
+                       )
+                    """
+                ),
+                {
+                    "priority": int(profile.priority or 0),
+                    "profile_id": profile.id,
+                    "batch_size": batch_size,
+                },
+            ).rowcount
+            or 0
+        )
+        total_retagged += updated
+
+        has_remaining = db.session.execute(
+            text(
+                """
+                SELECT 1
+                  FROM jobs
+                 WHERE scanprofile_id = :profile_id
+                   AND active = 0
+                   AND finished = 0
+                   AND priority != :priority
+                 LIMIT 1
+                """
+            ),
+            {"profile_id": profile.id, "priority": int(profile.priority or 0)},
+        ).fetchone()
+        if has_remaining is None:
+            profile.priority_retag_pending = False
+            completed_profiles += 1
+
+        db.session.commit()
+        logger.info(
+            "Priority retag TASK: profile %s retagged %s queued jobs to priority %s; pending=%s",
+            profile.name,
+            updated,
+            profile.priority,
+            bool(has_remaining),
+        )
+
+    logger.info(
+        "Priority retag TASK: retagged %s queued jobs across %s profiles; completed_profiles=%s; batch_size=%s; elapsed=%.2fs",
+        total_retagged,
+        len(profiles),
+        completed_profiles,
+        batch_size,
+        time.perf_counter() - started_at,
+    )
+    return {
+        "profiles_pending": len(profiles),
+        "profiles_completed": completed_profiles,
+        "jobs_retagged": total_retagged,
+        "batch_size": batch_size,
+    }
 
 
 def task_export_to_dbs():
@@ -739,7 +923,12 @@ def task_export_to_dbs():
 
     if not job_snapshots:
         db.session.remove()
-        return
+        return {
+            "jobs_scanned": 0,
+            "documents_exported": 0,
+            "batches": 0,
+            "jobs_marked_exported": 0,
+        }
 
     # Release the read transaction before spending time on IO/exports to avoid long locks.
     db.session.commit()
@@ -837,9 +1026,22 @@ def task_export_to_dbs():
             batch_count,
             updated_rows,
         )
+        return {
+            "jobs_scanned": len(job_snapshots),
+            "documents_exported": total_documents,
+            "batches": batch_count,
+            "jobs_marked_exported": updated_rows,
+        }
     except (MeilisearchApiError, HTTPError):
         db.session.rollback()
         logger.error("Unable to export to Meili database")
+        return {
+            "jobs_scanned": len(job_snapshots),
+            "documents_exported": total_documents,
+            "batches": batch_count,
+            "jobs_marked_exported": 0,
+            "errors": 1,
+        }
     finally:
         db.session.remove()
 
@@ -923,7 +1125,7 @@ def task_run_due_reports():
     Send active scheduled reports whose next run is due.
     """
     if not str(db.app.config.get("REPORT_SMTP_HOST", "") or "").strip():
-        return
+        return {"reports_due": 0, "reports_sent": 0, "smtp_enabled": False}
 
     now = utcnow_naive()
     due_reports = (
@@ -937,7 +1139,7 @@ def task_run_due_reports():
         .all()
     )
     if not due_reports:
-        return
+        return {"reports_due": 0, "reports_sent": 0, "smtp_enabled": True}
 
     sent_reports = 0
     for report in due_reports:
@@ -954,6 +1156,11 @@ def task_run_due_reports():
 
     if sent_reports:
         logger.info("Reports TASK: %s scheduled reports sent", sent_reports)
+    return {
+        "reports_due": len(due_reports),
+        "reports_sent": sent_reports,
+        "smtp_enabled": True,
+    }
 
 
 def task_cleanup_jobs():
@@ -1015,6 +1222,12 @@ def task_cleanup_jobs():
             missing_job_files,
             file_delete_errors,
         )
+    return {
+        "jobs_removed": deleted_jobs,
+        "files_deleted": deleted_job_files,
+        "files_missing": missing_job_files,
+        "file_delete_errors": file_delete_errors,
+    }
 
 
 def task_cleanup_export_jobs():
@@ -1057,6 +1270,7 @@ def task_cleanup_export_jobs():
             deleted_files,
             delete_errors,
         )
+    return {"artifacts_removed": deleted_files, "delete_errors": delete_errors}
 
 
 def task_cleanup_search_sessions():
@@ -1065,7 +1279,8 @@ def task_cleanup_search_sessions():
     """
     from .views import KVSearchView
 
-    KVSearchView.cleanup_expired_search_sessions()
+    removed_count = KVSearchView.cleanup_expired_search_sessions()
+    return {"sessions_removed": removed_count}
 
 
 # INIT of the Program..

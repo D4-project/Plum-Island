@@ -125,13 +125,13 @@ class Jobs(Model):
     @validates("priority")
     def validate_priority(self, key, value):
         """
-        Restrict job priority to the three supported queues: 0, 1, 2.
+        Restrict job priority to the five supported queues: 0, 1, 2, 3, 4.
         """
         if value is None:
             return 0
         value = int(value)
-        if value < 0 or value > 2:
-            raise ValueError("Priority must be between 0 and 2")
+        if value < 0 or value > 4:
+            raise ValueError("Priority must be between 0 and 4")
         return value
 
     def __repr__(self):
@@ -512,6 +512,7 @@ class ScanProfiles(Model):
     )
 
     priority = Column(Integer, default=0)
+    priority_retag_pending = Column(Boolean, default=False, nullable=False)
     scan_cycle_minutes = Column(Integer, default=720)
     jobs = relationship("Jobs", back_populates="scanprofile")
     scan_states = relationship(
@@ -521,13 +522,13 @@ class ScanProfiles(Model):
     @validates("priority")
     def validate_priority(self, key, value):
         """
-        Restrict scan profile priority to the three supported queues: 0, 1, 2.
+        Restrict scan profile priority to the five supported queues: 0, 1, 2, 3, 4.
         """
         if value is None:
             return 0
         value = int(value)
-        if value < 0 or value > 2:
-            raise ValueError("Priority must be between 0 and 2")
+        if value < 0 or value > 4:
+            raise ValueError("Priority must be between 0 and 4")
         return value
 
     def __repr__(self):
@@ -560,6 +561,18 @@ class Targets(Model):
     as_description = Column(String(256))  # AS Description.
     as_country = Column(String(2), default="ZZ")  # AS Country
     priority = Column(Integer, default=1)  # Priority, by default LOW
+
+    @validates("priority")
+    def validate_priority(self, key, value):
+        """
+        Restrict target priority metadata to the supported queue range.
+        """
+        if value is None:
+            return 1
+        value = int(value)
+        if value < 0 or value > 4:
+            raise ValueError("Priority must be between 0 and 4")
+        return value
 
     def __repr__(self):
         """

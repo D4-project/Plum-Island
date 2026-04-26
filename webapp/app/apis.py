@@ -141,6 +141,13 @@ class BulkTargetsSchema(Schema):
 
 
 logger = logging.getLogger("flask_appbuilder")
+PRIORITY_WEIGHTS = {
+    4: 50,
+    3: 20,
+    2: 15,
+    1: 10,
+    0: 5,
+}
 
 
 def _nse_file_path(nse):
@@ -185,6 +192,64 @@ def _build_job_nse_payload(scan_nses, agent_nse_hashes):
         nse_payload.append(descriptor)
 
     return effective_names, nse_payload
+
+
+def _get_available_job_priorities():
+    """
+    Return the priority queues that currently have at least one waiting job.
+    """
+    rows = (
+        db.session.query(Jobs.priority)
+        .filter(Jobs.active == False, Jobs.finished == False)
+        .distinct()
+        .all()
+    )
+    priorities = set()
+    for row in rows:
+        try:
+            priority = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        if priority in PRIORITY_WEIGHTS:
+            priorities.add(priority)
+    return priorities
+
+
+def _select_weighted_priority(available_priorities):
+    """
+    Smooth weighted round-robin over currently non-empty priority queues.
+    """
+    available_priorities = set(available_priorities or [])
+    if not available_priorities:
+        return []
+
+    state = db.app.config.setdefault(
+        "priority_weighted_round_robin",
+        {priority: 0 for priority in PRIORITY_WEIGHTS},
+    )
+    for priority in PRIORITY_WEIGHTS:
+        state.setdefault(priority, 0)
+        if priority not in available_priorities:
+            state[priority] = 0
+
+    total_weight = 0
+    for priority in sorted(available_priorities, reverse=True):
+        weight = PRIORITY_WEIGHTS[priority]
+        state[priority] += weight
+        total_weight += weight
+
+    selected_priority = max(
+        available_priorities,
+        key=lambda priority: (state[priority], priority),
+    )
+    state[selected_priority] -= total_weight
+    db.app.config["priority_weighted_round_robin"] = state
+
+    fallback_priorities = sorted(
+        available_priorities - {selected_priority},
+        reverse=True,
+    )
+    return [selected_priority] + fallback_priorities
 
 
 class PublicTargetsApi(ModelRestApi):
@@ -371,26 +436,10 @@ class Api(BaseApi):
             .scalar()
         )
 
-        # Get one Job todo, take care of priority.
-
-        # Step 1 Init "Run" counter if not set
-        if "job_counter" not in db.app.config:
-            db.app.config["job_counter"] = 0
-        counter = db.app.config["job_counter"]
-        counter += 1  # We increment
-        if counter >= 10:
-            counter = 0
-
-        # Step 2 Determine priority to serve based on counter value
-        # Prio 2 = High,  1 = medium, 0 = Low
-        if counter % 10 in [0, 2, 4, 6, 8]:  # 5 times out of 10 for High
-            prio_list = [2, 1, 0]
-        elif counter % 10 in [1, 5, 9]:  # 3 times out of 10 for Medium
-            prio_list = [1, 2, 0]
-        else:  # 2 times out of 10 Low queue (7 and 3)
-            prio_list = [0, 1, 2]
-
-        # Step 3 find a job for for each priority
+        # Get one job to do using smooth weighted round-robin over non-empty
+        # priority queues. Priority 4 gets the largest share when present, but
+        # lower queues inherit capacity when higher queues are empty.
+        prio_list = _select_weighted_priority(_get_available_job_priorities())
         job_todo = None
         for prio in prio_list:
             job_todo = (
@@ -434,11 +483,6 @@ class Api(BaseApi):
                     job_todo.scan_ports.split(",") if job_todo.scan_ports else []
                 ),
             }
-
-            # Finally ... reset the counter if > 10
-            db.app.config["job_counter"] = (
-                counter  # We save IT, only if we have job to do.
-            )
         else:
             ret_msg = {"message": "ready", "job": ""}
 

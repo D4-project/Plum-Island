@@ -44,6 +44,7 @@ from wtforms import (
     Field,
     ValidationError,
     IntegerField,
+    SelectField,
 )
 from wtforms.validators import Optional, NumberRange
 from wtforms.widgets import html_params
@@ -137,13 +138,21 @@ def get_report_preview_state(job_id):
 
 def build_priority_field(label="Priority"):
     """
-    Shared priority field limited to the three supported queues: 0, 1, 2.
+    Shared priority field limited to the five supported queues: 0, 1, 2, 3, 4.
     """
-    return IntegerField(
+    return SelectField(
         label,
+        coerce=int,
+        choices=[
+            (0, "0 - Background"),
+            (1, "1 - Low"),
+            (2, "2 - Normal"),
+            (3, "3 - High"),
+            (4, "4 - Urgent"),
+        ],
         validators=[
             Optional(),
-            NumberRange(min=0, max=2, message="Priority must be between 0 and 2"),
+            NumberRange(min=0, max=4, message="Priority must be between 0 and 4"),
         ],
         default=0,
     )
@@ -156,8 +165,8 @@ def normalize_priority(item):
     if getattr(item, "priority", None) is None:
         item.priority = 0
     item.priority = int(item.priority)
-    if item.priority < 0 or item.priority > 2:
-        raise ValueError("Priority must be between 0 and 2")
+    if item.priority < 0 or item.priority > 4:
+        raise ValueError("Priority must be between 0 and 4")
     return item.priority
 
 
@@ -2386,7 +2395,7 @@ class TargetsView(ModelView):
     )
     def mulrreslovewhois(self, items):
         """
-        Implement Raise priority of job to 2
+        Implement Raise priority of job to 4.
         """
         if isinstance(items, list):
             # Raise N record
@@ -2544,15 +2553,15 @@ class JobsView(ModelView):
     )
     def mulraiseprioriy(self, items):
         """
-        Implement Raise priority of job to 2
+        Implement Raise priority of job to 4.
         """
         if isinstance(items, list):
             # Raise N record
             for item in items:
-                item.priority = 2
+                item.priority = 4
         else:
             # Raise Un tag
-            items.priority = 2
+            items.priority = 4
         db.session.commit()
         self.update_redirect()
         return redirect(self.get_redirect())
@@ -3220,11 +3229,28 @@ class ScanprofilesView(ModelView):
     add_template = "add_scanprofilesview.html"
     edit_template = "edit_scanprofilesview.html"
     list_template = "list_scanprofilesview.html"
-    list_columns = {"name", "scan_cycle_minutes", "ports", "nses", "apply_to_all"}
+    list_columns = {
+        "name",
+        "scan_cycle_minutes",
+        "priority",
+        "priority_retag_pending",
+        "ports",
+        "nses",
+        "apply_to_all",
+    }
     search_columns = ["name", "scan_cycle_minutes", "priority", "apply_to_all", "targets"]
     add_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
     edit_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
-    show_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
+    show_columns = [
+        "name",
+        "scan_cycle_minutes",
+        "priority",
+        "priority_retag_pending",
+        "ports",
+        "nses",
+        "targets",
+        "apply_to_all",
+    ]
     search_form_extra_fields = {
         "targets": RemoteRelatedMultipleField(
             "Apply on Target",
@@ -3287,6 +3313,7 @@ class ScanprofilesView(ModelView):
         "apply_to_all": "Apply to all scans",
         "targets": "Apply on Target",
         "scan_cycle_minutes": "Scan Frequency (min)",
+        "priority_retag_pending": "Priority retag pending",
     }
 
     def pre_add(self, item):
@@ -3299,6 +3326,11 @@ class ScanprofilesView(ModelView):
 
     def pre_update(self, item):
         normalize_priority(item)
+        # Flask-AppBuilder updates the model instance before pre_update is
+        # called, so old/new priority comparison is not reliable here. Marking
+        # pending on every profile edit is cheap: the scheduler only updates
+        # queued jobs whose priority actually differs from the current profile.
+        item.priority_retag_pending = True
         if len(item.ports) == 0:
             raise ValueError("At least one port is mandatory")
         if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
