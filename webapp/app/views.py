@@ -73,6 +73,8 @@ from .utils.reports import (
     build_report_markdown,
     compute_new_open_ports,
     collect_report_ports,
+    collect_report_passive_dns_fqdns,
+    collect_report_requested_fqdns,
     collect_report_tags,
     compute_next_report_run,
     compute_report_interval,
@@ -91,6 +93,44 @@ EXPORT_JOB_STATES = {}
 EXPORT_JOB_STATES_LOCK = threading.Lock()
 SEARCH_SESSION_STATES = {}
 SEARCH_SESSION_STATES_LOCK = threading.Lock()
+REPORT_PREVIEW_STATES = {}
+REPORT_PREVIEW_STATES_LOCK = threading.Lock()
+REPORT_PREVIEW_RETENTION_SECONDS = 1800
+
+
+def cleanup_report_preview_states():
+    """
+    Drop old preview jobs kept only to serve a finished preview once.
+    """
+    cutoff = time.time() - REPORT_PREVIEW_RETENTION_SECONDS
+    with REPORT_PREVIEW_STATES_LOCK:
+        old_job_ids = [
+            job_id
+            for job_id, state in REPORT_PREVIEW_STATES.items()
+            if state.get("created_at", 0) < cutoff
+        ]
+        for job_id in old_job_ids:
+            REPORT_PREVIEW_STATES.pop(job_id, None)
+
+
+def set_report_preview_state(job_id, **updates):
+    """
+    Update one async report preview state.
+    """
+    updates["updated_at"] = time.time()
+    with REPORT_PREVIEW_STATES_LOCK:
+        state = REPORT_PREVIEW_STATES.setdefault(job_id, {})
+        state.update(updates)
+        return dict(state)
+
+
+def get_report_preview_state(job_id):
+    """
+    Return a copy of one async report preview state.
+    """
+    with REPORT_PREVIEW_STATES_LOCK:
+        state = REPORT_PREVIEW_STATES.get(job_id)
+        return dict(state) if state else None
 
 
 def build_priority_field(label="Priority"):
@@ -2852,8 +2892,77 @@ class ReportsView(ModelView):
         return self._normalize_report_item(item)
 
     @staticmethod
-    def _build_report(report, run_at=None):
+    def _preview_status_payload(state):
+        return {
+            "status": state.get("status", "missing"),
+            "step": state.get("step", "generation"),
+            "pdns_done": int(state.get("pdns_done") or 0),
+            "pdns_total": int(state.get("pdns_total") or 0),
+            "result_url": state.get("result_url"),
+            "error": state.get("error", ""),
+        }
+
+    @staticmethod
+    def _preview_state_allowed(state):
+        return state and str(state.get("owner_id")) == str(current_user.get_id())
+
+    def _run_preview_job(self, job_id, report_id, owner_id):
+        """
+        Generate a preview in a background thread and expose coarse progress.
+        """
+
+        def progress_callback(step, **kwargs):
+            updates = {"step": step, "status": "running"}
+            updates.update(kwargs)
+            set_report_preview_state(job_id, **updates)
+
+        with app.app_context():
+            try:
+                report = (
+                    db.session.query(Reports)
+                    .filter(Reports.id == report_id)
+                    .one_or_none()
+                )
+                if report is None:
+                    raise ValueError("Report not found")
+
+                markdown, from_dt, to_dt, _results = self._build_report(
+                    report,
+                    progress_callback=progress_callback,
+                )
+                set_report_preview_state(
+                    job_id,
+                    status="done",
+                    step="complete",
+                    report_id=report_id,
+                    owner_id=owner_id,
+                    markdown=markdown,
+                    from_dt=from_dt,
+                    to_dt=to_dt,
+                    result_url=f"/reportsview/preview_result/{job_id}",
+                    error="",
+                )
+            except Exception as error:  # pylint: disable=broad-except
+                logger.exception("Report preview job %s failed", job_id)
+                set_report_preview_state(
+                    job_id,
+                    status="error",
+                    step="error",
+                    report_id=report_id,
+                    owner_id=owner_id,
+                    error=str(error),
+                )
+            finally:
+                db.session.remove()
+
+    @staticmethod
+    def _build_report(report, run_at=None, progress_callback=None):
+        def update_progress(step, **kwargs):
+            if progress_callback:
+                progress_callback(step, **kwargs)
+
         run_at = ensure_utc_naive(run_at)
+        update_progress("generation")
         from_dt, to_dt = compute_report_interval(report, run_at=run_at)
         results = KVSearchView().execute_search(
             report.query,
@@ -2874,12 +2983,17 @@ class ReportsView(ModelView):
             indexer,
             results.get("results") or {},
         )
+        per_ip_requested_fqdns = collect_report_requested_fqdns(
+            indexer,
+            results.get("results") or {},
+        )
         new_open_ports = {}
         previous_from_dt, previous_to_dt = compute_previous_report_interval(
             report,
             from_dt,
             to_dt,
         )
+        update_progress("comparison")
         if previous_from_dt and previous_to_dt:
             previous_results = KVSearchView().execute_search(
                 report.query,
@@ -2899,6 +3013,19 @@ class ReportsView(ModelView):
                 per_ip_ports,
                 previous_per_ip_ports,
             )
+        result_ips = list((results.get("results") or {}).keys())
+        update_progress("pdns", pdns_done=0, pdns_total=len(result_ips))
+        per_ip_pdns_fqdns = collect_report_passive_dns_fqdns(
+            db.app.config,
+            result_ips,
+            per_ip_requested_fqdns,
+            progress_callback=lambda done, total: update_progress(
+                "pdns",
+                pdns_done=done,
+                pdns_total=total,
+            ),
+        )
+        update_progress("complete")
         markdown = build_report_markdown(
             report,
             results,
@@ -2907,9 +3034,102 @@ class ReportsView(ModelView):
             from_dt,
             to_dt,
             per_ip_tags=per_ip_tags,
+            per_ip_requested_fqdns=per_ip_requested_fqdns,
+            per_ip_pdns_fqdns=per_ip_pdns_fqdns,
             new_open_ports=new_open_ports,
         )
         return markdown, from_dt, to_dt, results
+
+    @expose("/preview_loading/<int:pk>")
+    @has_access
+    def preview_loading(self, pk):
+        """
+        Show the modal before starting a potentially slow report preview.
+        """
+        report = db.session.query(Reports).filter(Reports.id == pk).one_or_none()
+        if report is None:
+            return make_response("Report not found", 404)
+
+        return self.render_template(
+            "report_preview_loading.html",
+            report=report,
+            title=f"Preview {report.name}",
+        )
+
+    @expose("/preview_start/<int:pk>", methods=["POST"])
+    @has_access
+    def preview_start(self, pk):
+        """
+        Start async preview generation.
+        """
+        cleanup_report_preview_states()
+        report = db.session.query(Reports).filter(Reports.id == pk).one_or_none()
+        if report is None:
+            return jsonify({"error": "Report not found"}), 404
+
+        job_id = uuid.uuid4().hex
+        owner_id = str(current_user.get_id())
+        set_report_preview_state(
+            job_id,
+            status="queued",
+            step="generation",
+            report_id=pk,
+            owner_id=owner_id,
+            created_at=time.time(),
+            pdns_done=0,
+            pdns_total=0,
+            error="",
+        )
+        thread = threading.Thread(
+            target=self._run_preview_job,
+            args=(job_id, pk, owner_id),
+            daemon=True,
+        )
+        thread.start()
+        return jsonify({"job_id": job_id})
+
+    @expose("/preview_status/<string:job_id>")
+    @has_access
+    def preview_status(self, job_id):
+        """
+        Return async preview progress.
+        """
+        state = get_report_preview_state(job_id)
+        if state is None:
+            return jsonify({"error": "Preview job not found"}), 404
+        if not self._preview_state_allowed(state):
+            return jsonify({"error": "Forbidden"}), 403
+        return jsonify(self._preview_status_payload(state))
+
+    @expose("/preview_result/<string:job_id>")
+    @has_access
+    def preview_result(self, job_id):
+        """
+        Render a completed async preview.
+        """
+        state = get_report_preview_state(job_id)
+        if state is None:
+            return make_response("Preview job not found", 404)
+        if not self._preview_state_allowed(state):
+            return make_response("Forbidden", 403)
+        if state.get("status") != "done":
+            return redirect(url_for("ReportsView.show", pk=state.get("report_id")))
+
+        report = (
+            db.session.query(Reports)
+            .filter(Reports.id == state.get("report_id"))
+            .one_or_none()
+        )
+        if report is None:
+            return make_response("Report not found", 404)
+
+        return self.render_template(
+            "report_preview.html",
+            report=report,
+            markdown=state.get("markdown", ""),
+            from_dt=state.get("from_dt"),
+            to_dt=state.get("to_dt"),
+        )
 
     @expose("/preview/<int:pk>")
     @has_access

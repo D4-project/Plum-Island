@@ -4,18 +4,24 @@ Helpers for scheduled Markdown reports.
 
 import calendar
 import ipaddress
+import json
+import logging
 import re
 import smtplib
 from collections import Counter
 from datetime import datetime, timezone
 from email.message import EmailMessage
 
+import requests
+
 from .timeutils import ensure_utc_naive, utcnow_naive
 
 
+logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MONTHLY = "monthly"
+REPORT_FQDN_LIMIT = 20
 
 
 def normalize_report_emails(emails_value):
@@ -222,6 +228,123 @@ def collect_report_tags(indexer, results):
     return per_ip_tags
 
 
+def collect_report_requested_fqdns(indexer, results):
+    """
+    Collect per-IP user-requested FQDNs from Kvrocks fqdn_requested indexes.
+    """
+    per_ip_fqdns = {}
+    for ip, uids in (results or {}).items():
+        ip_fqdns = set()
+        pipe = indexer.r.pipeline(transaction=False)
+        for uid in uids:
+            pipe.smembers(f"fqdn_requesteds:{uid}")
+        for fqdns in pipe.execute():
+            for fqdn in fqdns or []:
+                fqdn_value = str(fqdn).strip().lower().rstrip(".")
+                if fqdn_value:
+                    ip_fqdns.add(fqdn_value)
+        per_ip_fqdns[ip] = sorted(ip_fqdns, key=str.lower)
+    return per_ip_fqdns
+
+
+def _parse_pdns_ndjson(payload):
+    """
+    Parse CIRCL Passive DNS NDJSON payload into dictionaries.
+    """
+    records = []
+    for line in (payload or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def _extract_pdns_fqdn(record):
+    """
+    Extract a hostname from one CIRCL Passive DNS A record.
+    """
+    record_type = str((record or {}).get("rrtype") or (record or {}).get("type") or "")
+    if record_type and record_type.upper() != "A":
+        return ""
+
+    for key in ("rrname", "name", "hostname", "fqdn"):
+        value = str((record or {}).get(key) or "").strip().lower().rstrip(".")
+        try:
+            ipaddress.ip_address(value)
+            continue
+        except ValueError:
+            pass
+        if value and "." in value:
+            return value
+    return ""
+
+
+def collect_report_passive_dns_fqdns(
+    app_config,
+    ips,
+    per_ip_requested_fqdns,
+    progress_callback=None,
+):
+    """
+    Collect Passive DNS hostnames to fill each IP's associated FQDN list.
+    """
+    ips = list(ips or [])
+
+    def update_progress(done):
+        if progress_callback:
+            progress_callback(done, len(ips))
+
+    update_progress(0)
+    passive_user = str(app_config.get("PASSIVE_USER", "") or "").strip()
+    passive_pwd = str(app_config.get("PASSIVE_PWD", "") or "")
+    if not passive_user or not passive_pwd:
+        update_progress(len(ips))
+        return {}
+
+    per_ip_pdns = {}
+    for done, ip in enumerate(ips, start=1):
+        requested_fqdns = per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
+        remaining = REPORT_FQDN_LIMIT - len(requested_fqdns)
+        if remaining <= 0:
+            update_progress(done)
+            continue
+
+        seen = {str(fqdn).lower() for fqdn in requested_fqdns}
+        pdns_fqdns = []
+        try:
+            response = requests.get(
+                f"https://www.circl.lu/pdns/query/{ip}",
+                auth=(passive_user, passive_pwd),
+                headers={"dribble-disable-active-query": "1"},
+                timeout=15,
+            )
+            response.raise_for_status()
+        except requests.RequestException as error:
+            logger.warning("Report passive DNS failed for %s: %s", ip, error)
+            update_progress(done)
+            continue
+
+        for record in _parse_pdns_ndjson(response.text):
+            fqdn = _extract_pdns_fqdn(record)
+            if not fqdn or fqdn in seen:
+                continue
+            seen.add(fqdn)
+            pdns_fqdns.append(fqdn)
+            if len(pdns_fqdns) >= remaining:
+                break
+
+        if pdns_fqdns:
+            per_ip_pdns[ip] = pdns_fqdns
+        update_progress(done)
+    return per_ip_pdns
+
+
 def compute_new_open_ports(per_ip_ports, previous_per_ip_ports):
     """
     Return ports present in the current interval but absent in the previous one.
@@ -246,6 +369,8 @@ def build_report_markdown(
     from_dt,
     to_dt,
     per_ip_tags=None,
+    per_ip_requested_fqdns=None,
+    per_ip_pdns_fqdns=None,
     new_open_ports=None,
 ):
     """
@@ -304,6 +429,10 @@ def build_report_markdown(
     else:
         for ip in sorted(results, key=_ip_sort_key):
             tags = per_ip_tags.get(ip, []) if per_ip_tags else []
+            requested_fqdns = (
+                per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
+            )
+            pdns_fqdns = per_ip_pdns_fqdns.get(ip, []) if per_ip_pdns_fqdns else []
             ports = per_ip_ports.get(ip) or []
             ports_text = ", ".join(ports) if ports else "none"
             lines.extend(
@@ -319,6 +448,18 @@ def build_report_markdown(
                     f"  - Scan results: {len(results[ip])}",
                 ]
             )
+            associated_count = len(requested_fqdns) + len(pdns_fqdns)
+            if associated_count:
+                lines.append(f"  - Associated FQDNs ({associated_count})")
+                shown_count = 0
+                for fqdn in requested_fqdns[:REPORT_FQDN_LIMIT]:
+                    lines.append(f"    - {fqdn}")
+                    shown_count += 1
+                for fqdn in pdns_fqdns[: max(0, REPORT_FQDN_LIMIT - shown_count)]:
+                    lines.append(f"    - {fqdn} (pdns)")
+                    shown_count += 1
+                if associated_count > REPORT_FQDN_LIMIT:
+                    lines.append("    - more fqdn associated")
 
     lines.extend(
         [

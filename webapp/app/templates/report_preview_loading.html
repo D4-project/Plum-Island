@@ -1,0 +1,197 @@
+{% extends "appbuilder/base.html" %}
+
+{% block content %}
+<div class="report-preview-loading">
+  <noscript>
+    <div class="alert alert-danger" role="alert">
+      JavaScript is required to generate the report preview.
+    </div>
+  </noscript>
+</div>
+
+<div class="modal fade" id="report-preview-progress-modal" tabindex="-1" role="dialog" aria-labelledby="report-preview-progress-title">
+  <div class="modal-dialog" role="document">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h4 class="modal-title" id="report-preview-progress-title">Report preview generation</h4>
+      </div>
+      <div class="modal-body">
+        <ul class="report-preview-steps">
+          <li id="report-preview-step-generation" class="report-preview-step is-running">
+            <span class="report-preview-step-icon" aria-hidden="true"></span>
+            <span>Generating monthly report</span>
+          </li>
+          <li id="report-preview-step-comparison" class="report-preview-step">
+            <span class="report-preview-step-icon" aria-hidden="true"></span>
+            <span>Comparing with previous report</span>
+          </li>
+          <li id="report-preview-step-pdns" class="report-preview-step">
+            <span class="report-preview-step-icon" aria-hidden="true"></span>
+            <span id="report-preview-pdns-label">Resolving Passive DNS 0/0</span>
+          </li>
+        </ul>
+        <div id="report-preview-error" class="report-preview-error"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock content %}
+
+{% block add_tail_js %}
+<style nonce="{{ baselib.get_nonce() }}">
+  .report-preview-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .report-preview-step {
+    align-items: center;
+    color: #6c757d;
+    display: flex;
+    font-size: 15px;
+    gap: 10px;
+    margin: 0 0 12px;
+  }
+
+  .report-preview-step-icon {
+    border: 2px solid #adb5bd;
+    border-radius: 50%;
+    display: inline-block;
+    flex: 0 0 auto;
+    height: 14px;
+    width: 14px;
+  }
+
+  .report-preview-step.is-running {
+    color: #0d6efd;
+    font-weight: 600;
+  }
+
+  .report-preview-step.is-running .report-preview-step-icon {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.16);
+  }
+
+  .report-preview-step.is-done {
+    color: #198754;
+  }
+
+  .report-preview-step.is-done .report-preview-step-icon {
+    background: #198754;
+    border-color: #198754;
+  }
+
+  .report-preview-error {
+    margin-top: 14px;
+  }
+</style>
+
+<script nonce="{{ baselib.get_nonce() }}">
+(function () {
+  const startUrl = "{{ url_for('ReportsView.preview_start', pk=report.id) }}";
+  const statusBaseUrl = "{{ url_for('ReportsView.preview_status', job_id='__JOB_ID__') }}";
+  const steps = ['generation', 'comparison', 'pdns'];
+  let poller = null;
+
+  function readJsonResponse(response) {
+    return response.json().catch(() => ({})).then((data) => {
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}`);
+      }
+      return data;
+    });
+  }
+
+  function setStepState(stepName, className) {
+    const stepEl = document.getElementById(`report-preview-step-${stepName}`);
+    if (!stepEl) {
+      return;
+    }
+    stepEl.classList.remove('is-running', 'is-done');
+    if (className) {
+      stepEl.classList.add(className);
+    }
+  }
+
+  function updateSteps(data) {
+    const currentStep = data.step || 'generation';
+    const currentIndex = steps.indexOf(currentStep);
+    steps.forEach((stepName, index) => {
+      if (currentStep === 'complete' || (currentIndex >= 0 && index < currentIndex)) {
+        setStepState(stepName, 'is-done');
+      } else if (stepName === currentStep) {
+        setStepState(stepName, 'is-running');
+      } else {
+        setStepState(stepName, '');
+      }
+    });
+
+    const pdnsDone = Number(data.pdns_done || 0);
+    const pdnsTotal = Number(data.pdns_total || 0);
+    document.getElementById('report-preview-pdns-label').textContent =
+      `Resolving Passive DNS ${pdnsDone}/${pdnsTotal}`;
+  }
+
+  function showError(message) {
+    if (poller) {
+      clearInterval(poller);
+      poller = null;
+    }
+    const errorEl = document.getElementById('report-preview-error');
+    errorEl.innerHTML = '';
+    const alertEl = document.createElement('div');
+    alertEl.className = 'alert alert-danger';
+    alertEl.setAttribute('role', 'alert');
+    alertEl.textContent = message || 'Report preview failed';
+    errorEl.appendChild(alertEl);
+  }
+
+  async function pollStatus(jobId) {
+    const statusUrl = statusBaseUrl.replace('__JOB_ID__', encodeURIComponent(jobId));
+    const response = await fetch(statusUrl);
+    const data = await readJsonResponse(response);
+    updateSteps(data);
+
+    if (data.status === 'done' && data.result_url) {
+      if (poller) {
+        clearInterval(poller);
+      }
+      window.location.href = data.result_url;
+    } else if (data.status === 'error') {
+      showError(data.error);
+    }
+    return data.status;
+  }
+
+  async function startPreview() {
+    $('#report-preview-progress-modal').modal({
+      backdrop: 'static',
+      keyboard: false
+    });
+    $('#report-preview-progress-modal').modal('show');
+
+    try {
+      const response = await fetch(startUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      const data = await readJsonResponse(response);
+      const status = await pollStatus(data.job_id);
+      if (status !== 'done' && status !== 'error') {
+        poller = setInterval(() => {
+          pollStatus(data.job_id).catch((error) => showError(error.message));
+        }, 1000);
+      }
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', startPreview);
+}());
+</script>
+{% endblock %}

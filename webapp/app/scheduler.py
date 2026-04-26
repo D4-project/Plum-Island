@@ -29,6 +29,8 @@ from .utils.reports import (
     build_report_markdown,
     compute_new_open_ports,
     collect_report_ports,
+    collect_report_passive_dns_fqdns,
+    collect_report_requested_fqdns,
     collect_report_tags,
     compute_next_report_run,
     compute_report_interval,
@@ -868,6 +870,15 @@ def _build_due_report(report, run_at):
         indexer,
         results.get("results") or {},
     )
+    per_ip_requested_fqdns = collect_report_requested_fqdns(
+        indexer,
+        results.get("results") or {},
+    )
+    per_ip_pdns_fqdns = collect_report_passive_dns_fqdns(
+        db.app.config,
+        (results.get("results") or {}).keys(),
+        per_ip_requested_fqdns,
+    )
     new_open_ports = {}
     previous_from_dt, previous_to_dt = compute_previous_report_interval(
         report,
@@ -900,6 +911,8 @@ def _build_due_report(report, run_at):
         from_dt,
         to_dt,
         per_ip_tags=per_ip_tags,
+        per_ip_requested_fqdns=per_ip_requested_fqdns,
+        per_ip_pdns_fqdns=per_ip_pdns_fqdns,
         new_open_ports=new_open_ports,
     )
     return markdown, to_dt

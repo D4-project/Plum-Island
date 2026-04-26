@@ -165,6 +165,7 @@ Reports are generated as Markdown. The current report body contains:
 - host list sorted by numeric IP order
 - per-host tags when present
 - per-host open ports and scan result count
+- per-host associated FQDNs from `fqdn_requested`, completed with Passive DNS `A` records up to 20 entries
 - an as-is disclaimer
 
 Example host entry:
@@ -174,7 +175,21 @@ Example host entry:
   - Tag: vuln:filelisting
   - Open ports: 443
   - Scan results: 1
+  - Associated FQDNs (2)
+    - scan-request.example.org
+    - historical.example.org (pdns)
 ```
+
+### Preview generation
+
+The `Preview` action generates the Markdown report without sending email.
+Because Passive DNS enrichment can be slow, preview first opens a progress modal and only redirects to the rendered report when generation is complete.
+
+The modal follows the report generation order:
+
+- `Generating monthly report`
+- `Comparing with previous report`
+- `Resolving Passive DNS X/XX`
 
 ### Email delivery
 

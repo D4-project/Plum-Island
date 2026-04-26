@@ -429,7 +429,7 @@ class Reports(Model):
         if not self.id:
             return Esc("")
         return Esc(
-            f'<a class="btn btn-sm btn-default" href="/reportsview/preview/{self.id}">'
+            f'<a class="btn btn-sm btn-default" href="/reportsview/preview_loading/{self.id}">'
             'Preview</a> '
             f'<a class="btn btn-sm btn-primary" href="/reportsview/run/{self.id}">'
             'Run now</a>'
