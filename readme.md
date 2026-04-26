@@ -165,7 +165,7 @@ Reports are generated as Markdown. The current report body contains:
 - host list sorted by numeric IP order
 - per-host tags when present
 - per-host open ports and scan result count
-- per-host associated FQDNs from report PTR records, then `fqdn_requested`, completed with Passive DNS `A` records up to 20 entries
+- per-host associated FQDNs from report PTR records, then `fqdn_requested`, completed with Passive DNS `A` records up to 25 entries
 - an as-is disclaimer
 
 Example host entry:

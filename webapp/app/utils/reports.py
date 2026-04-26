@@ -21,7 +21,7 @@ logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MONTHLY = "monthly"
-REPORT_FQDN_LIMIT = 20
+REPORT_FQDN_LIMIT = 25
 
 
 def normalize_report_emails(emails_value):
@@ -519,7 +519,10 @@ def build_report_markdown(
                     suffix = f" ({source})" if source else ""
                     lines.append(f"    - {fqdn}{suffix}")
                 if associated_count > REPORT_FQDN_LIMIT:
-                    lines.append("    - more fqdn associated")
+                    remaining_count = associated_count - REPORT_FQDN_LIMIT
+                    lines.append(
+                        f"    - {remaining_count} additional fqdn not listed here"
+                    )
 
     lines.extend(
         [
