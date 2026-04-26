@@ -44,6 +44,10 @@ REPORT_SMTP_FROM = ""
 REPORT_SMTP_USE_TLS = False
 REPORT_SMTP_USE_SSL = False
 
+# PTR hostnames included in reports must come from source documents whose
+# last_seen is within this many months before the report end time.
+REPORT_PTR_LAST_SEEN_MONTHS = 6
+
 # The SQLAlchemy connection string.
 SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(basedir, "app.db")
 # SQLALCHEMY_DATABASE_URI = 'mysql://myapp@localhost/myapp'

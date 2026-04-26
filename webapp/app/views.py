@@ -79,6 +79,7 @@ from .utils.reports import (
     collect_report_tags,
     compute_next_report_run,
     compute_report_interval,
+    compute_report_ptr_cutoff,
     compute_previous_report_interval,
     datetime_to_epoch,
     normalize_report_fields,
@@ -2989,9 +2990,21 @@ class ReportsView(ModelView):
             results.get("results") or {},
         )
         meili_index = client.index("plum")
+        try:
+            ptr_last_seen_months = int(
+                db.app.config.get("REPORT_PTR_LAST_SEEN_MONTHS", 6) or 6
+            )
+        except (TypeError, ValueError):
+            ptr_last_seen_months = 6
+        ptr_last_seen_months = max(1, ptr_last_seen_months)
+        ptr_cutoff_ts = datetime_to_epoch(
+            compute_report_ptr_cutoff(to_dt, months=ptr_last_seen_months)
+        )
         per_ip_ptr_fqdns = collect_report_ptr_fqdns(
             lambda uid: KVSearchView.load_meili_document(meili_index, uid)[0],
             results.get("results") or {},
+            timestamps=results.get("timestamps") or {},
+            min_last_seen_ts=ptr_cutoff_ts,
         )
         new_open_ports = {}
         previous_from_dt, previous_to_dt = compute_previous_report_interval(

@@ -165,7 +165,7 @@ Reports are generated as Markdown. The current report body contains:
 - host list sorted by numeric IP order
 - per-host tags when present
 - per-host open ports and scan result count
-- per-host associated FQDNs from report PTR records, then `fqdn_requested`, completed with Passive DNS `A` records up to 25 entries
+- per-host associated FQDNs from report PTR records seen in the last 6 months, then `fqdn_requested`, completed with Passive DNS `A` records up to 25 entries
 - an as-is disclaimer
 
 Example host entry:
@@ -196,6 +196,8 @@ The modal follows the report generation order:
 
 SMTP delivery is controlled by the `REPORT_SMTP_*` settings in `webapp/config.py`.
 If `REPORT_SMTP_HOST` is empty, automatic report delivery is disabled.
+
+`REPORT_PTR_LAST_SEEN_MONTHS` controls how recent a source document must be for its PTR hostname to appear in a report. The default is 6 months before the report end time.
 
 ## Technical requirements
 

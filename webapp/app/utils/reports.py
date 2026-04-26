@@ -150,6 +150,16 @@ def compute_previous_report_interval(report, from_dt, to_dt):
     return _subtract_one_month(from_dt), from_dt
 
 
+def compute_report_ptr_cutoff(reference_dt, months=6):
+    """
+    Return the minimum last_seen datetime accepted for report PTR hostnames.
+    """
+    reference_dt = ensure_utc_naive(reference_dt)
+    if reference_dt is None:
+        return None
+    return _add_months(reference_dt, -int(months or 6))
+
+
 def datetime_to_epoch(value):
     """
     Convert a naive UTC datetime to an epoch-second timestamp.
@@ -261,15 +271,26 @@ def _normalize_report_fqdn(value):
         return normalized
 
 
-def collect_report_ptr_fqdns(document_loader, results):
+def collect_report_ptr_fqdns(
+    document_loader,
+    results,
+    timestamps=None,
+    min_last_seen_ts=None,
+):
     """
-    Collect PTR hostnames found in the report interval documents.
+    Collect recent PTR hostnames found in the report interval documents.
     """
     per_ip_ptrs = {}
     for ip, uids in (results or {}).items():
         ip_ptrs = []
         seen = set()
         for uid in uids or []:
+            if min_last_seen_ts is not None:
+                uid_timestamps = (timestamps or {}).get(ip, {}).get(uid, {})
+                last_seen_ts = uid_timestamps.get("last_seen")
+                if last_seen_ts is None or int(last_seen_ts) < int(min_last_seen_ts):
+                    continue
+
             document = document_loader(uid)
             if not document:
                 continue
