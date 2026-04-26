@@ -1,0 +1,34 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "Report Preview") }}
+
+<div class="report-preview-toolbar">
+    <a class="btn btn-default" href="{{ url_for('ReportsView.show', pk=report.id) }}">
+        <i class="fa fa-arrow-left" aria-hidden="true"></i>
+    </a>
+    <a class="btn btn-primary" href="{{ url_for('ReportsView.run', pk=report.id) }}">
+        Run now
+    </a>
+</div>
+
+<pre class="report-preview-markdown">{{ markdown }}</pre>
+
+{{ lib.panel_end() }}
+{% endblock content %}
+
+{% block add_tail_js %}
+<style nonce="{{ baselib.get_nonce() }}">
+  .report-preview-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .report-preview-markdown {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
+{% endblock %}
