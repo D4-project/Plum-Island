@@ -129,7 +129,8 @@
     padding: 1rem;
 }
 .ip-port-tab-pane pre,
-.ip-unmapped-doc pre {
+.ip-unmapped-doc pre,
+.ip-cert-raw-box {
     margin: 0.75rem 0 0;
     white-space: pre-wrap;
     word-break: break-word;
@@ -159,7 +160,9 @@
     padding: 0.65rem 0.8rem;
 }
 .ip-host-line {
-    color: #4d5963;
+    color: #333;
+    font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-size: inherit;
     line-height: 1.5;
 }
 .ip-script-block + .ip-script-block {
@@ -169,6 +172,65 @@
     font-weight: 600;
     color: #2f3a44;
     margin-bottom: 0.35rem;
+}
+.ip-cert-raw-box {
+    display: block;
+    padding: 9.5px;
+    font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-size: inherit;
+    line-height: 1.42857143;
+    color: #333;
+    background-color: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+.ip-cert-san-list {
+    display: grid;
+    gap: 0.25rem;
+    margin: 0.25rem 0 0;
+}
+.ip-cert-san-item {
+    word-break: break-word;
+}
+.ip-cert-collapse {
+    margin: 0.45rem 0;
+}
+.ip-cert-collapse summary {
+    color: #337ab7;
+    cursor: pointer;
+    font-weight: 600;
+}
+.ip-cert-raw-details {
+    display: block;
+    margin: 0;
+}
+.ip-cert-raw-details summary {
+    color: #333;
+    display: inline-flex;
+    gap: 0.25rem;
+    list-style: none;
+    line-height: 1.2;
+}
+.ip-cert-raw-details summary::-webkit-details-marker {
+    display: none;
+}
+.ip-cert-raw-details summary::after {
+    content: "\25BE";
+}
+.ip-cert-raw-details[open] summary::after {
+    content: "\25B4";
+}
+.ip-cert-collapse pre {
+    margin-top: 0.45rem;
+}
+.ip-cert-raw-details pre {
+    margin-bottom: 0;
+}
+.ip-cert-san-more {
+    margin: 0;
+}
+.ip-cert-san-more summary {
+    padding-left: 4ch;
 }
 .ip-ptr-icon {
     color: #6b7781;
@@ -430,7 +492,48 @@
                     {% for script in observation.port.scripts %}
                     <div class="ip-script-block">
                         <div class="ip-script-title">{{ script.id or "script" }}</div>
-                        {% if script.output %}
+                        {% if script.id == "ssl-cert" %}
+                        {% set cert_extensions = script.extensions or {} %}
+                        {% set cert_issuer = script.issuer or {} %}
+                        {% set cert_subject = script.subject or {} %}
+                        {% set cert_validity = script.validity or {} %}
+                        {% set cert_pubkey = script.pubkey or {} %}
+                        {% set cert_san = cert_extensions.get("X509v3 Subject Alternative Name") %}
+                        {% set cert_san_values = cert_san.split(",") if cert_san else [] %}
+                        {% endif %}
+                        {% if script.output and script.id == "ssl-cert" %}
+                        <div class="ip-cert-raw-box">{% if cert_subject %}<strong>Subject</strong>
+{% if cert_subject.commonName %}    CN: {{ cert_subject.commonName }}
+{% endif %}{% if cert_subject.organizationName %}    Org: {{ cert_subject.organizationName }}
+{% endif %}{% if cert_subject.organizationalUnitName %}    OU: {{ cert_subject.organizationalUnitName }}
+{% endif %}{% if cert_subject.stateOrProvinceName %}    State: {{ cert_subject.stateOrProvinceName }}
+{% endif %}{% if cert_subject.localityName %}    Locality: {{ cert_subject.localityName }}
+{% endif %}{% if cert_subject.countryName %}    Country: {{ cert_subject.countryName }}
+{% endif %}{% endif %}{% if cert_issuer %}<strong>Issuer</strong>
+{% if cert_issuer.commonName %}    CN: {{ cert_issuer.commonName }}
+{% endif %}{% if cert_issuer.organizationName %}    Org: {{ cert_issuer.organizationName }}
+{% endif %}{% if cert_issuer.organizationalUnitName %}    OU: {{ cert_issuer.organizationalUnitName }}
+{% endif %}{% if cert_issuer.stateOrProvinceName %}    State: {{ cert_issuer.stateOrProvinceName }}
+{% endif %}{% if cert_issuer.localityName %}    Locality: {{ cert_issuer.localityName }}
+{% endif %}{% if cert_issuer.countryName %}    Country: {{ cert_issuer.countryName }}
+{% endif %}{% endif %}{% if cert_san %}<strong>SAN</strong>
+{% for san_value in cert_san_values[:10] %}    {{ san_value|trim }}
+{% endfor %}{% if cert_san_values|length > 10 %}<details class="ip-cert-collapse ip-cert-san-more"><summary>{{ cert_san_values|length - 10 }} more SANs</summary><div class="ip-cert-san-list">{% for san_value in cert_san_values[10:] %}<div class="ip-cert-san-item">    {{ san_value|trim }}</div>{% endfor %}</div></details>{% endif %}{% endif %}{% for output_line in script.output.splitlines() %}{% if output_line.startswith("Signature Algorithm:") %}
+{% if cert_pubkey.type or cert_pubkey.bits or cert_pubkey.exponent %}<strong>Public Key:</strong> {{ cert_pubkey.type or "N/A" }}{% if cert_pubkey.bits %} / {{ cert_pubkey.bits }} bits{% endif %}{% if cert_pubkey.exponent %} / exponent {{ cert_pubkey.exponent }}{% endif %}
+{% endif %}<strong>Signature Algorithm:</strong> {{ output_line.split(":", 1)[1]|trim }}
+{% if script.md5 %}<strong>MD5:</strong> {{ script.md5|replace(":", "")|trim }}
+{% endif %}{% if script.sha1 %}<strong>SHA-1:</strong> {{ script.sha1|replace(":", "")|trim }}
+{% endif %}
+{% if cert_validity.notBefore %}<strong>Not valid before:</strong> {{ cert_validity.notBefore }}
+{% endif %}{% if cert_validity.notAfter %}<strong>Not valid after:</strong> {{ cert_validity.notAfter }}
+{% endif %}{% elif not output_line.startswith("Subject:") and not output_line.startswith("Subject Alternative Name:") and not output_line.startswith("Issuer:") and not output_line.startswith("Public Key type:") and not output_line.startswith("Public Key bits:") and not output_line.startswith("Not valid before:") and not output_line.startswith("Not valid after:") and not output_line.startswith("MD5:") and not output_line.startswith("SHA-1:") %}{{ output_line }}
+{% endif %}{% endfor %}{% if cert_extensions.get("X509v3 CRL Distribution Points") %}<strong>X509v3 CRL Distribution Points:</strong> {{ cert_extensions.get("X509v3 CRL Distribution Points") }}
+{% endif %}{% if cert_extensions.get("X509v3 Certificate Policies") %}<strong>X509v3 Certificate Policies:</strong> {{ cert_extensions.get("X509v3 Certificate Policies") }}
+{% endif %}{% if cert_extensions.get("X509v3 Extended Key Usage") %}<strong>X509v3 Extended Key Usage:</strong> {{ cert_extensions.get("X509v3 Extended Key Usage") }}
+{% endif %}{% if cert_extensions.get("X509v3 Key Usage") %}<strong>X509v3 Key Usage:</strong> {{ cert_extensions.get("X509v3 Key Usage") }}
+{% endif %}{% if script.pem %}
+<details class="ip-cert-collapse ip-cert-raw-details"><summary>PEM certificate</summary><pre>{{ script.pem }}</pre></details>{% endif %}</div>
+                        {% elif script.output %}
                         <pre>{{ script.output }}</pre>
                         {% else %}
                         <div class="text-muted">No output.</div>
