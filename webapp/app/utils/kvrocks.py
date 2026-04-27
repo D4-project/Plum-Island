@@ -531,7 +531,7 @@ class KVrocksIndexer:
                 if suffix in ("like", "lk", "begin", "bg", "not", "nt"):
                     # substring = value.rstrip("*")
                     for key in self.r.scan_iter(f"{base_field}:*"):
-                        val = key.split(":", 2)[1]
+                        val = key.split(":", 1)[1]
                         # If NOT is needed here later, use the already scoped
                         # partial_result to subtract matching keys instead of
                         # rescanning every UID value ad hoc.
@@ -595,7 +595,7 @@ class KVrocksIndexer:
 
                 if suffix in ("like", "lk", "begin", "bg", "not", "nt"):
                     for key in self.r.scan_iter(f"{base_field}:*"):
-                        val = key.split(":", 2)[1]
+                        val = key.split(":", 1)[1]
                         if (suffix in ("like", "lk") and value in val) or (
                             suffix in ("begin", "bg") and val.startswith(value)
                         ):
