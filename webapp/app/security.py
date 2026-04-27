@@ -22,5 +22,5 @@ class CustomSecurityManager(SecurityManager):
             "Agent Keys",  # Nom de l’item
             href="/apikeysview/list/",
             category="Security",
-            icon="fa-folder-open-o",
+            icon="fa-robot",
         )

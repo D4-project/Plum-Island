@@ -2612,9 +2612,12 @@ class ApiKeysView(ModelView):
     datamodel = SQLAInterface(ApiKeys)
     add_template = "add_apikeyview.html"  # Custom Add view with KeyGenerator
     list_columns = ["id", "description"]
+    show_columns = ["keyidx", "description"]
     add_columns = ["key", "description"]
     edit_columns = ["description"]
-    # show_columns = ["id", "description"]
+    label_columns = {
+        "keyidx": "Key Identifier",
+    }
 
     def pre_add(self, item):
         # Hash the KeyID and Keep the Index
@@ -3475,6 +3478,7 @@ class TargetScanStatesView(ModelView):
     """
 
     datamodel = SQLAInterface(TargetScanStates)
+    list_title = "List Job Metrics"
     list_template = "list_targetscanstatesview.html"
     base_permissions = ["can_list", "can_show"]
     list_columns = ["target", "scanprofile", "working", "last_scan", "duration_html"]
@@ -3575,6 +3579,7 @@ class ProtosView(ModelView):
     """
 
     datamodel = SQLAInterface(Protos)
+    list_title = "List Protocols"
     label_columns = {
         "value": "Protocol",
         "name": "Description",
@@ -3662,11 +3667,12 @@ class StatsView(BaseView):
 
 
 appbuilder.add_view(
-    MeiliSearchView, "Token Search", icon="fa-magnifying-glass", category="Analytics"
+    KVSearchView, "Search Scans", icon="fa-magnifying-glass", category="Analytics"
 )
 appbuilder.add_view(
-    KVSearchView, "Header Search", icon="fa-magnifying-glass", category="Analytics"
+    MeiliSearchView, "Token Search", icon="fa-magnifying-glass", category="Analytics"
 )
+appbuilder.add_separator(category="Analytics")
 appbuilder.add_view_no_menu(IPDetailView)
 appbuilder.add_view(
     ApiKeysView, name="", category=None
@@ -3680,17 +3686,19 @@ appbuilder.add_link(
 )
 appbuilder.add_separator(category="Config")
 appbuilder.add_view(
-    ScanprofilesView, "Scan Profiles", icon="fa-folder-open-o", category="Config"
+    ScanprofilesView, "Scan Profiles", icon="fa-fingerprint", category="Config"
 )
-appbuilder.add_view(NsesView, "Nse Scripts", icon="fa-folder-open-o", category="Config")
+appbuilder.add_view(
+    NsesView, "Nse Scripts", icon="fa-regular fa-file-lines", category="Config"
+)
 appbuilder.add_view(TagRulesView, "Tag Rules", icon="fa-tags", category="Config")
 appbuilder.add_view(ReportsView, "Reports", icon="fa-file-text-o", category="Analytics")
-appbuilder.add_view(ProtosView, "Protocols", icon="fa-folder-open-o", category="Config")
+appbuilder.add_view(ProtosView, "Protocols", icon="fa-network-wired", category="Config")
 appbuilder.add_view(PortsView, "Ports", icon="fa-folder-open-o", category="Config")
-appbuilder.add_view(StatsView, "Stats", icon="fa-chart-bar", category="Status")
-appbuilder.add_view(JobsView, "Jobs", icon="fa-chart-bar", category="Status")
+appbuilder.add_view(JobsView, "Job Status", icon="fa-chart-bar", category="Status")
 appbuilder.add_view(
-    TargetScanStatesView, "Profile Scans", icon="fa-chart-bar", category="Status"
+    TargetScanStatesView, "Jobs Metrics", icon="fa-chart-bar", category="Status"
 )
-appbuilder.add_view(BotsView, "Bots", icon="fa-folder-open-o", category="Status")
+appbuilder.add_view(BotsView, "Bot Status", icon="fa-robot", category="Status")
+appbuilder.add_view(StatsView, "Stats", icon="fa-arrow-up-right-dots", category="Status")
 db.create_all()
