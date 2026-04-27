@@ -34,6 +34,7 @@ from meilisearch import Client
 from meilisearch.errors import MeilisearchApiError
 import requests
 
+from netaddr import IPNetwork
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
@@ -3609,6 +3610,57 @@ class PortsView(ModelView):
         return self
 
 
+class StatsView(BaseView):
+    """
+    Small operational statistics page.
+    """
+
+    default_view = "index"
+
+    @expose("/")
+    @has_access
+    def index(self):
+        targets = db.session.query(Targets.value).all()
+        cidr_count = 0
+        fqdn_count = 0
+        cidr_host_count = 0
+        total_hosts_to_scan = 0
+
+        for row in targets:
+            target_value = str(row.value or "").strip()
+            if not target_value:
+                continue
+            if is_valid_fqdn(target_value):
+                fqdn_count += 1
+                total_hosts_to_scan += 1
+                continue
+            if is_valid_ip(target_value):
+                total_hosts_to_scan += 1
+                continue
+            if is_valid_cidr(target_value):
+                cidr_count += 1
+                network_size = int(IPNetwork(target_value).size)
+                cidr_host_count += network_size
+                total_hosts_to_scan += network_size
+
+        stats = {
+            "cidr_count": cidr_count,
+            "fqdn_count": fqdn_count,
+            "cidr_host_count": cidr_host_count,
+            "total_hosts_to_scan": total_hosts_to_scan,
+            "kv_scanned_host_count": 0,
+            "kv_scan_result_count": 0,
+        }
+        indexer = db.app.config.get("KVROCKS_IDX") or KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"],
+            db.app.config["KVROCKS_PORT"],
+        )
+        kv_counts = indexer.objects_count()
+        stats["kv_scanned_host_count"] = kv_counts.get("ip_count", 0)
+        stats["kv_scan_result_count"] = kv_counts.get("uid_count", 0)
+        return self.render_template("stats.html", stats=stats, title="Stats")
+
+
 appbuilder.add_view(
     MeiliSearchView, "Token Search", icon="fa-magnifying-glass", category="Analytics"
 )
@@ -3635,6 +3687,7 @@ appbuilder.add_view(TagRulesView, "Tag Rules", icon="fa-tags", category="Config"
 appbuilder.add_view(ReportsView, "Reports", icon="fa-file-text-o", category="Analytics")
 appbuilder.add_view(ProtosView, "Protocols", icon="fa-folder-open-o", category="Config")
 appbuilder.add_view(PortsView, "Ports", icon="fa-folder-open-o", category="Config")
+appbuilder.add_view(StatsView, "Stats", icon="fa-chart-bar", category="Status")
 appbuilder.add_view(JobsView, "Jobs", icon="fa-chart-bar", category="Status")
 appbuilder.add_view(
     TargetScanStatesView, "Profile Scans", icon="fa-chart-bar", category="Status"

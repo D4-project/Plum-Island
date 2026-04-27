@@ -1,0 +1,63 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "Stats") }}
+
+<div class="stats-grid">
+  <div class="stats-card">
+    <div class="stats-label">Target CIDRs</div>
+    <div class="stats-value">{{ "{:,}".format(stats.cidr_count) }}</div>
+  </div>
+  <div class="stats-card">
+    <div class="stats-label">Target FQDNs</div>
+    <div class="stats-value">{{ "{:,}".format(stats.fqdn_count) }}</div>
+  </div>
+  <div class="stats-card">
+    <div class="stats-label">Total hosts for CIDRs</div>
+    <div class="stats-value">{{ "{:,}".format(stats.cidr_host_count) }}</div>
+  </div>
+  <div class="stats-card">
+    <div class="stats-label">Total hosts to scan</div>
+    <div class="stats-value">{{ "{:,}".format(stats.total_hosts_to_scan) }}</div>
+  </div>
+  <div class="stats-card">
+    <div class="stats-label">Scanned hosts in Kvrocks</div>
+    <div class="stats-value">{{ "{:,}".format(stats.kv_scanned_host_count) }}</div>
+  </div>
+  <div class="stats-card">
+    <div class="stats-label">Scan results in Kvrocks</div>
+    <div class="stats-value">{{ "{:,}".format(stats.kv_scan_result_count) }}</div>
+  </div>
+</div>
+
+{{ lib.panel_end() }}
+{% endblock content %}
+
+{% block add_tail_js %}
+<style nonce="{{ baselib.get_nonce() }}">
+  .stats-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .stats-card {
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 18px;
+  }
+
+  .stats-label {
+    color: #666;
+    font-size: 13px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+  }
+
+  .stats-value {
+    font-size: 30px;
+    font-weight: 600;
+  }
+</style>
+{% endblock %}
