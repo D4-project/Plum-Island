@@ -1,0 +1,5 @@
+description: status.net
+query: http_favicon_md5:3541A8ED03D7A4911679009961A82675
+tags:
+- soft:status-net
+version: 20260428T122952Z

@@ -1,0 +1,5 @@
+description: Mailman
+query: http_favicon_md5:EB6D4CE00EC36AF7D439EBD4E5A395D7
+tags:
+- soft:mailman
+version: 20260428T122952Z

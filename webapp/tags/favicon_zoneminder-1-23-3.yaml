@@ -1,0 +1,5 @@
+description: zoneminder (1.23.3)
+query: http_favicon_md5:E07C0775523271D629035DC8921DFFC7
+tags:
+- soft:zoneminder-1-23-3
+version: 20260428T122952Z

@@ -2,4 +2,5 @@ description: e107 CMS
 query: http_favicon_md5:2C338C26309E13987D315D85F499D7F2
 tags:
 - soft:e107-cms
-version: 20260428T122521Z
+- soft:cms
+version: 20260428T122522Z

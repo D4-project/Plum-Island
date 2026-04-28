@@ -1,0 +1,5 @@
+description: 'Roundcube Webmail 0.6-0.7 : Default, 0.8-0.9 : Classic, 0.8-0.9 : Larry'
+query: http_favicon_md5:228BA3F6D946AF4298B080E5C934487C
+tags:
+- soft:roundcube-webmail-0-6-0-7-default-0-8-0-9-classic-0-8-0-9-larry
+version: 20260428T122952Z

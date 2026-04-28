@@ -1,0 +1,5 @@
+description: Etherpad
+query: http_favicon_md5:FA2B274FAB800AF436EE688E97DA4AC4
+tags:
+- soft:etherpad
+version: 20260428T122952Z

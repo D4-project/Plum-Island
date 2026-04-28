@@ -1,0 +1,5 @@
+description: nagios (3.0.2)
+query: http_favicon_md5:1C4201C7DA53D6C7E48251D3A9680449
+tags:
+- soft:nagios-3-0-2
+version: 20260428T122952Z

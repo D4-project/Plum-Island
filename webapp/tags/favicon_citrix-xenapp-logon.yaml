@@ -1,0 +1,5 @@
+description: Citrix XenApp Logon
+query: http_favicon_md5:9939A032A9845E4D931D14E08F5A6C7C
+tags:
+- soft:citrix-xenapp-logon
+version: 20260428T122952Z

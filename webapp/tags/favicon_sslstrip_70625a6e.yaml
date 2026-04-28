@@ -2,4 +2,4 @@ description: sslstrip
 query: http_favicon_md5:70625A6E60529A85CC51AD7DA2D5580D
 tags:
 - soft:sslstrip
-version: 20260428T122521Z
+version: 20260428T122522Z

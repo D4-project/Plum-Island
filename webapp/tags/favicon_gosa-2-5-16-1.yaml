@@ -1,0 +1,5 @@
+description: gosa (2.5.16.1)
+query: http_favicon_md5:ECAB73F909DDD28E482ABABE810447C8
+tags:
+- soft:gosa-2-5-16-1
+version: 20260428T122952Z

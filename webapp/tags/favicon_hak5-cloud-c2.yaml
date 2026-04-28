@@ -1,0 +1,5 @@
+description: Hak5 Cloud C2
+query: http_favicon_md5:57F501D6FEE2FDB024795ABBDB750AD5
+tags:
+- soft:hak5-cloud-c2
+version: 20260428T122952Z

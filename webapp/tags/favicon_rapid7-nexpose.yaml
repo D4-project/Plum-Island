@@ -1,0 +1,5 @@
+description: Rapid7 (NeXpose)
+query: http_favicon_md5:E19FFB2BC890F5BDCA20F10BFDDB288D
+tags:
+- soft:rapid7-nexpose
+version: 20260428T122952Z

@@ -2,4 +2,6 @@ description: Wordpress Under Construction Icon
 query: http_favicon_mmhash:191654058
 tags:
 - soft:wordpress-under-construction-icon
-version: 20260428T122521Z
+- soft:cms
+- soft:wordpress
+version: 20260428T122522Z

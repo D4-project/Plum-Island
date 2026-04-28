@@ -1,0 +1,5 @@
+description: cacti (0.8.7b)
+query: http_favicon_md5:4F12CCCD3C42A4A478F067337FE92794
+tags:
+- soft:cacti-0-8-7b
+version: 20260428T122952Z

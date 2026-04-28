@@ -1,0 +1,5 @@
+description: Ampache
+query: http_favicon_md5:2E9545474EE33884B5FB8A9A0B8806DD
+tags:
+- soft:ampache
+version: 20260428T122952Z

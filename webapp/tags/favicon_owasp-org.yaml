@@ -1,0 +1,5 @@
+description: owasp.org
+query: http_favicon_md5:1F8C0B08FB6B556A6587517A8D5F290B
+tags:
+- soft:owasp-org
+version: 20260428T122952Z

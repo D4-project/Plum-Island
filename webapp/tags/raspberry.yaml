@@ -3,4 +3,4 @@ query: banner.bg:ssh-2.0-openssh AND banner.lk:raspbian
 tags:
 - hard:raspberry
 - soft:debian
-version: 20260428T122521Z
+version: 20260428T122522Z

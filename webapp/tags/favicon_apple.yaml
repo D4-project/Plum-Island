@@ -2,4 +2,4 @@ description: Apple
 query: http_favicon_mmhash:1232159009 OR http_favicon_mmhash:1382324298 OR http_favicon_mmhash:-1498185948
 tags:
 - soft:apple
-version: 20260428T122521Z
+version: 20260428T122522Z

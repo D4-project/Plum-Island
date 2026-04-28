@@ -1,0 +1,5 @@
+description: OTRS x
+query: http_favicon_md5:49BF194D1ECCB1E5110957D14559D33D
+tags:
+- soft:otrs-x
+version: 20260428T122952Z

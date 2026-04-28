@@ -1,5 +1,7 @@
 description: Plone CMS
 query: http_favicon_md5:10BD6AD7B318DF92D9E9BD03104D9B80 OR http_favicon_md5:4EB846F1286AB4E7A399C851D7D84CCA
+  OR http_favicon_md5:A47951FB41640E7A2F5862C296E6F218
 tags:
 - soft:plone-cms
-version: 20260428T122521Z
+- soft:cms
+version: 20260428T122952Z

@@ -3,4 +3,4 @@ query: x509_subject.bg:FG OR x509_issuer.bg:fortinet OR http_etag.bg:"83-6"
 tags:
 - soft:fortigate
 - soft:firewall
-version: 20260428T122521Z
+version: 20260428T122522Z

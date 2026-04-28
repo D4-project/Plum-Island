@@ -1,0 +1,5 @@
+description: 'QNAP TurboNAS 3.8.x : Admin'
+query: http_favicon_md5:F682DBD4D0A18DD7699339B8ADB28C0F
+tags:
+- soft:qnap-turbonas-3-8-x-admin
+version: 20260428T122952Z

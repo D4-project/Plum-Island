@@ -1,5 +1,6 @@
 description: Drupal
-query: http_favicon_mmhash:-167656799 OR http_favicon_mmhash:1174841451
+query: http_favicon_mmhash:-167656799 OR http_favicon_mmhash:1174841451 OR http_favicon_md5:F0EE98B4394DFDAB17C16245DD799204
 tags:
 - soft:drupal
-version: 20260428T122521Z
+- soft:cms
+version: 20260428T122952Z
