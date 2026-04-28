@@ -1,0 +1,10 @@
+{% extends "appbuilder/general/model/list.html" %}
+
+{% block list_list scoped %}
+    <div class="well well-sm">
+        <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
+            <i class="fa fa-download"></i> Export All
+        </a>
+    </div>
+    {{ super() }}
+{% endblock %}
