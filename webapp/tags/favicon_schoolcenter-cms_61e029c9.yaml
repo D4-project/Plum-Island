@@ -2,5 +2,4 @@ description: SchoolCenter CMS
 query: http_favicon_md5:61E029C99ABC5CF058ABC77562A69F98
 tags:
 - soft:schoolcenter-cms
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z

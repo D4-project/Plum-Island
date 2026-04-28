@@ -2,4 +2,4 @@ description: Open file listing
 query: http_title.bg:"index of"
 tags:
 - vuln:opendir
-version: 20260428T122522Z
+version: 20260428T124441Z

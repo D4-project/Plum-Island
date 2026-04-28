@@ -2,5 +2,4 @@ description: Liferay Portal
 query: http_favicon_mmhash:129457226
 tags:
 - soft:liferay-portal
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z

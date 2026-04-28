@@ -1,5 +1,5 @@
 description: AXIS (network cameras)
-query: http_favicon_mmhash:-1616143106 or x509_subject.lk:"Axis-"
+query: http_favicon_mmhash:-1616143106
 tags:
 - soft:axis-network-cameras
-version: 20260428T122522Z
+version: 20260428T124441Z

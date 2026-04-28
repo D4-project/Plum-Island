@@ -2,5 +2,4 @@ description: Joomla
 query: http_favicon_mmhash:1627330242 OR http_favicon_mmhash:-1950415971 OR http_favicon_mmhash:366524387
 tags:
 - soft:joomla
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z

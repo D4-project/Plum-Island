@@ -2,5 +2,4 @@ description: Mambo CMS
 query: http_favicon_md5:CEDDC34CBEC02D74FE40368E2DC1FA90
 tags:
 - soft:mambo-cms
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z

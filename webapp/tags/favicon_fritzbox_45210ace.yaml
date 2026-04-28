@@ -2,4 +2,4 @@ description: FRITZ!Box
 query: http_favicon_md5:45210ACE96CE9C893F8C27C5DECAB10D OR http_favicon_mmhash:-219752612
 tags:
 - soft:fritzbox
-version: 20260428T122522Z
+version: 20260428T124441Z

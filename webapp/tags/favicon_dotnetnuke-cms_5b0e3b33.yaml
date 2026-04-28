@@ -2,5 +2,4 @@ description: DotNetNuke CMS
 query: http_favicon_md5:5B0E3B33AA166C88CEE57F83DE1D4E55
 tags:
 - soft:dotnetnuke-cms
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z

@@ -2,5 +2,4 @@ description: DNN (CMS)
 query: http_favicon_mmhash:-1465479343
 tags:
 - soft:dnn-cms
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z

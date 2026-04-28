@@ -2,4 +2,4 @@ description: Zenoss Core x
 query: http_favicon_md5:C126F7E761813946FEA2E90FF7DDB838
 tags:
 - soft:zenoss-core-x
-version: 20260428T122952Z
+version: 20260428T124441Z

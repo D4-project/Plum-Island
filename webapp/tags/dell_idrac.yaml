@@ -3,4 +3,4 @@ query: http_title.lk:restgui/index.html OR http_title.lk:restgui/start.html or x
 tags:
 - hard:supervision
 - soft:idrac
-version: 20260428T122522Z
+version: 20260428T124441Z

@@ -2,4 +2,4 @@ description: Apache on Linux
 query: http_favicon_md5:FF2C8612B75B5F9A6175E016FE4AA609
 tags:
 - soft:apache-on-linux
-version: 20260428T122522Z
+version: 20260428T124441Z

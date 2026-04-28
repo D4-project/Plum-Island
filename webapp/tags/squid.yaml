@@ -3,4 +3,4 @@ query: http_Server.lk:squid
 tags:
 - soft:squid
 - soft:proxy
-version: 20260428T122522Z
+version: 20260428T124441Z

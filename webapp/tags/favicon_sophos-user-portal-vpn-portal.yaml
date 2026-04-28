@@ -2,4 +2,4 @@ description: Sophos User Portal/VPN Portal
 query: http_favicon_mmhash:1045696447
 tags:
 - soft:sophos-user-portal-vpn-portal
-version: 20260428T122522Z
+version: 20260428T124441Z

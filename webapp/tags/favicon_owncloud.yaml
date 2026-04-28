@@ -1,5 +1,5 @@
 description: ownCloud
-query: http_favicon_mmhash:-1616115760 OR http_favicon_md5:A4EB4E0AA80740DB8D7D951B6D63B2A2
+query: http_favicon_mmhash:-1616115760
 tags:
 - soft:owncloud
-version: 20260428T122952Z
+version: 20260428T124441Z

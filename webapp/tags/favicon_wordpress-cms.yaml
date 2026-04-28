@@ -1,7 +1,0 @@
-description: WordPress CMS
-query: http_favicon_md5:D5FE5CBCC31CFF5F8AC010DB72EB000C OR http_favicon_md5:FA54DBF2F61BD2E0188E47F5F578F736
-tags:
-- soft:wordpress-cms
-- soft:cms
-- soft:wordpress
-version: 20260428T122522Z

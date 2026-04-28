@@ -3,4 +3,4 @@ query: http_favicon_path.bg:"/vpn/images/AccessGateway.ico" OR http_title.bg:"Ne
   Gateway"
 tags:
 - soft:netscaler
-version: 20260428T122522Z
+version: 20260428T124441Z

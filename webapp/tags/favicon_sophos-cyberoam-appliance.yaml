@@ -2,4 +2,4 @@ description: Sophos Cyberoam (appliance)
 query: http_favicon_mmhash:1601194732
 tags:
 - soft:sophos-cyberoam-appliance
-version: 20260428T122522Z
+version: 20260428T124441Z

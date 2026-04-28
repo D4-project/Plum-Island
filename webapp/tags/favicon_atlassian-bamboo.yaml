@@ -1,6 +1,5 @@
 description: Atlassian - Bamboo
-query: http_favicon_mmhash:-1379982221 OR http_favicon_md5:43BA066789E749F9EF591DC086F3CD14
-  OR http_favicon_md5:A83DFECE1C0E9E3469588F418E1E4942
+query: http_favicon_mmhash:-1379982221
 tags:
 - soft:atlassian-bamboo
-version: 20260428T122952Z
+version: 20260428T124441Z

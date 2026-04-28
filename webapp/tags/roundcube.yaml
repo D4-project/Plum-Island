@@ -3,4 +3,4 @@ query: http_cookiename.bg:roundcube
 tags:
 - soft:webmail
 - soft:roundcube
-version: 20260428T122522Z
+version: 20260428T124441Z

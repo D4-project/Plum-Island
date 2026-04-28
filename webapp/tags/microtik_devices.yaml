@@ -2,4 +2,4 @@ description: Microtik Devices
 query: http_title:routeros or http_favicon_mmhash:1482462538
 tags:
 - hard:microtik
-version: 20260428T122522Z
+version: 20260428T124441Z

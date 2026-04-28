@@ -2,4 +2,4 @@ description: Python Language
 query: http_server.lk:python/ or http_server.lk:werkzeug/ or http_server.bg:wisp-server-python
 tags:
 - lang:python
-version: 20260428T122522Z
+version: 20260428T124441Z

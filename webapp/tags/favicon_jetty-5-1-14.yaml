@@ -2,4 +2,4 @@ description: jetty (5.1.14)
 query: http_favicon_md5:ED7D5C39C69262F4BA95418D4F909B10
 tags:
 - soft:jetty-5-1-14
-version: 20260428T122952Z
+version: 20260428T124441Z

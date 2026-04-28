@@ -1,6 +1,7 @@
 description: Wordpress
-query: http_favicon_md5:B231AD66A2A9B0EB06F72C4C88973039
+query: http_favicon_md5:B231AD66A2A9B0EB06F72C4C88973039 OR http_favicon_md5:D5FE5CBCC31CFF5F8AC010DB72EB000C
+  OR http_favicon_md5:FA54DBF2F61BD2E0188E47F5F578F736
 tags:
 - soft:wordpress
 - soft:cms
-version: 20260428T122952Z
+version: 20260428T124441Z

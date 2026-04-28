@@ -2,5 +2,4 @@ description: DedeCMS
 query: http_favicon_md5:7EF1F0A0093460FE46BB691578C07C95
 tags:
 - soft:dedecms
-- soft:cms
-version: 20260428T122522Z
+version: 20260428T124441Z
