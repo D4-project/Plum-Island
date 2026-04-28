@@ -4,4 +4,4 @@ query: http_server:CPWS or http_favicon_mmhash:-1822098181 or http_favicon_mmhas
 tags:
 - soft:firewall
 - soft:checkpoint
-version: 20260428T124441Z
+version: 20260428T142454Z

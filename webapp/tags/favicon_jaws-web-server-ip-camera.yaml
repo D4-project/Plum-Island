@@ -2,4 +2,4 @@ description: JAWS Web Server (IP Camera)
 query: http_favicon_mmhash:90066852 OR http_favicon_mmhash:768231242
 tags:
 - soft:jaws-web-server-ip-camera
-version: 20260428T124441Z
+version: 20260428T142454Z

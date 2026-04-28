@@ -2,4 +2,4 @@ description: Lotus Domino Server
 query: http_server:Lotus-Domino
 tags:
 - soft:ibm_domino
-version: 20260428T124441Z
+version: 20260428T142454Z

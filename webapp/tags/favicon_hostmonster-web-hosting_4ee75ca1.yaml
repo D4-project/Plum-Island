@@ -2,4 +2,4 @@ description: HostMonster web hosting
 query: http_favicon_md5:4EE75CA12A52425B9514EE6DE25D23FE OR http_favicon_mmhash:-972810761
 tags:
 - soft:hostmonster-web-hosting
-version: 20260428T124441Z
+version: 20260428T142454Z

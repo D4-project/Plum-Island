@@ -2,4 +2,4 @@ description: NetData
 query: http_favicon_mmhash:1302486561
 tags:
 - soft:netdata
-version: 20260428T124441Z
+version: 20260428T142454Z

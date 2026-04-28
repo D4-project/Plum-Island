@@ -2,4 +2,4 @@ description: rPath Appliance Agent
 query: http_favicon_md5:4C3373870496151FD02A6F1185B0BB68
 tags:
 - soft:rpath-appliance-agent
-version: 20260428T124441Z
+version: 20260428T142454Z

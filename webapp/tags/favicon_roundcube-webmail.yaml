@@ -2,4 +2,4 @@ description: Roundcube Webmail
 query: http_favicon_mmhash:-976235259 OR http_favicon_mmhash:-2140379067
 tags:
 - soft:roundcube-webmail
-version: 20260428T124441Z
+version: 20260428T142454Z

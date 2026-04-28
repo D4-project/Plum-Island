@@ -4,4 +4,4 @@ query: http_favicon_mmhash:631108382 or http_title:"SonicWall - Authentication" 
 tags:
 - soft:firewall
 - soft:sonicwall
-version: 20260428T124441Z
+version: 20260428T142454Z

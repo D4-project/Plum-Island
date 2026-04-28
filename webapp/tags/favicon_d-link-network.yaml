@@ -2,4 +2,4 @@ description: D-Link (Network)
 query: http_favicon_mmhash:-2031183903 OR http_favicon_mmhash:1081719753
 tags:
 - soft:d-link-network
-version: 20260428T124441Z
+version: 20260428T142454Z

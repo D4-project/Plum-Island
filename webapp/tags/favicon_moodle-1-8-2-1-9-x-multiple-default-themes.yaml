@@ -2,4 +2,4 @@ description: Moodle (1.8.2, 1.9.x, multiple default themes)
 query: http_favicon_md5:933A83C6E9E47BD1E38424F3789D121D
 tags:
 - soft:moodle-1-8-2-1-9-x-multiple-default-themes
-version: 20260428T124441Z
+version: 20260428T142454Z

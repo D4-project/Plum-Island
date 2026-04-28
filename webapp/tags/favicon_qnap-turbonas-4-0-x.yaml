@@ -2,4 +2,4 @@ description: QNAP TurboNAS 4.0.x
 query: http_favicon_md5:7FF45523A7EE9686D3D391A0A27A0B4F
 tags:
 - soft:qnap-turbonas-4-0-x
-version: 20260428T124441Z
+version: 20260428T142454Z

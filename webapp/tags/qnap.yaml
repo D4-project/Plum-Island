@@ -3,4 +3,4 @@ query: x509_subject.lk:"QNAP NAS"
 tags:
 - hard:qnap
 - hard:nas
-version: 20260428T124441Z
+version: 20260428T142454Z

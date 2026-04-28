@@ -2,4 +2,4 @@ description: solr (1.2.0) - admin
 query: http_favicon_md5:FFC05799DEE87A4F8901C458F7291D73
 tags:
 - soft:solr-1-2-0-admin
-version: 20260428T124441Z
+version: 20260428T142454Z

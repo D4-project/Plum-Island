@@ -2,4 +2,4 @@ description: cPanel Login
 query: http_favicon_mmhash:1993518473 OR http_favicon_mmhash:1544230796 OR http_favicon_mmhash:1244636413
 tags:
 - soft:cpanel-login
-version: 20260428T124441Z
+version: 20260428T142454Z

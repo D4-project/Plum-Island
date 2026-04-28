@@ -2,4 +2,4 @@ description: Google
 query: http_favicon_md5:F3418A443E7D841097C714D69EC4BCB8 OR http_favicon_mmhash:708578229
 tags:
 - soft:google
-version: 20260428T124441Z
+version: 20260428T142454Z

@@ -2,4 +2,4 @@ description: glpi (0.70.2)
 query: http_favicon_md5:C9339A2ECDE0980F40BA22C2D237B94B
 tags:
 - soft:glpi-0-70-2
-version: 20260428T124441Z
+version: 20260428T142454Z
