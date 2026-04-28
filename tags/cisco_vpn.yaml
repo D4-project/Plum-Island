@@ -1,4 +1,0 @@
-description: "Cisco VPN"
-query: 'http_cookiename.bg:webvpnlogin'
-tags:
-  - soft:ciscovpn

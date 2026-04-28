@@ -1,5 +1,0 @@
-description: "Python Simple HTTP directory listing"
-query: 'http_title.lk:"listing" http_server.bg:"SimpleHTTP"'
-tags:
-  - vuln:opendir
-  - lang:python

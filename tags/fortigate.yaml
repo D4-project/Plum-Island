@@ -1,4 +1,0 @@
-description: "FortiGate"
-query: 'x509_subject.bg:FG OR x509_issuer.bg:fortinet OR http_etag.bg:"83-6"'
-tags:
-  - soft:fortigate

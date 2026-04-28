@@ -11,6 +11,7 @@ This module contains all code related to the GUI.
 import calendar
 from datetime import datetime, timedelta, timezone
 import hashlib
+import io
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ import shlex
 import threading
 import time
 import uuid
+import zipfile
 import yaml
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
@@ -2825,6 +2827,20 @@ class TagRulesView(ModelView):
     def pre_update(self, item):
         return self._normalize_tag_rule_item(item)
 
+    def _iter_export_yaml(self):
+        """Yield export filename and YAML body for every tag rule."""
+        version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        rules = db.session.query(TagRules).order_by(TagRules.name).all()
+        for rule in rules:
+            filename = rule.name.replace(" ", "_").lower() + ".yaml"
+            doc = {
+                "description": rule.description,
+                "query": rule.query,
+                "tags": rule.tags_list(),
+                "version": version,
+            }
+            yield filename, yaml.dump(doc, default_flow_style=False, sort_keys=False)
+
     @expose("/export_all")
     def export_all(self):
         """Export all tag rules as individual YAML files in the /tags directory."""
@@ -2833,24 +2849,30 @@ class TagRulesView(ModelView):
             "tags",
         )
         os.makedirs(tags_dir, exist_ok=True)
-        version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        rules = db.session.query(TagRules).order_by(TagRules.name).all()
         exported = 0
-        for rule in rules:
-            filename = rule.name.replace(" ", "_").lower() + ".yaml"
+        for filename, yaml_body in self._iter_export_yaml():
             filepath = os.path.join(tags_dir, filename)
-            tags_list = rule.tags_list()
-            doc = {
-                "description": rule.description,
-                "query": rule.query,
-                "tags": tags_list,
-                "version": version,
-            }
-            with open(filepath, "w") as f:
-                yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(yaml_body)
             exported += 1
         flash(f"Exported {exported} rule(s) to {tags_dir}", "info")
         return redirect(url_for("TagRulesView.list"))
+
+    @expose("/export_zip")
+    def export_zip(self):
+        """Download all tag rules as a ZIP archive of YAML files."""
+        version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for filename, yaml_body in self._iter_export_yaml():
+                zip_file.writestr(filename, yaml_body)
+        archive.seek(0)
+        return send_file(
+            archive,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"tagrules_{version}.zip",
+        )
 
 
 class ReportsView(ModelView):

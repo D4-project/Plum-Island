@@ -1,5 +1,4 @@
-description: Sophos VPN
-query: http_favicon_md5:DC07CE58639E2DEEDDD787B3C7BF432E
+description: "Sophos VPN"
+query: 'http_favicon_md5:DC07CE58639E2DEEDDD787B3C7BF432E'
 tags:
-- soft:sophosvpn
-version: 20260428T111420Z
+  - soft:sophosvpn

@@ -3,7 +3,10 @@
 {% block list_list scoped %}
     <div class="well well-sm">
         <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
-            <i class="fa fa-download"></i> Export All
+            <i class="fa fa-save"></i> Save to disk
+        </a>
+        <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
+            <i class="fa fa-download"></i> Download ZIP
         </a>
     </div>
     {{ super() }}
