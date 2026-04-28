@@ -3,4 +3,4 @@ query: x509_issuer.lk:IPMI
 tags:
 - hard:supervision
 - soft:ipmi
-version: 20260428T142454Z
+version: 20260428T164519Z

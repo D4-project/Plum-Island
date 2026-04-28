@@ -1,5 +1,6 @@
 description: Bosch Security Systems (Camera)
 query: http_favicon_mmhash:-1702769256
 tags:
-- soft:bosch-security-systems-camera
-version: 20260428T142454Z
+- soft:bosch-security-systems
+- hard:camera
+version: 20260428T164519Z

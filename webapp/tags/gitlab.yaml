@@ -2,4 +2,4 @@ description: GitLab
 query: http_cookiename.bg:_gitlab_session OR http_title.lk:gitlab OR host.bg:gitlab
 tags:
 - soft:gitlab
-version: 20260428T142454Z
+version: 20260428T164519Z

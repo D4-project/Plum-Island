@@ -1,5 +1,6 @@
 description: Zhejiang Uniview Technologies Co.,Ltd. / UNV IP camera / NVR - DVR
 query: http_favicon_mmhash:-1240222446
 tags:
-- soft:zhejiang-uniview-technologies-co-ltd-unv-ip-camera-nvr-dvr
-version: 20260428T142454Z
+- soft:zhejiang-uniview-technologies
+- hard:camera
+version: 20260428T164519Z

@@ -1,5 +1,6 @@
 description: MOBOTIX Camera
 query: http_favicon_mmhash:661332347
 tags:
-- soft:mobotix-camera
-version: 20260428T142454Z
+- soft:mobotix
+- hard:camera
+version: 20260428T164519Z

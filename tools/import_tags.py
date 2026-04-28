@@ -37,9 +37,18 @@ def parse_args():
         help=f"Directory containing tag YAML files. Default: {DEFAULT_TAGS_DIR}",
     )
     parser.add_argument(
+        "--tags-file",
+        help="Import only one tag YAML file instead of scanning --tags-dir.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate and print planned changes without writing to the DB.",
+    )
+    parser.add_argument(
+        "--flush_db",
+        action="store_true",
+        help="Delete all tag rules from the SQLite DB and exit.",
     )
     parser.add_argument(
         "--quiet",
@@ -101,6 +110,22 @@ def iter_yaml_files(tags_dir):
             yield path
 
 
+def get_yaml_files(args):
+    """
+    Return the YAML files selected by CLI arguments.
+    """
+    if args.tags_file:
+        tags_file = Path(args.tags_file).resolve()
+        if not tags_file.is_file():
+            raise FileNotFoundError(f"Tag YAML file not found: {tags_file}")
+        return [tags_file]
+
+    tags_dir = Path(args.tags_dir).resolve()
+    if not tags_dir.is_dir():
+        raise FileNotFoundError(f"Tags directory not found: {tags_dir}")
+    return list(iter_yaml_files(tags_dir))
+
+
 def should_replace(source_version, db_rule):
     """
     Return True when the YAML rule is older than the DB row.
@@ -113,9 +138,7 @@ def import_rules(args):
     """
     Import all YAML rules according to the version policy.
     """
-    tags_dir = Path(args.tags_dir).resolve()
-    if not tags_dir.is_dir():
-        raise FileNotFoundError(f"Tags directory not found: {tags_dir}")
+    yaml_files = [] if args.flush_db else get_yaml_files(args)
 
     sys.path.insert(0, str(WEBAPP_DIR))
     warnings.filterwarnings("ignore", category=Warning)
@@ -130,6 +153,7 @@ def import_rules(args):
     )
 
     summary = {
+        "deleted": 0,
         "inserted": 0,
         "updated": 0,
         "kept_db": 0,
@@ -138,7 +162,19 @@ def import_rules(args):
     }
 
     with app.app_context():
-        for yaml_file in iter_yaml_files(tags_dir):
+        if args.flush_db:
+            summary["deleted"] = db.session.query(TagRules).count()
+            if not args.quiet:
+                action = "WOULD_DELETE" if args.dry_run else "DELETE"
+                print(f"{action} tagrules count={summary['deleted']}")
+            if not args.dry_run:
+                db.session.query(TagRules).delete(synchronize_session=False)
+                db.session.commit()
+            else:
+                db.session.rollback()
+            return summary
+
+        for yaml_file in yaml_files:
             name = yaml_file.stem
             try:
                 payload, source_version, has_version = load_yaml_rule(yaml_file)
@@ -220,15 +256,22 @@ def main():
     """
     args = parse_args()
     summary = import_rules(args)
-    print(
-        "Tag import complete: "
-        f"inserted={summary['inserted']} "
-        f"updated={summary['updated']} "
-        f"kept_db={summary['kept_db']} "
-        f"unchanged={summary['unchanged']} "
-        f"skipped={summary['skipped']} "
-        f"dry_run={args.dry_run}"
-    )
+    if args.flush_db:
+        print(
+            "Tag DB flush complete: "
+            f"deleted={summary['deleted']} "
+            f"dry_run={args.dry_run}"
+        )
+    else:
+        print(
+            "Tag import complete: "
+            f"inserted={summary['inserted']} "
+            f"updated={summary['updated']} "
+            f"kept_db={summary['kept_db']} "
+            f"unchanged={summary['unchanged']} "
+            f"skipped={summary['skipped']} "
+            f"dry_run={args.dry_run}"
+        )
 
 
 if __name__ == "__main__":

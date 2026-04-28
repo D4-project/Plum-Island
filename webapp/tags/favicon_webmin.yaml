@@ -3,4 +3,4 @@ query: http_favicon_mmhash:1453890729 OR http_favicon_mmhash:-1038557304 OR http
   OR http_favicon_mmhash:479413330
 tags:
 - soft:webmin
-version: 20260428T142454Z
+version: 20260428T164519Z

@@ -2,4 +2,4 @@ description: Atlassian - Confluence
 query: http_favicon_mmhash:-305179312 OR http_favicon_mmhash:-1642532491
 tags:
 - soft:atlassian-confluence
-version: 20260428T142454Z
+version: 20260428T164519Z

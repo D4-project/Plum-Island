@@ -1,0 +1,7 @@
+description: MariaDB
+query: "banner.bg:\"I\\x00\\x00\\x00\\xFF\" and banner.lk:\"MariaDB\" OR banner.bg:\"\
+  Z\\x00\\x00\\x00\\x0A\" AND banner.lk:MariaDB OR\r\nbanner.lk:\"this MariaDB server\""
+tags:
+- soft:database
+- soft:mariadb
+version: 20260428T164519Z

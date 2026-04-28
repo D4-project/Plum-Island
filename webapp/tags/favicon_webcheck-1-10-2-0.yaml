@@ -2,4 +2,4 @@ description: webcheck (1.10.2.0)
 query: http_favicon_md5:2507C0B0A60ECDC816BA45482AFFAEDF
 tags:
 - soft:webcheck-1-10-2-0
-version: 20260428T142454Z
+version: 20260428T164519Z

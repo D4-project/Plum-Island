@@ -5,4 +5,4 @@ query: http_favicon_md5:1CE0C63F8BD1E5D3376EC0AE95A41C08 OR http_favicon_mmhash:
   OR http_favicon_md5:DCEA02A5797CE9E36F19B7590752563E
 tags:
 - soft:parallels-plesk-panel
-version: 20260428T142454Z
+version: 20260428T164519Z

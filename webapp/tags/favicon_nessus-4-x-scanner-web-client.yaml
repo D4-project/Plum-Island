@@ -2,4 +2,4 @@ description: Nessus 4.x Scanner Web Client
 query: http_favicon_md5:E298E00B2FF6340343DDF2FC6212010B
 tags:
 - soft:nessus-4-x-scanner-web-client
-version: 20260428T142454Z
+version: 20260428T164519Z

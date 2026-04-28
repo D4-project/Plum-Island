@@ -3,4 +3,4 @@ query: http_title.bg:"Securepoint UTM v"
 tags:
 - soft:firewall
 - soft:securepoint
-version: 20260428T142454Z
+version: 20260428T164519Z

@@ -3,4 +3,4 @@ query: http_title.lk:phpinfo()
 tags:
 - vuln:phpinfo
 - lang:php
-version: 20260428T142454Z
+version: 20260428T164519Z

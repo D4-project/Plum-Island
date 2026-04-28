@@ -4,4 +4,4 @@ query: http_title.bg:"Apache Tomcat/" OR http_favicon_md5:4644F2D45601037B8423D4
 tags:
 - lang:java
 - soft:tomcat
-version: 20260428T142454Z
+version: 20260428T164519Z

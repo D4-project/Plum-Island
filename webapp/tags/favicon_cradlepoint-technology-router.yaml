@@ -1,5 +1,6 @@
 description: CradlePoint Technology (Router)
 query: http_favicon_mmhash:1466912879
 tags:
-- soft:cradlepoint-technology-router
-version: 20260428T142454Z
+- hard:router
+- soft:cradlepoint-technology
+version: 20260428T164519Z

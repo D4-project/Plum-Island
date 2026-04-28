@@ -1,5 +1,6 @@
 description: Vivotek (Camera)
 query: http_favicon_mmhash:-1654229048
 tags:
-- soft:vivotek-camera
-version: 20260428T142454Z
+- soft:vivotek
+- hard:camera
+version: 20260428T164519Z

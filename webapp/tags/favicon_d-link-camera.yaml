@@ -1,5 +1,6 @@
 description: D-Link (camera)
 query: http_favicon_mmhash:-355305208 OR http_favicon_mmhash:-1897829998
 tags:
-- soft:d-link-camera
-version: 20260428T142454Z
+- soft:d-link
+- hard:camera
+version: 20260428T164519Z

@@ -1,6 +1,6 @@
 description: Squid
-query: http_Server.lk:squid
+query: http_Server.lk:squid or http_favicon_md5:A967C8BFDE9EA0869637294B679B7251
 tags:
 - soft:squid
 - soft:proxy
-version: 20260428T142454Z
+version: 20260428T164519Z
