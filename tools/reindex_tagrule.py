@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import meilisearch
+import redis
 import yaml
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -61,7 +62,19 @@ def parse_args():
         action="store_true",
         help="Delete all existing Kvrocks tag indexes before recomputing them.",
     )
+    parser.add_argument(
+        "--list_tags",
+        action="store_true",
+        help="List distinct tag keys currently indexed in Kvrocks, then exit.",
+    )
     args = parser.parse_args()
+    if args.list_tags:
+        if args.rule_id is not None or args.allrules:
+            parser.error("--list_tags cannot be combined with rule_id or --allrules")
+        if args.flush:
+            parser.error("--list_tags cannot be combined with --flush")
+        return args
+
     has_rule_id = args.rule_id is not None
     if has_rule_id == bool(args.allrules):
         parser.error("use either rule_id or --allrules")
@@ -224,6 +237,22 @@ def flush_tag_batch(indexer, pending_docs):
     return count
 
 
+def list_kvrocks_tags(redis_client, batch_size):
+    """
+    Print tag values by reading Kvrocks `tag:<value>` index keys.
+    """
+    tags = set()
+    for key in redis_client.scan_iter(match="tag:*", count=batch_size):
+        tag = str(key).split(":", 1)[1].strip()
+        if tag:
+            tags.add(tag)
+
+    for tag in sorted(tags):
+        print(tag)
+    print(f"Total tags: {len(tags)}", file=sys.stderr)
+    return len(tags)
+
+
 def main():
     """
     Validate the target rule id and reindex Kvrocks tags.
@@ -235,8 +264,25 @@ def main():
             f"--batch-size must be between 1 and {MAX_BATCH_SIZE}"
         )
 
-    runtime = load_runtime()
     suppress_connection_debug_logs()
+    tools_config = load_tools_config()
+    kvrocks_host = get_tool_config_value(tools_config, "OUT_KVROCKS_HOST")
+    kvrocks_port = get_tool_config_value(tools_config, "OUT_KVROCKS_PORT")
+
+    if kvrocks_host in (None, "") or kvrocks_port in (None, ""):
+        raise SystemExit("Missing OUT_KVROCKS_HOST/OUT_KVROCKS_PORT in tools/config.yaml")
+
+    if args.list_tags:
+        redis_client = redis.Redis(
+            host=kvrocks_host,
+            port=kvrocks_port,
+            decode_responses=True,
+            db=0,
+        )
+        list_kvrocks_tags(redis_client, args.batch_size)
+        return
+
+    runtime = load_runtime()
     app = runtime["app"]
     db = runtime["db"]
     TagRules = runtime["TagRules"]
@@ -246,7 +292,6 @@ def main():
     compile_tag_rule_records = runtime["compile_tag_rule_records"]
 
     with app.app_context():
-        tools_config = load_tools_config()
         configure_parser_from_tools_config(app.config, tools_config)
         ensure_parser_tlds(app.config, fetch_tlds)
 
@@ -276,13 +321,9 @@ def main():
             "MEILI_API_KEY",
         )
         index_name = tools_config.get("INDEX_NAME", "plum")
-        kvrocks_host = get_tool_config_value(tools_config, "OUT_KVROCKS_HOST")
-        kvrocks_port = get_tool_config_value(tools_config, "OUT_KVROCKS_PORT")
 
         if not meili_url:
             raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
-        if kvrocks_host in (None, "") or kvrocks_port in (None, ""):
-            raise SystemExit("Missing OUT_KVROCKS_HOST/OUT_KVROCKS_PORT in tools/config.yaml")
 
         meili_client = meilisearch.Client(meili_url, meili_api_key)
         meili_index = meili_client.index(index_name)
