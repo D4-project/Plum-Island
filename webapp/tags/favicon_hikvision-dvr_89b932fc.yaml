@@ -1,0 +1,5 @@
+description: Hikvision DVR
+query: http_favicon_md5:89B932FCC47CF4CA3FAADB0CFDEF89CF
+tags:
+- soft:hikvision-dvr
+version: 20260428T111420Z

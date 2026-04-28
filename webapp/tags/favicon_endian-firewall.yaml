@@ -1,0 +1,5 @@
+description: Endian Firewall
+query: http_favicon_mmhash:-1225484776
+tags:
+- soft:endian-firewall
+version: 20260428T111420Z

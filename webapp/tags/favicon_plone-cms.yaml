@@ -1,0 +1,5 @@
+description: Plone CMS
+query: http_favicon_md5:10BD6AD7B318DF92D9E9BD03104D9B80 OR http_favicon_md5:4EB846F1286AB4E7A399C851D7D84CCA
+tags:
+- soft:plone-cms
+version: 20260428T111420Z

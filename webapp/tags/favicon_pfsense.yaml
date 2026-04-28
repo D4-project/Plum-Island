@@ -1,0 +1,5 @@
+description: pfSense
+query: http_favicon_mmhash:1405460984 OR http_favicon_mmhash:1015545776
+tags:
+- soft:pfsense
+version: 20260428T111420Z

@@ -1,0 +1,5 @@
+description: ARRIS (Network)
+query: http_favicon_mmhash:-360566773
+tags:
+- soft:arris-network
+version: 20260428T111420Z

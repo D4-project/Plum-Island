@@ -1,0 +1,5 @@
+description: Zabbix
+query: http_favicon_mmhash:892542951
+tags:
+- soft:zabbix
+version: 20260428T111420Z

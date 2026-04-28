@@ -1,0 +1,5 @@
+description: Mailcow
+query: http_favicon_mmhash:2146763496
+tags:
+- soft:mailcow
+version: 20260428T111420Z

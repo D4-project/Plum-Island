@@ -1,0 +1,5 @@
+description: 'SAP ID Service: Log On'
+query: http_favicon_mmhash:-1967743928
+tags:
+- soft:sap-id-service-log-on
+version: 20260428T111420Z

@@ -1,0 +1,5 @@
+description: Jeedom (home automation)
+query: http_favicon_mmhash:462223993
+tags:
+- soft:jeedom-home-automation
+version: 20260428T111420Z

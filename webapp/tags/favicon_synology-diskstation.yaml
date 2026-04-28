@@ -1,0 +1,5 @@
+description: Synology DiskStation
+query: http_favicon_mmhash:149371702
+tags:
+- soft:synology-diskstation
+version: 20260428T111420Z

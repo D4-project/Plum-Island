@@ -1,0 +1,5 @@
+description: SmartPing
+query: http_favicon_mmhash:430582574
+tags:
+- soft:smartping
+version: 20260428T111420Z

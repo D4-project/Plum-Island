@@ -1,0 +1,5 @@
+description: ZyXEL (Network)
+query: http_favicon_mmhash:-882760066
+tags:
+- soft:zyxel-network
+version: 20260428T111420Z

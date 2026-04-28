@@ -1,0 +1,5 @@
+description: OpenVPN
+query: http_favicon_mmhash:396533629
+tags:
+- soft:openvpn
+version: 20260428T111420Z

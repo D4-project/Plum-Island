@@ -1,0 +1,5 @@
+description: RabbitMQ
+query: http_favicon_mmhash:1064742722
+tags:
+- soft:rabbitmq
+version: 20260428T111420Z

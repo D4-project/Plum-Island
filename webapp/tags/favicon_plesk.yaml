@@ -1,0 +1,5 @@
+description: Plesk
+query: http_favicon_mmhash:-134375033 OR http_favicon_mmhash:-1050786453 OR http_favicon_mmhash:-981606721
+tags:
+- soft:plesk
+version: 20260428T111420Z

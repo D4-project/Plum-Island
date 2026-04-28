@@ -1,0 +1,5 @@
+description: ASUS AiCloud
+query: http_favicon_md5:5E4FCC77C49E69B4F55AED91C05256F3 OR http_favicon_mmhash:552592949
+tags:
+- soft:asus-aicloud
+version: 20260428T111420Z

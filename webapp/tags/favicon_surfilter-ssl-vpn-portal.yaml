@@ -1,0 +1,5 @@
+description: Surfilter SSL VPN Portal
+query: http_favicon_mmhash:-590892202
+tags:
+- soft:surfilter-ssl-vpn-portal
+version: 20260428T111420Z

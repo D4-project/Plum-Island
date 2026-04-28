@@ -1,0 +1,5 @@
+description: HFS (HTTP File Server)
+query: http_favicon_mmhash:2124459909 OR http_favicon_mmhash:731374291
+tags:
+- soft:hfs-http-file-server
+version: 20260428T111420Z

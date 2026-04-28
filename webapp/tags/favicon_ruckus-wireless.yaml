@@ -1,0 +1,5 @@
+description: Ruckus Wireless
+query: http_favicon_mmhash:-2069844696
+tags:
+- soft:ruckus-wireless
+version: 20260428T111420Z

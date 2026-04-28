@@ -1,0 +1,5 @@
+description: WatchGuard
+query: http_favicon_mmhash:15831193
+tags:
+- soft:watchguard
+version: 20260428T111420Z

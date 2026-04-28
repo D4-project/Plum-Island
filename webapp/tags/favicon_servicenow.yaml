@@ -1,0 +1,5 @@
+description: ServiceNow
+query: http_favicon_mmhash:86919334
+tags:
+- soft:servicenow
+version: 20260428T111420Z

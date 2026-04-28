@@ -1,0 +1,5 @@
+description: Shoutcast Server
+query: http_favicon_mmhash:-632583950
+tags:
+- soft:shoutcast-server
+version: 20260428T111420Z

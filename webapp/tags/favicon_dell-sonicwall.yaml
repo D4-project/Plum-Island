@@ -1,0 +1,5 @@
+description: Dell SonicWALL
+query: http_favicon_mmhash:363324987
+tags:
+- soft:dell-sonicwall
+version: 20260428T111420Z

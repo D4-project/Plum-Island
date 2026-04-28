@@ -1,0 +1,5 @@
+description: Synology VPN Plus
+query: http_favicon_mmhash:1235070469
+tags:
+- soft:synology-vpn-plus
+version: 20260428T111420Z

@@ -1,0 +1,5 @@
+description: Intelbras SA
+query: http_favicon_mmhash:2006716043 OR http_favicon_mmhash:283740897 OR http_favicon_mmhash:-1343070146
+tags:
+- soft:intelbras-sa
+version: 20260428T111420Z

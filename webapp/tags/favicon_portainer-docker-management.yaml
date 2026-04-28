@@ -1,0 +1,5 @@
+description: Portainer (Docker Management)
+query: http_favicon_mmhash:-1424036600
+tags:
+- soft:portainer-docker-management
+version: 20260428T111420Z

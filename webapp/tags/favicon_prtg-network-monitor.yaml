@@ -1,0 +1,5 @@
+description: PRTG Network Monitor
+query: http_favicon_mmhash:-655683626
+tags:
+- soft:prtg-network-monitor
+version: 20260428T111420Z

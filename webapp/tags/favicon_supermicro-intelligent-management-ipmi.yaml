@@ -1,0 +1,5 @@
+description: Supermicro Intelligent Management (IPMI)
+query: http_favicon_mmhash:1410610129
+tags:
+- soft:supermicro-intelligent-management-ipmi
+version: 20260428T111420Z

@@ -1,0 +1,5 @@
+description: Motorola eSite Builder (Resin web server)
+query: http_favicon_md5:A2714BE3E4C2F0AD16F33D3138033483
+tags:
+- soft:motorola-esite-builder-resin-web-server
+version: 20260428T111420Z

@@ -1,0 +1,5 @@
+description: MDaemon Webmail
+query: http_favicon_mmhash:-766957661
+tags:
+- soft:mdaemon-webmail
+version: 20260428T111420Z

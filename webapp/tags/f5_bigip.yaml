@@ -1,0 +1,5 @@
+description: F5 BIG-IP
+query: http_cookiename.bg:TS0 OR http_server.lk:bigip OR http_title.lk:"big-ip logout"
+tags:
+- soft:f5-big-ip
+version: 20260428T111420Z

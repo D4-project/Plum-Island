@@ -1,0 +1,5 @@
+description: Univention Portal
+query: http_favicon_mmhash:-1697334194
+tags:
+- soft:univention-portal
+version: 20260428T111420Z

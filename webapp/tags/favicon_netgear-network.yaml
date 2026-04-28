@@ -1,0 +1,5 @@
+description: Netgear (Network)
+query: http_favicon_mmhash:1047213685
+tags:
+- soft:netgear-network
+version: 20260428T111420Z

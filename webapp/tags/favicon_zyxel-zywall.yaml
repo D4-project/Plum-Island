@@ -1,0 +1,5 @@
+description: Zyxel ZyWALL
+query: http_favicon_mmhash:-440644339 OR http_favicon_mmhash:-484708885
+tags:
+- soft:zyxel-zywall
+version: 20260428T111420Z

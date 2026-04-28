@@ -1,0 +1,5 @@
+description: Freebox OS
+query: http_favicon_mmhash:1838417872
+tags:
+- soft:freebox-os
+version: 20260428T111420Z

@@ -1,0 +1,6 @@
+description: Dlink Webcam
+query: http_favicon_mmhash:31972968 OR http_favicon_mmhash:-1354933624 OR http_favicon_mmhash:1221759509
+  OR http_favicon_mmhash:1144925962
+tags:
+- soft:dlink-webcam
+version: 20260428T111420Z

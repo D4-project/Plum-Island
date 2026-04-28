@@ -1,0 +1,5 @@
+description: PhpMyAdmin
+query: http_title.lk:phpmyadmin OR http_cookiename.bg:phpmyadmin_https
+tags:
+- soft:phpmyadmin
+version: 20260428T111420Z

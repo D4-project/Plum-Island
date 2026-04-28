@@ -1,0 +1,5 @@
+description: Bitnami
+query: http_favicon_mmhash:-1607644090
+tags:
+- soft:bitnami
+version: 20260428T111420Z

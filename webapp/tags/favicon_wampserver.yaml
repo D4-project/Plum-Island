@@ -1,0 +1,5 @@
+description: WAMPSERVER
+query: http_favicon_mmhash:929825723 OR http_favicon_mmhash:443944613
+tags:
+- soft:wampserver
+version: 20260428T111420Z

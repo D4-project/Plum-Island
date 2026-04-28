@@ -1,0 +1,5 @@
+description: WISPR (Airlan)
+query: http_favicon_mmhash:-106646451
+tags:
+- soft:wispr-airlan
+version: 20260428T111420Z

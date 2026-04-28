@@ -1,0 +1,5 @@
+description: JIRA
+query: http_favicon_mmhash:855273746
+tags:
+- soft:jira
+version: 20260428T111420Z

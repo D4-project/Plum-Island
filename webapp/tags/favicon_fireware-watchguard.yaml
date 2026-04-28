@@ -1,0 +1,5 @@
+description: Fireware Watchguard
+query: http_favicon_mmhash:-569941107
+tags:
+- soft:fireware-watchguard
+version: 20260428T111420Z

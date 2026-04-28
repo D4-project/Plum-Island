@@ -1,0 +1,5 @@
+description: Kerio Control Firewall
+query: http_favicon_mmhash:-631002664 OR http_favicon_mmhash:-466504476
+tags:
+- soft:kerio-control-firewall
+version: 20260428T111420Z

@@ -1,0 +1,5 @@
+description: Gogs
+query: http_favicon_mmhash:917966895
+tags:
+- soft:gogs
+version: 20260428T111420Z

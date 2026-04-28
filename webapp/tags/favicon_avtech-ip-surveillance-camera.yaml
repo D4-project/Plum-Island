@@ -1,0 +1,5 @@
+description: Avtech IP Surveillance (Camera)
+query: http_favicon_mmhash:-194439630
+tags:
+- soft:avtech-ip-surveillance-camera
+version: 20260428T111420Z

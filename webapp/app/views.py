@@ -18,6 +18,7 @@ import shlex
 import threading
 import time
 import uuid
+import yaml
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
 from flask import request, jsonify
@@ -2763,6 +2764,7 @@ class TagRulesView(ModelView):
     """
 
     datamodel = SQLAInterface(TagRules)
+    list_template = "list_tagrulesview.html"
     list_columns = [
         "id",
         "active",
@@ -2822,6 +2824,33 @@ class TagRulesView(ModelView):
 
     def pre_update(self, item):
         return self._normalize_tag_rule_item(item)
+
+    @expose("/export_all")
+    def export_all(self):
+        """Export all tag rules as individual YAML files in the /tags directory."""
+        tags_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "tags",
+        )
+        os.makedirs(tags_dir, exist_ok=True)
+        version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        rules = db.session.query(TagRules).order_by(TagRules.name).all()
+        exported = 0
+        for rule in rules:
+            filename = rule.name.replace(" ", "_").lower() + ".yaml"
+            filepath = os.path.join(tags_dir, filename)
+            tags_list = rule.tags_list()
+            doc = {
+                "description": rule.description,
+                "query": rule.query,
+                "tags": tags_list,
+                "version": version,
+            }
+            with open(filepath, "w") as f:
+                yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+            exported += 1
+        flash(f"Exported {exported} rule(s) to {tags_dir}", "info")
+        return redirect(url_for("TagRulesView.list"))
 
 
 class ReportsView(ModelView):
@@ -3253,6 +3282,7 @@ class ScanprofilesView(ModelView):
         "ports",
         "nses",
         "targets",
+        "apply_to_all",
         "apply_to_all",
     ]
     search_form_extra_fields = {

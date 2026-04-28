@@ -1,0 +1,5 @@
+description: Rocket Chat
+query: http_favicon_mmhash:225632504
+tags:
+- soft:rocket-chat
+version: 20260428T111420Z

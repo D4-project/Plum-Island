@@ -1,0 +1,5 @@
+description: UniFi Video Controller (airVision)
+query: http_favicon_mmhash:768816037
+tags:
+- soft:unifi-video-controller-airvision
+version: 20260428T111420Z

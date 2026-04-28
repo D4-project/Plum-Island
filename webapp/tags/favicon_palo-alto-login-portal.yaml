@@ -1,0 +1,5 @@
+description: Palo Alto Login Portal
+query: http_favicon_mmhash:602431586
+tags:
+- soft:palo-alto-login-portal
+version: 20260428T111420Z
