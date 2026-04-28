@@ -1,0 +1,5 @@
+description: Cisco Device
+query: banner.lk:-cisco-
+tags:
+- hard:cisco
+version: 20260428T122521Z

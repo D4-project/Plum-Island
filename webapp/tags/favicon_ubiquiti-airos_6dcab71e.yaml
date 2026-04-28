@@ -3,4 +3,4 @@ query: http_favicon_md5:6DCAB71E60F0242907940F0FCDA69EA5 OR http_favicon_mmhash:
   OR http_favicon_mmhash:1020814938
 tags:
 - soft:ubiquiti-airos
-version: 20260428T111420Z
+version: 20260428T122521Z

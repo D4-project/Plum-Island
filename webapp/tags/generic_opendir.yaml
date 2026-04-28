@@ -1,0 +1,5 @@
+description: Open file listing
+query: http_title.bg:"index of"
+tags:
+- vuln:opendir
+version: 20260428T122521Z

@@ -1,0 +1,5 @@
+description: Windows
+query: http_server.lk:(Win64) or http_server.bg:microsoft-iis
+tags:
+- soft:windows
+version: 20260428T122521Z

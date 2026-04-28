@@ -1,0 +1,6 @@
+description: Dell Idrac
+query: http_title.lk:restgui/index.html OR http_title.lk:restgui/start.html or x509_subject.bg:idrac-
+tags:
+- hard:supervision
+- soft:idrac
+version: 20260428T122521Z

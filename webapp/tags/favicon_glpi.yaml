@@ -2,4 +2,4 @@ description: GLPI
 query: http_favicon_mmhash:-1474875778
 tags:
 - soft:glpi
-version: 20260428T111420Z
+version: 20260428T122521Z

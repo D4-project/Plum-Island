@@ -1,0 +1,5 @@
+description: FreeBsd
+query: banner.bg:ssh-2.0-openssh AND banner.lk:freebsd-
+tags:
+- soft:freebsd
+version: 20260428T122521Z

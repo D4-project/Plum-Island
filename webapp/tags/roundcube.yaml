@@ -1,0 +1,6 @@
+description: Roundcube
+query: http_cookiename.bg:roundcube
+tags:
+- soft:webmail
+- soft:roundcube
+version: 20260428T122521Z

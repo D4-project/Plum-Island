@@ -1,0 +1,7 @@
+description: Synology Nas
+query: http_title.lk:"-&nbsp;synology&nbsp;" OR http_title:"hello! welcome to synology
+  web station!" OR http_title:"hallo! herzlich willkommen bei synology web station!"
+tags:
+- hard:synology
+- hard:nas
+version: 20260428T122521Z

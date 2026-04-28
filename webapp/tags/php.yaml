@@ -1,0 +1,5 @@
+description: Php Language
+query: http_cookiename:PHPSESSID or http_cookiename:CAKEPHP or http_server:" PHP/"
+tags:
+- lang:php
+version: 20260428T122521Z

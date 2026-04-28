@@ -1,4 +1,5 @@
-description: "Cisco VPN"
-query: 'http_cookiename.bg:webvpnlogin'
+description: Cisco VPN
+query: http_cookiename.bg:webvpnlogin
 tags:
-  - soft:ciscovpn
+- soft:ciscovpn
+version: 20260428T122521Z

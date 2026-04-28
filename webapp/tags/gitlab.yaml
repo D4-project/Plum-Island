@@ -1,4 +1,5 @@
-description: "GitLab"
-query: 'http_cookiename.bg:_gitlab_session OR http_title.lk:gitlab OR host.bg:gitlab'
+description: GitLab
+query: http_cookiename.bg:_gitlab_session OR http_title.lk:gitlab OR host.bg:gitlab
 tags:
-  - soft:gitlab
+- soft:gitlab
+version: 20260428T122521Z

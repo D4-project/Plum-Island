@@ -1,4 +1,5 @@
-description: "WildFly"
-query: 'http_favicon_mmhash:-1666561833'
+description: WildFly
+query: http_favicon_mmhash:-1666561833
 tags:
-  - soft:wildfly
+- soft:wildfly
+version: 20260428T122521Z

@@ -1,0 +1,5 @@
+description: NextCloud
+query: http_title:Nextcloud
+tags:
+- soft:nextcloud
+version: 20260428T122521Z

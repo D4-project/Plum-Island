@@ -1,0 +1,7 @@
+description: Apache Tomcat
+query: http_title.bg:"Apache Tomcat/" OR http_favicon_md5:4644F2D45601037B8423D45E13194C93
+  OR http_favicon_mmhash:-297069493
+tags:
+- lang:java
+- soft:tomcat
+version: 20260428T122521Z

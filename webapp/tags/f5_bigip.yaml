@@ -1,4 +1,6 @@
-description: "F5 BIG-IP"
-query: 'http_cookiename.bg:TS0 OR http_server.lk:bigip OR http_title.lk:"big-ip logout"'
+description: F5 BIG-IP
+query: http_cookiename.bg:TS0 OR http_server.lk:bigip OR http_title.lk:"big-ip logout"  OR
+  http_favicon_mmhash:-335242539
 tags:
-  - soft:f5-big-ip
+- soft:f5-big-ip
+version: 20260428T122521Z

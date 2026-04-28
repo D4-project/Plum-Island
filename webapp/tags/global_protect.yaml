@@ -1,4 +1,5 @@
-description: "GlobalProtect"
-query: 'http_title.lk:"/global-protect/login.esp"'
+description: GlobalProtect
+query: http_title.lk:"/global-protect/login.esp"
 tags:
-  - soft:globalprotect
+- soft:globalprotect
+version: 20260428T122521Z

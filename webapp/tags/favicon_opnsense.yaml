@@ -2,4 +2,4 @@ description: OPNsense
 query: http_favicon_mmhash:-1148190371
 tags:
 - soft:opnsense
-version: 20260428T111420Z
+version: 20260428T122521Z

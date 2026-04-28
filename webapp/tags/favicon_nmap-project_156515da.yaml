@@ -2,4 +2,4 @@ description: Nmap Project
 query: http_favicon_md5:156515DA3C0F7DC6B2493BD5CE43F795
 tags:
 - soft:nmap-project
-version: 20260428T111420Z
+version: 20260428T122521Z

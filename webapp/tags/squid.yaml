@@ -1,0 +1,6 @@
+description: Squid
+query: http_Server.lk:squid
+tags:
+- soft:squid
+- soft:proxy
+version: 20260428T122521Z

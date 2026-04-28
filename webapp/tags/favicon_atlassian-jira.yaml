@@ -2,4 +2,4 @@ description: Atlassian - JIRA
 query: http_favicon_mmhash:981867722 OR http_favicon_mmhash:552727997 OR http_favicon_mmhash:-1581907337
 tags:
 - soft:atlassian-jira
-version: 20260428T111420Z
+version: 20260428T122521Z
