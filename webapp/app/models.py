@@ -8,6 +8,7 @@
 This is the module containing all the data models
 """
 
+import html
 from flask_appbuilder import Model
 from flask import Markup as Esc
 from sqlalchemy import (
@@ -352,12 +353,67 @@ class TagRules(Model):
 
     def tags_html(self):
         """
-        Display tags as HTML badges.
+        Display tags as compact HTML badges.
         """
-        html = ""
-        for tag in self.tags_list():
-            html += f'<span class="label label-default">{tag}</span> '
-        return Esc(html)
+        tags = self.tags_list()
+        if not tags:
+            return Esc("")
+
+        visible_limit = 2
+        title = html.escape(", ".join(tags), quote=True)
+        rendered = ""
+        rendered += f'<span class="tagrules-tags" title="{title}">'
+        for tag in tags[:visible_limit]:
+            rendered += (
+                '<span class="label label-default tagrules-tag">'
+                f'{html.escape(tag)}'
+                "</span> "
+            )
+
+        remaining = len(tags) - visible_limit
+        if remaining > 0:
+            rendered += (
+                '<span class="label label-info tagrules-tag">'
+                f'+{remaining}'
+                "</span>"
+            )
+        rendered += "</span>"
+        return Esc(rendered)
+
+    def name_html(self):
+        """
+        Render the rule name with the description available on hover.
+        """
+        name = html.escape(str(self.name or ""))
+        description = html.escape(str(self.description or ""), quote=True)
+        if not description:
+            return Esc(name)
+        return Esc(f'<span title="{description}">{name}</span>')
+
+    def active_html(self):
+        """
+        Compact list-friendly active state indicator.
+        """
+        if self.active:
+            return Esc('<i class="fa fa-check text-success" title="Active"></i>')
+        return Esc('<i class="fa fa-times text-muted" title="Inactive"></i>')
+
+    @staticmethod
+    def _datetime_html(value):
+        """
+        Render datetimes without microseconds for compact UI tables.
+        """
+        if not value:
+            return Esc("")
+        if hasattr(value, "strftime"):
+            return Esc(value.strftime("%Y-%m-%d %H:%M:%S"))
+        return Esc(html.escape(str(value).split(".", 1)[0]))
+
+    def created_at_html(self):
+        return self._datetime_html(self.created_at)
+
+    def updated_at_html(self):
+        return self._datetime_html(self.updated_at)
 
 
 class Reports(Model):

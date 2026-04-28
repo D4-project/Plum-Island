@@ -2768,12 +2768,10 @@ class TagRulesView(ModelView):
     datamodel = SQLAInterface(TagRules)
     list_template = "list_tagrulesview.html"
     list_columns = [
-        "id",
-        "active",
-        "name",
-        "description",
+        "active_html",
         "tags_html",
-        "updated_at",
+        "name_html",
+        "updated_at_html",
     ]
     show_columns = [
         "active",
@@ -2782,8 +2780,8 @@ class TagRulesView(ModelView):
         "query",
         "tags",
         "tags_html",
-        "created_at",
-        "updated_at",
+        "created_at_html",
+        "updated_at_html",
     ]
     add_columns = ["name", "active", "description", "query", "tags"]
     edit_columns = ["name", "active", "description", "query", "tags"]
@@ -2792,13 +2790,17 @@ class TagRulesView(ModelView):
     label_columns = {
         "id": "ID",
         "name": "Rule Name",
+        "name_html": "Rule Name",
         "active": "Active",
+        "active_html": "⏻",
         "description": "Description",
         "query": "Search",
         "tags": "Tags",
         "tags_html": "Tags",
         "created_at": "Created",
+        "created_at_html": "Created",
         "updated_at": "Updated",
+        "updated_at_html": "Updated",
     }
 
     def _normalize_tag_rule_item(self, item):
@@ -2826,6 +2828,21 @@ class TagRulesView(ModelView):
 
     def pre_update(self, item):
         return self._normalize_tag_rule_item(item)
+
+    @action(
+        "muldelete",
+        "Delete Tag Rules",
+        "Delete selected tag rules?",
+        "fa-trash-can",
+        single=False,
+    )
+    def muldelete(self, items):
+        """
+        Delete selected tag rules from the list checkbox action.
+        """
+        self.datamodel.delete_all(items)
+        self.update_redirect()
+        return redirect(self.get_redirect())
 
     def _iter_export_yaml(self):
         """Yield export filename and YAML body for every tag rule."""

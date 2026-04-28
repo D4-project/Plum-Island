@@ -1,5 +1,26 @@
 {% extends "appbuilder/general/model/list.html" %}
 
+{% block head_css %}
+{{ super() }}
+<style>
+.tagrules-tags {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    max-width: 22rem;
+    vertical-align: middle;
+}
+.tagrules-tag {
+    display: inline-block;
+    max-width: 16rem;
+    overflow: hidden;
+    padding: 0.15em 0.35em;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+}
+</style>
+{% endblock %}
+
 {% block list_list scoped %}
     <div class="well well-sm">
         <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
