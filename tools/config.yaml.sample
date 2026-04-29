@@ -3,10 +3,15 @@ MEILI_API_KEY: "thisneedtobechangedinproduction"
 IN_MEILI_URL: "http://localhost:7800"
 IN_MEILI_API_KEY: "thisneedtobechangedinproduction"
 INDEX_NAME: "plum"
+
+# Source KV for Reading 
 IN_KVROCKS_PORT: 6666
 IN_KVROCKS_HOST: localhost
+
+# Dest KV for writing
 OUT_KVROCKS_PORT: 6666
 OUT_KVROCKS_HOST: localhost
+
 ONLINETLD: false
 TLDADD:
   - "local"
