@@ -2859,6 +2859,7 @@ class TagRulesView(ModelView):
             yield filename, yaml.dump(doc, default_flow_style=False, sort_keys=False)
 
     @expose("/export_all")
+    @has_access
     def export_all(self):
         """Export all tag rules as individual YAML files in the /tags directory."""
         tags_dir = os.path.join(
@@ -2876,6 +2877,7 @@ class TagRulesView(ModelView):
         return redirect(url_for("TagRulesView.list"))
 
     @expose("/export_zip")
+    @has_access
     def export_zip(self):
         """Download all tag rules as a ZIP archive of YAML files."""
         version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
