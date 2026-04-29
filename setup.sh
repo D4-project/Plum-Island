@@ -54,6 +54,12 @@ done
 flask fab create-admin --username Admin --firstname Admin --lastname Admin --email PlumAdmin@changeme.xxx --password $key
 cd ..
 echo ""
+echo "Loading initial tag rules and NSE scripts..."
+if ! .venv/bin/python tools/initial_setup.py; then
+  echo "ERROR: Initial tag/NSE setup failed."
+  exit 1
+fi
+echo ""
 echo configured with username admin
 echo and password: $key
 echo change your password and email in the web interface.

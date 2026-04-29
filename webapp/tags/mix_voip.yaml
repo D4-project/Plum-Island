@@ -2,5 +2,5 @@ description: MixVoip
 query: 'http_title:"MIXpbx :: Configuration and managagement"'
 tags:
 - soft:mixvoip
-- sotft:telephony
+- soft:telephony
 version: 20260428T164519Z

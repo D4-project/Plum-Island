@@ -1,6 +1,6 @@
 description: SoftEther VPN Server
 query: http_title.bg:"SoftEther VPN Server"
 tags:
-- tag:soft:vpn
-- tag:soft:softether_vpn
+- soft:vpn
+- soft:softether_vpn
 version: 20260428T164519Z
