@@ -936,6 +936,7 @@ async function loadMoreResults() {
 
 function renderSearchChunk(data, baseIndex, hitsDiv) {
     const returnedIps = Object.keys(data.results || {});
+    const requestedHostnames = data.requested_hostnames || {};
 
     Object.entries(data.results || {}).forEach(([ip, uids], ipIndex) => {
         const resultIndex = baseIndex + ipIndex;
@@ -944,6 +945,13 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
         const ipLabel = ip;
         const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
+        const sortedUids = [...uids].sort((a, b) => {
+            const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
+            const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
+            return bLast - aLast;
+        });
+        const requestedHostname = findRequestedHostnameForUids(sortedUids, requestedHostnames);
+        const detailUrl = buildIpDetailUrl(ipLabel, requestedHostname);
 
         // IP accordion
         ipPanel.innerHTML = `
@@ -952,7 +960,7 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
                     <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${resultIndex}">
                         ${ipLabel}
                     </a>
-                    <a class="ip-detail-link" href="/ip/${encodeURIComponent(ipLabel)}" title="Open details for ${ipLabel}">
+                    <a class="ip-detail-link" href="${detailUrl}" title="Open details for ${ipLabel}">
                         <i class="fa fa-info-circle" aria-hidden="true"></i>
                     </a>
                     <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
@@ -970,11 +978,6 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         hitsDiv.appendChild(ipPanel);
 
         const uidsDiv = document.getElementById(`uids-${resultIndex}`);
-        const sortedUids = [...uids].sort((a, b) => {
-            const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
-            const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
-            return bLast - aLast;
-        });
 
         sortedUids.forEach((uid, uidIndex) => {
             const uidPanel = document.createElement('div');
@@ -1000,6 +1003,25 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
     });
 
     return returnedIps;
+}
+
+function findRequestedHostnameForUids(sortedUids, requestedHostnames) {
+    for (const uid of sortedUids) {
+        const hostnames = requestedHostnames[uid] || [];
+        if (hostnames.length) {
+            return hostnames[0];
+        }
+    }
+    return '';
+}
+
+function buildIpDetailUrl(ip, requestedHostname) {
+    const params = new URLSearchParams();
+    if (requestedHostname) {
+        params.set('hostname', requestedHostname);
+    }
+    const query = params.toString();
+    return `/ip/${encodeURIComponent(ip)}${query ? `?${query}` : ''}`;
 }
 
 function renderLoadMoreButton(loadMoreDiv) {

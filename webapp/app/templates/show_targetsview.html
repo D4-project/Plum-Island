@@ -80,6 +80,7 @@
 
 <script>
 const targetSearchQuery = {{ get_target_value(pk) | tojson }};
+const targetRequestedHostname = {{ get_target_requested_hostname(pk) | tojson }};
 const targetSearchTimeRange = {{ get_target_search_time_range(pk) | tojson }};
 const TARGET_SEARCH_PAGE_SIZE = 500;
 const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
@@ -234,6 +235,12 @@ async function search() {
                 </div>
             </div>
         `;
+        const detailLink = ipPanel.querySelector('.target-ip-action[href]');
+        if (detailLink && targetRequestedHostname) {
+            const url = new URL(detailLink.getAttribute('href'), window.location.origin);
+            url.searchParams.set('hostname', targetRequestedHostname);
+            detailLink.setAttribute('href', `${url.pathname}${url.search}`);
+        }
         hitsDiv.appendChild(ipPanel);
 
         const uidsDiv = document.getElementById(`uids-${ipIndex}`);

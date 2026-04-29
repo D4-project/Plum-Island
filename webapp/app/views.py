@@ -384,6 +384,20 @@ def get_target_value(pk):
     return f"fqdn_requested:{normalized_fqdn}"
 
 
+def get_target_requested_hostname(pk):
+    """
+    Return the target FQDN when the target is a requested hostname.
+    """
+    result = db.session.query(Targets.value).filter(Targets.id == pk).scalar()
+    if not result:
+        return ""
+
+    target_value = str(result).strip().rstrip(".").lower()
+    if is_valid_fqdn(target_value):
+        return target_value
+    return ""
+
+
 def _format_datetime_for_ui(value):
     """
     Render datetimes consistently on helper-backed templates.
@@ -491,6 +505,7 @@ def get_target_search_time_range(pk):
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
 app.jinja_env.globals["get_target_value"] = get_target_value
+app.jinja_env.globals["get_target_requested_hostname"] = get_target_requested_hostname
 app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
 app.jinja_env.globals["get_target_search_time_range"] = get_target_search_time_range
 
@@ -728,6 +743,17 @@ class KVSearchView(BaseView):
             filtered_timestamps["max_seen"] = max_seen
             timestamp_array[ip] = filtered_timestamps
         return timestamp_array
+
+    @staticmethod
+    def _build_requested_hostname_array(indexer, results_ip):
+        """
+        Build UID -> requested hostnames metadata for a search result map.
+        """
+        uids = []
+        for uid_list in (results_ip or {}).values():
+            uids.extend(uid_list or [])
+
+        return indexer.get_requested_hostnames_for_uids(uids)
 
     @classmethod
     def _sort_tag_namespaces(cls, namespaces):
@@ -1466,6 +1492,9 @@ class KVSearchView(BaseView):
             uids = list(self._get_matching_uids(indexer, criteria_groups).intersection(time_uids))
             results_ip = indexer.get_ip_from_uids(uids)
             timestamp_array = self._build_timestamp_array(indexer, results_ip)
+            requested_hostname_array = self._build_requested_hostname_array(
+                indexer, results_ip
+            )
 
             sorted_ips = sorted(
                 results_ip,
@@ -1476,6 +1505,8 @@ class KVSearchView(BaseView):
             )
             results_ip = {ip: results_ip[ip] for ip in sorted_ips}
             timestamp_array = {ip: timestamp_array[ip] for ip in sorted_ips}
+        else:
+            requested_hostname_array = {}
 
         end_time = time.time()
         processingtimems = (end_time - start_time) * 1000
@@ -1485,6 +1516,7 @@ class KVSearchView(BaseView):
             "status": status,
             "results": results_ip if status else {},
             "timestamps": timestamp_array if status else {},
+            "requested_hostnames": requested_hostname_array if status else {},
             "msg_error": msg_error or "",
             "processingTimeMs": processingtimems,
             "uid_count": count_objects.get("uid_count"),
@@ -1549,6 +1581,7 @@ class KVSearchView(BaseView):
         )
         results_ip = {}
         timestamp_array = {}
+        requested_hostname_array = {}
         scanned_days = 0
         exhausted = True
 
@@ -1602,6 +1635,10 @@ class KVSearchView(BaseView):
                 next_cursor = current_from - 1
                 exhausted = next_cursor < time_range["from_ts"]
 
+            requested_hostname_array = self._build_requested_hostname_array(
+                indexer, results_ip
+            )
+
         processingtimems = (time.time() - start_time) * 1000
         has_more = bool(status and not exhausted)
         if status and len(results_ip) > limit:
@@ -1619,6 +1656,7 @@ class KVSearchView(BaseView):
             "status": status,
             "results": results_ip if status else {},
             "timestamps": timestamp_array if status else {},
+            "requested_hostnames": requested_hostname_array if status else {},
             "msg_error": msg_error or "",
             "processingTimeMs": processingtimems,
             "uid_count": count_objects.get("uid_count"),
@@ -2236,7 +2274,6 @@ class IPDetailView(BaseView):
                 )
                 if not user_hostnames:
                     has_ip_only_filter = True
-
         port_cards = []
         for group in port_groups.values():
             group["service_names"] = sorted(group["service_names"])

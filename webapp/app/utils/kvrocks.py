@@ -660,6 +660,30 @@ class KVrocksIndexer:
                     ip_map[ip] = [uid]
         return ip_map
 
+    def get_requested_hostnames_for_uids(self, uid_list):
+        """
+        Return requested hostnames indexed for each UID.
+        """
+        uid_list = [str(uid) for uid in uid_list or [] if uid]
+        if not uid_list:
+            return {}
+
+        pipe = self.r.pipeline()
+        for uid in uid_list:
+            pipe.smembers(f"fqdn_requesteds:{uid}")
+
+        results = pipe.execute()
+        return {
+            uid: sorted(
+                {
+                    str(hostname or "").strip().lower()
+                    for hostname in hostnames or []
+                    if str(hostname or "").strip()
+                }
+            )
+            for uid, hostnames in zip(uid_list, results)
+        }
+
     def get_timestamp_from_uid(self, uid):
         """
         This Function ask doc timestamp ( last first)

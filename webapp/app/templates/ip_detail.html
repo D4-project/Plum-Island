@@ -898,8 +898,24 @@
         }
     }
 
+    function selectRequestedHostnameFromUrl(select) {
+        const params = new URLSearchParams(window.location.search);
+        const requestedHostname = (params.get('hostname') || '').trim().toLowerCase();
+        if (!requestedHostname) {
+            return;
+        }
+
+        const option = Array.from(select.options).find((item) => {
+            return String(item.value || '').trim().toLowerCase() === requestedHostname;
+        });
+        if (option) {
+            select.value = option.value;
+        }
+    }
+
     const hostnameFilter = document.getElementById('scan-hostname-filter');
     if (hostnameFilter) {
+        selectRequestedHostnameFromUrl(hostnameFilter);
         hostnameFilter.addEventListener('change', updatePortFilter);
         updatePortFilter();
     }
