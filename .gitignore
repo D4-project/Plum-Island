@@ -5,3 +5,4 @@ webapp/__pycache__
 dev-*
 tools/meili_dump
 tools/config.yaml
+external/

@@ -1,0 +1,97 @@
+role: Read Only
+permissions:
+- can this form get on UserInfoEditView
+- can this form post on UserInfoEditView
+- can this form get on ResetPasswordView
+- can this form post on ResetPasswordView
+- can this form get on ResetMyPasswordView
+- can this form post on ResetMyPasswordView
+- can edit on UserDBModelView
+- can show on UserDBModelView
+- can add on UserDBModelView
+- can download on UserDBModelView
+- can list on UserDBModelView
+- can userinfo on UserDBModelView
+- resetmypassword on UserDBModelView
+- userinfoedit on UserDBModelView
+- menu access on List Users
+- can download on UserGroupModelView
+- can list on UserGroupModelView
+- menu access on List Groups
+- can chart on UserStatsChartView
+- menu access on User's Statistics
+- can list on PermissionModelView
+- menu access on Base Permissions
+- can list on ViewMenuModelView
+- menu access on Views/Menus
+- can list on PermissionViewModelView
+- menu access on Permission on Views/Menus
+- can get on OpenApi
+- can show on SwaggerView
+- can get on MenuApi
+- menu access on Agent Keys
+- can show on ApiKeysView
+- can add on ApiKeysView
+- can download on ApiKeysView
+- can list on ApiKeysView
+- can show on TargetsView
+- can add on TargetsView
+- can download on TargetsView
+- can list on TargetsView
+- menu access on Targets
+- menu access on Config
+- can show on JobsView
+- can add on JobsView
+- can download on JobsView
+- can list on JobsView
+- can file get on JobsView
+- menu access on Jobs
+- menu access on Status
+- can put on PublicTargetsApi
+- can info on PublicTargetsApi
+- can post on PublicTargetsApi
+- can get on PublicTargetsApi
+- menu access on Bulk Import
+- can add on ScanprofilesView
+- can show on ScanprofilesView
+- can download on ScanprofilesView
+- can list on ScanprofilesView
+- menu access on Scan Profiles
+- can show on NsesView
+- can download on NsesView
+- can list on NsesView
+- menu access on Nse Scripts
+- can add on ProtosView
+- can show on ProtosView
+- can download on ProtosView
+- can list on ProtosView
+- menu access on Protocols
+- can add on PortsView
+- can download on PortsView
+- can list on PortsView
+- menu access on Ports
+- menu access on Search
+- menu access on Analytics
+- menu access on Token Search
+- menu access on Header Search
+- mulraisepriority on JobsView
+- mulresolvehwois on TargetsView
+- can bulk import on TargetsApi
+- can export full status on KVSearchView
+- can export full start on KVSearchView
+- can query on KVSearchView
+- can export on KVSearchView
+- can export full download on KVSearchView
+- can scanprofiles remote on TargetsView
+- can ports remote on ScanprofilesView
+- can targets remote on ScanprofilesView
+- can nses remote on ScanprofilesView
+- can list on TargetScanStatesView
+- can show on TargetScanStatesView
+- menu access on Profile Scans
+- can export ips start on KVSearchView
+- can export ips status on KVSearchView
+- can export ips download on KVSearchView
+- can detail on IPDetailView
+- can passive dns on IPDetailView
+- can geolookup on IPDetailView
