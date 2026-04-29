@@ -3,6 +3,34 @@
 Plum Island schedules scans per `Target x ScanProfile`.
 This means one target can have multiple independent scan states at the same time, one for each effective profile.
 
+## Agent requirement
+
+Plum Island does not run scans directly from the web application.
+Scans are executed by one or more Plum Agent instances.
+
+The agent is available here:
+
+- <https://github.com/D4-project/Plum-Agent>
+
+Each agent connects back to Plum Island, asks for a job, downloads the required NSE scripts when needed, runs the scan, then sends the result back to the web application.
+Agents visible to the server are listed in:
+
+- `Status -> Bot Status`
+
+## Agent API keys
+
+Before starting an agent, create an API key for it in the Plum Island web UI:
+
+1. Open `Security -> Agent Keys`.
+2. Click `+` / `Add`.
+3. Save the generated key immediately.
+
+The key is only shown at creation time.
+After saving, Plum Island stores a hashed copy and only keeps the key identifier visible.
+
+Use this generated key as the agent access key in the Plum Agent configuration.
+The agent sends it as `AGENT_KEY` when calling the bot API endpoints.
+
 ## Per-profile scan stats
 
 The authoritative runtime stats are stored in `target_scan_states` and visible in:
