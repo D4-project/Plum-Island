@@ -22,6 +22,9 @@ WEBAPP_DIR = BASE_DIR / "webapp"
 DEFAULT_NSE_REPO_URL = "https://github.com/D4-project/Plum-Rules-NSE"
 DEFAULT_NSE_REPO_DIR = BASE_DIR / "external" / "Plum-Rules-NSE"
 DEFAULT_ROLE_FILE = WEBAPP_DIR / "security_roles" / "read_only.yaml"
+TCP_PORT_MIN = 1
+TCP_PORT_MAX = 65534
+PORT_INSERT_BATCH_SIZE = 1000
 
 
 def parse_args():
@@ -45,6 +48,11 @@ def parse_args():
         "--skip-roles",
         action="store_true",
         help="Do not create/update configured security roles.",
+    )
+    parser.add_argument(
+        "--skip-ports",
+        action="store_true",
+        help="Do not create the default TCP protocol and TCP ports.",
     )
     parser.add_argument(
         "--role-file",
@@ -98,6 +106,79 @@ def import_tag_rules(dry_run=False):
         f"inserted={summary['inserted']} updated={summary['updated']} "
         f"kept_db={summary['kept_db']} unchanged={summary['unchanged']} "
         f"skipped={summary['skipped']} dry_run={dry_run}"
+    )
+
+
+def seed_tcp_ports(dry_run=False):
+    """
+    Ensure TCP exists and all TCP ports from 1 to 65534 are available.
+    """
+    from sqlalchemy import func  # pylint: disable=import-outside-toplevel
+
+    from app import app, db  # pylint: disable=import-outside-toplevel
+    from app.models import Ports, Protos  # pylint: disable=import-outside-toplevel
+
+    inserted = 0
+    skipped = 0
+    with app.app_context():
+        tcp_proto = (
+            db.session.query(Protos)
+            .filter(func.lower(Protos.value) == "tcp")
+            .one_or_none()
+        )
+        if tcp_proto is None:
+            print("CREATE protocol TCP")
+            tcp_proto = Protos(value="TCP", name="Transmission Control Protocol")
+            if not dry_run:
+                db.session.add(tcp_proto)
+                db.session.flush()
+
+        if dry_run and tcp_proto.id is None:
+            existing_ports = set()
+            tcp_proto_id = 0
+        else:
+            tcp_proto_id = tcp_proto.id
+            existing_ports = {
+                value
+                for (value,) in db.session.query(Ports.value)
+                .filter(Ports.proto_id == tcp_proto_id)
+                .all()
+            }
+
+        pending = []
+        for port in range(TCP_PORT_MIN, TCP_PORT_MAX + 1):
+            if port in existing_ports:
+                skipped += 1
+                continue
+
+            inserted += 1
+            if dry_run:
+                continue
+
+            pending.append(
+                Ports(
+                    value=port,
+                    name=f"TCP/{port}",
+                    proto_id=tcp_proto_id,
+                    proto_to_port=f"{port}:{tcp_proto_id}",
+                )
+            )
+            if len(pending) >= PORT_INSERT_BATCH_SIZE:
+                db.session.bulk_save_objects(pending)
+                db.session.commit()
+                pending = []
+
+        if dry_run:
+            db.session.rollback()
+        else:
+            if pending:
+                db.session.bulk_save_objects(pending)
+            db.session.commit()
+
+    print(
+        "TCP ports: "
+        f"inserted={inserted} skipped={skipped} "
+        f"range={TCP_PORT_MIN}-{TCP_PORT_MAX} dry_run={dry_run}"
     )
 
 
@@ -333,6 +414,9 @@ def main():
 
     if not args.skip_roles:
         sync_security_role(args.role_file, dry_run=args.dry_run)
+
+    if not args.skip_ports:
+        seed_tcp_ports(dry_run=args.dry_run)
 
     if not args.skip_tags:
         import_tag_rules(dry_run=args.dry_run)
