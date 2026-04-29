@@ -28,6 +28,13 @@ from sqlalchemy.orm import relationship, object_session, validates
 from .utils.timeutils import utcnow_naive
 
 
+def _html_escape(value, quote=True):
+    """
+    Escape dynamic content before returning Markup/Esc helper HTML.
+    """
+    return html.escape("" if value is None else str(value), quote=quote)
+
+
 class ApiKeys(Model):
     """
     Class for the key authorisation for BOTS
@@ -154,7 +161,7 @@ class Jobs(Model):
                     tag = tag[0:-4]
                 tags.append(tag)
         for tag in tags:
-            html += f'<span class="label label-default">{tag}</span> '
+            html += f'<span class="label label-default">{_html_escape(tag)}</span> '
         return Esc(html)
 
     @staticmethod
@@ -167,8 +174,12 @@ class Jobs(Model):
             return Esc("")
 
         html = ""
+        safe_label_class = _html_escape(label_class)
         for value in values[:limit]:
-            html += f'<span class="label {label_class}">{value}</span> '
+            html += (
+                f'<span class="label {safe_label_class}">'
+                f'{_html_escape(value)}</span> '
+            )
 
         remaining = len(values) - limit
         if remaining > 0:
@@ -205,7 +216,7 @@ class Jobs(Model):
             for tag in self.targets:
                 tags.append(tag)
         for tag in tags:
-            html += f'<span class="label label-default">{tag}</span> '
+            html += f'<span class="label label-default">{_html_escape(tag)}</span> '
         return Esc(html)
 
     def targets_count_html(self):
@@ -237,7 +248,7 @@ class Jobs(Model):
         html = ""
         if self.scan_ports:
             for port in self.scan_ports.split(","):
-                html += f'<span class="label label-info">{port}</span> '
+                html += f'<span class="label label-info">{_html_escape(port)}</span> '
         return Esc(html)
 
     def scan_nses_html(self):
@@ -247,7 +258,7 @@ class Jobs(Model):
         html = ""
         if self.scan_nses:
             for nse in self.scan_nses.split(","):
-                html += f'<span class="label label-primary">{nse}</span> '
+                html += f'<span class="label label-primary">{_html_escape(nse)}</span> '
         return Esc(html)
 
     def duration_html(self):
@@ -360,13 +371,13 @@ class TagRules(Model):
             return Esc("")
 
         visible_limit = 2
-        title = html.escape(", ".join(tags), quote=True)
+        title = _html_escape(", ".join(tags), quote=True)
         rendered = ""
         rendered += f'<span class="tagrules-tags" title="{title}">'
         for tag in tags[:visible_limit]:
             rendered += (
                 '<span class="label label-default tagrules-tag">'
-                f'{html.escape(tag)}'
+                f'{_html_escape(tag)}'
                 "</span> "
             )
 
@@ -384,8 +395,8 @@ class TagRules(Model):
         """
         Render the rule name with the description available on hover.
         """
-        name = html.escape(str(self.name or ""))
-        description = html.escape(str(self.description or ""), quote=True)
+        name = _html_escape(self.name)
+        description = _html_escape(self.description, quote=True)
         if not description:
             return Esc(name)
         return Esc(f'<span title="{description}">{name}</span>')
@@ -407,7 +418,7 @@ class TagRules(Model):
             return Esc("")
         if hasattr(value, "strftime"):
             return Esc(value.strftime("%Y-%m-%d %H:%M:%S"))
-        return Esc(html.escape(str(value).split(".", 1)[0]))
+        return Esc(_html_escape(str(value).split(".", 1)[0]))
 
     def created_at_html(self):
         return self._datetime_html(self.created_at)
@@ -464,7 +475,7 @@ class Reports(Model):
         """
         html = ""
         for email in self.emails_list():
-            html += f'<span class="label label-default">{email}</span> '
+            html += f'<span class="label label-default">{_html_escape(email)}</span> '
         return Esc(html)
 
     def schedule_html(self):
@@ -472,11 +483,16 @@ class Reports(Model):
         Display the configured reporting schedule.
         """
         if self.schedule_type == "monthly":
+            schedule_day = int(self.schedule_day or 0)
+            schedule_hour = int(self.schedule_hour or 0)
             return Esc(
                 f'<span class="label label-info">monthly day '
-                f'{self.schedule_day:02d} at {self.schedule_hour:02d}:00</span>'
+                f'{schedule_day:02d} at {schedule_hour:02d}:00</span>'
             )
-        return Esc(f'<span class="label label-default">{self.schedule_type}</span>')
+        return Esc(
+            f'<span class="label label-default">'
+            f'{_html_escape(self.schedule_type)}</span>'
+        )
 
     def actions_html(self):
         """
