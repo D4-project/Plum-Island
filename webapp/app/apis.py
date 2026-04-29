@@ -148,6 +148,7 @@ PRIORITY_WEIGHTS = {
     1: 10,
     0: 5,
 }
+MIN_JOB_RUNTIME_SECONDS = 1.0
 
 
 def _nse_file_path(nse):
@@ -155,6 +156,18 @@ def _nse_file_path(nse):
     Resolve the uploaded NSE file path on disk.
     """
     return os.path.join(db.app.config.get("UPLOAD_FOLDER"), nse.filebody)
+
+
+def _get_bot_by_uid(bot_uid):
+    """
+    Return the registered bot for an authenticated bot payload.
+    """
+    return (
+        db.session.query(Bots)
+        .filter(Bots.uid == bot_uid, Bots.active == True)
+        .limit("1")
+        .scalar()
+    )
 
 
 def _build_job_nse_payload(scan_nses, agent_nse_hashes):
@@ -429,12 +442,12 @@ class Api(BaseApi):
         logger.debug("Agent UID %s Requesting a JOB", botinfo.get("UID"))
 
         # Get the BOT object from DB
-        job_bot = (
-            db.session.query(Bots)
-            .filter(Bots.uid == botinfo.get("UID"))
-            .limit("1")
-            .scalar()
-        )
+        job_bot = _get_bot_by_uid(botinfo.get("UID"))
+        if job_bot is None:
+            logger.warning(
+                "Unknown or inactive bot %s requested a job", botinfo.get("UID")
+            )
+            return self.response(403, message="forbidden")
 
         # Get one job to do using smooth weighted round-robin over non-empty
         # priority queues. Priority 4 gets the largest share when present, but
@@ -468,10 +481,11 @@ class Api(BaseApi):
                     message=f"Unable to prepare NSE payloads: {error}"
                 )
 
+            now = utcnow_naive()
             job_todo.active = True  # Set the Job to Active.
             job_bot.running = True  # Set the Bot to Active too
-            job_todo.job_start = utcnow_naive()
-            job_bot.last_seen = utcnow_naive()
+            job_todo.job_start = now
+            job_bot.last_seen = now
             job_todo.bot_id = job_bot.id  # Link Job and Bot.
             ret_msg = {
                 "message": "ready",
@@ -518,6 +532,15 @@ class Api(BaseApi):
 
         logger.debug("Agent UID %s send back a JOB", botinfo.get("UID"))
 
+        submitting_bot = _get_bot_by_uid(botinfo.get("UID"))
+        if submitting_bot is None:
+            logger.warning(
+                "Unknown or inactive bot %s submitted job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(403, message="forbidden")
+
         # Tell the JOB that we finished
         lookup_started = time.perf_counter()
         job_bot = (
@@ -531,9 +554,58 @@ class Api(BaseApi):
             botinfo.get("JOB_UID"),
             time.perf_counter() - lookup_started,
         )
+        if job_bot is None:
+            logger.warning(
+                "Bot %s submitted unknown job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(404, message="job not found")
+
+        if job_bot.bot_id != submitting_bot.id:
+            logger.warning(
+                "Bot %s tried to submit job %s assigned to bot_id %s",
+                botinfo.get("UID"),
+                job_bot.uid,
+                job_bot.bot_id,
+            )
+            return self.response(403, message="forbidden")
+
+        if not job_bot.active or job_bot.finished:
+            logger.warning(
+                "Bot %s submitted job %s in invalid state active=%s finished=%s",
+                botinfo.get("UID"),
+                job_bot.uid,
+                job_bot.active,
+                job_bot.finished,
+            )
+            return self.response(409, message="job is not active")
+
+        job_start = ensure_utc_naive(job_bot.job_start)
+        now = utcnow_naive()
+        if job_start is None:
+            logger.warning(
+                "Bot %s submitted job %s without start time",
+                botinfo.get("UID"),
+                job_bot.uid,
+            )
+            return self.response(409, message="job is not active")
+
+        elapsed_seconds = (now - job_start).total_seconds()
+        if elapsed_seconds < MIN_JOB_RUNTIME_SECONDS:
+            logger.warning(
+                "Bot %s submitted job %s too quickly after %.3fs",
+                botinfo.get("UID"),
+                job_bot.uid,
+                elapsed_seconds,
+            )
+            return self.response(429, message="job submitted too quickly")
+
         job_bot.finished = True
         job_bot.active = False
-        job_bot.job_end = utcnow_naive()
+        job_bot.job_end = now
+        submitting_bot.running = False
+        submitting_bot.last_seen = now
 
         # Save the Job
         # Build path
