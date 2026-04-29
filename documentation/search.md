@@ -36,7 +36,7 @@ Supported modifiers:
 | `like` | `lk` | Substring match |
 | `begin` | `bg` | Prefix match |
 
-No modifier means exact match.
+No modifier means exact match. like without any scope reducer may slowdown the research.
 
 ## Searchable fields
 
@@ -82,29 +82,5 @@ The time filter matches scan documents whose seen interval overlaps the selected
 
 ## Result loading
 
-For responsiveness, the UI renders the first matching IPs first and continues with `Load more`.
-The visible page scans recent history first and grows the inspected time window when needed.
-
+For responsiveness, the UI renders the first matching 100 IPs first.
 Exports run on the full filtered result set, not only on the currently visible results.
-
-## Dumping indexed objects
-
-`tools/dump_object.py` dumps distinct indexed values from Kvrocks as CSV:
-
-```bash
-.venv/bin/python tools/dump_object.py http_title
-.venv/bin/python tools/dump_object.py http_server
-.venv/bin/python tools/dump_object.py http_cookiename
-```
-
-List dumpable fields:
-
-```bash
-.venv/bin/python tools/dump_object.py --list-dumpable
-```
-
-Output format:
-
-```text
-count,value
-```
