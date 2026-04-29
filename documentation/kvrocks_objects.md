@@ -243,5 +243,5 @@ count,value
 
 ## Notes on the old store document
 
-`documentation/Document_kvrocks_store.txt` is an older raw MONITOR capture and contains examples that are useful historically, but it is not the source of truth for the current schema.
+Older raw MONITOR captures are not a source of truth for the current schema.
 Use this Markdown page for the maintained object model.
