@@ -571,6 +571,17 @@ class Api(BaseApi):
             )
             return self.response(403, message="forbidden")
 
+        if job_bot.finished and not job_bot.active:
+            logger.info(
+                "Bot %s resubmitted already completed job %s; returning idempotent success",
+                botinfo.get("UID"),
+                job_bot.uid,
+            )
+            submitting_bot.running = False
+            submitting_bot.last_seen = utcnow_naive()
+            db.session.commit()
+            return self.response(200, message="ready")
+
         if not job_bot.active or job_bot.finished:
             logger.warning(
                 "Bot %s submitted job %s in invalid state active=%s finished=%s",
