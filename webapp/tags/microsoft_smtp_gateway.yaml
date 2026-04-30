@@ -1,0 +1,6 @@
+description: Microsoft SMTP mail gateway
+query: banner.bg:"220 microsoft esmtp mail"
+tags:
+- soft:windows
+- soft:smtp
+version: 20260430T000000Z
