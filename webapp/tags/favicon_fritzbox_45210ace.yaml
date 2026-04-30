@@ -1,5 +1,5 @@
 description: FRITZ!Box
-query: http_favicon_md5:45210ACE96CE9C893F8C27C5DECAB10D OR http_favicon_mmhash:-219752612
+query: 'http_favicon_md5:45210ACE96CE9C893F8C27C5DECAB10D OR http_favicon_mmhash:-219752612 OR banner.lk:"user-agent: fritz!os"'
 tags:
 - hard:fritzbox
-version: 20260428T164519Z
+version: 20260430T000000Z
