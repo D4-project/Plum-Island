@@ -3,4 +3,5 @@ query: banner.bg:ssh-2.0-openssh AND banner.lk:debian or banner.bg:"+OK Dovecot"
   banner.lk:(Debian)
 tags:
 - soft:debian
+- soft:ssh
 version: 20260428T164519Z

@@ -3,4 +3,5 @@ query: banner.bg:ssh-2.0-openssh_for_windows_8
 tags:
 - soft:windows_8
 - soft:windows
+- soft:ssh
 version: 20260428T164519Z
