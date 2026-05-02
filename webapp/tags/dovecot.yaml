@@ -1,0 +1,6 @@
+description: Dovecot IMAP/POP3 server
+query: banner.lk:dovecot AND banner.lk:imap4rev1 OR banner.bg:"+OK Dovecot"
+tags:
+- soft:dovecot
+- soft:imap
+version: 20260502T000000Z
