@@ -124,7 +124,7 @@ class KVrocksIndexer:
                 break
         return values
 
-    def add_documents_batch(self, docs, batch_size=10000):
+    def add_documents_batch(self, docs, batch_size=10000, include_tags=True):
         """
         insert documents into the kvrocks.
         Each doc: dict with keys:
@@ -173,6 +173,8 @@ class KVrocksIndexer:
             # "hsh"
             "banner",
         ]
+        if not include_tags:
+            keywords.remove("tag")
 
         for i in range(0, len(docs), batch_size):
             batch = docs[i : i + batch_size]
@@ -181,7 +183,15 @@ class KVrocksIndexer:
                 existing_pipe.hgetall(f"doc:{doc['uid']}")
             existing_docs = existing_pipe.execute()
 
+            existing_values_pipe = self.r.pipeline(transaction=False)
+            for doc in batch:
+                uid = doc["uid"]
+                for field in keywords:
+                    existing_values_pipe.smembers(f"{field}s:{uid}")
+            existing_values = existing_values_pipe.execute()
+
             pipe = self.r.pipeline(transaction=False)
+            existing_values_iter = iter(existing_values)
             for doc, existing in zip(batch, existing_docs):
                 uid = doc["uid"]
                 ip = doc["ip"]
@@ -247,6 +257,12 @@ class KVrocksIndexer:
                 # Generic indexing for any othe keyword
                 # uid = unique identifier for the entry
                 for field in keywords:
+                    previous_values = next(existing_values_iter, set()) or set()
+                    for previous_value in previous_values:
+                        if previous_value:
+                            pipe.srem(f"{field}:{previous_value}", uid)
+                    pipe.delete(f"{field}s:{uid}")
+
                     values = doc.get(field, [])
                     # print(f"{field} - {values} - {uid}")
                     # We have still NONE in table

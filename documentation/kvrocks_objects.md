@@ -175,6 +175,8 @@ The result set is built by intersecting fields inside one query group.
 ## Rebuild behavior
 
 `tools/index_kvrocks.py --rebuild` deletes known Plum keys before reimporting dumped Meilisearch JSON documents.
+`tools/index_kvrocks.py --rebuild-from-meili` performs the same clean rebuild but streams source documents directly from Meilisearch, without using `tools/meili_dump`.
+`--retag` can be added to either rebuild mode to clean tag indexes and recompute tags from all active Tag Rules.
 
 Deleted fixed keys:
 
@@ -195,9 +197,13 @@ ip:*
 {field}s:*
 ```
 
-for every generic field listed above.
+for every generic field listed above. Without `--retag`, `tag:*` and `tags:*` are skipped so existing tag indexes are preserved. With `--retag`, tag keys are deleted and rebuilt from the parsed active Tag Rules.
 
 Before deleting `doc:*`, the rebuild takes an in-memory snapshot of existing `first_seen` and `last_seen` values. During reimport, it preserves the earliest known `first_seen` and latest known `last_seen`.
+
+During indexing, progress output includes processed/indexed counts, the total document count when known, and a percentage. `--rebuild-from-meili` gets the total from Meilisearch; dump-based imports count JSON files in the input directory. Parsing uses multiprocessing by default with CPU count minus one worker; `--workers 1` disables multiprocessing.
+
+Ctrl+C requests a graceful stop. The current parsed pending batch is flushed to Kvrocks, then the tool exits with status `130`. A second Ctrl+C forces an immediate stop.
 
 `first_seen` is the only timestamp that cannot be fully reconstructed from the source Meilisearch/Nmap documents. The parser can recover `last_seen` from the scan document end time, but the first observation time is accumulated state in Kvrocks.
 
