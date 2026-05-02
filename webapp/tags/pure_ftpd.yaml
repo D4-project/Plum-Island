@@ -1,0 +1,6 @@
+description: Pure-FTPd FTP server
+query: banner.bg:"220----------" AND banner.lk:pure-ftpd
+tags:
+- soft:ftp
+- soft:pure-ftpd
+version: 20260502T000000Z
