@@ -196,20 +196,22 @@ def import_rules(args):
 
             if existing is None:
                 summary["inserted"] += 1
-                if not args.quiet:
-                    print(f"INSERT {name} version={version_label}")
                 if not args.dry_run:
-                    db.session.add(
-                        TagRules(
-                            name=name,
-                            active=True,
-                            description=normalized["description"],
-                            query=normalized["query"],
-                            tags=tags_text,
-                            created_at=source_version,
-                            updated_at=source_version,
-                        )
+                    new_rule = TagRules(
+                        name=name,
+                        active=True,
+                        description=normalized["description"],
+                        query=normalized["query"],
+                        tags=tags_text,
+                        created_at=source_version,
+                        updated_at=source_version,
                     )
+                    db.session.add(new_rule)
+                    db.session.flush()
+                    if not args.quiet:
+                        print(f"INSERT {name} id={new_rule.id} version={version_label}")
+                elif not args.quiet:
+                    print(f"WOULD_INSERT {name} version={version_label}")
                 continue
 
             same_content = (
