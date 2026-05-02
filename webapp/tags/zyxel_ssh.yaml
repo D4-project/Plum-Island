@@ -1,0 +1,6 @@
+description: Zyxel SSH server
+query: banner.lk:"zyxel ssh server"
+tags:
+- hard:zyxel
+- soft:ssh
+version: 20260502T000000Z

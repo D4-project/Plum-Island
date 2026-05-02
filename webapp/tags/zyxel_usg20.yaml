@@ -1,5 +1,5 @@
 description: Zyxel USG20 firewall
-query: banner.lk:"ftp server (usg20" OR banner.lk:"zyxel ssh server" OR http_title.lk:usg20-vpn
+query: banner.lk:"ftp server (usg20" OR http_title.lk:usg20-vpn
 tags:
 - hard:firewall
 - hard:zyxel
