@@ -1,5 +1,6 @@
 description: pfSense
-query: http_favicon_mmhash:1405460984 OR http_favicon_mmhash:1015545776
+query: http_favicon_mmhash:1405460984 OR http_favicon_mmhash:1015545776 OR http_favicon_md5:5567e9ce23e5549e0fcd7195f3882816 OR http_favicon_sha256:b2dd935235013a51fde0a2afc12ba965952e384b7ab43fe1746cc21c7eafc38c OR http_title.lk:pfsense OR x509_subject.lk:pfsense OR x509_issuer.lk:pfsense
 tags:
+- soft:firewall
 - soft:pfsense
-version: 20260428T164519Z
+version: 20260502T000000Z
