@@ -1,8 +1,46 @@
-# Plum Island - MarmotUp Release - v0.2604.0 Latest
+# Plum Island - Next Release - Unreleased
+
+Changes after `v0.2604.0`.
+
+## Changes
+- Detection tags:
+  - Dropbear SSH (`eac052b`), FRITZ!Box SIP (`ff2fcc6`), Microsoft SMTP gateway (`b19b027`)
+  - SIP protocol, closes #26 (`0227c6a`)
+  - CrushFTP server header, closes #38 (`b41e40f`)
+  - ProFTPD, closes #36 (`3e4f7a2`)
+  - Pure-FTPd, closes #35 (`d019905`)
+  - pfSense, closes #34 (`6b609d9`)
+  - Mitel 108, closes #30 (`0c019fa`)
+  - Dovecot, closes #28 (`63e2001`)
+  - Raspberry/Raspbian HTTP and SSH tagging, closes #25 (`2f618ba`, `b2c9b5e`)
+  - Zyxel USG20 plus separate Zyxel SSH rule, closes #32 (`98e6e75`, `a2e0f95`)
+  - Add `soft:ssh` to all SSH banner detections (`d8b16d2`)
+- Make bot job submission idempotent (`ac9c7fe`)
+- Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)
+- Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
+- Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
+- Show inserted Tag Rule IDs in `import_tags.py` (`bf1afd5`)
+- Add required tool dependency update (`acbe2d1`)
+
+# Plum Island - MarmotUp Release - v0.2604.0
 
 Nearly ready for production.
 
-## New Feature
+## v0.2604.0 Highlights
+- IP detail view with scan history, vhost filtering, PTR hostnames, cert details, and quick service links
+- Passive DNS and CIRCL geolookup enrichment
+- YAML-backed Tag Rules, automatic Kvrocks tagging, and import/export support
+- Built-in technology fingerprint library
+- Configurable scan profiles, priorities, target bindings, and scan cycles
+- Target/profile scan state tracking
+- Scheduled Markdown reports with async preview and manual runs
+- Controller-managed NSE scripts deployed to agents
+- Expanded structured search: `OR`, `since:N`, requested FQDN/domain, tags, favicon hashes, and banners
+- Async search result downloads for IP lists and full JSON exports
+- Stats dashboard and read-only security role template
+- TLD validation via faup-rs or IANA data
+
+## v0.2604.0 Features
 - Add IP detail view with per-port scan history, timestamp tabs, vhost filtering, PTR hostnames, certificate details, and quick service links
 - Add Passive DNS and CIRCL geolookup enrichment in IP detail
 - Add Tag Rules with YAML-backed signatures, automatic Kvrocks tagging, and import/export support
@@ -23,12 +61,12 @@ Nearly ready for production.
 - Add tool script for PDNS hosts extraction last_fqdns.py
 - Add tool script for API target import
 
-## Current Limitation
+## v0.2604.0 Current Limitation
 - Only TCP Supported.
 - IPv6 scan not supported yet.
 
 
-## Bugfix
+## v0.2604.0 Bugfix
 - Improve document storage to avoid lock
 - Add cleanup of old jobs
 - Add index for scan timeline
