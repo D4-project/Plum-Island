@@ -1,0 +1,5 @@
+description: SIP protocol
+query: banner.bg:"sip/2.0"
+tags:
+- soft:sip
+version: 20260502T000000Z
