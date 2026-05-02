@@ -21,6 +21,7 @@ cp tools/config.yaml.sample tools/config.yaml
 Important settings:
 
 - `IN_MEILI_URL`, `IN_MEILI_API_KEY`, `INDEX_NAME`: Meilisearch input index
+- `OUT_MEILI_URL`, `OUT_MEILI_API_KEY`, `INDEX_NAME`: Meilisearch output index
 - `IN_KVROCKS_HOST`, `IN_KVROCKS_PORT`: Kvrocks index used by imports/search dumps
 - `OUT_KVROCKS_HOST`, `OUT_KVROCKS_PORT`: Kvrocks output used by some export helpers
 - `PLUMISLAND`, `PLUMAPIUSER`, `PLUMAPIPWD`: API access for webapp import helpers
@@ -166,6 +167,30 @@ Run from `tools/` because the script reads `config.yaml` from the current direct
 cd tools
 ../.venv/bin/python dump_meilidb.py
 ```
+
+### `index_meili.py`
+
+Import dumped JSON documents into the configured output Meilisearch index.
+
+The script reads `tools/config.yaml` and writes to `OUT_MEILI_URL` / `OUT_MEILI_API_KEY`. The target index name comes from `INDEX_NAME`, defaulting to `plum`.
+
+```bash
+.venv/bin/python tools/index_meili.py --input-dir tools/meili_dump
+```
+
+Batch size can be adjusted:
+
+```bash
+.venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --batch-size 500
+```
+
+Use `--progress` when you want percentage output:
+
+```bash
+.venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --progress
+```
+
+This counts importable JSON documents before sending anything to Meilisearch. On large dumps this makes startup slower.
 
 ### `index_kvrocks.py`
 

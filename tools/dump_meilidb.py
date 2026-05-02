@@ -16,13 +16,16 @@ OUTPUT_DIR = "meili_dump"
 
 
 with open("config.yaml", "r") as f:
-    config = yaml.safe_load(f)
-MEILI_URL = config.get("MEILI_URL")
-MEILI_API_KEY = config.get("MEILI_API_KEY")
+    config = yaml.safe_load(f) or {}
+IN_MEILI_URL = config.get("IN_MEILI_URL")
+IN_MEILI_API_KEY = config.get("IN_MEILI_API_KEY")
 INDEX_NAME = config.get("INDEX_NAME")
 
+if not IN_MEILI_URL:
+    raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
+
 # Init client
-client = meilisearch.Client(MEILI_URL, MEILI_API_KEY)
+client = meilisearch.Client(IN_MEILI_URL, IN_MEILI_API_KEY)
 index = client.index(INDEX_NAME)
 
 

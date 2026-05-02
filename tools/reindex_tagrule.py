@@ -313,13 +313,8 @@ def main():
             if target_rule is None:
                 raise SystemExit(f"Tag rule id {args.rule_id} not found")
 
-        meili_url = get_tool_config_value(tools_config, "IN_MEILI_URL", "MEILI_URL")
-        meili_api_key = get_tool_config_value(
-            tools_config,
-            "IN_MEILI_API_KEY",
-            "IN MEILI_API_KEY",
-            "MEILI_API_KEY",
-        )
+        meili_url = get_tool_config_value(tools_config, "IN_MEILI_URL")
+        meili_api_key = get_tool_config_value(tools_config, "IN_MEILI_API_KEY")
         index_name = tools_config.get("INDEX_NAME", "plum")
 
         if not meili_url:

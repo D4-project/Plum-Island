@@ -627,16 +627,12 @@ def build_meili_index():
     """
     import meilisearch  # pylint: disable=import-outside-toplevel
 
-    meili_url = get_config_value("IN_MEILI_URL", "MEILI_URL")
-    meili_api_key = get_config_value(
-        "IN_MEILI_API_KEY",
-        "IN MEILI_API_KEY",
-        "MEILI_API_KEY",
-    )
+    meili_url = get_config_value("IN_MEILI_URL")
+    meili_api_key = get_config_value("IN_MEILI_API_KEY")
     index_name = get_config_value("INDEX_NAME", default="plum")
 
     if not meili_url:
-        raise SystemExit("Missing IN_MEILI_URL or MEILI_URL in tools/config.yaml")
+        raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
 
     client = meilisearch.Client(meili_url, meili_api_key)
     index = client.index(index_name)

@@ -1,7 +1,7 @@
-MEILI_URL: "http://localhost:7800"
-MEILI_API_KEY: "thisneedtobechangedinproduction"
 IN_MEILI_URL: "http://localhost:7800"
 IN_MEILI_API_KEY: "thisneedtobechangedinproduction"
+OUT_MEILI_URL: "http://localhost:7800"
+OUT_MEILI_API_KEY: "thisneedtobechangedinproduction"
 INDEX_NAME: "plum"
 
 # Source KV for Reading 
