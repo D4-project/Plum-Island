@@ -1,0 +1,6 @@
+description: ProFTPD FTP server
+query: banner.bg:"220 proftpd " AND banner.lk:server
+tags:
+- soft:ftp
+- soft:proftpd
+version: 20260502T000000Z
