@@ -1,6 +1,6 @@
 description: Raspberry
-query: banner.bg:ssh-2.0-openssh AND banner.lk:raspbian
+query: banner.bg:ssh-2.0-openssh AND banner.lk:raspbian OR http_server.lk:raspbian
 tags:
 - hard:raspberry
 - soft:debian
-version: 20260428T164519Z
+version: 20260502T000000Z
