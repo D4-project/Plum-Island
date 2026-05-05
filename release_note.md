@@ -15,6 +15,7 @@ Changes after `v0.2604.0`.
   - Raspberry/Raspbian HTTP and SSH tagging, closes #25 (`2f618ba`, `b2c9b5e`)
   - Zyxel USG20 plus separate Zyxel SSH rule, closes #32 (`98e6e75`, `a2e0f95`)
   - Add `soft:ssh` to all SSH banner detections (`d8b16d2`)
+  - Bump MixVoip tag rule version to force corrected `soft:telephony` import, closes #48
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)
