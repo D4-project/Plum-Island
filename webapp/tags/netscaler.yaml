@@ -1,6 +1,6 @@
 description: NetScaler Gateway
-query: http_favicon_path.bg:"/vpn/images/AccessGateway.ico" OR http_title.bg:"NetScaler
-  Gateway"
+query: http_favicon_path.bg:"/vpn/images/AccessGateway.ico" OR http_title.bg:"NetScaler Gateway" OR http_title.bg:"NetScaler AAA" OR http_title.lk:"/logon/LogonPoint/tmindex.html" OR http_title.lk:"/logonpoint/tmindex.html"
 tags:
+- soft:citrix
 - soft:netscaler
-version: 20260428T164519Z
+version: 20260505T153725Z

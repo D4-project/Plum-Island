@@ -8,6 +8,7 @@ Changes after `v0.2604.0`.
   - SIP protocol, closes #26 (`0227c6a`)
   - CrushFTP server header, closes #38 (`b41e40f`)
   - Red Hat Enterprise Linux HTTP server header in Apache RedHat detection, closes #39
+  - NetScaler AAA title and LogonPoint path tagging, closes #40
   - ProFTPD, closes #36 (`3e4f7a2`)
   - Pure-FTPd, closes #35 (`d019905`)
   - pfSense, closes #34 (`6b609d9`)
