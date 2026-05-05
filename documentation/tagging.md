@@ -34,10 +34,10 @@ Fields:
 Conflict policy:
 
 - New YAML rules are inserted.
-- Existing DB rules are replaced only when the YAML version is older than the DB rule timestamp.
-- A YAML file without `version` is considered older than any DB rule.
+- Existing DB rules are replaced only when the YAML version is newer than the DB rule timestamp.
+- A YAML file without `version` does not replace an existing DB rule.
 
-This preserves the oldest rule definition when multiple copies exist.
+This keeps local DB edits unless the YAML file carries a newer version.
 
 ## Import commands
 

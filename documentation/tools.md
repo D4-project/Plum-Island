@@ -82,8 +82,8 @@ Useful options:
 Version policy:
 
 - new rules are inserted
-- existing rules are replaced only when the YAML version is older than the DB timestamp
-- YAML rules without `version` are considered older than DB rules
+- existing rules are replaced only when the YAML version is newer than the DB timestamp
+- YAML rules without `version` do not replace existing DB rules
 
 ### `reindex_tagrule.py`
 

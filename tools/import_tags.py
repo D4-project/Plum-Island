@@ -4,9 +4,9 @@ Import YAML tag rules into the Flask database.
 
 Conflict policy:
 - New rules are inserted.
-- Existing rules are replaced only when the YAML version is older than the
+- Existing rules are replaced only when the YAML version is newer than the
   database version.
-- A YAML file without a version is considered older than any database row.
+- A YAML file without a version will not replace an existing database row.
 """
 
 import argparse
@@ -152,7 +152,7 @@ def parse_yaml_version(raw_version):
     Parse a YAML version timestamp into a naive UTC-ish datetime.
 
     YAML files without a timestamp deliberately get an old sentinel value so
-    they win over existing DB rows under the "keep oldest" policy.
+    they do not replace existing DB rows under the "newer wins" policy.
     """
     if raw_version in (None, ""):
         return MISSING_VERSION_TIME, False
@@ -217,10 +217,10 @@ def get_yaml_files(args):
 
 def should_replace(source_version, db_rule):
     """
-    Return True when the YAML rule is older than the DB row.
+    Return True when the YAML rule is newer than the DB row.
     """
     db_version = db_rule.updated_at or db_rule.created_at or datetime.max
-    return source_version < db_version
+    return source_version > db_version
 
 
 def import_rules(args):
@@ -236,7 +236,9 @@ def import_rules(args):
 
     from app import app, db  # pylint: disable=import-outside-toplevel
     from app.models import TagRules  # pylint: disable=import-outside-toplevel
-    from app.utils.kvrocks import KVrocksIndexer  # pylint: disable=import-outside-toplevel
+
+    # pylint: disable-next=import-outside-toplevel
+    from app.utils.kvrocks import KVrocksIndexer
     from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
         compile_tag_rule_definition,
         format_tags_text,
@@ -339,7 +341,9 @@ def import_rules(args):
                 if not args.quiet:
                     print(
                         f"KEEP_DB {name} "
-                        f"yaml_version={version_label} db_updated_at={existing.updated_at}"
+                        f"id={existing.id} "
+                        f"yaml_version={version_label} "
+                        f"db_updated_at={existing.updated_at}"
                     )
                 continue
 
@@ -347,7 +351,9 @@ def import_rules(args):
             if not args.quiet:
                 print(
                     f"UPDATE {name} "
-                    f"yaml_version={version_label} db_updated_at={existing.updated_at}"
+                    f"id={existing.id} "
+                    f"yaml_version={version_label} "
+                    f"db_updated_at={existing.updated_at}"
                 )
             if not args.dry_run:
                 existing.description = normalized["description"]
