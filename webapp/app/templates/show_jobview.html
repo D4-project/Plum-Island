@@ -36,6 +36,83 @@
   <div class="panel-body" id="addrAccordion">
 
   <script>
+    function makeCollapsePanel({ panelClass = "panel panel-default", headingTag = "h4", parentId, collapseId, title }) {
+      const panel = document.createElement("div");
+      panel.className = panelClass;
+
+      const heading = document.createElement("div");
+      heading.className = "panel-heading";
+
+      const titleEl = document.createElement(headingTag);
+      titleEl.className = "panel-title";
+
+      const link = document.createElement("a");
+      link.setAttribute("data-toggle", "collapse");
+      link.setAttribute("data-parent", `#${parentId}`);
+      link.href = `#collapse-${collapseId}`;
+      link.textContent = title;
+
+      titleEl.appendChild(link);
+      heading.appendChild(titleEl);
+
+      const collapse = document.createElement("div");
+      collapse.id = `collapse-${collapseId}`;
+      collapse.className = "panel-collapse collapse";
+
+      const body = document.createElement("div");
+      body.className = "panel-body";
+      collapse.appendChild(body);
+
+      panel.appendChild(heading);
+      panel.appendChild(collapse);
+
+      return { panel, body };
+    }
+
+    function appendObjectPre(parent, value) {
+      const pre = document.createElement("pre");
+      Object.entries(value || {}).forEach(([key, val], index) => {
+        if (index > 0) {
+          pre.appendChild(document.createTextNode("\n"));
+        }
+        pre.appendChild(document.createTextNode(`${key} : ${val}`));
+      });
+      parent.appendChild(pre);
+    }
+
+    function appendDetailPanel(parent, parentId, portId, key, val, detailIndex) {
+      const detailId = `${portId}-detail-${detailIndex}`;
+      const { panel, body } = makeCollapsePanel({
+        headingTag: "h5",
+        parentId,
+        collapseId: detailId,
+        title: key
+      });
+
+      if (Array.isArray(val) && val.every(obj => obj && obj.id)) {
+        const group = document.createElement("div");
+        group.className = "panel-group";
+        group.id = `${detailId}-group`;
+
+        val.forEach((obj, objIndex) => {
+          const objId = `${detailId}-obj-${objIndex}`;
+          const { panel: objPanel, body: objBody } = makeCollapsePanel({
+            parentId: group.id,
+            collapseId: objId,
+            title: `ID: ${obj.id}`
+          });
+          appendObjectPre(objBody, obj);
+          group.appendChild(objPanel);
+        });
+
+        body.appendChild(group);
+      } else {
+        appendObjectPre(body, val);
+      }
+
+      parent.appendChild(panel);
+    }
+
     fetch("/jobsview/file_get/{{get_job_uid(pk) | safe}}")
       .then(res => res.json())
       .then(data => {
@@ -43,99 +120,40 @@
 
         data.forEach((entry, addrIndex) => {
           const addrId = `addr-${addrIndex}`;
-          const addrPanel = document.createElement("div");
-          addrPanel.className = "panel panel-default";
+          const { panel: addrPanel, body: addrBody } = makeCollapsePanel({
+            headingTag: "h1",
+            parentId: "addrAccordion",
+            collapseId: addrId,
+            title: entry.addr
+          });
 
-          addrPanel.innerHTML = `
-            <div class="panel-heading">
-              <h1 class="panel-title">
-                <a data-toggle="collapse" data-parent="#addrAccordion" href="#collapse-${addrId}">
-                  ${entry.addr}
-                </a>
-              </h1>
-            </div>
-            <div id="collapse-${addrId}" class="panel-collapse collapse">
-              <div class="panel-body">
-                <div class="panel-group" id="ports-${addrId}">
-                  ${entry.ports.map((port, portIndex) => {
-                    const portId = `${addrId}-port-${portIndex}`;
-                    return `
-                      <div class="panel panel-default">
-                        <div class="panel-heading">
-                          <h4 class="panel-title" >
-                            <a data-toggle="collapse" data-parent="#ports-${addrId}" href="#collapse-${portId}">
-                              TCP Port ${port.portid}
-                            </a>
-                          </h4>
-                        </div>
-                        <div id="collapse-${portId}" class="panel-collapse collapse">
-                          <div class="panel-body">
-                            <div class="panel-group" id="details-${portId}">
-                              ${Object.entries(port).filter(([k, v]) => typeof v === "object").map(([key, val], detailIndex) => {
-                                const detailId = `${portId}-detail-${detailIndex}`;
+          const portsGroup = document.createElement("div");
+          portsGroup.className = "panel-group";
+          portsGroup.id = `ports-${addrId}`;
 
-                                if (Array.isArray(val) && val.every(obj => obj && obj.id)) {
-                                  return `
-                                    <div class="panel panel-default">
-                                      <div class="panel-heading">
-                                        <h4 class="panel-title">
-                                          <a data-toggle="collapse" data-parent="#details-${portId}" href="#collapse-${detailId}">
-                                           ${key}
-                                          </a>
-                                        </h4>
-                                      </div>
-                                      <div id="collapse-${detailId}" class="panel-collapse collapse">
-                                        <div class="panel-body">
-                                          <div class="panel-group" id="${detailId}-group">
-                                            ${val.map((obj, objIndex) => {
-                                              const objId = `${detailId}-obj-${objIndex}`;
-                                              return `
-                                                <div class="panel panel-default">
-                                                  <div class="panel-heading">
-                                                    <h4 class="panel-title">
-                                                      <a data-toggle="collapse" data-parent="#${detailId}-group" href="#collapse-${objId}">
-                                                        ID: ${obj.id}
-                                                      </a>
-                                                    </h4>
-                                                  </div>
-                                                  <div id="collapse-${objId}" class="panel-collapse collapse">
-                                                    <div class="panel-body">
-                                                      <pre>${Object.entries(obj).map(([k, v]) => `${k} : ${v}`).join('\n')}</pre>
-                                                    </div>
-                                                  </div>
-                                                </div>`;
-                                            }).join('')}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>`;
-                                }
+          (entry.ports || []).forEach((port, portIndex) => {
+            const portId = `${addrId}-port-${portIndex}`;
+            const { panel: portPanel, body: portBody } = makeCollapsePanel({
+              parentId: portsGroup.id,
+              collapseId: portId,
+              title: `TCP Port ${port.portid}`
+            });
 
-                                return `
-                                  <div class="panel panel-default">
-                                    <div class="panel-heading">
-                                      <h5 class="panel-title">
-                                        <a data-toggle="collapse" data-parent="#details-${portId}" href="#collapse-${detailId}">
-                                          ${key}
-                                        </a>
-                                      </h4>
-                                    </div>
-                                    <div id="collapse-${detailId}" class="panel-collapse collapse">
-                                      <div class="panel-body">
-                                        <pre>${Object.entries(val).map(([k, v]) => `${k} : ${v}`).join('\n')}</pre>
-                                      </div>
-                                    </div>
-                                  </div>`;
-                              }).join("")}
-                            </div>
-                          </div>
-                        </div>
-                      </div>`;
-                  }).join("")}
-                </div>
-              </div>
-            </div>
-          `;
+            const detailsGroup = document.createElement("div");
+            detailsGroup.className = "panel-group";
+            detailsGroup.id = `details-${portId}`;
+
+            Object.entries(port)
+              .filter(([, value]) => value && typeof value === "object")
+              .forEach(([key, val], detailIndex) => {
+                appendDetailPanel(detailsGroup, detailsGroup.id, portId, key, val, detailIndex);
+              });
+
+            portBody.appendChild(detailsGroup);
+            portsGroup.appendChild(portPanel);
+          });
+
+          addrBody.appendChild(portsGroup);
           addrAccordion.appendChild(addrPanel);
         });
       });
