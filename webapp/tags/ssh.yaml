@@ -2,4 +2,4 @@ description: SSH
 query: banner.bg:ssh-2.0
 tags:
 - soft:ssh
-version: 20260428T164519Z
+version: 20260505T125141Z

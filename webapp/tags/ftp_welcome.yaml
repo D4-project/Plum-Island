@@ -3,4 +3,4 @@ query: banner.bg:"220 welcome" AND banner.lk:"ftp server" OR banner.bg:"220 welc
   AND banner.lk:"ftp service"
 tags:
 - soft:ftp
-version: 20260428T164519Z
+version: 20260505T125141Z

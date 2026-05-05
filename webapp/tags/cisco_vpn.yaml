@@ -3,4 +3,4 @@ query: http_cookiename.bg:webvpnlogin
 tags:
 - hard:cisco
 - soft:cisco-vpn
-version: 20260428T164519Z
+version: 20260505T125141Z
