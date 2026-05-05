@@ -1,5 +1,5 @@
 description: ZyXEL
 query: http_favicon_mmhash:943925975
 tags:
-- soft:zyxel
+- hard:zyxel
 version: 20260428T164519Z

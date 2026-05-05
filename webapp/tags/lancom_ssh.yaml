@@ -1,0 +1,7 @@
+description: Lancom SSH
+query: banner.bg:ssh-2.0-lancom
+tags:
+- hard:lancom
+- hard:router
+- soft:ssh
+version: 20260428T164519Z

@@ -1,0 +1,6 @@
+description: OpenSSH
+query: banner.bg:ssh-2.0-openssh
+tags:
+- soft:ssh
+- soft:openssh
+version: 20260428T164519Z

@@ -1,0 +1,7 @@
+description: Cisco SSH
+query: banner.bg:ssh-2.0-cisco-
+tags:
+- hard:cisco
+- hard:router
+- soft:ssh
+version: 20260428T164519Z

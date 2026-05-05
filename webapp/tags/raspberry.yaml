@@ -4,4 +4,5 @@ tags:
 - hard:raspberry
 - soft:debian
 - soft:ssh
+- soft:openssh
 version: 20260502T000000Z

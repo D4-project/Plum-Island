@@ -1,5 +1,6 @@
 description: ZyXEL (Network)
 query: http_favicon_mmhash:-882760066
 tags:
-- soft:zyxel-network
+- hard:zyxel
+- hard:router
 version: 20260428T164519Z

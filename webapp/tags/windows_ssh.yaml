@@ -1,0 +1,7 @@
+description: Windows OpenSSH
+query: banner.bg:ssh-2.0-openssh_for_windows_
+tags:
+- soft:windows
+- soft:ssh
+- soft:openssh
+version: 20260428T164519Z

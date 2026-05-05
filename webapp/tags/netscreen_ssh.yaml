@@ -1,0 +1,7 @@
+description: NetScreen SSH
+query: banner.bg:ssh-2.0-netscreen
+tags:
+- hard:netscreen
+- hard:firewall
+- soft:ssh
+version: 20260428T164519Z

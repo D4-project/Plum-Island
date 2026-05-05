@@ -1,5 +1,6 @@
 description: Checkpoint (Gaia)
 query: http_favicon_mmhash:-1822098181
 tags:
+- soft:checkpoint
 - soft:checkpoint-gaia
 version: 20260428T164519Z

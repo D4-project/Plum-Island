@@ -3,4 +3,5 @@ query: banner.bg:ssh-2.0-openssh AND banner.lk:ubuntu
 tags:
 - soft:ubuntu
 - soft:ssh
+- soft:openssh
 version: 20260428T164519Z

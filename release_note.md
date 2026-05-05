@@ -16,6 +16,29 @@ Changes after `v0.2604.0`.
   - Zyxel USG20 plus separate Zyxel SSH rule, closes #32 (`98e6e75`, `a2e0f95`)
   - Add `soft:ssh` to all SSH banner detections (`d8b16d2`)
   - Bump MixVoip tag rule version to force corrected `soft:telephony` import, closes #48
+  - Normalize Apache favicon-derived tag names/tags and merge Tomcat favicon detection, refs #50
+  - Normalize Cisco, Check Point, Debian, and Gargoyle tag rule names/tags, refs #50
+  - Normalize Arris favicon-derived rule names/tags as router hardware, refs #50
+  - Merge SonicWall favicon-derived rules into the main SonicWall rule, refs #50
+  - Normalize Zyxel tag rule names/tags as Zyxel hardware, refs #50
+  - Validate Ubuntu/Debian SSH banner tagging for OpenSSH package banners, refs #50
+  - Merge Windows OpenSSH version-specific banner rules into one generic rule, refs #50
+  - Add generic OpenSSH banner tagging and include `soft:openssh` on OpenSSH-derived rules, refs #50
+  - Add generic SSH protocol banner tagging for `ssh-2.0` banners, refs #50
+  - Add SSH banner rules for Cerberus FTP Server and MOVEit Transfer SFTP, refs #50
+  - Add SSH banner rules for Serv-U FTP Server and WS_FTP SSH, keeping Serv-U web favicon separate, refs #50
+  - Add NetScreen SSH banner tagging, refs #50
+  - Add Cisco and Lancom SSH banner tagging, and classify Zyxel SSH as router hardware, refs #50
+  - Add SFTPGo and Bitvise SSH Server banner tagging, refs #50
+  - Add Crestron SSH banner tagging, refs #50
+  - Add generic FTP welcome banner tagging for FTP server/service banners, refs #50
+  - Add Microsoft FTP Service banner tagging, refs #50
+  - Add FileZilla FTP Server banner tagging, refs #50
+  - Add vsftpd FTP banner tagging, refs #50
+  - Rename Mikrotik tag rule file typo from `microtik` to `mikrotik`, refs #50
+  - Add Mikrotik FTP banner tagging, refs #50
+  - Add QNAP NASFTPD/ProFTPD FTP banner tagging, refs #50
+  - Add Debian ProFTPD FTP banner tagging, refs #50
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)

@@ -1,5 +1,6 @@
 description: Cisco VPN
 query: http_cookiename.bg:webvpnlogin
 tags:
-- soft:ciscovpn
+- hard:cisco
+- soft:cisco-vpn
 version: 20260428T164519Z
