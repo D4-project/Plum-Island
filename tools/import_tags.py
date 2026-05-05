@@ -22,6 +22,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 WEBAPP_DIR = BASE_DIR / "webapp"
 DEFAULT_TAGS_DIR = WEBAPP_DIR / "tags"
 MISSING_VERSION_TIME = datetime(1970, 1, 1)
+TAG_FLUSH_BATCH_SIZE = 1000
 
 
 def parse_args():
@@ -51,11 +52,99 @@ def parse_args():
         help="Delete all tag rules from the SQLite DB and exit.",
     )
     parser.add_argument(
+        "--flush-tag",
+        help=(
+            "Delete one tag from Kvrocks tag indexes and exit. "
+            "Accepts 'value' or 'tag:value'."
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Only print the final summary and errors.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.flush_db and args.flush_tag:
+        parser.error("--flush_db cannot be combined with --flush-tag")
+    return args
+
+
+def normalize_flush_tag(raw_tag):
+    """
+    Normalize a CLI tag value to the stored Kvrocks tag value.
+    """
+    tag = str(raw_tag or "").strip().lower()
+    if tag.startswith("tag:"):
+        tag = tag.split(":", 1)[1].strip()
+    if not tag:
+        raise ValueError("Tag name is required")
+    return tag
+
+
+def flush_kvrocks_tag(indexer, raw_tag, dry_run=False, quiet=False):
+    """
+    Delete one Kvrocks tag index and remove its inverse UID references.
+    """
+    tag = normalize_flush_tag(raw_tag)
+    tag_key = f"tag:{tag}"
+    uid_count = indexer.r.scard(tag_key)
+
+    summary = {
+        "tag": tag,
+        "tag_uids": uid_count,
+        "tag_key_deleted": 0,
+        "inverse_removed": 0,
+        "inverse_deleted": 0,
+    }
+
+    if dry_run:
+        if not quiet:
+            print(f"WOULD_DELETE {tag_key} uids={uid_count}")
+        return summary
+
+    batch = []
+
+    def flush_batch(uid_batch):
+        remove_pipe = indexer.r.pipeline(transaction=False)
+        for uid in uid_batch:
+            remove_pipe.srem(f"tags:{uid}", tag)
+        removed = sum(remove_pipe.execute())
+
+        count_pipe = indexer.r.pipeline(transaction=False)
+        for uid in uid_batch:
+            count_pipe.scard(f"tags:{uid}")
+        counts = count_pipe.execute()
+
+        empty_keys = [
+            f"tags:{uid}"
+            for uid, remaining_count in zip(uid_batch, counts)
+            if remaining_count == 0
+        ]
+        deleted = indexer.r.delete(*empty_keys) if empty_keys else 0
+        return removed, deleted
+
+    for uid in indexer.r.sscan_iter(tag_key, count=TAG_FLUSH_BATCH_SIZE):
+        batch.append(uid)
+        if len(batch) >= TAG_FLUSH_BATCH_SIZE:
+            removed, deleted = flush_batch(batch)
+            summary["inverse_removed"] += removed
+            summary["inverse_deleted"] += deleted
+            batch.clear()
+
+    if batch:
+        removed, deleted = flush_batch(batch)
+        summary["inverse_removed"] += removed
+        summary["inverse_deleted"] += deleted
+
+    summary["tag_key_deleted"] = indexer.r.delete(tag_key)
+    if not quiet:
+        print(
+            f"DELETE {tag_key} "
+            f"uids={summary['tag_uids']} "
+            f"inverse_removed={summary['inverse_removed']} "
+            f"inverse_deleted={summary['inverse_deleted']}"
+        )
+    return summary
 
 
 def parse_yaml_version(raw_version):
@@ -138,7 +227,8 @@ def import_rules(args):
     """
     Import all YAML rules according to the version policy.
     """
-    yaml_files = [] if args.flush_db else get_yaml_files(args)
+    flush_tag = getattr(args, "flush_tag", None)
+    yaml_files = [] if args.flush_db or flush_tag else get_yaml_files(args)
 
     sys.path.insert(0, str(WEBAPP_DIR))
     warnings.filterwarnings("ignore", category=Warning)
@@ -146,6 +236,7 @@ def import_rules(args):
 
     from app import app, db  # pylint: disable=import-outside-toplevel
     from app.models import TagRules  # pylint: disable=import-outside-toplevel
+    from app.utils.kvrocks import KVrocksIndexer  # pylint: disable=import-outside-toplevel
     from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
         compile_tag_rule_definition,
         format_tags_text,
@@ -159,9 +250,29 @@ def import_rules(args):
         "kept_db": 0,
         "unchanged": 0,
         "skipped": 0,
+        "tag": "",
+        "tag_uids": 0,
+        "tag_key_deleted": 0,
+        "inverse_removed": 0,
+        "inverse_deleted": 0,
     }
 
     with app.app_context():
+        if flush_tag:
+            indexer = KVrocksIndexer(
+                app.config["KVROCKS_HOST"],
+                app.config["KVROCKS_PORT"],
+            )
+            summary.update(
+                flush_kvrocks_tag(
+                    indexer,
+                    flush_tag,
+                    dry_run=args.dry_run,
+                    quiet=args.quiet,
+                )
+            )
+            return summary
+
         if args.flush_db:
             summary["deleted"] = db.session.query(TagRules).count()
             if not args.quiet:
@@ -258,7 +369,17 @@ def main():
     """
     args = parse_args()
     summary = import_rules(args)
-    if args.flush_db:
+    if args.flush_tag:
+        print(
+            "Tag Kvrocks flush complete: "
+            f"tag={summary['tag']} "
+            f"uids={summary['tag_uids']} "
+            f"inverse_removed={summary['inverse_removed']} "
+            f"inverse_deleted={summary['inverse_deleted']} "
+            f"tag_key_deleted={summary['tag_key_deleted']} "
+            f"dry_run={args.dry_run}"
+        )
+    elif args.flush_db:
         print(
             "Tag DB flush complete: "
             f"deleted={summary['deleted']} "

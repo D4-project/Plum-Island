@@ -21,6 +21,7 @@ Changes after `v0.2604.0`.
 - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
 - Show inserted Tag Rule IDs in `import_tags.py` (`bf1afd5`)
+- Add `import_tags.py --flush-tag` to remove one tag from Kvrocks tag indexes, closes #47
 - Add required tool dependency update (`acbe2d1`)
 - Harden job result rendering against banner HTML injection, closes #37 (`7224443`)
 
