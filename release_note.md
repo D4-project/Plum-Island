@@ -16,6 +16,7 @@ Changes after `v0.2604.0`.
   - Zyxel USG20 plus separate Zyxel SSH rule, closes #32 (`98e6e75`, `a2e0f95`)
   - Add `soft:ssh` to all SSH banner detections (`d8b16d2`)
 - Make bot job submission idempotent (`ac9c7fe`)
+- Prevent concurrent scanner agents from claiming the same queued job
 - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)
 - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)

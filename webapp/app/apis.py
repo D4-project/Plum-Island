@@ -207,6 +207,31 @@ def _build_job_nse_payload(scan_nses, agent_nse_hashes):
     return effective_names, nse_payload
 
 
+def _claim_job_for_bot(job_id, bot_id, now):
+    """
+    Atomically claim one queued job.
+
+    Multiple agents can poll at the same time. The conditional UPDATE makes
+    only one requester transition the job from queued to active.
+    """
+    return (
+        db.session.query(Jobs)
+        .filter(
+            Jobs.id == job_id,
+            Jobs.active == False,
+            Jobs.finished == False,
+        )
+        .update(
+            {
+                Jobs.active: True,
+                Jobs.job_start: now,
+                Jobs.bot_id: bot_id,
+            },
+            synchronize_session=False,
+        )
+    )
+
+
 def _get_available_job_priorities():
     """
     Return the priority queues that currently have at least one waiting job.
@@ -455,7 +480,7 @@ class Api(BaseApi):
         prio_list = _select_weighted_priority(_get_available_job_priorities())
         job_todo = None
         for prio in prio_list:
-            job_todo = (
+            candidate = (
                 db.session.query(Jobs)
                 .filter(
                     Jobs.active == False, Jobs.finished == False, Jobs.priority == prio
@@ -463,6 +488,22 @@ class Api(BaseApi):
                 .order_by(Jobs.job_creation.asc())  # oldest first
                 .first()
             )
+            if not candidate:
+                continue
+
+            now = utcnow_naive()
+            if _claim_job_for_bot(candidate.id, job_bot.id, now) != 1:
+                db.session.rollback()
+                continue
+
+            job_todo = candidate
+            job_todo.active = True
+            job_todo.job_start = now
+            job_todo.bot_id = job_bot.id
+            job_bot.running = True  # Set the Bot to Active too
+            job_bot.last_seen = now
+            db.session.add(job_bot)
+            db.session.add(job_todo)
             if job_todo:
                 break  # A soon as a Job is found... return.
 
@@ -474,6 +515,7 @@ class Api(BaseApi):
                     botinfo.get("NSE_HASHES"),
                 )
             except OSError as error:
+                db.session.rollback()
                 logger.exception(
                     "Unable to prepare NSE payloads for job %s", job_todo.uid
                 )
@@ -481,12 +523,6 @@ class Api(BaseApi):
                     message=f"Unable to prepare NSE payloads: {error}"
                 )
 
-            now = utcnow_naive()
-            job_todo.active = True  # Set the Job to Active.
-            job_bot.running = True  # Set the Bot to Active too
-            job_todo.job_start = now
-            job_bot.last_seen = now
-            job_todo.bot_id = job_bot.id  # Link Job and Bot.
             ret_msg = {
                 "message": "ready",
                 "job": job_todo.job,
@@ -562,6 +598,18 @@ class Api(BaseApi):
             )
             return self.response(404, message="job not found")
 
+        if job_bot.finished and not job_bot.active:
+            logger.info(
+                "Bot %s resubmitted already completed job %s assigned to bot_id %s; returning idempotent success",
+                botinfo.get("UID"),
+                job_bot.uid,
+                job_bot.bot_id,
+            )
+            submitting_bot.running = False
+            submitting_bot.last_seen = utcnow_naive()
+            db.session.commit()
+            return self.response(200, message="ready")
+
         if job_bot.bot_id != submitting_bot.id:
             logger.warning(
                 "Bot %s tried to submit job %s assigned to bot_id %s",
@@ -570,17 +618,6 @@ class Api(BaseApi):
                 job_bot.bot_id,
             )
             return self.response(403, message="forbidden")
-
-        if job_bot.finished and not job_bot.active:
-            logger.info(
-                "Bot %s resubmitted already completed job %s; returning idempotent success",
-                botinfo.get("UID"),
-                job_bot.uid,
-            )
-            submitting_bot.running = False
-            submitting_bot.last_seen = utcnow_naive()
-            db.session.commit()
-            return self.response(200, message="ready")
 
         if not job_bot.active or job_bot.finished:
             logger.warning(
