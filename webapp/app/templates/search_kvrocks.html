@@ -9,6 +9,7 @@ let lastSuccessfulSearch = null;
 let exportStatusPoller = null;
 let activeExportConfig = null;
 let searchPageUnloading = false;
+let activeSearchAbortController = null;
 const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_WINDOW_DAYS = 4096;
 const TAG_SUGGEST_DEBOUNCE_MS = 120;
@@ -42,11 +43,35 @@ let sinceDirectiveModeActive = false;
 
 window.addEventListener('pagehide', () => {
     searchPageUnloading = true;
+    abortActiveSearch();
 });
 
 window.addEventListener('pageshow', () => {
     searchPageUnloading = false;
 });
+
+function abortActiveSearch() {
+    if (activeSearchAbortController) {
+        activeSearchAbortController.abort();
+    }
+}
+
+function isSearchNavigationAbort(error) {
+    const message = error?.message || '';
+    return error?.name === 'AbortError'
+        || (searchPageUnloading && message.includes('NetworkError'));
+}
+
+function bindSearchNavigationAbort() {
+    document.addEventListener('click', (event) => {
+        const link = event.target.closest('.ip-detail-link');
+        if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+            return;
+        }
+        searchPageUnloading = true;
+        abortActiveSearch();
+    });
+}
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -1067,6 +1092,9 @@ async function runSearchPage(cursorTs, append) {
         return;
     }
     setSearchLoading(true, !append);
+    abortActiveSearch();
+    const searchAbortController = new AbortController();
+    activeSearchAbortController = searchAbortController;
     try {
         if (!append) {
             loadMoreDiv.innerHTML = '';
@@ -1090,7 +1118,9 @@ async function runSearchPage(cursorTs, append) {
                 remaining,
                 windowDays
             );
-            const res = await fetch(`/kvsearchview/query?${params.toString()}`);
+            const res = await fetch(`/kvsearchview/query?${params.toString()}`, {
+                signal: searchAbortController.signal
+            });
             const data = await readJsonResponse(res);
             lastData = data;
             searchId = data.search_id || searchId;
@@ -1158,7 +1188,7 @@ async function runSearchPage(cursorTs, append) {
             renderLoadMoreButton(loadMoreDiv);
         }
     } catch (error) {
-        if (searchPageUnloading) {
+        if (isSearchNavigationAbort(error)) {
             return;
         }
         console.error('KV search failed', error);
@@ -1169,7 +1199,10 @@ async function runSearchPage(cursorTs, append) {
         }
         loadMoreDiv.innerHTML = '';
     } finally {
-        setSearchLoading(false);
+        if (activeSearchAbortController === searchAbortController) {
+            activeSearchAbortController = null;
+            setSearchLoading(false);
+        }
     }
 }
 
@@ -1194,6 +1227,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindDateInput('time-from');
     bindDateInput('time-to');
     bindQueryTagHelper();
+    bindSearchNavigationAbort();
     setDefaultTimeRange();
     syncSinceDirectiveState();
 });
