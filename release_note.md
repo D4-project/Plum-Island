@@ -22,6 +22,7 @@ Changes after `v0.2604.0`.
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
 - Show inserted Tag Rule IDs in `import_tags.py` (`bf1afd5`)
 - Add required tool dependency update (`acbe2d1`)
+- Harden job result rendering against banner HTML injection, closes #37 (`7224443`)
 
 # Plum Island - MarmotUp Release - v0.2604.0
 
