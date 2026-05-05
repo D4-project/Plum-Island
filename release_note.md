@@ -7,6 +7,7 @@ Changes after `v0.2604.0`.
   - Dropbear SSH (`eac052b`), FRITZ!Box SIP (`ff2fcc6`), Microsoft SMTP gateway (`b19b027`)
   - SIP protocol, closes #26 (`0227c6a`)
   - CrushFTP server header, closes #38 (`b41e40f`)
+  - Red Hat Enterprise Linux HTTP server header in Apache RedHat detection, closes #39
   - ProFTPD, closes #36 (`3e4f7a2`)
   - Pure-FTPd, closes #35 (`d019905`)
   - pfSense, closes #34 (`6b609d9`)
