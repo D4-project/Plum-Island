@@ -9,6 +9,7 @@ Changes after `v0.2604.0`.
   - CrushFTP server header, closes #38 (`b41e40f`)
   - Red Hat Enterprise Linux HTTP server header in Apache RedHat detection, closes #39
   - NetScaler AAA title and LogonPoint path tagging, closes #40
+  - Netskope Borderless SD-WAN certificate issuer tagging, closes #41
   - WatchGuard Fireware XTM favicon, title, and certificate tagging, closes #42
   - ProFTPD, closes #36 (`3e4f7a2`)
   - Pure-FTPd, closes #35 (`d019905`)
