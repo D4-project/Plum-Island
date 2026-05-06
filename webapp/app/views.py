@@ -65,6 +65,7 @@ from .models import (
     ScanProfiles,
     Ports,
     TargetScanStates,
+    ScanProfileCycles,
 )
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
@@ -89,6 +90,10 @@ from .utils.reports import (
     datetime_to_epoch,
     normalize_report_fields,
     send_report_markdown,
+)
+from .utils.scan_cycles import (
+    reconcile_scanprofile_cycle,
+    release_orphaned_scan_states_for_profile,
 )
 from .utils.timeutils import ensure_utc_naive, utcnow_iso
 
@@ -200,9 +205,7 @@ class RemoteSelect2ManyWidget:
                 f'<option value="{escape(value)}" selected="selected">{escape(label)}</option>'
             )
 
-        return Markup(
-            f"<select {html_params(**kwargs)}>{''.join(options)}</select>"
-        )
+        return Markup(f"<select {html_params(**kwargs)}>{''.join(options)}</select>")
 
 
 class RemoteSelect2Widget:
@@ -230,9 +233,7 @@ class RemoteSelect2Widget:
                 f'<option value="{escape(value)}" selected="selected">{escape(label)}</option>'
             )
 
-        return Markup(
-            f"<select {html_params(**kwargs)}>{''.join(options)}</select>"
-        )
+        return Markup(f"<select {html_params(**kwargs)}>{''.join(options)}</select>")
 
 
 class RemoteRelatedMultipleField(Field):
@@ -455,7 +456,9 @@ def get_target_profile_stats(pk):
     }
 
     rows = []
-    for profile in sorted(profiles.values(), key=lambda item: (item.name or "").lower()):
+    for profile in sorted(
+        profiles.values(), key=lambda item: (item.name or "").lower()
+    ):
         state = states.get(profile.id)
         last_scan = ensure_utc_naive(state.last_scan) if state else None
         previous_scan = ensure_utc_naive(state.last_previous_scan) if state else None
@@ -469,6 +472,44 @@ def get_target_profile_stats(pk):
                 "last_scan": _format_datetime_for_ui(last_scan),
                 "last_previous_scan": _format_datetime_for_ui(previous_scan),
                 "duration": _format_scan_duration(last_scan, previous_scan),
+            }
+        )
+
+    return rows
+
+
+def get_scanprofile_cycle_rows(pk):
+    """
+    Return retained scan profile cycles for the profile show page.
+    """
+    cycles = (
+        db.session.query(ScanProfileCycles)
+        .filter(ScanProfileCycles.scanprofile_id == pk)
+        .order_by(
+            ScanProfileCycles.started_at.desc(),
+            ScanProfileCycles.id.desc(),
+        )
+        .limit(2)
+        .all()
+    )
+
+    rows = []
+    finished_count = 0
+    for cycle in cycles:
+        if cycle.status == "running":
+            label = "Current"
+        else:
+            finished_count += 1
+            label = "Last" if finished_count == 1 else "Previous"
+
+        rows.append(
+            {
+                "label": label,
+                "status": cycle.status_html(),
+                "started_at": _format_datetime_for_ui(cycle.started_at),
+                "finished_at": _format_datetime_for_ui(cycle.finished_at),
+                "duration": cycle.duration_html(),
+                "progress": cycle.progress_html(),
             }
         )
 
@@ -507,6 +548,7 @@ app.jinja_env.globals["get_job_uid"] = get_job_uid
 app.jinja_env.globals["get_target_value"] = get_target_value
 app.jinja_env.globals["get_target_requested_hostname"] = get_target_requested_hostname
 app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
+app.jinja_env.globals["get_scanprofile_cycle_rows"] = get_scanprofile_cycle_rows
 app.jinja_env.globals["get_target_search_time_range"] = get_target_search_time_range
 
 
@@ -635,9 +677,9 @@ class KVSearchView(BaseView):
             return None, False, "since: expects a positive integer number of days"
 
         now_utc = datetime.now(timezone.utc)
-        from_date = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
-            days=since_days
-        )
+        from_date = now_utc.replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(days=since_days)
         to_date = now_utc.replace(hour=23, minute=59, second=59, microsecond=0)
         return (
             {
@@ -704,12 +746,16 @@ class KVSearchView(BaseView):
         if from_ts > to_ts:
             return None, False, "Start time must be before end time"
 
-        return {
-            "from_ts": from_ts,
-            "to_ts": to_ts,
-            "from_iso": cls._timestamp_to_iso(from_ts),
-            "to_iso": cls._timestamp_to_iso(to_ts),
-        }, True, None
+        return (
+            {
+                "from_ts": from_ts,
+                "to_ts": to_ts,
+                "from_iso": cls._timestamp_to_iso(from_ts),
+                "to_iso": cls._timestamp_to_iso(to_ts),
+            },
+            True,
+            None,
+        )
 
     @staticmethod
     def _build_timestamp_array(indexer, results_ip):
@@ -731,12 +777,12 @@ class KVSearchView(BaseView):
                 first_seen = uid_data.get("first_seen")
                 last_seen = uid_data.get("last_seen")
                 if first_seen is not None:
-                    min_seen = first_seen if min_seen is None else min(
-                        min_seen, first_seen
+                    min_seen = (
+                        first_seen if min_seen is None else min(min_seen, first_seen)
                     )
                 if last_seen is not None:
-                    max_seen = last_seen if max_seen is None else max(
-                        max_seen, last_seen
+                    max_seen = (
+                        last_seen if max_seen is None else max(max_seen, last_seen)
                     )
 
             filtered_timestamps["min_seen"] = min_seen
@@ -761,7 +807,8 @@ class KVSearchView(BaseView):
         Sort namespaces with the preferred helper order first.
         """
         preferred_index = {
-            value: index for index, value in enumerate(cls.TAG_NAMESPACE_PREFERRED_ORDER)
+            value: index
+            for index, value in enumerate(cls.TAG_NAMESPACE_PREFERRED_ORDER)
         }
         return sorted(
             namespaces,
@@ -827,7 +874,9 @@ class KVSearchView(BaseView):
             suffix_index = suffix.find(needle) if needle else 0
             full_index = candidate.find(needle) if needle else 0
             suffix_starts = 0 if needle and suffix.startswith(needle) else 1
-            exact_namespace = 0 if namespace and candidate.startswith(f"{namespace}:") else 1
+            exact_namespace = (
+                0 if namespace and candidate.startswith(f"{namespace}:") else 1
+            )
             return (
                 exact_namespace,
                 suffix_starts,
@@ -869,7 +918,9 @@ class KVSearchView(BaseView):
                 namespaces.append(namespace)
 
             suggestions = []
-            for namespace in cls._sort_tag_namespaces(namespaces)[: cls.TAG_SUGGEST_LIMIT]:
+            for namespace in cls._sort_tag_namespaces(namespaces)[
+                : cls.TAG_SUGGEST_LIMIT
+            ]:
                 suggestions.append(
                     {
                         "label": namespace,
@@ -886,9 +937,9 @@ class KVSearchView(BaseView):
                     matching_tags.append(tag)
 
                 remaining_slots = cls.TAG_SUGGEST_LIMIT - len(suggestions)
-                for tag in cls._sort_tag_matches(matching_tags, needle=namespace_prefix)[
-                    :remaining_slots
-                ]:
+                for tag in cls._sort_tag_matches(
+                    matching_tags, needle=namespace_prefix
+                )[:remaining_slots]:
                     suggestions.append(
                         {
                             "label": tag,
@@ -1191,12 +1242,8 @@ class KVSearchView(BaseView):
 
                         export_entry = {
                             "uid": uid,
-                            "first_seen": ip_timestamps.get(uid, {}).get(
-                                "first_seen"
-                            ),
-                            "last_seen": ip_timestamps.get(uid, {}).get(
-                                "last_seen"
-                            ),
+                            "first_seen": ip_timestamps.get(uid, {}).get("first_seen"),
+                            "last_seen": ip_timestamps.get(uid, {}).get("last_seen"),
                             "document": document,
                         }
                         if warning:
@@ -1489,7 +1536,11 @@ class KVSearchView(BaseView):
             time_uids = indexer.get_uids_by_time_range(
                 time_range["from_ts"], time_range["to_ts"]
             )
-            uids = list(self._get_matching_uids(indexer, criteria_groups).intersection(time_uids))
+            uids = list(
+                self._get_matching_uids(indexer, criteria_groups).intersection(
+                    time_uids
+                )
+            )
             results_ip = indexer.get_ip_from_uids(uids)
             timestamp_array = self._build_timestamp_array(indexer, results_ip)
             requested_hostname_array = self._build_requested_hostname_array(
@@ -1603,9 +1654,7 @@ class KVSearchView(BaseView):
                 1,
                 int((current_to - current_from) / self.SEARCH_WINDOW_SECONDS) + 1,
             )
-            window_uids = indexer.get_uids_by_last_seen_range(
-                current_from, current_to
-            )
+            window_uids = indexer.get_uids_by_last_seen_range(current_from, current_to)
             page_uids = self._get_matching_uids(
                 indexer, criteria_groups, scoped_uids=window_uids
             )
@@ -1645,9 +1694,7 @@ class KVSearchView(BaseView):
             displayed_ips = list(results_ip)[:limit]
             results_ip = {ip: results_ip[ip] for ip in displayed_ips}
             timestamp_array = {
-                ip: timestamp_array[ip]
-                for ip in displayed_ips
-                if ip in timestamp_array
+                ip: timestamp_array[ip] for ip in displayed_ips if ip in timestamp_array
             }
         returned_results = len(results_ip) if status else 0
         shown_count = len(seen_ips) + returned_results
@@ -1757,11 +1804,7 @@ class KVSearchView(BaseView):
         AJAX helper for tag: query autocompletion.
         """
         return jsonify(
-            {
-                "suggestions": self._build_tag_suggestions(
-                    request.args.get("term", "")
-                )
-            }
+            {"suggestions": self._build_tag_suggestions(request.args.get("term", ""))}
         )
 
     @expose("/export")
@@ -2070,7 +2113,9 @@ class IPDetailView(BaseView):
         cleaned = []
         for entry in entries:
             if isinstance(entry, dict):
-                cleaned.append({key: value for key, value in entry.items() if key != "meta"})
+                cleaned.append(
+                    {key: value for key, value in entry.items() if key != "meta"}
+                )
             else:
                 cleaned.append(entry)
         return cleaned
@@ -2149,7 +2194,9 @@ class IPDetailView(BaseView):
             logger.warning("CIRCL geolookup failed for %s: %s", ip, error)
             return jsonify({"error": "Lookup failed"}), 502
         except ValueError as error:
-            logger.warning("CIRCL geolookup returned invalid JSON for %s: %s", ip, error)
+            logger.warning(
+                "CIRCL geolookup returned invalid JSON for %s: %s", ip, error
+            )
             return jsonify({"error": "Invalid lookup response"}), 502
 
         return jsonify(self._strip_geolookup_meta(payload))
@@ -2192,9 +2239,7 @@ class IPDetailView(BaseView):
             first_seen = self._safe_timestamp_to_display(
                 uid_timestamps.get("first_seen")
             )
-            last_seen = self._safe_timestamp_to_display(
-                uid_timestamps.get("last_seen")
-            )
+            last_seen = self._safe_timestamp_to_display(uid_timestamps.get("last_seen"))
             document, _warning, warning_message = KVSearchView.load_meili_document(
                 index, uid
             )
@@ -2289,12 +2334,8 @@ class IPDetailView(BaseView):
             ip=ip,
             total_documents=len(sorted_uids),
             total_ports=len(port_cards),
-            first_seen=(
-                self._safe_timestamp_to_display(ip_timestamps.get("min_seen"))
-            ),
-            last_seen=(
-                self._safe_timestamp_to_display(ip_timestamps.get("max_seen"))
-            ),
+            first_seen=(self._safe_timestamp_to_display(ip_timestamps.get("min_seen"))),
+            last_seen=(self._safe_timestamp_to_display(ip_timestamps.get("max_seen"))),
             port_cards=port_cards,
             unmapped_documents=unmapped_documents,
             has_ip_only_filter=has_ip_only_filter,
@@ -2540,7 +2581,7 @@ class JobsView(ModelView):
     datamodel = SQLAInterface(Jobs)
     show_columns = [
         "uid",
-        "scanprofile",
+        "scanprofile_label_html",
         "job_html",
         "scan_ports_html",
         "scan_nses_html",
@@ -2557,7 +2598,7 @@ class JobsView(ModelView):
     ]
     list_columns = [
         "job_creation",
-        "scanprofile",
+        "scanprofile_label_html",
         "job_start",
         "job_end",
         "job_summary_html",
@@ -2575,7 +2616,8 @@ class JobsView(ModelView):
     list_template = "list_jobview.html"  # Custom Show view with results
     search_exclude_columns = ["targets"]
     label_columns = {
-        "scanprofile": "Scan Profile",
+        "scanprofile_label_html": "Scan Profile",
+        "scanprofile_cycle": "Scan Cycle",
         "job_html": "Scan Jobs",
         "job_summary_html": "Scan Jobs",
         "scan_ports_html": "Ports",
@@ -2614,8 +2656,20 @@ class JobsView(ModelView):
         """
         Implement Multiple Delete for Targets
         """
-
+        selected_items = items if isinstance(items, list) else [items]
+        affected_profiles = {}
+        for item in selected_items:
+            if item.scanprofile_id is None:
+                continue
+            affected_profiles.setdefault(item.scanprofile_id, set()).update(
+                target.id for target in item.targets
+            )
         self.datamodel.delete_all(items)
+        for profile_id, target_ids in affected_profiles.items():
+            release_orphaned_scan_states_for_profile(profile_id, target_ids)
+            reconcile_scanprofile_cycle(profile_id)
+        if affected_profiles:
+            db.session.commit()
         self.update_redirect()
         return redirect(self.get_redirect())
 
@@ -2706,8 +2760,12 @@ class NsesView(ModelView):
         return upload, filename
 
     def _resolve_existing_nse(self, filename, sha256sum, current_id=None):
-        match_by_hash = db.session.query(Nses).filter(Nses.hash == sha256sum).one_or_none()
-        match_by_name = db.session.query(Nses).filter(Nses.name == filename).one_or_none()
+        match_by_hash = (
+            db.session.query(Nses).filter(Nses.hash == sha256sum).one_or_none()
+        )
+        match_by_name = (
+            db.session.query(Nses).filter(Nses.name == filename).one_or_none()
+        )
 
         if current_id is not None:
             if match_by_hash is not None and match_by_hash.id == current_id:
@@ -2731,7 +2789,9 @@ class NsesView(ModelView):
         file_bytes = upload.read()
         upload.stream.seek(0)
         sha256sum = hashlib.sha256(file_bytes).hexdigest()
-        conflicting_item = self._resolve_existing_nse(filename, sha256sum, current_id=item.id)
+        conflicting_item = self._resolve_existing_nse(
+            filename, sha256sum, current_id=item.id
+        )
 
         if conflicting_item is not None:
             raise ValueError(
@@ -3141,8 +3201,7 @@ class ReportsView(ModelView):
             )
             if not previous_results.get("status"):
                 raise ValueError(
-                    previous_results.get("msg_error")
-                    or "Invalid previous report query"
+                    previous_results.get("msg_error") or "Invalid previous report query"
                 )
             previous_per_ip_ports, _previous_port_counter = collect_report_ports(
                 indexer,
@@ -3156,13 +3215,8 @@ class ReportsView(ModelView):
         per_ip_existing_fqdns = {}
         for ip in result_ips:
             per_ip_existing_fqdns[ip] = (
-                (per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else [])
-                + (
-                    per_ip_requested_fqdns.get(ip, [])
-                    if per_ip_requested_fqdns
-                    else []
-                )
-            )
+                per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else []
+            ) + (per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else [])
         update_progress("pdns", pdns_done=0, pdns_total=len(result_ips))
         per_ip_pdns_fqdns = collect_report_passive_dns_fqdns(
             db.app.config,
@@ -3340,18 +3394,38 @@ class ScanprofilesView(ModelView):
     add_template = "add_scanprofilesview.html"
     edit_template = "edit_scanprofilesview.html"
     list_template = "list_scanprofilesview.html"
-    list_columns = {
+    show_template = "show_scanprofilesview.html"
+    list_columns = [
         "name",
         "scan_cycle_minutes",
         "priority",
-        "priority_retag_pending",
         "ports",
         "nses",
         "apply_to_all",
-    }
-    search_columns = ["name", "scan_cycle_minutes", "priority", "apply_to_all", "targets"]
-    add_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
-    edit_columns = ["name", "scan_cycle_minutes", "priority", "ports", "nses", "targets", "apply_to_all"]
+        "current_cycle_summary_html",
+    ]
+    search_columns = [
+        "name",
+        "scan_cycle_minutes",
+        "priority",
+        "apply_to_all",
+    ]
+    add_columns = [
+        "name",
+        "scan_cycle_minutes",
+        "priority",
+        "ports",
+        "nses",
+        "apply_to_all",
+    ]
+    edit_columns = [
+        "name",
+        "scan_cycle_minutes",
+        "priority",
+        "ports",
+        "nses",
+        "apply_to_all",
+    ]
     show_columns = [
         "name",
         "scan_cycle_minutes",
@@ -3359,19 +3433,8 @@ class ScanprofilesView(ModelView):
         "priority_retag_pending",
         "ports",
         "nses",
-        "targets",
-        "apply_to_all",
         "apply_to_all",
     ]
-    search_form_extra_fields = {
-        "targets": RemoteRelatedMultipleField(
-            "Apply on Target",
-            validators=[Optional()],
-            datamodel=datamodel,
-            col_name="targets",
-            endpoint="ScanprofilesView.targets_remote",
-        )
-    }
     add_form_extra_fields = {
         "priority": build_priority_field(),
         "ports": RemoteRelatedMultipleField(
@@ -3388,13 +3451,6 @@ class ScanprofilesView(ModelView):
             col_name="nses",
             endpoint="ScanprofilesView.nses_remote",
         ),
-        "targets": RemoteRelatedMultipleField(
-            "Apply on Target",
-            validators=[Optional()],
-            datamodel=datamodel,
-            col_name="targets",
-            endpoint="ScanprofilesView.targets_remote",
-        )
     }
     edit_form_extra_fields = {
         "priority": build_priority_field(),
@@ -3412,20 +3468,14 @@ class ScanprofilesView(ModelView):
             col_name="nses",
             endpoint="ScanprofilesView.nses_remote",
         ),
-        "targets": RemoteRelatedMultipleField(
-            "Apply on Target",
-            validators=[Optional()],
-            datamodel=datamodel,
-            col_name="targets",
-            endpoint="ScanprofilesView.targets_remote",
-        )
     }
     label_columns = {
         "nses": "Nse Scripts",
         "apply_to_all": "Apply to all scans",
-        "targets": "Apply on Target",
         "scan_cycle_minutes": "Scan Frequency (min)",
         "priority_retag_pending": "Priority retag pending",
+        "current_cycle_summary_html": "Scan Cycles",
+        "cycle_summary_html": "Scan Cycles",
     }
 
     def pre_add(self, item):
@@ -3808,5 +3858,7 @@ appbuilder.add_view(
     TargetScanStatesView, "Jobs Metrics", icon="fa-chart-bar", category="Status"
 )
 appbuilder.add_view(BotsView, "Bot Status", icon="fa-robot", category="Status")
-appbuilder.add_view(StatsView, "Stats", icon="fa-arrow-up-right-dots", category="Status")
+appbuilder.add_view(
+    StatsView, "Stats", icon="fa-arrow-up-right-dots", category="Status"
+)
 db.create_all()

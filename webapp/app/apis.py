@@ -34,6 +34,7 @@ from .models import (
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
+from .utils.scan_cycles import reconcile_scanprofile_cycle
 from .views import TargetsView
 
 
@@ -175,7 +176,9 @@ def _build_job_nse_payload(scan_nses, agent_nse_hashes):
     Build the job NSE payload and only include file contents when the agent cache
     does not already have the expected hash.
     """
-    requested_names = [name.strip() for name in (scan_nses or "").split(",") if name.strip()]
+    requested_names = [
+        name.strip() for name in (scan_nses or "").split(",") if name.strip()
+    ]
     if not requested_names:
         return [], []
 
@@ -709,7 +712,9 @@ class Api(BaseApi):
                     completion_time = utcnow_naive()
                     if scan_state is not None:
                         scan_state.working = False
-                        scan_state.last_previous_scan = ensure_utc_naive(scan_state.last_scan)
+                        scan_state.last_previous_scan = ensure_utc_naive(
+                            scan_state.last_scan
+                        )
                         scan_state.last_scan = completion_time
                     target.last_previous_scan = previous_scan
                     target.last_scan = completion_time
@@ -721,6 +726,8 @@ class Api(BaseApi):
             job_bot.uid,
             time.perf_counter() - sync_started,
         )
+        if job_bot.scanprofile_id is not None:
+            reconcile_scanprofile_cycle(job_bot.scanprofile_id)
         commit_started = time.perf_counter()
         db.session.commit()
         logger.debug(

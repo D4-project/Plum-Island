@@ -1,0 +1,70 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "show") }}
+
+{% if related_views is defined %}
+    <ul class="nav nav-tabs" style="{{"display: none;" if not related_views else "" }}">
+        <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a></li>
+        {% for view in related_views %}
+            <li>
+                <a href="#{{view.__class__.__name__}}" data-toggle="tab">{{view.title}}</a>
+            </li>
+        {% endfor %}
+    </ul>
+    <div class="tab-content">
+    {% for view in related_views %}
+        <div id="{{view.__class__.__name__}}" class="tab-pane">
+            {{ widgets.get('related_views')[loop.index - 1](pk = pk)|safe }}
+        </div>
+    {% endfor %}
+{% endif %}
+
+{% block show_form %}
+    <div id="Home" class="tab-pane active">
+        {{ widgets.get('show')()|safe }}
+    </div>
+
+    <div class="panel panel-info">
+      <div class="panel-heading">
+        <h4 class="panel-title">Scan Profile Cycles</h4>
+      </div>
+      <div class="panel-body">
+        {% set cycle_rows = get_scanprofile_cycle_rows(pk) %}
+        {% if cycle_rows %}
+        <div class="table-responsive">
+          <table class="table table-condensed table-hover">
+            <thead>
+              <tr>
+                <th>Cycle</th>
+                <th>Status</th>
+                <th>Start</th>
+                <th>Stop</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in cycle_rows %}
+              <tr>
+                <td>{{ row.label }}</td>
+                <td>{{ row.status }} {{ row.progress }}</td>
+                <td>{{ row.started_at or '-' }}</td>
+                <td>{{ row.finished_at or '-' }}</td>
+                <td>{{ row.duration }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="alert alert-info" role="alert">No scan cycle exists for this scan profile.</div>
+        {% endif %}
+      </div>
+    </div>
+{% endblock %}
+
+{% if related_views is defined %}</div>{% endif %}
+
+{{ lib.panel_end() }}
+{% endblock %}

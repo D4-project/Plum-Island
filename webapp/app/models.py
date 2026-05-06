@@ -123,9 +123,14 @@ class Jobs(Model):
     job_creation = Column(DateTime, default=utcnow_naive)  # Timestamp of job creation
     priority = Column(Integer, default=0)  # Priority, by default LOW
     scanprofile_id = Column(Integer, ForeignKey("scanprofiles.id"), nullable=True)
+    scanprofile_cycle_id = Column(
+        Integer, ForeignKey("scanprofile_cycles.id"), nullable=True
+    )
+    scanprofile_name = Column(String(256), nullable=True)
     scan_ports = Column(Text, nullable=True)
     scan_nses = Column(Text, nullable=True)
     scanprofile = relationship("ScanProfiles", back_populates="jobs")
+    scanprofile_cycle = relationship("ScanProfileCycles", back_populates="jobs")
     targets = relationship(
         "Targets", secondary=assoc_jobs_targets, back_populates="jobs"
     )
@@ -178,14 +183,14 @@ class Jobs(Model):
         for value in values[:limit]:
             html += (
                 f'<span class="label {safe_label_class}">'
-                f'{_html_escape(value)}</span> '
+                f"{_html_escape(value)}</span> "
             )
 
         remaining = len(values) - limit
         if remaining > 0:
             html += (
                 f'<span class="label label-info">+{remaining} more '
-                f'({len(values)} total)</span>'
+                f"({len(values)} total)</span>"
             )
 
         return Esc(html)
@@ -260,6 +265,43 @@ class Jobs(Model):
             for nse in self.scan_nses.split(","):
                 html += f'<span class="label label-primary">{_html_escape(nse)}</span> '
         return Esc(html)
+
+    def scanprofile_label_html(self):
+        """
+        Render stable scan profile name for job history.
+
+        The FK gives the current profile name when the profile still exists.
+        `scanprofile_name` keeps a creation-time snapshot so old jobs remain
+        understandable after a profile rename/delete or legacy FK loss.
+        """
+        if self.scanprofile is not None:
+            label = self.scanprofile.name
+            title = "current scan profile"
+            label_class = "label-default"
+        elif (
+            self.scanprofile_cycle is not None
+            and self.scanprofile_cycle.scanprofile is not None
+        ):
+            label = self.scanprofile_cycle.scanprofile.name
+            title = "scan profile resolved from cycle"
+            label_class = "label-info"
+        elif self.scanprofile_name:
+            label = self.scanprofile_name
+            title = "snapshot; current scan profile is missing"
+            label_class = "label-warning"
+        elif self.scanprofile_id:
+            label = f"profile #{self.scanprofile_id}"
+            title = "scan profile id without loaded profile"
+            label_class = "label-warning"
+        else:
+            label = "unknown scan profile"
+            title = "legacy job without scan profile reference"
+            label_class = "label-warning"
+
+        return Esc(
+            f'<span class="label {label_class}" title="{_html_escape(title)}">'
+            f"{_html_escape(label)}</span>"
+        )
 
     def duration_html(self):
         """
@@ -377,16 +419,14 @@ class TagRules(Model):
         for tag in tags[:visible_limit]:
             rendered += (
                 '<span class="label label-default tagrules-tag">'
-                f'{_html_escape(tag)}'
+                f"{_html_escape(tag)}"
                 "</span> "
             )
 
         remaining = len(tags) - visible_limit
         if remaining > 0:
             rendered += (
-                '<span class="label label-info tagrules-tag">'
-                f'+{remaining}'
-                "</span>"
+                '<span class="label label-info tagrules-tag">' f"+{remaining}" "</span>"
             )
         rendered += "</span>"
         return Esc(rendered)
@@ -487,11 +527,11 @@ class Reports(Model):
             schedule_hour = int(self.schedule_hour or 0)
             return Esc(
                 f'<span class="label label-info">monthly day '
-                f'{schedule_day:02d} at {schedule_hour:02d}:00</span>'
+                f"{schedule_day:02d} at {schedule_hour:02d}:00</span>"
             )
         return Esc(
             f'<span class="label label-default">'
-            f'{_html_escape(self.schedule_type)}</span>'
+            f"{_html_escape(self.schedule_type)}</span>"
         )
 
     def actions_html(self):
@@ -502,9 +542,9 @@ class Reports(Model):
             return Esc("")
         return Esc(
             f'<a class="btn btn-sm btn-default" href="/reportsview/preview_loading/{self.id}">'
-            'Preview</a> '
+            "Preview</a> "
             f'<a class="btn btn-sm btn-primary" href="/reportsview/run/{self.id}">'
-            'Run now</a>'
+            "Run now</a>"
         )
 
 
@@ -554,6 +594,164 @@ class TargetScanStates(Model):
         return "∞"
 
 
+class ScanProfileCycles(Model):
+    """
+    Runtime cycle state for one scan profile.
+
+    A cycle starts when the scheduler creates queued jobs for a scan profile.
+    It finishes only when every currently applicable target/profile state has
+    been scanned after `started_at` and no unfinished job remains for the
+    profile. This makes cycle completion recoverable after restart and
+    independent from old deleted job rows.
+    """
+
+    __tablename__ = "scanprofile_cycles"
+
+    id = Column(Integer, primary_key=True)
+    scanprofile_id = Column(Integer, ForeignKey("scanprofiles.id"), nullable=False)
+    started_at = Column(DateTime, default=utcnow_naive, nullable=False)
+    finished_at = Column(DateTime, default=None)
+    status = Column(String(32), default="running", nullable=False)
+    target_count = Column(Integer, default=0, nullable=False)
+    completed_target_count = Column(Integer, default=0, nullable=False)
+
+    scanprofile = relationship(
+        "ScanProfiles",
+        foreign_keys=[scanprofile_id],
+        back_populates="cycles",
+    )
+    jobs = relationship("Jobs", back_populates="scanprofile_cycle")
+
+    def __repr__(self):
+        if self.scanprofile is not None:
+            return f"{self.scanprofile} cycle {self.id}"
+        return f"cycle {self.id}"
+
+    @staticmethod
+    def _format_duration(started_at, finished_at=None):
+        """
+        Render elapsed cycle time as HH:MM:SS, MM:SS, or seconds.
+        """
+        if started_at is None:
+            return ""
+        end_at = finished_at or utcnow_naive()
+        total_seconds = max(0, int((end_at - started_at).total_seconds()))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        if minutes:
+            return f"{minutes:02d}:{seconds:02d}"
+        return f"{seconds}s"
+
+    @staticmethod
+    def _format_datetime(value):
+        """
+        Render compact UTC-naive timestamps used by the legacy UI.
+        """
+        if value is None:
+            return "running"
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+
+    def duration_html(self):
+        """
+        Current elapsed duration, or final duration after completion.
+        """
+        return self._format_duration(self.started_at, self.finished_at)
+
+    def status_html(self):
+        """
+        Render cycle status as a small FAB table badge.
+        """
+        status = self.status or "running"
+        label_class = "label-success" if status == "finished" else "label-info"
+        return Esc(f'<span class="label {label_class}">{_html_escape(status)}</span>')
+
+    def list_status_html(self):
+        """
+        Render cycle status label for the list view.
+        """
+        status = self.status or "running"
+        display_status = "waiting" if status == "finished" else status
+        label_class = "label-primary" if display_status == "waiting" else "label-info"
+        return Esc(
+            f'<span class="label {label_class}">{_html_escape(display_status)}</span>'
+        )
+
+    def progress_html(self):
+        """
+        Render target completion counter for this cycle.
+        """
+        total = int(self.target_count or 0)
+        completed = int(self.completed_target_count or 0)
+        title = f"{completed} of {total} targets scanned in this cycle"
+        return Esc(
+            '<span class="label label-default" '
+            f'title="{_html_escape(title)}">{completed}/{total}</span>'
+        )
+
+    def summary_badge_html(self, label):
+        """
+        Compact badge used from ScanProfiles list/show pages.
+        """
+        status = self.status or "running"
+        label_class = "label-success" if status == "finished" else "label-info"
+        total = int(self.target_count or 0)
+        completed = int(self.completed_target_count or 0)
+        started_at = self._format_datetime(self.started_at)
+        finished_at = self._format_datetime(self.finished_at)
+        duration = self.duration_html()
+        title = (
+            f"{label}: {completed}/{total} targets; started {started_at}; "
+            f"finished {finished_at}; duration {duration}"
+        )
+        return (
+            f'<span class="label {label_class}" title="{_html_escape(title)}">'
+            f"{_html_escape(label)} {completed}/{total}</span>"
+        )
+
+    def previous_cycle_html(self):
+        """
+        Show the previous cycle for the same scan profile.
+        """
+        session = object_session(self)
+        if session is None or self.id is None or self.scanprofile_id is None:
+            return Esc("")
+
+        query = (
+            session.query(ScanProfileCycles)
+            .filter(
+                ScanProfileCycles.scanprofile_id == self.scanprofile_id,
+                ScanProfileCycles.id != self.id,
+                ScanProfileCycles.status == "finished",
+            )
+            .order_by(
+                ScanProfileCycles.finished_at.desc(),
+                ScanProfileCycles.id.desc(),
+            )
+        )
+        if self.started_at is not None:
+            query = query.filter(ScanProfileCycles.started_at < self.started_at)
+
+        previous_cycle = query.first()
+        if previous_cycle is None:
+            return Esc('<span class="label label-default">no previous cycle</span>')
+
+        started_at = self._format_datetime(previous_cycle.started_at)
+        finished_at = self._format_datetime(previous_cycle.finished_at)
+        duration = previous_cycle.duration_html()
+        completed = int(previous_cycle.completed_target_count or 0)
+        total = int(previous_cycle.target_count or 0)
+        return Esc(
+            '<div class="scan-cycle-previous">'
+            f'<span class="label label-success">tour -1 {completed}/{total}</span> '
+            f"<span>start: {_html_escape(started_at)}</span> "
+            f"<span>stop: {_html_escape(finished_at)}</span> "
+            f"<span>duration: {_html_escape(duration)}</span>"
+            "</div>"
+        )
+
+
 class ScanProfiles(Model):
     """
     A Scan profile define for a target range which are the
@@ -586,7 +784,15 @@ class ScanProfiles(Model):
     priority = Column(Integer, default=0)
     priority_retag_pending = Column(Boolean, default=False, nullable=False)
     scan_cycle_minutes = Column(Integer, default=720)
+    current_cycle_id = Column(Integer, default=None)
+    last_cycle_finished_at = Column(DateTime, default=None)
     jobs = relationship("Jobs", back_populates="scanprofile")
+    cycles = relationship(
+        "ScanProfileCycles",
+        foreign_keys="ScanProfileCycles.scanprofile_id",
+        back_populates="scanprofile",
+        cascade="all, delete-orphan",
+    )
     scan_states = relationship(
         "TargetScanStates", back_populates="scanprofile", cascade="all, delete-orphan"
     )
@@ -605,6 +811,98 @@ class ScanProfiles(Model):
 
     def __repr__(self):
         return self.name
+
+    def cycle_summary_html(self):
+        """
+        Show up to two retained cycles for this profile.
+        """
+        session = object_session(self)
+        if session is None or self.id is None:
+            return Esc("")
+
+        rows = []
+        running_cycle = None
+        if self.current_cycle_id:
+            running_cycle = (
+                session.query(ScanProfileCycles)
+                .filter(
+                    ScanProfileCycles.id == self.current_cycle_id,
+                    ScanProfileCycles.scanprofile_id == self.id,
+                    ScanProfileCycles.status == "running",
+                )
+                .one_or_none()
+            )
+        if running_cycle is None:
+            running_cycle = (
+                session.query(ScanProfileCycles)
+                .filter(
+                    ScanProfileCycles.scanprofile_id == self.id,
+                    ScanProfileCycles.status == "running",
+                )
+                .order_by(
+                    ScanProfileCycles.started_at.desc(), ScanProfileCycles.id.desc()
+                )
+                .first()
+            )
+        if running_cycle is not None:
+            rows.append(("Current", running_cycle))
+
+        remaining_slots = max(0, 2 - len(rows))
+        finished_cycles = (
+            session.query(ScanProfileCycles)
+            .filter(
+                ScanProfileCycles.scanprofile_id == self.id,
+                ScanProfileCycles.status == "finished",
+            )
+            .order_by(
+                ScanProfileCycles.finished_at.desc(),
+                ScanProfileCycles.id.desc(),
+            )
+            .limit(remaining_slots)
+            .all()
+        )
+        for index, cycle in enumerate(finished_cycles):
+            rows.append(("Last" if index == 0 else "Previous", cycle))
+
+        if not rows:
+            return Esc('<span class="label label-default">no cycle</span>')
+        return Esc(" ".join(cycle.summary_badge_html(label) for label, cycle in rows))
+
+    def current_cycle_summary_html(self):
+        """
+        Show only the active running cycle for this profile.
+        """
+        session = object_session(self)
+        if session is None or self.id is None:
+            return Esc("")
+
+        running_cycle = None
+        if self.current_cycle_id:
+            running_cycle = (
+                session.query(ScanProfileCycles)
+                .filter(
+                    ScanProfileCycles.id == self.current_cycle_id,
+                    ScanProfileCycles.scanprofile_id == self.id,
+                    ScanProfileCycles.status == "running",
+                )
+                .one_or_none()
+            )
+        if running_cycle is None:
+            running_cycle = (
+                session.query(ScanProfileCycles)
+                .filter(
+                    ScanProfileCycles.scanprofile_id == self.id,
+                    ScanProfileCycles.status == "running",
+                )
+                .order_by(
+                    ScanProfileCycles.started_at.desc(), ScanProfileCycles.id.desc()
+                )
+                .first()
+            )
+
+        if running_cycle is None:
+            return Esc('<span class="label label-default">no current cycle</span>')
+        return Esc(running_cycle.summary_badge_html("Current"))
 
 
 class Targets(Model):
