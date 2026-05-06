@@ -44,8 +44,9 @@ from .utils.timeutils import utcnow_aware, utcnow_naive
 logger = logging.getLogger("flask_appbuilder")
 
 job = []
+JOB_TARGET_CHUNK_SIZE = 256
 DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE = 256
-DEFAULT_QUEUE_STATE_BATCH_SIZE = 128
+DEFAULT_QUEUE_STATE_BATCH_SIZE = JOB_TARGET_CHUNK_SIZE
 DEFAULT_STATE_SYNC_BATCH_SIZE = 2048
 DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
@@ -456,7 +457,9 @@ def _load_due_states_for_profile(profile, now_utc, state_limit):
         .all()
     )
     states_by_id = {state.id: state for state in states}
-    return [states_by_id[state_id] for state_id in state_ids if state_id in states_by_id]
+    return [
+        states_by_id[state_id] for state_id in state_ids if state_id in states_by_id
+    ]
 
 
 def _append_large_network_chunks(target, state, range_chunks):
@@ -466,7 +469,7 @@ def _append_large_network_chunks(target, state, range_chunks):
     current_block = []
     for ip in IPNetwork(target.value):
         current_block.append(ip)
-        if len(current_block) == 256:
+        if len(current_block) == JOB_TARGET_CHUNK_SIZE:
             range_chunks.append(
                 {
                     "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
@@ -485,32 +488,17 @@ def _append_large_network_chunks(target, state, range_chunks):
         )
 
 
-def _merge_small_ranges_into_chunks(small_ranges, range_chunks):
+def _merge_small_ranges_into_chunks(small_ranges, range_chunks, max_chunks=None):
     """
     Merge small IP ranges across states into 256-IP jobs.
     """
     current_block = []
     current_targets = {}
     current_states = {}
+    chunks_added = 0
 
-    for record in sorted(small_ranges, key=lambda item: item["ips"][0]):
-        for ip in record["ips"]:
-            current_block.append(ip)
-            current_targets[record["target"].id] = record["target"]
-            current_states[id(record["state"])] = record["state"]
-            if len(current_block) == 256:
-                range_chunks.append(
-                    {
-                        "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
-                        "targets": list(current_targets.values()),
-                        "states": list(current_states.values()),
-                    }
-                )
-                current_block = []
-                current_targets = {}
-                current_states = {}
-
-    if current_block:
+    def append_current_block():
+        nonlocal chunks_added, current_block, current_targets, current_states
         range_chunks.append(
             {
                 "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
@@ -518,14 +506,73 @@ def _merge_small_ranges_into_chunks(small_ranges, range_chunks):
                 "states": list(current_states.values()),
             }
         )
+        chunks_added += 1
+        current_block = []
+        current_targets = {}
+        current_states = {}
+
+    for record in sorted(small_ranges, key=lambda item: item["ips"][0]):
+        if max_chunks is not None and chunks_added >= max_chunks:
+            break
+        for ip in record["ips"]:
+            current_block.append(ip)
+            current_targets[record["target"].id] = record["target"]
+            current_states[id(record["state"])] = record["state"]
+            if len(current_block) == JOB_TARGET_CHUNK_SIZE:
+                append_current_block()
+
+    if current_block:
+        append_current_block()
+
+    return chunks_added
 
 
-def _stage_jobs_for_profile(profile, due_states, scan_ports, scan_nses):
+def _merge_hostnames_into_chunks(hostname_records, hostname_chunks, max_chunks=None):
     """
-    Convert due states into queued jobs for one profile.
+    Merge FQDN target states into 256-host jobs.
+    """
+    current_hosts = []
+    current_targets = {}
+    current_states = {}
+    chunks_added = 0
+
+    def append_current_hosts():
+        nonlocal chunks_added, current_hosts, current_targets, current_states
+        hostname_chunks.append(
+            {
+                "hosts": list(current_hosts),
+                "targets": list(current_targets.values()),
+                "states": list(current_states.values()),
+            }
+        )
+        chunks_added += 1
+        current_hosts = []
+        current_targets = {}
+        current_states = {}
+
+    for record in hostname_records:
+        if max_chunks is not None and chunks_added >= max_chunks:
+            break
+        current_hosts.extend(record["hosts"])
+        for target in record["targets"]:
+            current_targets[target.id] = target
+        for state in record["states"]:
+            current_states[id(state)] = state
+        if len(current_hosts) == JOB_TARGET_CHUNK_SIZE:
+            append_current_hosts()
+
+    if current_hosts:
+        append_current_hosts()
+
+    return chunks_added
+
+
+def _classify_due_states_for_chunks(due_states, max_large_range_jobs=None):
+    """
+    Split due states by target type before final 256-item chunking.
     """
     range_chunks = []
-    hostname_chunks = []
+    hostname_records = []
     small_ranges = []
 
     for state in due_states:
@@ -533,74 +580,146 @@ def _stage_jobs_for_profile(profile, due_states, scan_ports, scan_nses):
         if target is None:
             continue
         if is_valid_fqdn(target.value):
-            hostname_chunks.append(
+            hostname_records.append(
                 {"hosts": [target.value], "targets": [target], "states": [state]}
             )
         else:
             net = IPNetwork(target.value)
-            if net.size > 256:
+            if net.size > JOB_TARGET_CHUNK_SIZE:
+                if (
+                    max_large_range_jobs is not None
+                    and len(range_chunks) >= max_large_range_jobs
+                ):
+                    continue
                 _append_large_network_chunks(target, state, range_chunks)
             else:
-                small_ranges.append({"ips": list(net), "target": target, "state": state})
+                small_ranges.append(
+                    {"ips": list(net), "target": target, "state": state}
+                )
 
-        state.working = True
+    return range_chunks, small_ranges, hostname_records
+
+
+def _enqueue_profile_job(profile, job_value, scan_ports, scan_nses, chunk):
+    """
+    Add one queued job and mark its linked targets/states working.
+    """
+    new_job = Jobs()
+    new_job.uid = str(uuid.uuid4())
+    new_job.job = job_value
+    new_job.scanprofile = profile
+    new_job.scan_ports = scan_ports
+    new_job.scan_nses = scan_nses
+    new_job.priority = profile.priority or 0
+    for target in chunk["targets"]:
+        new_job.targets.append(target)
         target.working = True
+    for state in chunk["states"]:
+        state.working = True
+    db.session.add(new_job)
+    return {state.id for state in chunk["states"]}
 
-    if small_ranges:
-        _merge_small_ranges_into_chunks(small_ranges, range_chunks)
 
-    range_job_count = 0
+def _enqueue_range_jobs(profile, range_chunks, scan_ports, scan_nses):
+    """
+    Add queued range jobs and return their scheduled state IDs.
+    """
+    scheduled_state_ids = set()
     for chunk in range_chunks:
-        new_job = Jobs()
-        new_job.uid = str(uuid.uuid4())
-        new_job.job = ",".join(str(cidr) for cidr in cidr_merge(chunk["cidrs"]))
-        new_job.scanprofile = profile
-        new_job.scan_ports = scan_ports
-        new_job.scan_nses = scan_nses
-        new_job.priority = profile.priority or 0
-        for target in chunk["targets"]:
-            new_job.targets.append(target)
-            target.working = True
-        db.session.add(new_job)
-        range_job_count += 1
+        job_value = ",".join(str(cidr) for cidr in cidr_merge(chunk["cidrs"]))
+        scheduled_state_ids.update(
+            _enqueue_profile_job(profile, job_value, scan_ports, scan_nses, chunk)
+        )
+    return scheduled_state_ids
 
-    host_job_count = 0
-    for i in range(0, len(hostname_chunks), 256):
-        chunk256 = hostname_chunks[i : i + 256]
-        new_job = Jobs()
-        new_job.uid = str(uuid.uuid4())
-        final_hosts = []
-        targets = {}
-        for item in chunk256:
-            final_hosts.extend(item["hosts"])
-            for target in item["targets"]:
-                targets[target.id] = target
-        new_job.job = ",".join(final_hosts)
-        new_job.scanprofile = profile
-        new_job.scan_ports = scan_ports
-        new_job.scan_nses = scan_nses
-        new_job.priority = profile.priority or 0
-        for target in targets.values():
-            new_job.targets.append(target)
-            target.working = True
-        db.session.add(new_job)
-        host_job_count += 1
+
+def _enqueue_hostname_jobs(profile, hostname_chunks, scan_ports, scan_nses):
+    """
+    Add queued FQDN jobs and return their scheduled state IDs.
+    """
+    scheduled_state_ids = set()
+    for chunk in hostname_chunks:
+        scheduled_state_ids.update(
+            _enqueue_profile_job(
+                profile,
+                ",".join(chunk["hosts"]),
+                scan_ports,
+                scan_nses,
+                chunk,
+            )
+        )
+    return scheduled_state_ids
+
+
+def _stage_jobs_for_profile(profile, due_states, scan_ports, scan_nses, max_jobs=None):
+    """
+    Convert due states into queued jobs for one profile.
+    """
+    range_chunks, small_ranges, hostname_records = _classify_due_states_for_chunks(
+        due_states,
+        max_large_range_jobs=max_jobs,
+    )
+    hostname_chunks = []
+    jobs_remaining = None
+    if max_jobs is not None:
+        jobs_remaining = max(0, max_jobs - len(range_chunks))
+
+    if small_ranges and (jobs_remaining is None or jobs_remaining > 0):
+        range_jobs_added = _merge_small_ranges_into_chunks(
+            small_ranges,
+            range_chunks,
+            jobs_remaining,
+        )
+        if jobs_remaining is not None:
+            jobs_remaining = max(0, jobs_remaining - range_jobs_added)
+
+    if hostname_records and (jobs_remaining is None or jobs_remaining > 0):
+        _merge_hostnames_into_chunks(hostname_records, hostname_chunks, jobs_remaining)
+
+    scheduled_state_ids = _enqueue_range_jobs(
+        profile, range_chunks, scan_ports, scan_nses
+    )
+    scheduled_state_ids.update(
+        _enqueue_hostname_jobs(profile, hostname_chunks, scan_ports, scan_nses)
+    )
 
     return {
-        "scheduled_states": len(due_states),
-        "range_jobs": range_job_count,
-        "host_jobs": host_job_count,
+        "scheduled_states": len(scheduled_state_ids),
+        "range_jobs": len(range_chunks),
+        "host_jobs": len(hostname_chunks),
     }
 
 
 def task_create_jobs():
     """
     Keep per-profile waiting queues filled without sweeping the whole target set.
+
+    How it works:
+    - First repairs, in bounded batches, target/profile states left in
+      `working` mode while no unfinished job references them anymore.
+    - Creates missing target/profile runtime rows so each active target has one
+      state row per applicable scan profile.
+    - Loads scan profiles by priority, then resumes after the last profile
+      processed by the previous tick so the same profiles are not always first.
+    - For each eligible profile, computes the waiting-job deficit:
+      `queue_target - waiting_before`.
+    - Converts that job deficit into an item load budget. A job should contain
+      up to 256 items when enough targets are due; the last job may contain
+      fewer than 256 only when the due list is exhausted.
+    - Stages jobs through `_stage_jobs_for_profile()`: IP/CIDR and FQDN targets
+      are grouped into 256-item chunks, jobs are added to the session, then only
+      actually scheduled targets/states are marked `working=True`.
+    - Commits after each profile to keep transactions short and limit SQLite
+      lock duration.
+    - Stops once the global `SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK` budget is
+      exhausted.
     """
     started_at = time.perf_counter()
     orphan_release = {"released_states": 0, "checked_states": 0}
     seeded_states = 0
 
+    # Step 1: release states stuck in working mode without an active job.
+    # The called helper stays deliberately batched to protect SQLite.
     orphan_started = time.perf_counter()
     if _should_run_orphan_state_release():
         orphan_release = _release_orphaned_working_states()
@@ -615,6 +734,8 @@ def task_create_jobs():
             "Create Job TASK debug: orphan-state release skipped (cooldown active)"
         )
 
+    # Step 2: create missing target/profile runtime rows.
+    # Without those rows, an active target cannot enter the scheduler.
     sync_started = time.perf_counter()
     seeded_states = _sync_missing_scan_states()
     logger.debug(
@@ -623,6 +744,9 @@ def task_create_jobs():
         seeded_states,
     )
 
+    # Step 3: read queue-fill limits.
+    # queue_target and max_new_jobs_per_tick are job-count limits.
+    # state_batch_size is a target/profile-state read limit.
     queue_target = _get_scheduler_int_config(
         "SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE",
         DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE,
@@ -630,12 +754,15 @@ def task_create_jobs():
     state_batch_size = _get_scheduler_int_config(
         "SCHEDULER_QUEUE_STATE_BATCH_SIZE",
         DEFAULT_QUEUE_STATE_BATCH_SIZE,
+        minimum=JOB_TARGET_CHUNK_SIZE,
     )
     max_new_jobs_per_tick = _get_scheduler_int_config(
         "SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK",
         DEFAULT_MAX_NEW_JOBS_PER_TICK,
     )
 
+    # Step 4: load queue metadata once for this tick.
+    # waiting_counts avoids recounting the DB after each profile.
     metadata_started = time.perf_counter()
     profiles = (
         db.session.query(ScanProfiles)
@@ -650,8 +777,10 @@ def task_create_jobs():
         len(profiles),
         len(waiting_counts),
     )
+    # Simple rotation: the next tick resumes after the last processed profile.
     profiles = _rotate_profiles_for_tick(profiles)
 
+    # End-of-tick counters used only for logs and the returned summary.
     totals = {
         "scheduled_states": 0,
         "range_jobs": 0,
@@ -669,10 +798,16 @@ def task_create_jobs():
     fill_started = time.perf_counter()
     for profile in profiles:
         last_processed_profile_id = profile.id
+
+        # Step 5: skip profiles that cannot produce executable Nmap jobs.
+        # A job without ports or scan frequency is not actionable.
         scan_ports = _serialize_profile_ports(profile)
         if not scan_ports:
             profiles_without_ports += 1
-            logger.warning("Create Job TASK: skipping profile %s because it has no ports", profile.name)
+            logger.warning(
+                "Create Job TASK: skipping profile %s because it has no ports",
+                profile.name,
+            )
             continue
 
         cycle_minutes = profile.scan_cycle_minutes
@@ -684,13 +819,29 @@ def task_create_jobs():
             )
             continue
 
+        # Step 6: check whether this profile queue needs more jobs.
+        # queue_deficit is a missing-job count, not a target count.
         waiting_before = waiting_counts.get(profile.id, 0)
         queue_deficit = queue_target - waiting_before
         if queue_deficit <= 0:
             profiles_already_full += 1
             continue
 
-        state_limit = max(1, min(state_batch_size, queue_deficit))
+        # Step 7: apply the global per-tick job creation budget.
+        # This prevents one tick from creating too many jobs across due profiles.
+        jobs_available = max_new_jobs_per_tick - (
+            totals["range_jobs"] + totals["host_jobs"]
+        )
+        if jobs_available <= 0:
+            budget_exhausted = True
+            break
+
+        job_limit = min(queue_deficit, jobs_available)
+
+        # Step 8: convert the job budget into an item budget.
+        # Example: queue_deficit=3 loads up to 3 * 256 states, not 3.
+        # This is what guarantees 256-FQDN packets when enough FQDNs are due.
+        state_limit = min(state_batch_size, job_limit * JOB_TARGET_CHUNK_SIZE)
         due_started = time.perf_counter()
         due_states = _load_due_states_for_profile(profile, now, state_limit)
         due_elapsed = time.perf_counter() - due_started
@@ -705,19 +856,29 @@ def task_create_jobs():
             )
             continue
 
+        # Step 9: transform due states into in-memory jobs.
+        # `_stage_jobs_for_profile` groups IP/CIDR and FQDN targets into
+        # 256-item chunks, adds Jobs to the session, and marks working=True only
+        # for targets/states actually included in those jobs.
         stage_started = time.perf_counter()
         job_counts = _stage_jobs_for_profile(
             profile,
             due_states,
             scan_ports,
             _serialize_profile_nses(profile),
+            max_jobs=job_limit,
         )
         stage_elapsed = time.perf_counter() - stage_started
 
+        # Step 10: commit per profile.
+        # Short transactions reduce long SQLite lock risk.
         commit_started = time.perf_counter()
         db.session.commit()
         commit_elapsed = time.perf_counter() - commit_started
 
+        # Step 11: update local counters.
+        # Since this profile was just committed, waiting_counts mirrors DB state
+        # for the next profiles without rerunning the global count query.
         new_jobs = job_counts["range_jobs"] + job_counts["host_jobs"]
         waiting_counts[profile.id] = waiting_before + new_jobs
         totals["scheduled_states"] += job_counts["scheduled_states"]
@@ -728,11 +889,16 @@ def task_create_jobs():
             profiles_with_jobs += 1
             profile_summaries.append(
                 f"{profile.name}={new_jobs}"
-                f"(range:{job_counts['range_jobs']},host:{job_counts['host_jobs']},states:{job_counts['scheduled_states']},queued:{waiting_counts[profile.id]})"
+                f"(range:{job_counts['range_jobs']},"
+                f"host:{job_counts['host_jobs']},"
+                f"states:{job_counts['scheduled_states']},"
+                f"queued:{waiting_counts[profile.id]})"
             )
 
         logger.debug(
-            "Create Job TASK debug: profile %s filled in %.2fs (due_load=%.2fs, stage=%.2fs, commit=%.2fs, states=%s, new_jobs=%s, waiting_before=%s, waiting_after=%s)",
+            "Create Job TASK debug: profile %s filled in %.2fs "
+            "(due_load=%.2fs, stage=%.2fs, commit=%.2fs, states=%s, "
+            "new_jobs=%s, waiting_before=%s, waiting_after=%s)",
             profile.name,
             due_elapsed + stage_elapsed + commit_elapsed,
             due_elapsed,
@@ -744,6 +910,7 @@ def task_create_jobs():
             waiting_counts[profile.id],
         )
 
+        # Step 12: stop when this tick has consumed its creation budget.
         if totals["range_jobs"] + totals["host_jobs"] >= max_new_jobs_per_tick:
             budget_exhausted = True
             break
@@ -752,9 +919,11 @@ def task_create_jobs():
         "Create Job TASK debug: queue fill completed in %.2fs",
         time.perf_counter() - fill_started,
     )
+    # Save the inter-tick profile rotation cursor.
     if last_processed_profile_id:
         db.app.config["scheduler_profile_cursor_id"] = last_processed_profile_id
 
+    # Step 13: build a compact summary for logs and observability.
     total_jobs_created = totals["range_jobs"] + totals["host_jobs"]
     summary_log = (
         "Create Job TASK: %s jobs created across %s profiles (%s range, %s host); "
@@ -790,6 +959,7 @@ def task_create_jobs():
         "Create Job TASK debug: total create_jobs runtime %.2fs",
         time.perf_counter() - started_at,
     )
+    # Return counters useful for tests and generic scheduler logs.
     return {
         "jobs_created": total_jobs_created,
         "range_jobs": totals["range_jobs"],

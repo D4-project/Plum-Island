@@ -182,7 +182,7 @@ SCHEDULER_DELAY = 10
 SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE = 256
 
 # Maximum number of target/profile runtime rows evaluated per profile and tick.
-SCHEDULER_QUEUE_STATE_BATCH_SIZE = 128
+SCHEDULER_QUEUE_STATE_BATCH_SIZE = 256
 
 # Maximum number of missing target/profile runtime rows created per tick.
 SCHEDULER_STATE_SYNC_BATCH_SIZE = 2048

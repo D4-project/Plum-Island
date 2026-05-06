@@ -12,6 +12,7 @@ Changes after `v0.2604.0`.
   - Netskope Borderless SD-WAN certificate issuer tagging, closes #41
   - WatchGuard Fireware XTM favicon, title, and certificate tagging, closes #42
   - Cisco Catalyst SD-WAN title and certificate tagging, closes #43
+  - Scheduler FQDN/IP job batching now fills 256-item packets when due targets remain, closes #51
   - ProFTPD, closes #36 (`3e4f7a2`)
   - Pure-FTPd, closes #35 (`d019905`)
   - pfSense, closes #34 (`6b609d9`)
