@@ -108,3 +108,13 @@ Common tag prefixes:
 - `vuln:*` for vulnerability-oriented classifications
 
 Favicon rules usually use `soft:<product>` or `hard:<device>` depending on what the favicon identifies.
+
+# Source of information used.
+
+To build, and craft the detection rules, We based our knowledge on various open source;
+
+- https://github.com/OWASP/www-project-secure-headers
+- https://github.com/nmap/nmap/blob/9965fef7743c9f67dfe310b8e42c83cf170fa434/nselib/data/favicon-db
+- https://github.com/sansatart/scrapts/blob/master/shodan-favicon-hashes.csv
+
+Many thank's to these creators
