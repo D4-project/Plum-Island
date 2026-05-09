@@ -100,6 +100,8 @@ Current generic fields:
 | `http_favicon_sha256` | yes | no | Favicon SHA-256 |
 | `http_cookiename` | yes | yes | HTTP cookie names |
 | `http_etag` | yes | yes | HTTP ETag values |
+| `http_header` | yes | yes | Configured HTTP header name presence |
+| `http_headval` | yes | value only | Configured HTTP header value stored as `header:value` |
 | `http_server` | yes | yes | HTTP Server header |
 | `x509_issuer` | yes | yes | TLS issuer |
 | `x509_md5` | yes | no | TLS certificate MD5 |
@@ -108,6 +110,8 @@ Current generic fields:
 | `x509_subject` | yes | yes | TLS subject |
 | `x509_san` | yes | yes | TLS SAN values |
 | `banner` | yes | yes | Service banner |
+
+`http_header` and `http_headval` are populated only from the configured `collected_headers` rows. Header names and values are lowercased before ingestion. `http_headval` keeps the header name exact and applies prefix/substring matching only to the value through queries such as `http_headval:x-powered-by.lk:php`.
 
 ## Tag-specific updates
 

@@ -38,6 +38,9 @@ def normalize_db_conf(db_conf_local):
         conf.setdefault("ONLINETLD", False)
         conf.setdefault("TLDS", [])
         conf.setdefault("TLDADD", [])
+        conf["HTTP_HEADER_COLLECTION"] = normalize_http_header_collection(
+            conf.get("HTTP_HEADER_COLLECTION", {})
+        )
         return conf
 
     if isinstance(db_conf_local, list):
@@ -45,9 +48,11 @@ def normalize_db_conf(db_conf_local):
             "ONLINETLD": False,
             "TLDS": db_conf_local,
             "TLDADD": [],
+            "HTTP_HEADER_COLLECTION": {},
         }
 
     raise TypeError("parse_json expects a config dict or a TLD list")
+
 
 # B -> Body.XXXX Subsearch
 # P -> Body.ports.XXXX Per Port Search
@@ -55,6 +60,7 @@ def normalize_db_conf(db_conf_local):
 default_parsing = [
     "get_hosts:b.hostnames",
     "get_fqdn_requested:b.hostnames",
+    "get_http_header:p.http-headers.output",
     "get_http_server:p.http-headers.output",
     "get_http_cookies:p.http-headers.output",
     "get_http_etag:p.http-headers.output",
@@ -73,6 +79,7 @@ ALLOW = [
     "get_http_cookies",
     "get_hosts",
     "get_fqdn_requested",
+    "get_http_header",
     "get_http_server",
     "get_http_title",
     "get_http_etag",
@@ -94,6 +101,8 @@ favicon_field_regex = re.compile(
     re.MULTILINE,
 )
 
+http_header_regex = re.compile(r"^\s*([^:\s][^:\s]*)\s*:\s*(.*?)\s*$")
+
 favicon_field_map = {
     "favicon_file": "http_favicon_path",
     "favicon_mmhash": "http_favicon_mmhash",
@@ -102,6 +111,68 @@ favicon_field_map = {
     "favicon_sha256": "http_favicon_sha256",
     "sha256": "http_favicon_sha256",
 }
+
+
+def normalize_http_header_name(value):
+    """
+    Normalize HTTP header names for case-insensitive indexing and search.
+    """
+    return str(value or "").strip().lower()
+
+
+def normalize_http_header_collection(raw_collection):
+    """
+    Normalize configured HTTP header collection rules.
+    """
+    if not raw_collection:
+        return {}
+
+    if isinstance(raw_collection, dict):
+        return {
+            normalize_http_header_name(header_name): bool(collect_value)
+            for header_name, collect_value in raw_collection.items()
+            if normalize_http_header_name(header_name)
+        }
+
+    collection = {}
+    if isinstance(raw_collection, (list, tuple, set)):
+        for item in raw_collection:
+            if isinstance(item, dict):
+                header_name = normalize_http_header_name(
+                    item.get("header_name") or item.get("name")
+                )
+                collect_value = bool(
+                    item.get("collect_value")
+                    or item.get("requires_value_for_identification")
+                )
+            else:
+                header_name = normalize_http_header_name(item)
+                collect_value = False
+            if header_name:
+                collection[header_name] = collect_value
+    return collection
+
+
+def iter_http_header_lines(body):
+    """
+    Yield normalized (header, value) pairs from http-headers NSE output.
+    """
+    if not body:
+        return
+
+    for line in str(body).splitlines():
+        candidate = line.strip()
+        if candidate.startswith("|"):
+            candidate = candidate[1:].lstrip("_").strip()
+
+        match = http_header_regex.match(candidate)
+        if not match:
+            continue
+
+        header_name = normalize_http_header_name(match.group(1))
+        header_value = str(match.group(2) or "").strip().lower()
+        if header_name:
+            yield header_name, header_value
 
 
 def insensitive(input_list):
@@ -392,6 +463,26 @@ def get_favicon(data: dict, target: str):
     if body:
         parse_favicon_object(result, body)
     return result
+
+
+def get_http_header(data: dict, target: str):
+    """
+    Parse configured HTTP header names and selected values.
+    """
+    body = get_body(data, target)
+    collection = DB_CONF.get("HTTP_HEADER_COLLECTION", {})
+    http_header = []
+    http_headval = []
+
+    if body and collection:
+        for header_name, header_value in iter_http_header_lines(body):
+            if header_name not in collection:
+                continue
+            http_header.append(header_name)
+            if collection[header_name] and header_value:
+                http_headval.append(f"{header_name}:{header_value}")
+
+    return {"http_header": http_header, "http_headval": http_headval}
 
 
 def get_http_server(data: dict, target: str):

@@ -576,13 +576,26 @@ function getQueryTagContext() {
     }
 
     const token = value.slice(tokenStart, tokenEnd);
-    if (!token.toLowerCase().startsWith('tag:')) {
+    const lowerToken = token.toLowerCase();
+    if (!lowerToken.startsWith('tag:') && !lowerToken.startsWith('http_headval:')) {
+        return null;
+    }
+    if (lowerToken.startsWith('http_headval:')) {
+        const headerFragment = lowerToken.slice('http_headval:'.length);
+        if (headerFragment.includes(':')) {
+            return null;
+        }
+    }
+
+    const suggestType = lowerToken.startsWith('http_headval:') ? 'header' : 'tag';
+    if (suggestType === 'header' && token.includes(' ')) {
         return null;
     }
 
     return {
         input,
         token,
+        suggestType,
         tokenStart,
         tokenEnd
     };
@@ -678,7 +691,8 @@ async function fetchTagSuggestions(context) {
     try {
         const params = new URLSearchParams();
         params.set('term', context.token);
-        const res = await fetch(`/kvsearchview/tag_suggest?${params.toString()}`, {
+        const suggestPath = context.suggestType === 'header' ? 'header_suggest' : 'tag_suggest';
+        const res = await fetch(`/kvsearchview/${suggestPath}?${params.toString()}`, {
             signal: tagSuggestAbortController.signal
         });
         const data = await readJsonResponse(res);
@@ -1673,14 +1687,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>domain_requested</td>
                 <td>lk, bg</td>
                 <td>Domain given to scanner</td>
-                <td></td>
-                <td></td>
-                <td></td>
+                <td>http_header</td>
+                <td>lk, bg</td>
+                <td>Collected HTTP header presence, e.g. <code>http_header:cache-control</code></td>
             </tr>
             <tr>
                 <td>host</td>
                 <td>lk, bg</td>
                 <td>Hostname, the subdomain part</td>
+                <td>http_headval</td>
+                <td>header.lk, header.bg</td>
+                <td>Collected HTTP header value, e.g. <code>http_headval:x-powered-by:php</code></td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td>http_favicon_path</td>
                 <td>lk, bg</td>
                 <td>Favicon source path</td>

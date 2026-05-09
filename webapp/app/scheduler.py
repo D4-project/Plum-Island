@@ -21,6 +21,7 @@ from sqlalchemy.orm import joinedload
 from . import db
 from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
 from .models import Reports
+from .models import CollectedHeaders
 from .models import TagRules
 from .utils.mutils import is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
@@ -1111,6 +1112,12 @@ def task_export_to_dbs():
     active_tag_rules = compile_tag_rule_records(
         db.session.query(TagRules).filter(TagRules.active == True).all()
     )
+    parser_config = dict(db.app.config)
+    parser_config["HTTP_HEADER_COLLECTION"] = {
+        str(row.header_name or "").strip().lower(): bool(row.collect_value)
+        for row in db.session.query(CollectedHeaders).all()
+        if str(row.header_name or "").strip()
+    }
     # Select "All" Json
     for job_data in (
         db.session.query(Jobs.id, Jobs.uid)
@@ -1185,7 +1192,7 @@ def task_export_to_dbs():
                     }
                     parsed_doc = parse_json(
                         object_to_save,
-                        db.app.config,
+                        parser_config,
                         tag_rules=active_tag_rules,
                     )
                     pending_meili.append(object_to_save)

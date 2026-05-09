@@ -94,7 +94,10 @@ def load_runtime():
     Import Flask runtime dependencies lazily so CLI help stays clean.
     """
     from app import app, db  # pylint: disable=import-outside-toplevel
-    from app.models import TagRules  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        CollectedHeaders,
+        TagRules,
+    )
     from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
         KVrocksIndexer,
     )
@@ -109,6 +112,7 @@ def load_runtime():
     return {
         "app": app,
         "db": db,
+        "CollectedHeaders": CollectedHeaders,
         "TagRules": TagRules,
         "KVrocksIndexer": KVrocksIndexer,
         "fetch_tlds": fetch_tlds,
@@ -156,6 +160,17 @@ def ensure_parser_tlds(app_config, fetch_tlds):
         if tld not in existing_tlds:
             app_config["TLDS"].append(tld)
             existing_tlds.add(tld)
+
+
+def configure_parser_http_headers(app_config, db, collected_headers_model):
+    """
+    Add DB-backed HTTP header collection config to parser settings.
+    """
+    app_config["HTTP_HEADER_COLLECTION"] = {
+        str(row.header_name or "").strip().lower(): bool(row.collect_value)
+        for row in db.session.query(collected_headers_model).all()
+        if str(row.header_name or "").strip()
+    }
 
 
 def iter_meili_documents(index, page_size):
@@ -231,7 +246,9 @@ def flush_tag_batch(indexer, pending_docs):
     """
     if not pending_docs:
         return 0
-    indexer.replace_field_values_batch("tag", pending_docs, batch_size=len(pending_docs))
+    indexer.replace_field_values_batch(
+        "tag", pending_docs, batch_size=len(pending_docs)
+    )
     count = len(pending_docs)
     pending_docs.clear()
     return count
@@ -260,9 +277,7 @@ def main():
     args = parse_args()
 
     if args.batch_size <= 0 or args.batch_size > MAX_BATCH_SIZE:
-        raise SystemExit(
-            f"--batch-size must be between 1 and {MAX_BATCH_SIZE}"
-        )
+        raise SystemExit(f"--batch-size must be between 1 and {MAX_BATCH_SIZE}")
 
     suppress_connection_debug_logs()
     tools_config = load_tools_config()
@@ -270,7 +285,9 @@ def main():
     kvrocks_port = get_tool_config_value(tools_config, "OUT_KVROCKS_PORT")
 
     if kvrocks_host in (None, "") or kvrocks_port in (None, ""):
-        raise SystemExit("Missing OUT_KVROCKS_HOST/OUT_KVROCKS_PORT in tools/config.yaml")
+        raise SystemExit(
+            "Missing OUT_KVROCKS_HOST/OUT_KVROCKS_PORT in tools/config.yaml"
+        )
 
     if args.list_tags:
         redis_client = redis.Redis(
@@ -285,6 +302,7 @@ def main():
     runtime = load_runtime()
     app = runtime["app"]
     db = runtime["db"]
+    CollectedHeaders = runtime["CollectedHeaders"]
     TagRules = runtime["TagRules"]
     KVrocksIndexer = runtime["KVrocksIndexer"]
     fetch_tlds = runtime["fetch_tlds"]
@@ -294,6 +312,7 @@ def main():
     with app.app_context():
         configure_parser_from_tools_config(app.config, tools_config)
         ensure_parser_tlds(app.config, fetch_tlds)
+        configure_parser_http_headers(app.config, db, CollectedHeaders)
 
         active_rules = (
             db.session.query(TagRules)

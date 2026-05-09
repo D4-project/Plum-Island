@@ -12,10 +12,12 @@ except ImportError:
 from datetime import datetime, timezone
 import ipaddress
 import logging
+import re
 import redis
 from netaddr import IPNetwork
 
 logger = logging.getLogger("flask_appbuilder")
+HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
 
 
 class KVrocksIndexer:
@@ -159,6 +161,8 @@ class KVrocksIndexer:
             # "http_filename",
             "http_cookiename",
             "http_etag",
+            "http_header",
+            "http_headval",
             "http_server",
             # "email",
             "x509_issuer",
@@ -212,7 +216,9 @@ class KVrocksIndexer:
                     existing_first_seen = self.normalize_timestamp(
                         existing.get("first_seen")
                     )
-                    existing_last_seen = self.normalize_timestamp(existing.get("last_seen"))
+                    existing_last_seen = self.normalize_timestamp(
+                        existing.get("last_seen")
+                    )
                     if existing_first_seen is not None:
                         first_seen = (
                             existing_first_seen
@@ -337,9 +343,7 @@ class KVrocksIndexer:
         if from_ts is None or to_ts is None:
             return set()
 
-        seen_after_start = set(
-            self.r.zrangebyscore("last_seen_index", from_ts, "+inf")
-        )
+        seen_after_start = set(self.r.zrangebyscore("last_seen_index", from_ts, "+inf"))
         started_before_end = set(
             self.r.zrangebyscore("first_seen_index", "-inf", to_ts)
         )
@@ -406,6 +410,76 @@ class KVrocksIndexer:
             candidate_uids = self._filter_uids_by_network(candidate_uids, network)
 
         return candidate_uids
+
+    @staticmethod
+    def _split_field_modifier(field):
+        """
+        Split a search field into base field and optional modifier suffix.
+        """
+        parts = str(field or "").split(".")
+        base_field = parts[0]
+        suffix = parts[1] if len(parts) > 1 else ""
+        return base_field, suffix
+
+    @staticmethod
+    def _modifier_matches(indexed_value, search_value, suffix):
+        """
+        Return whether an indexed value matches a search modifier.
+        """
+        if suffix in ("like", "lk"):
+            return search_value in indexed_value
+        if suffix in ("begin", "bg"):
+            return indexed_value.startswith(search_value)
+        return False
+
+    @staticmethod
+    def _escape_redis_glob(value):
+        """
+        Escape Redis glob metacharacters used by SCAN MATCH.
+        """
+        return "".join(f"\\{char}" if char in "\\*?[]" else char for char in str(value))
+
+    def _get_uids_for_http_headval(self, raw_value, suffix="", scoped_uids=None):
+        """
+        Resolve http_headval:header[.modifier]:value against exact header names.
+        """
+        raw_value = str(raw_value or "").strip().lower()
+        if ":" not in raw_value:
+            return set()
+
+        header_name, search_value = raw_value.split(":", 1)
+        header_name = header_name.strip()
+        search_value = search_value.strip()
+        if (
+            not header_name
+            or not search_value
+            or len(header_name) > 128
+            or not HTTP_HEADER_NAME_RE.fullmatch(header_name)
+        ):
+            return set()
+
+        scoped_uids = set(scoped_uids) if scoped_uids is not None else None
+        if not suffix:
+            uids = set(self.r.smembers(f"http_headval:{header_name}:{search_value}"))
+            return uids.intersection(scoped_uids) if scoped_uids is not None else uids
+
+        if suffix not in ("like", "lk", "begin", "bg"):
+            return set()
+
+        matching_uids = set()
+        key_prefix = f"http_headval:{header_name}:"
+        escaped_prefix = f"http_headval:{self._escape_redis_glob(header_name)}:"
+        for key in self.r.scan_iter(match=f"{escaped_prefix}*"):
+            if not key.startswith(key_prefix):
+                continue
+            indexed_value = key[len(key_prefix) :]
+            if not self._modifier_matches(indexed_value, search_value, suffix):
+                continue
+            key_uids = set(self.r.smembers(key))
+            if scoped_uids is not None:
+                key_uids.intersection_update(scoped_uids)
+            matching_uids.update(key_uids)
+        return matching_uids
 
     def get_uids_by_criteria(self, criteria: dict):
         """
@@ -491,9 +565,15 @@ class KVrocksIndexer:
                 if not isinstance(values, list):
                     values = [values]
                 for value in values:
-                    base_field = field.split(".")[0]
-                    suffix = field.split(".")[1] if "." in field else ""
-                    if suffix == "":
+                    base_field, suffix = self._split_field_modifier(field)
+                    if base_field == "http_headval":
+                        uids = self._get_uids_for_http_headval(value, suffix)
+                        if uids:
+                            partial_result = set(uids)
+                            remaining_criteria.pop(field)
+                            found_base = True
+                            break
+                    elif suffix == "":
                         logger.debug(
                             "Generate partial result by Looking at %s", base_field
                         )
@@ -520,14 +600,28 @@ class KVrocksIndexer:
                 if field is None:
                     return []
 
-                base_field = field.split(".")[0]
-                logger.debug(
-                    "No usable criteria get uid list from Base field: %s", base_field
-                )
-                matching_keys = self.r.keys(f"{base_field}:*")
-                if not matching_keys:
-                    return []
-                partial_result = self.r.sunion(*matching_keys)
+                base_field, suffix = self._split_field_modifier(field)
+                if base_field == "http_headval":
+                    values = remaining_criteria.get(field, [])
+                    if not isinstance(values, list):
+                        values = [values]
+                    partial_result = set()
+                    for value in values:
+                        partial_result.update(
+                            self._get_uids_for_http_headval(value, suffix)
+                        )
+                    if not partial_result:
+                        return []
+                    remaining_criteria.pop(field)
+                else:
+                    logger.debug(
+                        "No usable criteria get uid list from Base field: %s",
+                        base_field,
+                    )
+                    matching_keys = self.r.keys(f"{base_field}:*")
+                    if not matching_keys:
+                        return []
+                    partial_result = self.r.sunion(*matching_keys)
 
         if partial_result is None:
             return []
@@ -538,10 +632,18 @@ class KVrocksIndexer:
                 values = [values]
 
             for value in values:
-                parts = field.split(".")
-                base_field = parts[0]
-                suffix = parts[1] if len(parts) > 1 else ""
+                base_field, suffix = self._split_field_modifier(field)
                 matching_uids = set()
+
+                if base_field == "http_headval":
+                    partial_result = partial_result.intersection(
+                        self._get_uids_for_http_headval(
+                            value,
+                            suffix,
+                            scoped_uids=partial_result,
+                        )
+                    )
+                    continue
 
                 # handle .like / .lk / .begin / .bg
                 if suffix in ("like", "lk", "begin", "bg", "not", "nt"):
@@ -590,7 +692,9 @@ class KVrocksIndexer:
             if not isinstance(net_vals, list):
                 net_vals = [net_vals]
             for net_val in net_vals:
-                scoped_base.update(self._get_uids_for_net_value(net_val, partial_result))
+                scoped_base.update(
+                    self._get_uids_for_net_value(net_val, partial_result)
+                )
 
         if scoped_base:
             partial_result = partial_result.intersection(scoped_base)
@@ -605,11 +709,17 @@ class KVrocksIndexer:
 
             field_uids = set()
             for value in values:
-                parts = field.split(".")
-                base_field = parts[0]
-                suffix = parts[1] if len(parts) > 1 else ""
+                base_field, suffix = self._split_field_modifier(field)
 
-                if suffix in ("like", "lk", "begin", "bg", "not", "nt"):
+                if base_field == "http_headval":
+                    field_uids.update(
+                        self._get_uids_for_http_headval(
+                            value,
+                            suffix,
+                            scoped_uids=partial_result,
+                        )
+                    )
+                elif suffix in ("like", "lk", "begin", "bg", "not", "nt"):
                     for key in self.r.scan_iter(f"{base_field}:*"):
                         val = key.split(":", 1)[1]
                         if (suffix in ("like", "lk") and value in val) or (
@@ -764,5 +874,7 @@ class KVrocksIndexer:
             if last_seen is not None:
                 max_last_seen = max(last_seen, max_last_seen)
         results["max_seen"] = max_last_seen if max_last_seen != -1 else None
-        results["min_seen"] = max_first_seen if max_first_seen != 9999999999999 else None
+        results["min_seen"] = (
+            max_first_seen if max_first_seen != 9999999999999 else None
+        )
         return results

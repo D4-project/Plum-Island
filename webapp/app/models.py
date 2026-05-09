@@ -9,6 +9,7 @@ This is the module containing all the data models
 """
 
 import html
+import re
 from flask_appbuilder import Model
 from flask import Markup as Esc
 from sqlalchemy import (
@@ -26,6 +27,20 @@ from flask_appbuilder.models.mixins import FileColumn
 from sqlalchemy import func
 from sqlalchemy.orm import relationship, object_session, validates
 from .utils.timeutils import utcnow_naive
+
+HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
+
+
+def is_valid_http_header_name(value):
+    """
+    Validate a canonical lowercase HTTP header field name.
+    """
+    header_name = str(value or "").strip()
+    return (
+        bool(header_name)
+        and len(header_name) <= 128
+        and bool(HTTP_HEADER_NAME_RE.fullmatch(header_name))
+    )
 
 
 def _html_escape(value, quote=True):
@@ -368,6 +383,30 @@ class Nses(Model):
 
     def __repr__(self):
         return self.name
+
+
+class CollectedHeaders(Model):
+    """
+    Curated HTTP headers indexed from the Nmap http-headers NSE output.
+    """
+
+    __tablename__ = "collected_headers"
+    id = Column(Integer, primary_key=True)
+    header_name = Column(String(128), unique=True, nullable=False)
+    collect_value = Column(Boolean, default=False, nullable=False)
+
+    @validates("header_name")
+    def validate_header_name(self, _key, value):
+        """
+        Store HTTP header names in their search/index canonical lowercase form.
+        """
+        header_name = str(value or "").strip().lower()
+        if not is_valid_http_header_name(header_name):
+            raise ValueError("Header name must be a valid HTTP field name")
+        return header_name
+
+    def __repr__(self):
+        return self.header_name
 
 
 class TagRules(Model):

@@ -48,6 +48,7 @@ Changes after `v0.2604.0`.
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
+- Add curated HTTP header presence/value collection and structured Kvrocks search, closes #54
 - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)
 - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)

@@ -4,6 +4,7 @@ This script will import the locals json data exported from meilidb export
 into the Kvrocks for idexation.
 
 """
+
 import argparse
 import json
 import logging
@@ -35,6 +36,8 @@ INDEX_FIELDS = [
     "http_favicon_sha256",
     "http_cookiename",
     "http_etag",
+    "http_header",
+    "http_headval",
     "http_server",
     "x509_issuer",
     "x509_md5",
@@ -119,6 +122,7 @@ def load_config():
         "ONLINETLD": config.get("ONLINETLD", config.get("PARSER_ONLINETLD", False)),
         "TLDS": [],
         "TLDADD": config.get("TLDADD", config.get("PARSER_TLDADD", ["local"])),
+        "HTTP_HEADER_COLLECTION": {},
     }
 
 
@@ -162,6 +166,7 @@ def load_runtime_dependencies(retag=False):
         from result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
         )
+
         TAG_RUNTIME = {}
 
     KVrocksIndexer = RuntimeKVrocksIndexer
@@ -197,6 +202,32 @@ def load_active_tag_rules():
             .all()
         )
         return compile_tag_rule_records(active_rules), len(active_rules)
+
+
+def load_collected_header_collection():
+    """
+    Load DB-backed HTTP header collection config for parser rebuilds.
+    """
+    sys.path.insert(0, str(WEBAPP_DIR))
+    try:
+        from app import app, db  # pylint: disable=import-outside-toplevel
+        from app.models import (  # pylint: disable=import-outside-toplevel
+            CollectedHeaders,
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        print(f"[WARN] Unable to import app header config: {error}", flush=True)
+        return {}
+
+    try:
+        with app.app_context():
+            return {
+                str(row.header_name or "").strip().lower(): bool(row.collect_value)
+                for row in db.session.query(CollectedHeaders).all()
+                if str(row.header_name or "").strip()
+            }
+    except Exception as error:  # pylint: disable=broad-except
+        print(f"[WARN] Unable to load collected headers: {error}", flush=True)
+        return {}
 
 
 def json_import(json_file, seen_snapshot=None, tag_rules=None):
@@ -238,11 +269,14 @@ def parse_json_file_worker(json_file):
     Parse one JSON dump file in a worker process.
     """
     try:
-        return json_import(
-            json_file,
-            seen_snapshot=WORKER_SEEN_SNAPSHOT,
-            tag_rules=WORKER_TAG_RULES,
-        ), None
+        return (
+            json_import(
+                json_file,
+                seen_snapshot=WORKER_SEEN_SNAPSHOT,
+                tag_rules=WORKER_TAG_RULES,
+            ),
+            None,
+        )
     except Exception as error:  # pylint: disable=broad-except
         return None, f"[WARN] Unable to parse {json_file}: {error}"
 
@@ -252,11 +286,14 @@ def parse_meili_document_worker(meili_doc):
     Parse one Meilisearch document in a worker process.
     """
     try:
-        return parse_meili_document(
-            meili_doc,
-            seen_snapshot=WORKER_SEEN_SNAPSHOT,
-            tag_rules=WORKER_TAG_RULES,
-        ), None
+        return (
+            parse_meili_document(
+                meili_doc,
+                seen_snapshot=WORKER_SEEN_SNAPSHOT,
+                tag_rules=WORKER_TAG_RULES,
+            ),
+            None,
+        )
     except Exception as error:  # pylint: disable=broad-except
         doc_id = dict(meili_doc).get("id", "<unknown>")
         return None, f"[WARN] Unable to parse Meili document {doc_id}: {error}"
@@ -571,7 +608,9 @@ def index_parsed_documents(
         )
 
     if objects_to_index:
-        print(f"Indexing final batch of {len(objects_to_index)} documents...", flush=True)
+        print(
+            f"Indexing final batch of {len(objects_to_index)} documents...", flush=True
+        )
         indexer.add_documents_batch(objects_to_index, include_tags=include_tags)
         indexed_count += len(objects_to_index)
 
@@ -669,7 +708,9 @@ def parsed_documents_from_meili(
             )
         return
 
-    for meili_doc in iter_meili_documents(index, batch_size, first_results=first_results):
+    for meili_doc in iter_meili_documents(
+        index, batch_size, first_results=first_results
+    ):
         try:
             yield parse_meili_document(
                 meili_doc,
@@ -744,6 +785,7 @@ def main():
         PARSER_CONF["TLDS"] = fetch_tlds()
     else:
         PARSER_CONF["TLDS"] = config.get("TLDS", config.get("PARSER_TLDS", []))
+    PARSER_CONF["HTTP_HEADER_COLLECTION"] = load_collected_header_collection()
 
     if args.retag:
         tag_rules, active_rule_count = load_active_tag_rules()
@@ -765,7 +807,9 @@ def main():
             0,
         )
         if not first_meili_results:
-            raise SystemExit("Meilisearch returned no documents; refusing to rebuild Kvrocks")
+            raise SystemExit(
+                "Meilisearch returned no documents; refusing to rebuild Kvrocks"
+            )
 
     seen_snapshot = (
         rebuild_kvrocks(indexer, include_tags=args.retag)

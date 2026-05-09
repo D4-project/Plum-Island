@@ -27,6 +27,10 @@ http_server.lk:nginx OR http_server.lk:apache
 fqdn_requested.lk:ttrenov.lu port:443
 ```
 
+```text
+http_header:cache-control http_headval:x-powered-by.lk:php
+```
+
 ## Modifiers
 
 Supported modifiers:
@@ -55,6 +59,8 @@ No modifier means exact match. like without any scope reducer may slowdown the r
 | `http_title` | `like`, `begin` | HTML title |
 | `http_cookiename` | `like`, `begin` | HTTP cookie name |
 | `http_etag` | `like`, `begin` | HTTP ETag value |
+| `http_header` | `like`, `begin` | Configured HTTP header name presence from `http-headers` NSE output |
+| `http_headval` | header-scoped `like`, `begin` | Configured HTTP header value from `http-headers` NSE output |
 | `http_server` | `like`, `begin` | HTTP Server header |
 | `http_favicon_path` | `like`, `begin` | Favicon source path |
 | `http_favicon_mmhash` | | Favicon MurmurHash value |
@@ -67,6 +73,29 @@ No modifier means exact match. like without any scope reducer may slowdown the r
 | `x509_sha256` | | TLS certificate SHA-256 hash |
 | `x509_subject` | `like`, `begin` | TLS certificate subject |
 | `x509_san` | `like`, `begin` | TLS certificate subject alternative names |
+
+## HTTP header search
+
+Only headers configured in `Config > Header Collection` are indexed. Header names and values are lowercased before writing to Kvrocks. The `http_headval` autocomplete only suggests headers with `Collect Value` enabled.
+
+Header presence uses the normal field syntax:
+
+```text
+http_header:cache-control
+http_header.lk:frame
+http_header.bg:x-
+```
+
+Header values use a header-scoped syntax:
+
+```text
+http_headval:x-powered-by:php/8.2
+http_headval:x-powered-by.lk:php
+http_headval:x-powered-by.bg:php/8
+http_headval:x-powered-by:"php 8.2"
+```
+
+The header name is exact in `http_headval` queries. `lk` and `bg` apply to the value part only.
 
 ## Date range
 

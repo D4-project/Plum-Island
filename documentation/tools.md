@@ -223,6 +223,8 @@ Use a rebuild directly from Meilisearch when you want the cleanest operational p
 
 This reads Meilisearch directly, verifies that Meilisearch returns at least one document, then deletes and rebuilds the known Kvrocks keys. It has the same timestamp preservation behavior as `--rebuild`, but avoids creating or relying on `tools/meili_dump/`.
 
+Run a Kvrocks rebuild after changing HTTP Header Collection rules when existing scan documents need the new `http_header` or `http_headval` indexes.
+
 Use `--retag` with either rebuild mode when tag rules must be recomputed during the rebuild:
 
 ```bash

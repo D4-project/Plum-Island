@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import os
+import re
 import shlex
 import threading
 import time
@@ -62,10 +63,12 @@ from .models import (
     TagRules,
     Reports,
     Protos,
+    CollectedHeaders,
     ScanProfiles,
     Ports,
     TargetScanStates,
     ScanProfileCycles,
+    is_valid_http_header_name,
 )
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
@@ -629,6 +632,7 @@ class KVSearchView(BaseView):
     SEARCH_SESSION_TTL_SECONDS = 3600
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
+    HTTP_HEADER_SUGGEST_LIMIT = 128
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
     SINCE_PREFIX = "since:"
 
@@ -975,6 +979,51 @@ class KVSearchView(BaseView):
                 needle=suffix_prefix,
                 namespace=namespace,
             )[: cls.TAG_SUGGEST_LIMIT]
+        ]
+
+    @classmethod
+    def _build_header_suggestions(cls, raw_term):
+        """
+        Build http_headval header-name suggestions for the current query token.
+        """
+        term = str(raw_term or "").strip().lower()
+        prefix = "http_headval:"
+        if not term.startswith(prefix):
+            return []
+
+        header_fragment = term[len(prefix) :]
+        if ":" in header_fragment:
+            return []
+
+        for suffix in (".like", ".begin", ".lk", ".bg"):
+            if header_fragment.endswith(suffix):
+                header_fragment = header_fragment[: -len(suffix)]
+                break
+
+        if len(header_fragment) > cls.HTTP_HEADER_SUGGEST_LIMIT:
+            return []
+        if header_fragment and not re.fullmatch(
+            r"[!#$%&'*+\-.^_`|~0-9a-z]+", header_fragment
+        ):
+            return []
+
+        query = db.session.query(CollectedHeaders).order_by(
+            CollectedHeaders.header_name.asc()
+        )
+        query = query.filter(CollectedHeaders.collect_value == True)
+        if header_fragment:
+            query = query.filter(
+                CollectedHeaders.header_name.contains(header_fragment, autoescape=True)
+            )
+
+        headers = query.limit(cls.TAG_SUGGEST_LIMIT).all()
+        return [
+            {
+                "label": header.header_name,
+                "value": f"http_headval:{header.header_name}:",
+                "kind": "header",
+            }
+            for header in headers
         ]
 
     def _get_matching_uids(self, indexer, criteria_groups, scoped_uids=None):
@@ -1360,6 +1409,56 @@ class KVSearchView(BaseView):
         groups.append(current_group)
         return groups
 
+    @staticmethod
+    def _parse_http_headval_term(part):
+        """
+        Parse http_headval:header[.modifier]:value query syntax.
+        """
+        prefix = "http_headval:"
+        raw_part = str(part or "")
+        if not raw_part.lower().startswith(prefix):
+            return None, None, False, "Bad http_headval query"
+
+        payload = raw_part[len(prefix) :]
+        if ":" not in payload:
+            return (
+                None,
+                None,
+                False,
+                "Bad http_headval syntax, expected http_headval:header:value",
+            )
+
+        header_expr, header_value = payload.split(":", 1)
+        header_expr = header_expr.strip().lower()
+        header_value = header_value.strip()
+        if not header_expr or not header_value:
+            return (
+                None,
+                None,
+                False,
+                "Bad http_headval syntax, expected http_headval:header:value",
+            )
+
+        modifier = ""
+        valid_value_modifiers = {
+            ".lk": ".lk",
+            ".like": ".like",
+            ".bg": ".bg",
+            ".begin": ".begin",
+        }
+        for suffix, normalized_suffix in valid_value_modifiers.items():
+            if header_expr.endswith(suffix):
+                header_expr = header_expr[: -len(suffix)]
+                modifier = normalized_suffix
+                break
+
+        if not is_valid_http_header_name(header_expr):
+            return None, None, False, "Bad http_headval header name"
+
+        key = f"http_headval{modifier}"
+        value = f"{header_expr}:{header_value}"
+        return key, value, True, None
+
     def parse_query_group(self, query):
         """
         This function parse one AND-only query group.
@@ -1393,6 +1492,7 @@ class KVSearchView(BaseView):
             # "http_filename",
             "http_cookiename",
             "http_etag",
+            "http_header",
             "http_server",
             # "email",
             "x509_issuer",
@@ -1422,6 +1522,18 @@ class KVSearchView(BaseView):
                 return {}, False, f"Invalid query syntax: {error}"
         for part in parts:
             if str(part).upper() == "AND":
+                continue
+            if str(part).lower().startswith("http_headval:"):
+                key, value, term_status, term_error = self._parse_http_headval_term(
+                    part
+                )
+                if not term_status:
+                    msg_error = term_error
+                    continue
+                if key not in result:
+                    result[key] = [value]
+                else:
+                    result[key].append(value)
                 continue
             if ":" not in part:
                 msg_error = f"Bad keyword/value: {part}"
@@ -1805,6 +1917,20 @@ class KVSearchView(BaseView):
         """
         return jsonify(
             {"suggestions": self._build_tag_suggestions(request.args.get("term", ""))}
+        )
+
+    @expose("/header_suggest")
+    @has_access
+    def header_suggest(self):
+        """
+        AJAX helper for http_headval: header-name autocompletion.
+        """
+        return jsonify(
+            {
+                "suggestions": self._build_header_suggestions(
+                    request.args.get("term", "")
+                )
+            }
         )
 
     @expose("/export")
@@ -2857,6 +2983,38 @@ class NsesView(ModelView):
         )
 
 
+class CollectedHeadersView(ModelView):
+    """
+    CRUD interface for HTTP headers indexed from http-headers NSE output.
+    """
+
+    datamodel = SQLAInterface(CollectedHeaders)
+    list_columns = ["header_name", "collect_value"]
+    show_columns = ["header_name", "collect_value"]
+    add_columns = ["header_name", "collect_value"]
+    edit_columns = ["header_name", "collect_value"]
+    search_columns = ["header_name", "collect_value"]
+    base_order = ("header_name", "asc")
+    label_columns = {
+        "header_name": "Header Name",
+        "collect_value": "Collect Value",
+    }
+
+    @staticmethod
+    def _normalize_item(item):
+        item.header_name = str(item.header_name or "").strip().lower()
+        if not is_valid_http_header_name(item.header_name):
+            raise ValueError("Header name must be a valid HTTP field name")
+
+    def pre_add(self, item):
+        self._normalize_item(item)
+        return self
+
+    def pre_update(self, item):
+        self._normalize_item(item)
+        return self
+
+
 class TagRulesView(ModelView):
     """
     CRUD interface for search-backed tagging rules.
@@ -3848,6 +4006,12 @@ appbuilder.add_view(
 )
 appbuilder.add_view(
     NsesView, "Nse Scripts", icon="fa-regular fa-file-lines", category="Config"
+)
+appbuilder.add_view(
+    CollectedHeadersView,
+    "Header Collection",
+    icon="fa-list-check",
+    category="Config",
 )
 appbuilder.add_view(TagRulesView, "Tag Rules", icon="fa-tags", category="Config")
 appbuilder.add_view(ReportsView, "Reports", icon="fa-file-text-o", category="Analytics")
