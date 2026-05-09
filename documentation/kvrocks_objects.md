@@ -234,6 +234,8 @@ Use `tools/dump_object.py` to list distinct indexed values for one field:
 ```bash
 .venv/bin/python tools/dump_object.py http_title
 .venv/bin/python tools/dump_object.py http_server
+.venv/bin/python tools/dump_object.py http_header
+.venv/bin/python tools/dump_object.py http_headval:x-powered-by
 .venv/bin/python tools/dump_object.py tag
 ```
 

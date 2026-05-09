@@ -5,6 +5,7 @@ Dump distinct indexed Kvrocks values as raw CSV on stdout.
 
 import argparse
 from pathlib import Path
+import re
 import sys
 
 import yaml
@@ -13,6 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 UTILS_DIR = BASE_DIR.parent / "webapp" / "app" / "utils"
 sys.path.append(str(UTILS_DIR))
 
+HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
 
 DUMPABLE_FIELDS = [
     "banner",
@@ -27,6 +29,8 @@ DUMPABLE_FIELDS = [
     "http_favicon_mmhash",
     "http_favicon_path",
     "http_favicon_sha256",
+    "http_header",
+    "http_headval",
     "http_server",
     "http_title",
     "ip",
@@ -42,6 +46,7 @@ DUMPABLE_FIELDS = [
     "x509_subject",
 ]
 
+
 def load_config():
     """
     Load tool config without requiring the caller's working directory.
@@ -50,17 +55,61 @@ def load_config():
         return yaml.safe_load(config_file) or {}
 
 
+def is_valid_http_header_name(value):
+    """
+    Validate a canonical lowercase HTTP header field name.
+    """
+    header_name = str(value or "").strip()
+    return (
+        bool(header_name)
+        and len(header_name) <= 128
+        and bool(HTTP_HEADER_NAME_RE.fullmatch(header_name))
+    )
+
+
+def escape_redis_glob(value):
+    """
+    Escape Redis glob metacharacters used by SCAN MATCH.
+    """
+    return "".join(f"\\{char}" if char in "\\*?[]" else char for char in str(value))
+
+
 def normalize_field(raw_field):
     """
     Validate a Kvrocks index prefix.
     """
-    field = str(raw_field or "").strip()
+    field = str(raw_field or "").strip().lower()
     if field not in DUMPABLE_FIELDS:
         raise ValueError(
             f"Unknown dumpable field: {raw_field}. "
-            "Run with --list-dumpable to see supported fields."
+            "Run with --list-dumpable to see supported fields. "
+            "Use http_headval:<header_name> to dump values for one collected header."
         )
     return field
+
+
+def normalize_dump_target(raw_field):
+    """
+    Validate a dump target, including header-scoped http_headval:<header>.
+    """
+    field = str(raw_field or "").strip().lower()
+    prefix = "http_headval:"
+    if field.startswith(prefix):
+        header_name = field[len(prefix) :].strip()
+        if not is_valid_http_header_name(header_name):
+            raise ValueError("http_headval dump expects a valid HTTP header name")
+        return {
+            "field": "http_headval",
+            "match_prefix": f"http_headval:{header_name}:",
+            "display_prefix": f"http_headval:{header_name}:",
+        }
+
+    field = normalize_field(field)
+    return {
+        "field": field,
+        "match_prefix": f"{field}:",
+        "display_prefix": f"{field}:",
+    }
 
 
 def parse_args(argv=None):
@@ -73,7 +122,10 @@ def parse_args(argv=None):
     parser.add_argument(
         "field",
         nargs="?",
-        help="Indexed search criterion to dump, for example banner or http_title.",
+        help=(
+            "Indexed search criterion to dump, for example banner, http_title, "
+            "http_header, or http_headval:x-powered-by."
+        ),
     )
     parser.add_argument(
         "--list-dumpable",
@@ -89,11 +141,12 @@ def list_dumpable():
     """
     for field in DUMPABLE_FIELDS:
         print(field)
+    print("http_headval:<header_name>")
 
 
-def dump_field(field):
+def dump_target(target):
     """
-    Print `count,value` lines to stdout for one indexed field.
+    Print `count,value` lines to stdout for one indexed target.
     """
     from kvrocks import KVrocksIndexer  # pylint: disable=import-outside-toplevel
 
@@ -103,8 +156,13 @@ def dump_field(field):
     indexer = KVrocksIndexer(kvrocks_host, kvrocks_port)
 
     results = []
-    for key in indexer.r.scan_iter(match=f"{field}:*", count=1000):
-        value = key.split(":", 1)[1]
+    match_prefix = target["match_prefix"]
+    display_prefix = target["display_prefix"]
+    scan_match = f"{escape_redis_glob(match_prefix)}*"
+    for key in indexer.r.scan_iter(match=scan_match, count=1000):
+        if not key.startswith(match_prefix):
+            continue
+        value = key[len(display_prefix) :]
         if not value:
             continue
         count = indexer.r.scard(key)
@@ -125,7 +183,7 @@ def main(argv=None):
     if not args.field:
         raise SystemExit("Missing dump field. Run with --list-dumpable.")
 
-    dump_field(normalize_field(args.field))
+    dump_target(normalize_dump_target(args.field))
 
 
 if __name__ == "__main__":
