@@ -48,6 +48,7 @@ Changes after `v0.2604.0`.
   - Add Drupal x-generator header value tagging, closes #56
   - Add WordPress redirect and powered-by header value tagging with PHP classification, closes #57
   - Add PHP and Ubuntu x-powered-by header value tagging, closes #62
+  - Merge Joomla favicon rules and add x-content-encoded-by header value tagging, closes #59
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52

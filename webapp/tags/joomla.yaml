@@ -1,0 +1,7 @@
+description: Joomla
+query: http_favicon_mmhash:1627330242 OR http_favicon_mmhash:-1950415971 OR http_favicon_mmhash:366524387 OR http_favicon_md5:63B982EDDD64D44233BAA25066DB6BC1 OR http_headval:x-content-encoded-by.bg:joomla
+tags:
+- soft:joomla
+- soft:cms
+- lang:php
+version: 20260509T104131Z
