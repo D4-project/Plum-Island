@@ -46,6 +46,7 @@ Changes after `v0.2604.0`.
   - Add QNAP NASFTPD/ProFTPD FTP banner tagging, refs #50
   - Add Debian ProFTPD FTP banner tagging, refs #50
   - Add Drupal x-generator header value tagging, closes #56
+  - Add WordPress redirect and powered-by header value tagging, closes #57
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
