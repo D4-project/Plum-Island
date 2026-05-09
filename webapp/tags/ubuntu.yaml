@@ -1,7 +1,7 @@
 description: Ubuntu
-query: banner.bg:ssh-2.0-openssh AND banner.lk:ubuntu
+query: banner.bg:ssh-2.0-openssh AND banner.lk:ubuntu OR http_headval:x-powered-by.lk:ubuntu
 tags:
 - soft:ubuntu
 - soft:ssh
 - soft:openssh
-version: 20260505T125141Z
+version: 20260509T103525Z
