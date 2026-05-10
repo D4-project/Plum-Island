@@ -3,5 +3,5 @@ query: banner.lk:"zyxel ssh server"
 tags:
 - hard:zyxel
 - hard:router
-- soft:ssh
-version: 20260505T125141Z
+- proto:ssh
+version: 20260510T065455Z

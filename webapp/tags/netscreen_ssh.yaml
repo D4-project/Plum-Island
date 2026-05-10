@@ -3,5 +3,5 @@ query: banner.bg:ssh-2.0-netscreen
 tags:
 - hard:netscreen
 - hard:firewall
-- soft:ssh
-version: 20260505T125141Z
+- proto:ssh
+version: 20260510T065455Z

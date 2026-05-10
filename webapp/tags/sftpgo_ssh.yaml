@@ -2,6 +2,6 @@ description: SFTPGo SSH
 query: banner.bg:ssh-2.0-sftpgo_
 tags:
 - soft:sftpgo
-- soft:ssh
+- proto:ssh
 - soft:sftp
-version: 20260505T125141Z
+version: 20260510T065455Z

@@ -2,6 +2,4 @@ description: FreeBsd
 query: banner.bg:ssh-2.0-openssh AND banner.lk:freebsd-
 tags:
 - soft:freebsd
-- soft:ssh
-- soft:openssh
-version: 20260505T125141Z
+version: 20260510T065455Z

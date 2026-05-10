@@ -3,5 +3,5 @@ query: banner.bg:ssh-2.0-lancom
 tags:
 - hard:lancom
 - hard:router
-- soft:ssh
-version: 20260505T125141Z
+- proto:ssh
+version: 20260510T065455Z

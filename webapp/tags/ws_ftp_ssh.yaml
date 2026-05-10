@@ -2,6 +2,6 @@ description: WS_FTP SSH
 query: banner.bg:ssh-2.0-ws_ftp-ssh_
 tags:
 - soft:ws-ftp
-- soft:ssh
+- proto:ssh
 - soft:sftp
-version: 20260505T125141Z
+version: 20260510T065455Z

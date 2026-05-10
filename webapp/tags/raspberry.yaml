@@ -3,6 +3,4 @@ query: banner.bg:ssh-2.0-openssh AND banner.lk:raspbian OR http_server.lk:raspbi
 tags:
 - hard:raspberry
 - soft:debian
-- soft:ssh
-- soft:openssh
-version: 20260505T125141Z
+version: 20260510T065455Z

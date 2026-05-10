@@ -2,5 +2,5 @@ description: Dropbear SSH server
 query: banner.bg:ssh-2.0-dropbear
 tags:
 - soft:dropbear
-- soft:ssh
-version: 20260430T000000Z
+- proto:ssh
+version: 20260510T065455Z

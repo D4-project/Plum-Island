@@ -51,6 +51,7 @@ Changes after `v0.2604.0`.
   - Merge Joomla favicon rules and add x-content-encoded-by header value tagging, closes #59
   - Merge OWA favicon rules and add x-owa-version header tagging, closes #60
   - Add Polylang x-redirect-by header value tagging, closes #61
+  - Replace SSH software tag with proto:ssh and tighten generic SSH banner tagging, closes #65
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52

@@ -2,6 +2,6 @@ description: Cerberus FTP Server
 query: banner.bg:ssh-2.0-cerberusftpserver_
 tags:
 - soft:cerberus-ftp-server
-- soft:ssh
+- proto:ssh
 - soft:sftp
-version: 20260505T125141Z
+version: 20260510T065455Z
