@@ -53,6 +53,7 @@ Changes after `v0.2604.0`.
   - Add Polylang x-redirect-by header value tagging, closes #61
   - Replace SSH software tag with proto:ssh and tighten generic SSH banner tagging, closes #65
   - Add generic HTTP banner/header protocol tagging, closes #64
+  - Merge ASP.NET favicon detection and add ASP.NET header tagging, closes #63
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
