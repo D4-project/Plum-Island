@@ -1,8 +1,8 @@
 description: Cisco Expressway
 query: http_server:CE_E OR http_server:CE_C
 tags:
-- hard:cisco
-- soft:cisco-expressway
+- tag:vendor:cisco
+- tag:product:cisco-expressway
 - tag:vendor:cisco
 - tag:product:expressway
 version: 20260512T120120Z

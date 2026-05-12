@@ -4,5 +4,5 @@ query: http_favicon_mmhash:-689902428 OR http_favicon_mmhash:-600508822 OR http_
   OR http_favicon_mmhash:1241049726 OR http_favicon_mmhash:998138196 OR http_favicon_mmhash:322531336
   OR http_favicon_mmhash:-401934945 OR http_favicon_mmhash:-613216179
 tags:
-- soft:iomega-nas
-version: 20260428T164519Z
+- tag:product:iomega-nas
+version: 20260508T144609Z

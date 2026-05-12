@@ -1,5 +1,5 @@
 description: BIG-IP
 query: http_favicon_mmhash:878647854
 tags:
-- soft:f5
-version: 20260505T125141Z
+- tag:product:f5
+version: 20260508T144609Z

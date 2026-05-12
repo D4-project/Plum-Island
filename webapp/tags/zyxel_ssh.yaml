@@ -1,7 +1,7 @@
 description: Zyxel SSH server
 query: banner.lk:"zyxel ssh server"
 tags:
-- hard:zyxel
-- hard:router
+- tag:vendor:zyxel
+- tag:vendor:router
 - proto:ssh
 version: 20260510T065455Z

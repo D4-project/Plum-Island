@@ -1,5 +1,5 @@
 description: Atlassian - Bamboo
 query: http_favicon_mmhash:-1379982221
 tags:
-- soft:atlassian-bamboo
-version: 20260428T164519Z
+- tag:product:atlassian-bamboo
+version: 20260508T144609Z

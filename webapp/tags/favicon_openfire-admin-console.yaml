@@ -1,5 +1,5 @@
 description: Openfire Admin Console
 query: http_favicon_mmhash:1211608009
 tags:
-- soft:openfire-admin-console
-version: 20260428T164519Z
+- tag:product:openfire-admin-console
+version: 20260508T144609Z

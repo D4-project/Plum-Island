@@ -1,5 +1,5 @@
 description: Seagate Technology (NAS)
 query: http_favicon_mmhash:240136437
 tags:
-- soft:seagate-technology-nas
-version: 20260428T164519Z
+- tag:product:seagate-technology-nas
+version: 20260508T144609Z

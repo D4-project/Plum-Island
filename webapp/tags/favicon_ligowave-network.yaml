@@ -1,5 +1,5 @@
 description: Ligowave (network)
 query: http_favicon_mmhash:1467395679
 tags:
-- soft:ligowave-network
-version: 20260428T164519Z
+- tag:product:ligowave-network
+version: 20260508T144609Z

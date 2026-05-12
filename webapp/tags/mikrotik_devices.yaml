@@ -1,6 +1,7 @@
 description: Mikrotik Devices
-query: http_title:routeros or http_favicon_mmhash:1482462538 or banner.lk:"ftp server (mikrotik "
+query: http_title:routeros or http_favicon_mmhash:1482462538 or banner.lk:"ftp server
+  (mikrotik " or http_favicon_md5:199260FF00D27B811E41A06007CBCD96
 tags:
-- hard:mikrotik
-- soft:ftp
-version: 20260505T125141Z
+- tag:vendor:mikrotik
+- tag:product:ftp
+version: 20260508T144609Z

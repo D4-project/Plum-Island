@@ -1,5 +1,5 @@
 description: Mitel Networks (MiCollab End User Portal)
 query: http_favicon_mmhash:-1922044295
 tags:
-- soft:mitel-networks-micollab-end-user-portal
-version: 20260428T164519Z
+- tag:product:mitel-networks-micollab-end-user-portal
+version: 20260508T144609Z

@@ -1,5 +1,5 @@
 description: GlobalProtect
 query: http_title.lk:"/global-protect/login.esp"
 tags:
-- soft:globalprotect
-version: 20260428T164519Z
+- tag:product:globalprotect
+version: 20260508T144609Z

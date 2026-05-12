@@ -1,5 +1,5 @@
 description: Paradox IP Module
 query: http_favicon_mmhash:727253975
 tags:
-- soft:paradox-ip-module
-version: 20260428T164519Z
+- tag:product:paradox-ip-module
+version: 20260508T144609Z

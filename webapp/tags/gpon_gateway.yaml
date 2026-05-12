@@ -1,5 +1,5 @@
 description: GPON Home Gateway
 query: http_title.lk:"GPON Home Gateway"
 tags:
-- hard:gpon-gateway
-version: 20260428T164519Z
+- tag:vendor:gpon-gateway
+version: 20260508T144609Z

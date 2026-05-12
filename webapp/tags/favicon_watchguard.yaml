@@ -1,6 +1,8 @@
 description: WatchGuard
-query: http_favicon_mmhash:15831193 OR http_favicon_mmhash:2087014467 OR http_favicon_sha256:727f5c7ab6f84e7a7c9f857ac25fae2daa1fb30aa45bba5964221085f77df6b1 OR http_title.bg:"Fireware XTM User Authentication" OR x509_subject.bg:WatchGuard OR x509_issuer.bg:WatchGuard OR x509_subject.bg:Fireware OR x509_issuer.bg:Fireware
+query: http_favicon_mmhash:15831193 OR http_favicon_mmhash:2087014467 OR http_favicon_sha256:727f5c7ab6f84e7a7c9f857ac25fae2daa1fb30aa45bba5964221085f77df6b1
+  OR http_title.bg:"Fireware XTM User Authentication" OR x509_subject.bg:WatchGuard
+  OR x509_issuer.bg:WatchGuard OR x509_subject.bg:Fireware OR x509_issuer.bg:Fireware
 tags:
-- soft:firewall
-- soft:watchguard
-version: 20260505T163429Z
+- tag:product:firewall
+- tag:product:watchguard
+version: 20260508T144609Z

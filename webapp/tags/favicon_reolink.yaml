@@ -1,5 +1,5 @@
 description: Reolink
 query: http_favicon_mmhash:-38705358
 tags:
-- soft:reolink
-version: 20260428T164519Z
+- tag:product:reolink
+version: 20260508T144609Z

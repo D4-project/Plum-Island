@@ -1,7 +1,7 @@
 description: Lancom SSH
 query: banner.bg:ssh-2.0-lancom
 tags:
-- hard:lancom
-- hard:router
+- tag:vendor:lancom
+- tag:vendor:router
 - proto:ssh
 version: 20260510T065455Z

@@ -1,5 +1,5 @@
 description: WiJungle
 query: http_favicon_mmhash:2113497004
 tags:
-- soft:wijungle
-version: 20260428T164519Z
+- tag:product:wijungle
+version: 20260508T144609Z

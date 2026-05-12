@@ -1,5 +1,5 @@
 description: IBM Server
 query: http_favicon_mmhash:1726027799
 tags:
-- soft:ibm-server
-version: 20260428T164519Z
+- tag:product:ibm-server
+version: 20260508T144609Z

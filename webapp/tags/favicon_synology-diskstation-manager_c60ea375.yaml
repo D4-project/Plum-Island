@@ -1,5 +1,5 @@
 description: Synology DiskStation Manager
 query: http_favicon_md5:C60EA375C39D1AB273C4D1BEE717287A
 tags:
-- soft:synology-diskstation-manager
-version: 20260428T164519Z
+- tag:product:synology-diskstation-manager
+version: 20260508T144609Z

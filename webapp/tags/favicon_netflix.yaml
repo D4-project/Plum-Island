@@ -1,5 +1,5 @@
 description: Netflix
 query: http_favicon_mmhash:902521196
 tags:
-- soft:netflix
-version: 20260428T164519Z
+- tag:product:netflix
+version: 20260508T144609Z

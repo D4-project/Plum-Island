@@ -1,8 +1,8 @@
 description: Polylang
 query: http_headval:x-redirect-by.bg:polylang
 tags:
-- soft:polylang
-- soft:wordpress
-- soft:cms
+- tag:product:polylang
+- tag:product:wordpress
+- tag:product:cms
 - lang:php
 version: 20260510T065143Z

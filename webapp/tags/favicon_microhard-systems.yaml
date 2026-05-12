@@ -1,5 +1,5 @@
 description: Microhard Systems
 query: http_favicon_mmhash:-1723752240
 tags:
-- soft:microhard-systems
-version: 20260428T164519Z
+- tag:product:microhard-systems
+version: 20260508T144609Z

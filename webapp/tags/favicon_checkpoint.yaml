@@ -1,5 +1,5 @@
 description: CheckPoint
 query: http_favicon_mmhash:794809961
 tags:
-- soft:checkpoint
-version: 20260428T164519Z
+- tag:product:checkpoint
+version: 20260508T144609Z

@@ -1,6 +1,7 @@
 description: Cisco Catalyst SD-WAN
-query: http_favicon_md5:F5A68DB40594839CFC2696197608E2A3 OR http_title:"Cisco Catalyst SD-WAN" OR x509_subject.lk:"Cisco SD-WAN" OR x509_issuer.lk:"Cisco SD-WAN"
+query: http_favicon_md5:F5A68DB40594839CFC2696197608E2A3 OR http_title:"Cisco Catalyst
+  SD-WAN" OR x509_subject.lk:"Cisco SD-WAN" OR x509_issuer.lk:"Cisco SD-WAN"
 tags:
-- hard:cisco
-- soft:cisco-sd-wan
-version: 20260506T060545Z
+- tag:vendor:cisco
+- tag:product:cisco-sd-wan
+version: 20260508T144609Z

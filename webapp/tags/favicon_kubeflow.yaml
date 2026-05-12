@@ -1,5 +1,5 @@
 description: Kubeflow
 query: http_favicon_mmhash:-1203021870
 tags:
-- soft:kubeflow
-version: 20260428T164519Z
+- tag:product:kubeflow
+version: 20260508T144609Z

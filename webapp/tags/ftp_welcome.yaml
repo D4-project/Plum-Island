@@ -2,5 +2,5 @@ description: FTP welcome banner
 query: banner.bg:"220 welcome" AND banner.lk:"ftp server" OR banner.bg:"220 welcome"
   AND banner.lk:"ftp service"
 tags:
-- soft:ftp
-version: 20260505T125141Z
+- tag:product:ftp
+version: 20260508T144609Z

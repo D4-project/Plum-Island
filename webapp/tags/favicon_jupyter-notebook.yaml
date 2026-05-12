@@ -1,5 +1,5 @@
 description: Jupyter Notebook
 query: http_favicon_mmhash:-895963602
 tags:
-- soft:jupyter-notebook
-version: 20260428T164519Z
+- tag:product:jupyter-notebook
+version: 20260508T144609Z

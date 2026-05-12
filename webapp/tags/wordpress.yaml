@@ -4,6 +4,6 @@ query: http_favicon_md5:B231AD66A2A9B0EB06F72C4C88973039 OR http_favicon_md5:D5F
   OR http_headval:x-powered-by.bg:wordpress
 tags:
 - lang:php
-- soft:wordpress
-- soft:cms
+- tag:product:wordpress
+- tag:product:cms
 version: 20260509T102520Z

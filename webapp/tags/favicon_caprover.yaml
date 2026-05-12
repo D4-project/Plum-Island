@@ -1,5 +1,5 @@
 description: CapRover
 query: http_favicon_mmhash:988422585
 tags:
-- soft:caprover
-version: 20260428T164519Z
+- tag:product:caprover
+version: 20260508T144609Z

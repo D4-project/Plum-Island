@@ -1,5 +1,5 @@
 description: Aplikasi
 query: http_favicon_mmhash:494866796
 tags:
-- soft:aplikasi
-version: 20260428T164519Z
+- tag:product:aplikasi
+version: 20260508T144609Z

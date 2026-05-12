@@ -1,5 +1,5 @@
 description: Twonky Server (Media Streaming)
 query: http_favicon_mmhash:-878891718
 tags:
-- soft:twonky-server-media-streaming
-version: 20260428T164519Z
+- tag:product:twonky-server-media-streaming
+version: 20260508T144609Z

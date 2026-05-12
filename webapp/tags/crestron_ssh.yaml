@@ -1,7 +1,7 @@
 description: Crestron SSH
 query: banner.bg:ssh-2.0-crestronssh
 tags:
-- hard:crestron
-- hard:video
+- tag:vendor:crestron
+- tag:vendor:video
 - proto:ssh
 version: 20260510T065455Z

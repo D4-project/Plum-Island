@@ -1,5 +1,5 @@
 description: OkoFEN Pellematic
 query: http_favicon_mmhash:-625364318
 tags:
-- soft:okofen-pellematic
-version: 20260428T164519Z
+- tag:product:okofen-pellematic
+version: 20260508T144609Z

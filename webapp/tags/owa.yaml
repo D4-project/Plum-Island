@@ -3,8 +3,8 @@ query: http_favicon_mmhash:1768726119 OR http_favicon_mmhash:1356662359 OR http_
   OR http_favicon_mmhash:-330653729 OR http_favicon_md5:A1EADAF7974E7CE9889A5D7A07844590
   OR http_favicon_mmhash:442749392 OR http_header:x-owa-version
 tags:
-- soft:owa
-- soft:webmail
-- soft:windows
-- soft:outlook
+- tag:product:owa
+- tag:product:webmail
+- tag:product:windows
+- tag:product:outlook
 version: 20260509T104548Z

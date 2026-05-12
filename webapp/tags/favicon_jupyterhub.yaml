@@ -1,5 +1,5 @@
 description: JupyterHub
 query: http_favicon_mmhash:1248917303
 tags:
-- soft:jupyterhub
-version: 20260428T164519Z
+- tag:product:jupyterhub
+version: 20260508T144609Z

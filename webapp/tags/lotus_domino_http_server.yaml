@@ -1,5 +1,5 @@
 description: Lotus Domino Server
 query: http_server:Lotus-Domino
 tags:
-- soft:ibm_domino
-version: 20260428T164519Z
+- tag:product:ibm_domino
+version: 20260508T144609Z

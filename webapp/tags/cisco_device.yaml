@@ -1,5 +1,5 @@
 description: Cisco Device
 query: banner.lk:-cisco-
 tags:
-- hard:cisco
-version: 20260428T164519Z
+- tag:vendor:cisco
+version: 20260508T144609Z

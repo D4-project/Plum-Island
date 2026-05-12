@@ -1,7 +1,7 @@
 description: Wordpress Multi-User (MU)
 query: http_favicon_md5:95103D0EABCD541527A86F23B636E794
 tags:
-- soft:wordpress-multi-user-mu
-- soft:cms
-- soft:wordpress
-version: 20260428T164519Z
+- tag:product:wordpress-multi-user-mu
+- tag:product:cms
+- tag:product:wordpress
+version: 20260508T144609Z

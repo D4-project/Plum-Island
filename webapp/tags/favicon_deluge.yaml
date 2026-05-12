@@ -1,5 +1,5 @@
 description: Deluge
 query: http_favicon_mmhash:944969688
 tags:
-- soft:deluge
-version: 20260428T164519Z
+- tag:product:deluge
+version: 20260508T144609Z

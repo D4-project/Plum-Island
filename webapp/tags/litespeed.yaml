@@ -2,5 +2,5 @@ description: LiteSpeed
 query: http_headval:x-turbo-charged-by.bg:litespeed OR http_header:x-litespeed-tag
   OR http_header:x-litespeed-cache-control OR http_header:x-litespeed-cache OR http_server.bg:litespeed
 tags:
-- soft:litespeed
+- tag:product:litespeed
 version: 20260510T103121Z

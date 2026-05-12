@@ -1,6 +1,6 @@
 description: AXIS (network cameras)
 query: http_favicon_mmhash:-1616143106
 tags:
-- soft:axis-network
-- hard:camera
-version: 20260428T164519Z
+- tag:product:axis-network
+- tag:vendor:camera
+version: 20260508T144609Z

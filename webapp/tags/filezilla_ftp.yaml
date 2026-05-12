@@ -1,6 +1,6 @@
 description: FileZilla FTP Server
 query: banner.bg:220-filezilla
 tags:
-- soft:ftp
-- soft:filezilla
-version: 20260505T125141Z
+- tag:product:ftp
+- tag:product:filezilla
+version: 20260508T144609Z

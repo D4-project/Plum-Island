@@ -1,5 +1,5 @@
 description: CakePHP 1.1.x application
 query: http_favicon_md5:C0533AE5D0ED638BA3FB3485D8250A28
 tags:
-- soft:cakephp-1-1-x-application
-version: 20260428T164519Z
+- tag:product:cakephp-1-1-x-application
+version: 20260508T144609Z

@@ -1,5 +1,5 @@
 description: (Blank) ewomail
 query: http_favicon_mmhash:-1096644865
 tags:
-- soft:blank-ewomail
-version: 20260428T164519Z
+- tag:product:blank-ewomail
+version: 20260508T144609Z

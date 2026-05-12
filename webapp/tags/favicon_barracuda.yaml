@@ -1,5 +1,5 @@
 description: Barracuda
 query: http_favicon_mmhash:1436966696
 tags:
-- soft:barracuda
-version: 20260428T164519Z
+- tag:product:barracuda
+version: 20260508T144609Z

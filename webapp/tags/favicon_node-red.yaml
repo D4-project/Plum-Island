@@ -1,5 +1,5 @@
 description: Node-RED
 query: http_favicon_mmhash:321591353
 tags:
-- soft:node-red
-version: 20260428T164519Z
+- tag:product:node-red
+version: 20260508T144609Z

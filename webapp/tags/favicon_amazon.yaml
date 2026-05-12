@@ -1,5 +1,5 @@
 description: Amazon
 query: http_favicon_mmhash:-1544605732 OR http_favicon_mmhash:716989053
 tags:
-- soft:amazon
-version: 20260428T164519Z
+- tag:product:amazon
+version: 20260508T144609Z

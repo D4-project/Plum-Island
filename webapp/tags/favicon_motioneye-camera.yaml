@@ -1,6 +1,6 @@
 description: motionEye (camera)
 query: http_favicon_mmhash:-923693877
 tags:
-- soft:motioneye
-- hard:camera
-version: 20260428T164519Z
+- tag:product:motioneye
+- tag:vendor:camera
+version: 20260508T144609Z

@@ -1,5 +1,7 @@
 description: FRITZ!Box
-query: 'http_favicon_md5:45210ACE96CE9C893F8C27C5DECAB10D OR http_favicon_mmhash:-219752612 OR banner.lk:"user-agent: fritz!os" OR banner.begin:"fritz!boxfonwlan7390 ftp server" OR banner.lk:"user-agent: avm fritz!bo"'
+query: 'http_favicon_md5:45210ACE96CE9C893F8C27C5DECAB10D OR http_favicon_mmhash:-219752612
+  OR banner.lk:"user-agent: fritz!os" OR banner.begin:"fritz!boxfonwlan7390 ftp server"
+  OR banner.lk:"user-agent: avm fritz!bo"'
 tags:
-- hard:fritzbox
-version: 20260430T000000Z
+- tag:vendor:fritzbox
+version: 20260508T144609Z

@@ -1,6 +1,6 @@
 description: Arris Touchstone Device
 query: http_favicon_md5:A8FE5B8AE2C445A33AC41B33CCC9A120
 tags:
-- hard:arris
-- hard:router
-version: 20260505T125141Z
+- tag:vendor:arris
+- tag:vendor:router
+version: 20260508T144609Z

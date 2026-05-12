@@ -1,5 +1,5 @@
 description: XOOPS CMS
 query: http_favicon_md5:389A8816C5B87685DE7D8D5FEC96C85B
 tags:
-- soft:xoops-cms
-version: 20260428T164519Z
+- tag:product:xoops-cms
+version: 20260508T144609Z

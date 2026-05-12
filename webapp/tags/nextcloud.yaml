@@ -1,5 +1,5 @@
 description: NextCloud
 query: http_title.bg:Nextcloud or http_cookiename.bg:oc_sessionPassphrase
 tags:
-- soft:nextcloud
-version: 20260428T164519Z
+- tag:product:nextcloud
+version: 20260508T144609Z

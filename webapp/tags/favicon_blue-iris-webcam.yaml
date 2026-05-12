@@ -1,6 +1,6 @@
 description: Blue Iris (Webcam)
 query: http_favicon_mmhash:-520888198
 tags:
-- soft:blue-iris-webcam
-- hard:camera
-version: 20260505T125141Z
+- tag:product:blue-iris-webcam
+- tag:vendor:camera
+version: 20260508T144609Z

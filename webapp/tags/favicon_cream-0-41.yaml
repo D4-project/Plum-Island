@@ -1,5 +1,5 @@
 description: cream (0.41)
 query: http_favicon_md5:DDD76F1CFE31499CE3DB6702991CBC45
 tags:
-- soft:cream-0-41
-version: 20260428T164519Z
+- tag:product:cream-0-41
+version: 20260508T144609Z

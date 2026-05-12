@@ -2,6 +2,6 @@ description: MySQL
 query: banner.bg:"J\x00\x00\x00\x0A" AND banner.lk:"this MySQL server" OR banner.bg:"G\x00\x00\x00\xFF"
   AND banner.lk:"this MySQL server" OR banner.bg:"I\x00\x00\x00\x0A"
 tags:
-- soft:database
-- soft:mysql
-version: 20260428T164519Z
+- tag:product:database
+- tag:product:mysql
+version: 20260508T144609Z

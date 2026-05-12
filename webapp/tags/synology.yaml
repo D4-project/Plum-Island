@@ -1,7 +1,8 @@
 description: Synology Nas
 query: http_title.lk:"-&nbsp;synology&nbsp;" OR http_title:"hello! welcome to synology
-  web station!" OR http_title:"hallo! herzlich willkommen bei synology web station!" or x509_issuer:"synology inc. ca"
+  web station!" OR http_title:"hallo! herzlich willkommen bei synology web station!"
+  or x509_issuer:"synology inc. ca"
 tags:
-- hard:synology
-- hard:nas
-version: 20260428T164519Z
+- tag:vendor:synology
+- tag:vendor:nas
+version: 20260508T144609Z

@@ -1,6 +1,6 @@
 description: Solarwinds Serv-U FTP Server
 query: http_favicon_mmhash:812385209
 tags:
-- soft:serv-u-ftp-server
-- soft:web
-version: 20260505T125141Z
+- tag:product:serv-u-ftp-server
+- tag:product:web
+version: 20260508T144609Z

@@ -1,5 +1,5 @@
 description: Tandberg
 query: http_favicon_mmhash:97604680
 tags:
-- soft:tandberg
-version: 20260428T164519Z
+- tag:product:tandberg
+version: 20260508T144609Z
