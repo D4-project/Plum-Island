@@ -38,6 +38,7 @@ COLLECTED_HEADERS = [
     "powered-by",
     "product",
     "sourcemap",
+    "www-authenticate",
     "x-aspnet-version",
     "x-aspnetmvc-version",
     "x-atmosphere-error",
@@ -129,6 +130,7 @@ VALUE_COLLECTED_HEADERS = {
     "x-php-version",
     "x-aspnet-version",
     "x-aspnetmvc-version",
+    "www-authenticate",
 }
 
 conn = sqlite3.connect(DB_PATH)
