@@ -2,4 +2,5 @@ description: bmpx (0.40.14)
 query: http_favicon_md5:140E3EB3E173BFB8D15778A578A213AA
 tags:
 - tag:product:bmpx-0-40-14
+- tag:vendor:bmpx
 version: 20260508T144609Z

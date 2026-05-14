@@ -2,4 +2,5 @@ description: OTRS (Open Ticket Request System)
 query: http_favicon_mmhash:-2006308185
 tags:
 - tag:product:otrs-open-ticket-request-system
+- tag:vendor:otrs
 version: 20260508T144609Z

@@ -1,5 +1,5 @@
 description: SIP protocol
 query: banner.bg:"sip/2.0"
 tags:
-- tag:product:sip
+- proto:sip
 version: 20260508T144609Z

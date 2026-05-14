@@ -2,4 +2,5 @@ description: vdr-plugin-live (0.2.0)
 query: http_favicon_md5:2B52C1344164D29DD8FB758DB16AADB6
 tags:
 - tag:product:vdr-plugin-live-0-2-0
+- tag:vendor:vdr
 version: 20260508T144609Z

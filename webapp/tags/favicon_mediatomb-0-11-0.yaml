@@ -2,4 +2,5 @@ description: mediatomb (0.11.0)
 query: http_favicon_md5:F972C37BF444FB1925A2C97812E2C1EB
 tags:
 - tag:product:mediatomb-0-11-0
+- tag:vendor:mediatomb
 version: 20260508T144609Z

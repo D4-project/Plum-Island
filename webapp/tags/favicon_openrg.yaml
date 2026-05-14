@@ -2,4 +2,5 @@ description: OpenRG
 query: http_favicon_mmhash:-986816620
 tags:
 - tag:product:openrg
+- tag:vendor:openrg
 version: 20260508T144609Z

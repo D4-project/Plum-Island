@@ -2,4 +2,5 @@ description: Redaxscript 1.0-1.2.1
 query: http_favicon_md5:368C15AC73F0096AA3DAFF8FF6F719F8
 tags:
 - tag:product:redaxscript-1-0-1-2-1
+- tag:vendor:redaxscript
 version: 20260508T144609Z

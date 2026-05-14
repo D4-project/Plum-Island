@@ -4,5 +4,5 @@ tags:
 - tag:product:bitvise-ssh-server
 - proto:ssh
 - tag:product:sftp
-- tag:product:windows
+- tag:vendor:windows
 version: 20260510T065455Z

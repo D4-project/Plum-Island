@@ -2,4 +2,5 @@ description: Nuxt JS
 query: http_favicon_mmhash:-1442789563
 tags:
 - tag:product:nuxt-js
+- tag:vendor:nuxt
 version: 20260508T144609Z

@@ -3,4 +3,5 @@ query: banner.bg:ssh-2.0-openssh
 tags:
 - proto:ssh
 - tag:product:openssh
+- tag:vendor:openssh
 version: 20260510T065455Z

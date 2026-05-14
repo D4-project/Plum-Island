@@ -2,4 +2,5 @@ description: Iomega StorCenter x
 query: http_favicon_md5:6ACFEE4C670580EBF06EDAE40631B946
 tags:
 - tag:product:iomega-storcenter-x
+- tag:vendor:iomega
 version: 20260508T144609Z

@@ -4,4 +4,5 @@ tags:
 - tag:vendor:crestron
 - tag:vendor:video
 - proto:ssh
+- tag:product:crestron-ssh
 version: 20260510T065455Z

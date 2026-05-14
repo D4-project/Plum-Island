@@ -2,4 +2,5 @@ description: iDirect Canada (Network Management)
 query: http_favicon_mmhash:-256828986
 tags:
 - tag:product:idirect-canada-network-management
+- tag:vendor:idirect
 version: 20260508T144609Z

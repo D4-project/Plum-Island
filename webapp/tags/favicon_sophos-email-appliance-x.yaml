@@ -2,4 +2,5 @@ description: Sophos Email Appliance x
 query: http_favicon_md5:F6C5F5E8857ECF561029FC5DA005B6E3
 tags:
 - tag:product:sophos-email-appliance-x
+- tag:vendor:sophos
 version: 20260508T144609Z

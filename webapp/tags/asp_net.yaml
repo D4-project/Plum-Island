@@ -3,5 +3,6 @@ query: http_favicon_mmhash:1772087922 OR http_headval:x-powered-by.bg:asp.net OR
   OR http_header:x-aspnetmvc-version
 tags:
 - lang:asp
-- tag:product:windows
+- tag:vendor:windows
+- tag:product:asp-net
 version: 20260510T080632Z

@@ -3,4 +3,5 @@ query: http_title.bg:"Securepoint UTM v"
 tags:
 - tag:product:firewall
 - tag:product:securepoint
+- tag:vendor:securepoint
 version: 20260508T144609Z

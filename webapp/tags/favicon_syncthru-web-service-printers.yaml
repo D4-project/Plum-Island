@@ -2,4 +2,5 @@ description: SyncThru Web Service (Printers)
 query: http_favicon_mmhash:1483097076
 tags:
 - tag:product:syncthru-web-service-printers
+- tag:vendor:syncthru
 version: 20260508T144609Z

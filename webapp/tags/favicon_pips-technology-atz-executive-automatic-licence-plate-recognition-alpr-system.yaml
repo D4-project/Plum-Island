@@ -3,4 +3,5 @@ description: PIPS Technology ATZ Executive / Automatic Licence Plate Recognition
 query: http_favicon_md5:2DF6EDFFCA360B7A0FADC3BDF2191857
 tags:
 - tag:product:pips-technology-atz-executive-automatic-licence-plate-recognition-alpr-system
+- tag:vendor:pips
 version: 20260508T144609Z

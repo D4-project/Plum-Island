@@ -2,4 +2,5 @@ description: Openfire Admin Console
 query: http_favicon_mmhash:1211608009
 tags:
 - tag:product:openfire-admin-console
+- tag:vendor:openfire
 version: 20260508T144609Z

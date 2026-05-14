@@ -2,4 +2,5 @@ description: Voila web hosting
 query: http_favicon_md5:3646670CAC1E2AFAE1FE152F2FD8C118
 tags:
 - tag:product:voila-web-hosting
+- tag:vendor:voila
 version: 20260508T144609Z

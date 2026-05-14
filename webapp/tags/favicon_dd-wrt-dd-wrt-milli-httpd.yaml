@@ -2,4 +2,5 @@ description: DD WRT (DD-WRT milli_httpd)
 query: http_favicon_mmhash:252728887
 tags:
 - tag:product:dd-wrt-dd-wrt-milli-httpd
+- tag:vendor:dd
 version: 20260508T144609Z

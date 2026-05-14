@@ -2,4 +2,5 @@ description: FC2 blog hosting
 query: http_favicon_md5:F30B5ED270A57EABEA60BEB935E2B800
 tags:
 - tag:product:fc2-blog-hosting
+- tag:vendor:fc2
 version: 20260508T144609Z

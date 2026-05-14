@@ -2,4 +2,5 @@ description: qwik (0.8.4.4ubuntu2)
 query: http_favicon_md5:AF83BBA99D82EA47CA9DAFC8341EC110
 tags:
 - tag:product:qwik-0-8-4-4ubuntu2
+- tag:vendor:qwik
 version: 20260508T144609Z

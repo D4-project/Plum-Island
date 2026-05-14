@@ -2,4 +2,5 @@ description: Parallels Confixx Control Panel
 query: http_favicon_md5:A34DEA4BD04BDB816BEA176619C29063
 tags:
 - tag:product:parallels-confixx-control-panel
+- tag:vendor:parallels
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Technicolor Gateway
 query: http_favicon_mmhash:1835479497
 tags:
 - tag:product:technicolor-gateway
+- tag:vendor:technicolor
 version: 20260508T144609Z

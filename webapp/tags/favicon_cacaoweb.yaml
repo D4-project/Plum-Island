@@ -2,4 +2,5 @@ description: cacaoweb
 query: http_favicon_mmhash:-1738184811
 tags:
 - tag:product:cacaoweb
+- tag:vendor:cacaoweb
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: nanoblogger (3.3)
 query: http_favicon_md5:28015FCDF84CA0D7D382394A82396927
 tags:
 - tag:product:nanoblogger-3-3
+- tag:vendor:nanoblogger
 version: 20260508T144609Z

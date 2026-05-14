@@ -5,4 +5,5 @@ query: http_favicon_mmhash:1405460984 OR http_favicon_mmhash:1015545776 OR http_
 tags:
 - tag:product:firewall
 - tag:product:pfsense
+- tag:vendor:pfsense
 version: 20260508T144609Z

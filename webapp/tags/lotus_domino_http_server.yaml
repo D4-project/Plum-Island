@@ -2,4 +2,5 @@ description: Lotus Domino Server
 query: http_server:Lotus-Domino
 tags:
 - tag:product:ibm_domino
+- tag:vendor:lotus
 version: 20260508T144609Z

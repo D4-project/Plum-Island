@@ -2,4 +2,5 @@ description: Digital Keystone (DK)
 query: http_favicon_mmhash:-373674173
 tags:
 - tag:product:digital-keystone-dk
+- tag:vendor:digital
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: solr (1.2.0) - docs
 query: http_favicon_md5:69ACFCB2659952BC37C54108D52FCA70
 tags:
 - tag:product:solr-1-2-0-docs
+- tag:vendor:solr
 version: 20260508T144609Z

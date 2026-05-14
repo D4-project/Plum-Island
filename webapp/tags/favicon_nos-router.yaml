@@ -2,5 +2,6 @@ description: NOS Router
 query: http_favicon_mmhash:-831826827
 tags:
 - tag:product:nos
-- tag:vendor:router
+- tag:type:router
+- tag:vendor:nos
 version: 20260508T144609Z

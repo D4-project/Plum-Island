@@ -2,4 +2,5 @@ description: Docker
 query: http_favicon_mmhash:-1814887000 OR http_favicon_mmhash:1937209448
 tags:
 - tag:product:docker
+- tag:vendor:docker
 version: 20260508T144609Z

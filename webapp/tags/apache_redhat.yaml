@@ -3,5 +3,5 @@ query: http_favicon_md5:71E30C507CA3FA005E2D1322A5AA8FB2 OR http_server.lk:"Red 
   Enterprise Linux" OR http_server.lk:RedHat
 tags:
 - tag:product:apache
-- tag:product:redhat
+- tag:vendor:redhat
 version: 20260508T144609Z

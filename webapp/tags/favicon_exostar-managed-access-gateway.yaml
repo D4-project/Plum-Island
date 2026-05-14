@@ -2,4 +2,5 @@ description: Exostar - Managed Access Gateway
 query: http_favicon_mmhash:420473080
 tags:
 - tag:product:exostar-managed-access-gateway
+- tag:vendor:exostar
 version: 20260508T144609Z

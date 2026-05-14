@@ -3,6 +3,7 @@ query: http_headval:x-redirect-by.bg:polylang
 tags:
 - tag:product:polylang
 - tag:product:wordpress
-- tag:product:cms
+- tag:type:cms
 - lang:php
+- tag:vendor:polylang
 version: 20260510T065143Z

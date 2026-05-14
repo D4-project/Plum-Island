@@ -2,4 +2,5 @@ description: PKP (OpenJournalSystems) Public Knowledge Project
 query: http_favicon_mmhash:2099342476
 tags:
 - tag:product:pkp-openjournalsystems-public-knowledge-project
+- tag:vendor:pkp
 version: 20260508T144609Z

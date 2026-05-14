@@ -2,5 +2,6 @@ description: Apache on Mac OS X
 query: http_favicon_md5:73778A17B0D22FFBB7D6C445A7947B92
 tags:
 - tag:product:apache
-- tag:product:osx
+- tag:type:osx
+- tag:vendor:apache
 version: 20260508T144609Z

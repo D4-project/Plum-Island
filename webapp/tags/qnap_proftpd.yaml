@@ -1,7 +1,7 @@
 description: QNAP ProFTPD FTP server
 query: banner.bg:"220 nasftpd turbo station" AND banner.lk:proftpd
 tags:
-- tag:product:ftp
+- proto:ftp
 - tag:product:proftpd
 - tag:vendor:qnap
 - tag:vendor:nas

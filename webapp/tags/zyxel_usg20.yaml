@@ -4,4 +4,5 @@ tags:
 - tag:vendor:firewall
 - tag:vendor:zyxel
 - tag:vendor:usg20w
+- tag:product:zyxel-usg20-firewall
 version: 20260508T144609Z

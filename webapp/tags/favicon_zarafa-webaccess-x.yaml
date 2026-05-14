@@ -2,4 +2,5 @@ description: Zarafa WebAccess x
 query: http_favicon_md5:E9DD9992D222D67C8F6A4704D2C88BDD
 tags:
 - tag:product:zarafa-webaccess-x
+- tag:vendor:zarafa
 version: 20260508T144609Z

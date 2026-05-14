@@ -2,4 +2,5 @@ description: Iomega StorCenter px2-300d x
 query: http_favicon_md5:F08D232927AB8F2C661616B896928233
 tags:
 - tag:product:iomega-storcenter-px2-300d-x
+- tag:vendor:iomega
 version: 20260508T144609Z

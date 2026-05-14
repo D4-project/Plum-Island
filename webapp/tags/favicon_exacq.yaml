@@ -2,4 +2,5 @@ description: Exacq
 query: http_favicon_mmhash:476213314
 tags:
 - tag:product:exacq
+- tag:vendor:exacq
 version: 20260508T144609Z

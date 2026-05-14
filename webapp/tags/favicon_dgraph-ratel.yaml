@@ -2,4 +2,5 @@ description: Dgraph Ratel
 query: http_favicon_mmhash:-1961046099
 tags:
 - tag:product:dgraph-ratel
+- tag:vendor:dgraph
 version: 20260508T144609Z

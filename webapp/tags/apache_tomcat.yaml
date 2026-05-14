@@ -4,4 +4,5 @@ query: http_title.bg:"Apache Tomcat/" OR http_favicon_md5:4644F2D45601037B8423D4
 tags:
 - lang:java
 - tag:product:tomcat
+- tag:vendor:apache
 version: 20260508T144609Z

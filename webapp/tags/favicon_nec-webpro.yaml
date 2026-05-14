@@ -2,4 +2,5 @@ description: NEC WebPro
 query: http_favicon_mmhash:1922032523
 tags:
 - tag:product:nec-webpro
+- tag:vendor:nec
 version: 20260508T144609Z

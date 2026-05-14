@@ -3,4 +3,5 @@ query: 'http_title:"MIXpbx :: Configuration and managagement"'
 tags:
 - tag:product:mixvoip
 - tag:product:telephony
+- tag:vendor:mixvoip
 version: 20260508T144609Z

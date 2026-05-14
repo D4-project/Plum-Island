@@ -2,4 +2,5 @@ description: WebGeocalc 2.10.2 (5439 N67 09-DEC-2025)
 query: http_favicon_md5:756B8992D820CFE46E6259D7D9387E95
 tags:
 - tag:product:webgeocalc-2-10-2-5439-n67-09-dec-2025
+- tag:vendor:webgeocalc
 version: 20260508T144609Z

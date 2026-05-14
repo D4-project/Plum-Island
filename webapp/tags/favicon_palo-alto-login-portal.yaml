@@ -2,4 +2,5 @@ description: Palo Alto Login Portal
 query: http_favicon_mmhash:602431586
 tags:
 - tag:product:palo-alto-login-portal
+- tag:vendor:palo
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Earthlink web hosting
 query: http_favicon_md5:5C3E5BD042D8F70C68BA903B85BA7D2E
 tags:
 - tag:product:earthlink-web-hosting
+- tag:vendor:earthlink
 version: 20260508T144609Z

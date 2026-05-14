@@ -2,4 +2,5 @@ description: Prometheus Time Series Collection and Processing Server
 query: http_favicon_mmhash:-1399433489
 tags:
 - tag:product:prometheus-time-series-collection-and-processing-server
+- tag:vendor:prometheus
 version: 20260508T144609Z

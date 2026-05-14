@@ -2,4 +2,5 @@ description: Cisco Device
 query: banner.lk:-cisco-
 tags:
 - tag:vendor:cisco
+- tag:product:cisco-device
 version: 20260508T144609Z

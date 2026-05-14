@@ -2,4 +2,5 @@ description: FortiGate
 query: x509_subject.bg:FG OR x509_issuer.bg:fortinet OR http_etag.bg:"83-6"
 tags:
 - tag:product:fortigate
+- tag:vendor:fortigate
 version: 20260508T144609Z

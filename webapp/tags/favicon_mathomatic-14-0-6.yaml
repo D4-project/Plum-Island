@@ -2,4 +2,5 @@ description: mathomatic (14.0.6)
 query: http_favicon_md5:0D42576D625920BCD121261FC5A6230B
 tags:
 - tag:product:mathomatic-14-0-6
+- tag:vendor:mathomatic
 version: 20260508T144609Z

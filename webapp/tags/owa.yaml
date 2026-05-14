@@ -5,6 +5,6 @@ query: http_favicon_mmhash:1768726119 OR http_favicon_mmhash:1356662359 OR http_
 tags:
 - tag:product:owa
 - tag:product:webmail
-- tag:product:windows
+- tag:vendor:windows
 - tag:product:outlook
 version: 20260509T104548Z

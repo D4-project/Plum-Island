@@ -5,5 +5,6 @@ query: http_favicon_md5:B231AD66A2A9B0EB06F72C4C88973039 OR http_favicon_md5:D5F
 tags:
 - lang:php
 - tag:product:wordpress
-- tag:product:cms
+- tag:type:cms
+- tag:vendor:wordpress
 version: 20260509T102520Z

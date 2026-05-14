@@ -3,4 +3,5 @@ query: http_Server.lk:squid or http_favicon_md5:A967C8BFDE9EA0869637294B679B7251
 tags:
 - tag:product:squid
 - tag:product:proxy
+- tag:vendor:squid
 version: 20260508T144609Z

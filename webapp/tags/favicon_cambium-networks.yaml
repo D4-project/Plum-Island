@@ -2,4 +2,5 @@ description: Cambium Networks
 query: http_favicon_mmhash:-435817905
 tags:
 - tag:product:cambium-networks
+- tag:vendor:cambium
 version: 20260508T144609Z

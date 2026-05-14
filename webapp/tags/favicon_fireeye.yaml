@@ -3,4 +3,5 @@ query: http_favicon_mmhash:95271369 OR http_favicon_mmhash:1476335317 OR http_fa
   OR http_favicon_mmhash:105083909 OR http_favicon_mmhash:240606739 OR http_favicon_mmhash:2121539357
 tags:
 - tag:product:fireeye
+- tag:vendor:fireeye
 version: 20260508T144609Z

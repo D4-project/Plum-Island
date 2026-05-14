@@ -2,4 +2,5 @@ description: PRTG Network Monitor
 query: http_favicon_mmhash:-655683626
 tags:
 - tag:product:prtg-network-monitor
+- tag:vendor:prtg
 version: 20260508T144609Z

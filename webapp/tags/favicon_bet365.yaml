@@ -2,4 +2,5 @@ description: bet365
 query: http_favicon_mmhash:-2116540786
 tags:
 - tag:product:bet365
+- tag:vendor:bet365
 version: 20260508T144609Z

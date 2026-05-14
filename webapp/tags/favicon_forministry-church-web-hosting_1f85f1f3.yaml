@@ -2,4 +2,5 @@ description: ForMinistry church web hosting
 query: http_favicon_md5:1F85F1F312825C87294A80C5BF9F0774
 tags:
 - tag:product:forministry-church-web-hosting
+- tag:vendor:forministry
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Handle Proxy
 query: http_favicon_mmhash:926501571
 tags:
 - tag:product:handle-proxy
+- tag:vendor:handle
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Netscape Enterprise Server 4
 query: http_favicon_md5:226FFC5E483B85EC261654FE255E60BE
 tags:
 - tag:product:netscape-enterprise-server-4
+- tag:vendor:netscape
 version: 20260508T144609Z

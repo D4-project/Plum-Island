@@ -2,4 +2,5 @@ description: IW
 query: http_favicon_mmhash:896412703
 tags:
 - tag:product:iw
+- tag:vendor:iw
 version: 20260508T144609Z

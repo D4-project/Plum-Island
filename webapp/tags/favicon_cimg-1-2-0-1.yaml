@@ -2,4 +2,5 @@ description: cimg (1.2.0.1)
 query: http_favicon_md5:27C3B07523EFD6C318A201CAC58008BA
 tags:
 - tag:product:cimg-1-2-0-1
+- tag:vendor:cimg
 version: 20260508T144609Z

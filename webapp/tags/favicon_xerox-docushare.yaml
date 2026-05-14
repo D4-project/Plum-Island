@@ -2,4 +2,5 @@ description: Xerox DocuShare
 query: http_favicon_md5:28893699241094742C3C2D4196CD1ACB
 tags:
 - tag:product:xerox-docushare
+- tag:vendor:xerox
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Redmine
 query: http_favicon_mmhash:603314
 tags:
 - tag:product:redmine
+- tag:vendor:redmine
 version: 20260508T144609Z

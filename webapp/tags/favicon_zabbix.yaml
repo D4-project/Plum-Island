@@ -2,4 +2,5 @@ description: Zabbix
 query: http_favicon_mmhash:892542951
 tags:
 - tag:product:zabbix
+- tag:vendor:zabbix
 version: 20260508T144609Z

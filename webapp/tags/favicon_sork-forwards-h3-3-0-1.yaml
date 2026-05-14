@@ -2,4 +2,5 @@ description: sork-forwards-h3 (3.0.1)
 query: http_favicon_md5:AA2253A32823C8A5CBA8D479FECEDD3A
 tags:
 - tag:product:sork-forwards-h3-3-0-1
+- tag:vendor:sork
 version: 20260508T144609Z

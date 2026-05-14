@@ -2,4 +2,5 @@ description: FC2WEB web hosting
 query: http_favicon_md5:C5388DFFAB10DA7531F94E7424BE3394
 tags:
 - tag:product:fc2web-web-hosting
+- tag:vendor:fc2web
 version: 20260508T144609Z

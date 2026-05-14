@@ -2,4 +2,5 @@ description: WoltLab Burning Board
 query: http_favicon_md5:1BF954BA2D568EC9771D35C94A6EB2DC
 tags:
 - tag:product:woltlab-burning-board
+- tag:vendor:woltlab
 version: 20260508T144609Z

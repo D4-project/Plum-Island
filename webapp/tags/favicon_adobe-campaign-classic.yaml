@@ -2,4 +2,5 @@ description: Adobe Campaign Classic
 query: http_favicon_mmhash:-333791179
 tags:
 - tag:product:adobe-campaign-classic
+- tag:vendor:adobe
 version: 20260508T144609Z

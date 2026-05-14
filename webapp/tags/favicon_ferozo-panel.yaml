@@ -2,4 +2,5 @@ description: Ferozo Panel
 query: http_favicon_mmhash:2072198544
 tags:
 - tag:product:ferozo-panel
+- tag:vendor:ferozo
 version: 20260508T144609Z

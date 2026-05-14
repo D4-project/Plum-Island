@@ -2,6 +2,7 @@ description: Cisco SSH
 query: banner.bg:ssh-2.0-cisco-
 tags:
 - tag:vendor:cisco
-- tag:vendor:router
+- tag:type:router
 - proto:ssh
+- tag:product:cisco-ssh
 version: 20260510T065455Z

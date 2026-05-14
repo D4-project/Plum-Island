@@ -2,4 +2,5 @@ description: TilginAB (HomeGateway)
 query: http_favicon_mmhash:-1346447358
 tags:
 - tag:product:tilginab-homegateway
+- tag:vendor:tilginab
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: iKuai Networks
 query: http_favicon_mmhash:-271448102
 tags:
 - tag:product:ikuai-networks
+- tag:vendor:ikuai
 version: 20260508T144609Z

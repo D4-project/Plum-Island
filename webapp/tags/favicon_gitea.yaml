@@ -2,4 +2,5 @@ description: Gitea
 query: http_favicon_mmhash:1969970750
 tags:
 - tag:product:gitea
+- tag:vendor:gitea
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Google Page Creator
 query: http_favicon_md5:A31552D4FCC0EA68D69153E458FE6AB2
 tags:
 - tag:product:google-page-creator
+- tag:vendor:google
 version: 20260508T144609Z

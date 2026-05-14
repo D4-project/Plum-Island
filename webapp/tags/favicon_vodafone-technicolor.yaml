@@ -2,4 +2,5 @@ description: Vodafone (Technicolor)
 query: http_favicon_mmhash:165976831
 tags:
 - tag:product:vodafone-technicolor
+- tag:vendor:vodafone
 version: 20260508T144609Z

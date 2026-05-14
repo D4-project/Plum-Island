@@ -2,4 +2,5 @@ description: Domoticz (Home Automation)
 query: http_favicon_mmhash:90680708
 tags:
 - tag:product:domoticz-home-automation
+- tag:vendor:domoticz
 version: 20260508T144609Z

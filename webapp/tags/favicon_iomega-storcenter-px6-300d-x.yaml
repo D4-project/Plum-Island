@@ -2,4 +2,5 @@ description: Iomega StorCenter px6-300d x
 query: http_favicon_md5:FD3F689B804DDB7BFAB53FDF32BF7C04
 tags:
 - tag:product:iomega-storcenter-px6-300d-x
+- tag:vendor:iomega
 version: 20260508T144609Z

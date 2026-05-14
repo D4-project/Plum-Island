@@ -2,4 +2,5 @@ description: CakePHP 1.2.x-1.3.x Application
 query: http_favicon_md5:66B3119D379AEE26BA668FEF49188DD3
 tags:
 - tag:product:cakephp-1-2-x-1-3-x-application
+- tag:vendor:cakephp
 version: 20260508T144609Z

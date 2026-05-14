@@ -2,4 +2,5 @@ description: znc (0.058, webadmin/skins/default)
 query: http_favicon_md5:6434232D43F27EF5462BA5BA345E03DF
 tags:
 - tag:product:znc-0-058-webadmin-skins-default
+- tag:vendor:znc
 version: 20260508T144609Z

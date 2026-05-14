@@ -2,4 +2,5 @@ description: SparkWeb web-based collaboration client. http
 query: http_favicon_md5:386211E5C0B7D92EFABD41390E0FC250
 tags:
 - tag:product:sparkweb-web-based-collaboration-client-http
+- tag:vendor:sparkweb
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Siemens OZW772
 query: http_favicon_mmhash:-336242473
 tags:
 - tag:product:siemens-ozw772
+- tag:vendor:siemens
 version: 20260508T144609Z

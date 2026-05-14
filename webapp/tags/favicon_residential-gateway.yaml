@@ -2,4 +2,5 @@ description: Residential Gateway
 query: http_favicon_mmhash:-1933493443
 tags:
 - tag:product:residential-gateway
+- tag:vendor:residential
 version: 20260508T144609Z

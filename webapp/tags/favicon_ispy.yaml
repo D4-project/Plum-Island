@@ -2,4 +2,5 @@ description: iSpy
 query: http_favicon_mmhash:1821549811
 tags:
 - tag:product:ispy
+- tag:vendor:ispy
 version: 20260508T144609Z

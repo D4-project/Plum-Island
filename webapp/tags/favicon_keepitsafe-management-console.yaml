@@ -2,4 +2,5 @@ description: KeepItSafe Management Console
 query: http_favicon_mmhash:-1738727418
 tags:
 - tag:product:keepitsafe-management-console
+- tag:vendor:keepitsafe
 version: 20260508T144609Z

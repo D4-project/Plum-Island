@@ -2,4 +2,5 @@ description: D-Link x
 query: http_favicon_md5:107579220745D3B21461C23024D6C4A3
 tags:
 - tag:product:d-link-x
+- tag:vendor:dlink
 version: 20260508T144609Z

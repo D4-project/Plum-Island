@@ -2,4 +2,5 @@ description: Lucee!
 query: http_favicon_mmhash:784872924
 tags:
 - tag:product:lucee
+- tag:vendor:lucee
 version: 20260508T144609Z

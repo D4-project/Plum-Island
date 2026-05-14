@@ -2,5 +2,6 @@ description: Gargoyle Router Management Utility
 query: http_favicon_mmhash:1862132268
 tags:
 - tag:product:gargoyle
-- tag:vendor:router
+- tag:type:router
+- tag:vendor:gargoyle
 version: 20260508T144609Z

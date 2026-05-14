@@ -4,4 +4,5 @@ tags:
 - tag:product:cerberus-ftp-server
 - proto:ssh
 - tag:product:sftp
+- tag:vendor:cerberus
 version: 20260510T065455Z

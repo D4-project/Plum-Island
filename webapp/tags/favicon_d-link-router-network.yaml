@@ -2,5 +2,6 @@ description: D-Link (router/network)
 query: http_favicon_mmhash:1703788174 OR http_favicon_mmhash:517158172 OR http_favicon_mmhash:1038500535
 tags:
 - tag:product:d-link
-- tag:vendor:router
+- tag:type:router
+- tag:vendor:dlink
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Fog Creek Fogbugz (6.1.44)
 query: http_favicon_md5:A6B55B93BC01A6DF076483B69039BA9C
 tags:
 - tag:product:fog-creek-fogbugz-6-1-44
+- tag:vendor:fog
 version: 20260508T144609Z

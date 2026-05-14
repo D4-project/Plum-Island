@@ -2,4 +2,5 @@ description: hover domain forwarding
 query: http_favicon_md5:292B586171617B56E77EE694485B1052
 tags:
 - tag:product:hover-domain-forwarding
+- tag:vendor:hover
 version: 20260508T144609Z

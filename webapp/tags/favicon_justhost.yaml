@@ -2,4 +2,5 @@ description: JustHost
 query: http_favicon_mmhash:1734609466
 tags:
 - tag:product:justhost
+- tag:vendor:justhost
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: twiki (4.1.2) - logos/favicon.ico
 query: http_favicon_md5:E7FC436D0BF31500CED7A7143067C337
 tags:
 - tag:product:twiki-4-1-2-logos-favicon-ico
+- tag:vendor:twiki
 version: 20260508T144609Z

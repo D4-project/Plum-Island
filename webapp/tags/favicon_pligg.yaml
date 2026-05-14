@@ -2,4 +2,5 @@ description: Pligg
 query: http_favicon_md5:83A1FD57A1E1684FAFD6D2487290FDF5
 tags:
 - tag:product:pligg
+- tag:vendor:pligg
 version: 20260508T144609Z

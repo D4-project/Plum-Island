@@ -2,4 +2,5 @@ description: Arcadyan o2 box (Network)
 query: http_favicon_mmhash:1479202414
 tags:
 - tag:product:arcadyan-o2-box-network
+- tag:vendor:arcadyan
 version: 20260508T144609Z

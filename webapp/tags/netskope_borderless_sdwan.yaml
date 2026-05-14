@@ -4,4 +4,5 @@ query: x509_issuer.bg:"Netskope Borderless SD-WAN Root" OR x509_issuer.bg:"Netsk
 tags:
 - tag:product:netskope
 - tag:product:sd-wan
+- tag:vendor:netskope
 version: 20260508T144609Z

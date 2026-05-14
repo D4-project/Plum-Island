@@ -2,4 +2,5 @@ description: 'Moodle 2.0 : Magazine'
 query: http_favicon_md5:D4AF3BE33D952C1F98684D985019757C
 tags:
 - tag:product:moodle-2-0-magazine
+- tag:vendor:moodle
 version: 20260508T144609Z

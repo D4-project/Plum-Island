@@ -1,6 +1,7 @@
 description: Microsoft FTP Service
 query: banner.lk:"microsoft ftp service"
 tags:
-- tag:product:ftp
-- tag:product:windows
+- proto:ftp
+- tag:vendor:windows
+- tag:product:microsoft-ftp-service
 version: 20260508T144609Z

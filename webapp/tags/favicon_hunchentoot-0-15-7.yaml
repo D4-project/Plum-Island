@@ -2,4 +2,5 @@ description: hunchentoot (0.15.7)
 query: http_favicon_md5:43D4AA56DC796067B442C95976A864FD
 tags:
 - tag:product:hunchentoot-0-15-7
+- tag:vendor:hunchentoot
 version: 20260508T144609Z

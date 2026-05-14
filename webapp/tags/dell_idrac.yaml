@@ -1,6 +1,7 @@
 description: Dell Idrac
 query: http_title.lk:restgui/index.html OR http_title.lk:restgui/start.html or x509_subject.bg:idrac-
 tags:
-- tag:vendor:supervision
+- tag:type:supervision
+- tag:vendor:dell
 - tag:product:idrac
 version: 20260508T144609Z

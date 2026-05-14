@@ -2,4 +2,5 @@ description: horde-sam (0.1+cvs20080316) - graphics
 query: http_favicon_md5:EE3D6A9227E27A5BC72DB3184DAB8303
 tags:
 - tag:product:horde-sam-0-1-cvs20080316-graphics
+- tag:vendor:horde
 version: 20260508T144609Z

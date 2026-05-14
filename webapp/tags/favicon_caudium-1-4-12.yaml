@@ -2,4 +2,5 @@ description: caudium (1.4.12)
 query: http_favicon_md5:09F5EA65A2D31DA8976B9B9FD2BF853C
 tags:
 - tag:product:caudium-1-4-12
+- tag:vendor:caudium
 version: 20260508T144609Z

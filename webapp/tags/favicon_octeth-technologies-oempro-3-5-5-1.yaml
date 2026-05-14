@@ -2,4 +2,5 @@ description: Octeth Technologies oemPro (3.5.5.1)
 query: http_favicon_md5:48C02490BA335A159B99343B00DECD87
 tags:
 - tag:product:octeth-technologies-oempro-3-5-5-1
+- tag:vendor:octeth
 version: 20260508T144609Z

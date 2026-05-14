@@ -2,4 +2,5 @@ description: Ant docs manual (1.7.1)
 query: http_favicon_md5:2D4CCA83CF14D1ADAE178AD013BDF65B
 tags:
 - tag:product:ant-docs-manual-1-7-1
+- tag:vendor:ant
 version: 20260508T144609Z

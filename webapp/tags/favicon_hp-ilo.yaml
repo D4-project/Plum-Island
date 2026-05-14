@@ -2,4 +2,5 @@ description: HP iLO
 query: http_favicon_mmhash:2059618623
 tags:
 - tag:product:hp-ilo
+- tag:vendor:hp
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Farming Simulator Dedicated Server
 query: http_favicon_mmhash:509789953
 tags:
 - tag:product:farming-simulator-dedicated-server
+- tag:vendor:farming
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: Ace
 query: http_favicon_mmhash:-183163807
 tags:
 - tag:product:ace
+- tag:vendor:ace
 version: 20260508T144609Z

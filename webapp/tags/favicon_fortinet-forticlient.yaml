@@ -2,4 +2,5 @@ description: Fortinet - Forticlient
 query: http_favicon_mmhash:945408572
 tags:
 - tag:product:fortinet-forticlient
+- tag:vendor:fortinet
 version: 20260508T144609Z

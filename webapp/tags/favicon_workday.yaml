@@ -2,4 +2,5 @@ description: Workday
 query: http_favicon_mmhash:-459291760
 tags:
 - tag:product:workday
+- tag:vendor:workday
 version: 20260508T144609Z

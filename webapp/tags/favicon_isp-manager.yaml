@@ -2,4 +2,5 @@ description: ISP Manager
 query: http_favicon_mmhash:-986678507
 tags:
 - tag:product:isp-manager
+- tag:vendor:isp
 version: 20260508T144609Z

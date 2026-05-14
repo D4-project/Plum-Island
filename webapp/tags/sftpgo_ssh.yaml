@@ -4,4 +4,5 @@ tags:
 - tag:product:sftpgo
 - proto:ssh
 - tag:product:sftp
+- tag:vendor:sftpgo
 version: 20260510T065455Z

@@ -2,4 +2,5 @@ description: Polycom
 query: http_favicon_mmhash:77044418
 tags:
 - tag:product:polycom
+- tag:vendor:polycom
 version: 20260508T144609Z

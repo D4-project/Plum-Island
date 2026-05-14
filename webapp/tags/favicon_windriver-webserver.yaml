@@ -2,4 +2,5 @@ description: WindRiver-WebServer
 query: http_favicon_mmhash:74935566
 tags:
 - tag:product:windriver-webserver
+- tag:vendor:windriver
 version: 20260508T144609Z

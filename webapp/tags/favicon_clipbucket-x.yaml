@@ -2,4 +2,5 @@ description: ClipBucket x
 query: http_favicon_md5:6C633B9B92530843C782664CB3F0542D
 tags:
 - tag:product:clipbucket-x
+- tag:vendor:clipbucket
 version: 20260508T144609Z

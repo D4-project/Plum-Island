@@ -2,4 +2,5 @@ description: vlc (0.9.4)
 query: http_favicon_md5:6F7E92FE7E6A62661AC2B41528A78FC6
 tags:
 - tag:product:vlc-0-9-4
+- tag:vendor:vlc
 version: 20260508T144609Z

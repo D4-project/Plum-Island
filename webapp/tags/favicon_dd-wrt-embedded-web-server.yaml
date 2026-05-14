@@ -2,4 +2,5 @@ description: DD-WRT Embedded Web Server
 query: http_favicon_md5:9C003F40E63DF95A2B844C6B61448310
 tags:
 - tag:product:dd-wrt-embedded-web-server
+- tag:vendor:dd
 version: 20260508T144609Z

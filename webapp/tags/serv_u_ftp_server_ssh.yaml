@@ -4,4 +4,5 @@ tags:
 - tag:product:serv-u-ftp-server
 - proto:ssh
 - tag:product:sftp
+- tag:vendor:solarwinds
 version: 20260510T065455Z

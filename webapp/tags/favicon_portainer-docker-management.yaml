@@ -2,4 +2,5 @@ description: Portainer (Docker Management)
 query: http_favicon_mmhash:-1424036600
 tags:
 - tag:product:portainer-docker-management
+- tag:vendor:portainer
 version: 20260508T144609Z

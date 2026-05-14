@@ -1,5 +1,6 @@
 description: Ubuntu
 query: banner.bg:ssh-2.0-openssh AND banner.lk:ubuntu OR http_headval:x-powered-by.lk:ubuntu
 tags:
+- tag:vendor:ubuntu
 - tag:product:ubuntu
 version: 20260510T065455Z

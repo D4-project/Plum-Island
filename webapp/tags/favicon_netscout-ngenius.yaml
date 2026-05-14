@@ -2,4 +2,5 @@ description: NetScout NGenius
 query: http_favicon_md5:A46BC7FC42979E9B343335BDD86D1C3E
 tags:
 - tag:product:netscout-ngenius
+- tag:vendor:netscout
 version: 20260508T144609Z

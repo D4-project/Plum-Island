@@ -2,4 +2,5 @@ description: Pi Star
 query: http_favicon_mmhash:432733105
 tags:
 - tag:product:pi-star
+- tag:vendor:pi
 version: 20260508T144609Z

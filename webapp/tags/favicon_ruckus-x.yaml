@@ -2,4 +2,5 @@ description: Ruckus x
 query: http_favicon_md5:ED8CF53EF6836184587EE3A987BE074A
 tags:
 - tag:product:ruckus-x
+- tag:vendor:ruckus
 version: 20260508T144609Z

@@ -2,4 +2,5 @@ description: RabbitMQ
 query: http_favicon_mmhash:1064742722
 tags:
 - tag:product:rabbitmq
+- tag:vendor:rabbitmq
 version: 20260508T144609Z

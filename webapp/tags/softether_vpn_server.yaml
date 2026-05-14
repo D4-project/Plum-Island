@@ -3,4 +3,5 @@ query: http_title.bg:"SoftEther VPN Server"
 tags:
 - tag:product:vpn
 - tag:product:softether_vpn
+- tag:vendor:softether
 version: 20260508T144609Z

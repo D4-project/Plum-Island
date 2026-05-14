@@ -2,4 +2,5 @@ description: GraphQL
 query: http_favicon_mmhash:-1067420240
 tags:
 - tag:product:graphql
+- tag:vendor:graphql
 version: 20260508T144609Z

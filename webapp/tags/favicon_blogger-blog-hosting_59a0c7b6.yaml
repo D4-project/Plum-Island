@@ -2,4 +2,5 @@ description: Blogger blog hosting
 query: http_favicon_md5:59A0C7B6E4848CCDABCEA0636EFDA02B
 tags:
 - tag:product:blogger-blog-hosting
+- tag:vendor:blogger
 version: 20260508T144609Z
