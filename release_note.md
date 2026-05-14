@@ -59,6 +59,7 @@ Changes after `v0.2604.0`.
   - Rename detection tag prefixes from `hard`/`soft` to `tag:vendor`/`tag:product`, refs #50
   - Complete tag taxonomy normalization for vendor/product/type/protocol tags, closes #50
   - Add BGP protocol banner tagging, closes #71
+  - Add HP iLO default certificate issuer tagging and rename iLO rule, closes #73
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
