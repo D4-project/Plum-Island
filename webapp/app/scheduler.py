@@ -49,7 +49,6 @@ from .utils.scan_cycles import (
 
 logger = logging.getLogger("flask_appbuilder")
 
-job = []
 JOB_TARGET_CHUNK_SIZE = 256
 DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE = 256
 DEFAULT_QUEUE_STATE_BATCH_SIZE = JOB_TARGET_CHUNK_SIZE
