@@ -69,6 +69,7 @@ Changes after `v0.2604.0`.
 - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
 - Fix bot API SQLAlchemy limit calls to use integer arguments, closes #87
+- Make result parsing config explicit per call to avoid cross-thread parser state leaks, closes #88
 - Show inserted Tag Rule IDs in `import_tags.py` (`bf1afd5`)
 - Add `import_tags.py --flush-tag` to remove one tag from Kvrocks tag indexes, closes #47
 - Fix `import_tags.py` to update DB tag rules from newer YAML versions and print existing rule IDs, closes #49
