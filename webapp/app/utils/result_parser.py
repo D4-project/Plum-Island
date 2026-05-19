@@ -19,6 +19,7 @@ For now far from performance issues anyway.
 """
 
 import re
+import threading
 from pyfaup import Url  # pylint: disable=no-name-in-module
 
 try:
@@ -26,7 +27,11 @@ try:
 except ImportError:
     from tagrules import apply_tag_rules_to_document
 
-DB_CONF = {}
+_thread_local = threading.local()
+
+
+def _get_db_conf():
+    return getattr(_thread_local, "conf", {})
 
 
 def normalize_db_conf(db_conf_local):
@@ -296,14 +301,14 @@ def get_hosts(data: dict, target: str):
                     parse = False
                     if suffix:
                         suffix_str = str(url.suffix).lower()  # TLD
-                        if DB_CONF["ONLINETLD"]:
-                            if suffix_str in DB_CONF["TLDS"]:
+                        if _get_db_conf()["ONLINETLD"]:
+                            if suffix_str in _get_db_conf()["TLDS"]:
                                 parse = True
                         else:
                             if suffix.is_known():
                                 parse = True
 
-                        if suffix_str in DB_CONF["TLDADD"]:
+                        if suffix_str in _get_db_conf()["TLDADD"]:
                             parse = True
 
                     if parse:
@@ -337,14 +342,14 @@ def _parse_valid_hostname(hostname):
 
     suffix_str = str(suffix).lower()
     parse = False
-    if DB_CONF["ONLINETLD"]:
-        if suffix_str in DB_CONF["TLDS"]:
+    if _get_db_conf()["ONLINETLD"]:
+        if suffix_str in _get_db_conf()["TLDS"]:
             parse = True
     else:
         if suffix.is_known():
             parse = True
 
-    if suffix_str in DB_CONF["TLDADD"]:
+    if suffix_str in _get_db_conf()["TLDADD"]:
         parse = True
 
     if not parse:
@@ -470,7 +475,7 @@ def get_http_header(data: dict, target: str):
     Parse configured HTTP header names and selected values.
     """
     body = get_body(data, target)
-    collection = DB_CONF.get("HTTP_HEADER_COLLECTION", {})
+    collection = _get_db_conf().get("HTTP_HEADER_COLLECTION", {})
     http_header = []
     http_headval = []
 
@@ -524,8 +529,7 @@ def parse_json(doc, db_conf_local, tag_rules=None):
     Parse one Nmap-like document into the Kvrocks search fields.
     """
 
-    DB_CONF.clear()
-    DB_CONF.update(normalize_db_conf(db_conf_local))
+    _thread_local.conf = normalize_db_conf(db_conf_local)
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
