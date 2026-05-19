@@ -1,3 +1,4 @@
+.env
 webapp/app.db
 webapp/app/jsons
 webapp/__pycache__
