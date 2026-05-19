@@ -166,7 +166,7 @@ def _get_bot_by_uid(bot_uid):
     return (
         db.session.query(Bots)
         .filter(Bots.uid == bot_uid, Bots.active == True)
-        .limit("1")
+        .limit(1)
         .scalar()
     )
 
@@ -585,7 +585,7 @@ class Api(BaseApi):
         job_bot = (
             db.session.query(Jobs)
             .filter(Jobs.uid == botinfo.get("JOB_UID"))
-            .limit("1")
+            .limit(1)
             .scalar()
         )
         logger.debug(
@@ -663,7 +663,7 @@ class Api(BaseApi):
         base = os.path.join(
             db.app.config.get("JSON_FOLDER"),
             botinfo.get("JOB_UID")[0],
-            f"{botinfo.get("JOB_UID")}.json",
+            f"{botinfo.get('JOB_UID')}.json",
         )
         with open(base, "w", encoding="utf-8") as f:
             json.dump(json.loads(botinfo.get("RESULT")), f, indent=2)

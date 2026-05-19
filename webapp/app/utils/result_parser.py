@@ -26,8 +26,6 @@ try:
 except ImportError:
     from tagrules import apply_tag_rules_to_document
 
-DB_CONF = {}
-
 
 def normalize_db_conf(db_conf_local):
     """
@@ -88,6 +86,12 @@ ALLOW = [
     "hsh",
     "get_favicon",
 ]
+
+CONFIG_AWARE_ACTIONS = {
+    "get_fqdn_requested",
+    "get_hosts",
+    "get_http_header",
+}
 
 fqdn_regex = re.compile(
     r"""(?:^|[\s(\/<>|@'"=\:])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-_]{2,})+)(?=$|[\?\s#&\/<>'",)])""",
@@ -242,6 +246,16 @@ def get_body(data, target):
     return current
 
 
+def run_parser_action(action, script, target, db_conf):
+    """
+    Call one configured parser action with explicit config when required.
+    """
+    parser = globals()[action]
+    if action in CONFIG_AWARE_ACTIONS:
+        return parser(script, target, db_conf)
+    return parser(script, target)
+
+
 def get_http_cookies(data: dict, target: str):
     """
     Get cookies
@@ -276,7 +290,7 @@ def get_http_etag(data: dict, target: str):
     return {"http_etag": http_etag}
 
 
-def get_hosts(data: dict, target: str):
+def get_hosts(data: dict, target: str, db_conf: dict):
     """
     extract fqdn.
     """
@@ -296,14 +310,14 @@ def get_hosts(data: dict, target: str):
                     parse = False
                     if suffix:
                         suffix_str = str(url.suffix).lower()  # TLD
-                        if DB_CONF["ONLINETLD"]:
-                            if suffix_str in DB_CONF["TLDS"]:
+                        if db_conf["ONLINETLD"]:
+                            if suffix_str in db_conf["TLDS"]:
                                 parse = True
                         else:
                             if suffix.is_known():
                                 parse = True
 
-                        if suffix_str in DB_CONF["TLDADD"]:
+                        if suffix_str in db_conf["TLDADD"]:
                             parse = True
 
                     if parse:
@@ -318,7 +332,7 @@ def get_hosts(data: dict, target: str):
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
 
 
-def _parse_valid_hostname(hostname):
+def _parse_valid_hostname(hostname, db_conf: dict):
     """
     Parse one hostname using the configured domain validation rules.
     """
@@ -337,14 +351,14 @@ def _parse_valid_hostname(hostname):
 
     suffix_str = str(suffix).lower()
     parse = False
-    if DB_CONF["ONLINETLD"]:
-        if suffix_str in DB_CONF["TLDS"]:
+    if db_conf["ONLINETLD"]:
+        if suffix_str in db_conf["TLDS"]:
             parse = True
     else:
         if suffix.is_known():
             parse = True
 
-    if suffix_str in DB_CONF["TLDADD"]:
+    if suffix_str in db_conf["TLDADD"]:
         parse = True
 
     if not parse:
@@ -358,7 +372,7 @@ def _parse_valid_hostname(hostname):
     }
 
 
-def get_fqdn_requested(data: dict, target: str):
+def get_fqdn_requested(data: dict, target: str, db_conf: dict):
     """
     Extract user-requested FQDN and domain values from hostnames entries.
     """
@@ -375,7 +389,7 @@ def get_fqdn_requested(data: dict, target: str):
         if hostname and hostname not in fqdn_requested:
             fqdn_requested.append(hostname)
 
-        parsed_hostname = _parse_valid_hostname(hostname)
+        parsed_hostname = _parse_valid_hostname(hostname, db_conf)
         if not parsed_hostname:
             continue
         domain = parsed_hostname.get("domain")
@@ -465,12 +479,12 @@ def get_favicon(data: dict, target: str):
     return result
 
 
-def get_http_header(data: dict, target: str):
+def get_http_header(data: dict, target: str, db_conf: dict):
     """
     Parse configured HTTP header names and selected values.
     """
     body = get_body(data, target)
-    collection = DB_CONF.get("HTTP_HEADER_COLLECTION", {})
+    collection = db_conf.get("HTTP_HEADER_COLLECTION", {})
     http_header = []
     http_headval = []
 
@@ -524,8 +538,7 @@ def parse_json(doc, db_conf_local, tag_rules=None):
     Parse one Nmap-like document into the Kvrocks search fields.
     """
 
-    DB_CONF.clear()
-    DB_CONF.update(normalize_db_conf(db_conf_local))
+    db_conf = normalize_db_conf(db_conf_local)
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
@@ -553,17 +566,15 @@ def parse_json(doc, db_conf_local, tag_rules=None):
             for script in doc.get("body"):
                 if script == script_name:  # If it is in the job list.
                     script = doc.get("body").get(script)
-                    parse_result = globals()[action](
-                        script, target
-                    )  # Call the function given in the action variable.
+                    parse_result = run_parser_action(action, script, target, db_conf)
 
         elif section == "p":
             for port in doc.get("body").get("ports"):  # for each ports,
                 for script in port.get("scripts", []):  # We look at script results
                     if script.get("id") == script_name:  # If it is in the job list.
-                        parse_result = globals()[action](
-                            script, target
-                        )  # Call the function given in the action variable.
+                        parse_result = run_parser_action(
+                            action, script, target, db_conf
+                        )
 
         final_result = fuse_dicts(final_result, parse_result)
 
