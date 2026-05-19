@@ -3,6 +3,6 @@ query: banner.bg:ssh-2.0-netscreen
 tags:
 - tag:vendor:netscreen
 - tag:type:firewall
-- proto:ssh
+- tag:proto:ssh
 - tag:product:netscreen-ssh
-version: 20260510T065455Z
+version: 20260519T142825Z

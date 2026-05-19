@@ -14,7 +14,8 @@ Example:
 description: HashiCorp Vault
 query: http_favicon_mmhash:747250914 AND http_title.bg:Vault
 tags:
-- soft:hashicorp-vault
+- tag:product:hashicorp-vault
+- tag:vendor:hashicorp
 version: 20260428T170756Z
 ```
 
@@ -95,19 +96,32 @@ List complete tags currently present in Kvrocks:
 The command prints tag keys such as:
 
 ```text
-soft:gitlab
-hard:gpon-gateway
+tag:product:gitlab
+tag:vendor:gitlab
+tag:type:firewall
+tag:proto:http
 ```
 
 ## Tag naming
 
-Common tag prefixes:
+Tags use the normalized `tag:<namespace>:<value>` format.
+Common namespaces:
 
-- `soft:*` for software or product identification
-- `hard:*` for hardware or device family identification
+- `tag:vendor:*` for vendor, project, or organization names
+- `tag:product:*` for software, product, service, or device family names
+- `tag:type:*` for broad asset families or roles, such as `firewall`, `router`, `cms`, `vpn`, or `webmail`
+- `tag:proto:*` for protocols or protocol families, such as `http`, `ssh`, `ftp`, `sip`, `telnet`, `bgp`, or `icy`
 - `vuln:*` for vulnerability-oriented classifications
 
-Favicon rules usually use `soft:<product>` or `hard:<device>` depending on what the favicon identifies.
+Do not use the old `soft:*` or `hard:*` prefixes in new rules. They were replaced by `tag:product:*`, `tag:vendor:*`, and `tag:type:*`.
+
+Do not use bare `proto:*` in new rules. Protocol tags must use `tag:proto:*`.
+
+Favicon rules usually use `tag:product:<product>` and `tag:vendor:<vendor>`.
+Add `tag:type:*` when the favicon identifies an asset family rather than only a product.
+
+Protocol-only rules should tag with `tag:proto:*` and avoid product/vendor tags unless the signal identifies a specific implementation.
+For example, an HTTP banner prefix rule should use `tag:proto:http`; a HashiCorp Vault favicon rule should use `tag:product:hashicorp-vault` and `tag:vendor:hashicorp`.
 
 # Source of information used.
 

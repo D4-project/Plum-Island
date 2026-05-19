@@ -1,7 +1,7 @@
 description: FileZilla FTP Server
 query: banner.bg:220-filezilla
 tags:
-- proto:ftp
+- tag:proto:ftp
 - tag:product:filezilla
 - tag:vendor:filezilla
-version: 20260508T144609Z
+version: 20260519T142825Z

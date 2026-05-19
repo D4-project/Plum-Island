@@ -1,5 +1,5 @@
 description: HTTP
 query: "banner.bg:HTTP/1.1 OR banner.bg:HTTP/1.0 OR banner.bg:http/0.9 OR banner.bg:<!doctype OR banner.bg:<html OR banner.bg:\"<meta http-equiv\" OR banner.bg:\"\uFEFF<!doctype html\" OR banner.bg:<title OR http_header:cache-control"
 tags:
-- proto:http
-version: 20260510T070650Z
+- tag:proto:http
+version: 20260519T142825Z

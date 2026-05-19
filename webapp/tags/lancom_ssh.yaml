@@ -3,6 +3,6 @@ query: banner.bg:ssh-2.0-lancom
 tags:
 - tag:vendor:lancom
 - tag:type:router
-- proto:ssh
+- tag:proto:ssh
 - tag:product:lancom-ssh
-version: 20260510T065455Z
+version: 20260519T142825Z

@@ -1,7 +1,7 @@
 description: OpenSSH
 query: banner.bg:ssh-2.0-openssh
 tags:
-- proto:ssh
+- tag:proto:ssh
 - tag:product:openssh
 - tag:vendor:openssh
-version: 20260510T065455Z
+version: 20260519T142825Z

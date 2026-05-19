@@ -1,5 +1,5 @@
 description: SIP protocol
 query: banner.bg:"sip/2.0" OR http_headval:www-authenticate.bg:'digest realm="sip_phone"'
 tags:
-- proto:sip
-version: 20260519T113900Z
+- tag:proto:sip
+version: 20260519T142825Z

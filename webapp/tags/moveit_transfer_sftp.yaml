@@ -2,7 +2,7 @@ description: MOVEit Transfer SFTP
 query: banner.bg:"ssh-2.0-moveit transfer sftp"
 tags:
 - tag:product:moveit-transfer
-- proto:ssh
+- tag:proto:ssh
 - tag:product:sftp
 - tag:vendor:moveit
-version: 20260510T065455Z
+version: 20260519T142825Z

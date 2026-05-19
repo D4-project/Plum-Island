@@ -2,7 +2,7 @@ description: WS_FTP SSH
 query: banner.bg:ssh-2.0-ws_ftp-ssh_
 tags:
 - tag:product:ws-ftp
-- proto:ssh
+- tag:proto:ssh
 - tag:product:sftp
 - tag:vendor:ws
-version: 20260510T065455Z
+version: 20260519T142825Z

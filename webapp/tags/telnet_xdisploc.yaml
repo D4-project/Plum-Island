@@ -3,6 +3,6 @@ query: banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB " OR banner.bg:"\xFF\xFD"
   banner.lk:"\xFF\xFD " OR banner.bg:"\xFF\xFC" banner.lk:"\xFF\xFC " OR
   banner.bg:"\xFF\xFE" banner.lk:"\xFF\xFE " OR banner.bg:"\xFF\xFA" banner.lk:"\xFF\xFA "
 tags:
-- tag:protocol:x-window
-- tag:protocol:telnet
-version: 20260519T121600Z
+- tag:proto:x-window
+- tag:proto:telnet
+version: 20260519T142825Z
