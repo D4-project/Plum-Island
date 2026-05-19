@@ -4,7 +4,7 @@ build-backend = "setuptools.backends.legacy:build"
 
 [project]
 name = "plum-island"
-version = "0.1.0"
+version = "0.2604.0"
 description = "Proactive Land Uncovering & Monitoring — network scan orchestration platform"
 readme = "readme.md"
 license = { text = "AGPL-3.0-only" }
