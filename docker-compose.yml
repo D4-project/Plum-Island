@@ -48,7 +48,7 @@ services:
     volumes:
       - meili_data:/meili_data
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:7700/health | grep -q '\"status\":\"available\"'"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:7700/health | grep -q available"]
       interval: 5s
       timeout: 3s
       retries: 10
