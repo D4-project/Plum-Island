@@ -11,7 +11,7 @@ This is the module containing all the data models
 import html
 import re
 from flask_appbuilder import Model
-from flask import Markup as Esc
+from markupsafe import Markup as Esc
 from sqlalchemy import (
     Column,
     Integer,
