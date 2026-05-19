@@ -1498,7 +1498,8 @@ check_json_storage(db.app.config.get("JSON_FOLDER"))
 
 # Connect to the Kvrocks and keep this index for all indexing.
 db.app.config["KVROCKS_IDX"] = KVrocksIndexer(
-    db.app.config.get("KVROCKS_HOST", db.app.config.get("KVROCKS_PORT"))
+    db.app.config.get("KVROCKS_HOST", "localhost"),
+    db.app.config.get("KVROCKS_PORT", 6666),
 )
 
 # Connect to the Mieili DB ( if the index is not present create IT)
