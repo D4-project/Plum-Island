@@ -68,6 +68,7 @@ Changes after `v0.2604.0`.
 - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)
 - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
+- Remove unused scheduler module-level job list, closes #102
 - Show inserted Tag Rule IDs in `import_tags.py` (`bf1afd5`)
 - Add `import_tags.py --flush-tag` to remove one tag from Kvrocks tag indexes, closes #47
 - Fix `import_tags.py` to update DB tag rules from newer YAML versions and print existing rule IDs, closes #49
