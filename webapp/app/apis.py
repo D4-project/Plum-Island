@@ -166,7 +166,7 @@ def _get_bot_by_uid(bot_uid):
     return (
         db.session.query(Bots)
         .filter(Bots.uid == bot_uid, Bots.active == True)
-        .limit("1")
+        .limit(1)
         .scalar()
     )
 
@@ -585,7 +585,7 @@ class Api(BaseApi):
         job_bot = (
             db.session.query(Jobs)
             .filter(Jobs.uid == botinfo.get("JOB_UID"))
-            .limit("1")
+            .limit(1)
             .scalar()
         )
         logger.debug(
