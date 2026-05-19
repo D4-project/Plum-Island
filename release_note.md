@@ -5,7 +5,7 @@ Changes after `v0.2604.0`.
 ## Changes
 - Detection tags:
   - Dropbear SSH (`eac052b`), FRITZ!Box SIP (`ff2fcc6`), Microsoft SMTP gateway (`b19b027`)
-  - SIP protocol, closes #26 (`0227c6a`)
+  - SIP protocol and SIP_Phone WWW-Authenticate realm tagging, closes #26 (`0227c6a`)
   - CrushFTP server header, closes #38 (`b41e40f`)
   - Red Hat Enterprise Linux HTTP server header in Apache RedHat detection, closes #39
   - NetScaler AAA title and LogonPoint path tagging, closes #40
