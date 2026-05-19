@@ -92,8 +92,11 @@ def is_valid_ip_or_cidr(value: str):
 
 def get_country(value):
     """
-    GeoIP
-    #TODO the Code
+    GeoIP lookup stub — always returns the unknown sentinel "WW".
+
+    To implement: integrate a GeoIP library (e.g. geoip2, ip-api, or
+    a MaxMind DB) and resolve the ISO 3166-1 alpha-2 country code from
+    the given public IP address string.
     """
     _ = value
     return "WW"
