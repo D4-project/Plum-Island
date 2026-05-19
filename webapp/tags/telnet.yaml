@@ -1,7 +1,15 @@
 description: Telnet protocol
-query: banner.bg:"\FF\FB\01" OR banner.bg:"\FF\FB\03" OR banner.bg:"\FF\FD\03"
-  OR banner.bg:"\FF\FB\25" OR banner.bg:"\FF\FB\26" OR banner.bg:"\FF\FD\01"
-  OR banner.bg:"\FF\FD\1F" OR banner.bg:"\FF\FD\18"
+query: banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB\x01" OR banner.bg:"\xFF\xFD"
+  banner.lk:"\xFF\xFB\x01" OR banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB\x03"
+  OR banner.bg:"\xFF\xFD" banner.lk:"\xFF\xFB\x03" OR banner.bg:"\xFF\xFB"
+  banner.lk:"\xFF\xFD\x03" OR banner.bg:"\xFF\xFD" banner.lk:"\xFF\xFD\x03"
+  OR banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB\x25" OR banner.bg:"\xFF\xFD"
+  banner.lk:"\xFF\xFB\x25" OR banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB\x26"
+  OR banner.bg:"\xFF\xFD" banner.lk:"\xFF\xFB\x26" OR banner.bg:"\xFF\xFB"
+  banner.lk:"\xFF\xFD\x01" OR banner.bg:"\xFF\xFD" banner.lk:"\xFF\xFD\x01"
+  OR banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFD\x1F" OR banner.bg:"\xFF\xFD"
+  banner.lk:"\xFF\xFD\x1F" OR banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFD\x18"
+  OR banner.bg:"\xFF\xFD" banner.lk:"\xFF\xFD\x18"
 tags:
 - proto:telnet
 version: 20260519T120400Z
