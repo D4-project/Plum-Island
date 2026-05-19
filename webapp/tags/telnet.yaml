@@ -1,0 +1,7 @@
+description: Telnet protocol
+query: banner.bg:"\FF\FB\01" OR banner.bg:"\FF\FB\03" OR banner.bg:"\FF\FD\03"
+  OR banner.bg:"\FF\FB\25" OR banner.bg:"\FF\FB\26" OR banner.bg:"\FF\FD\01"
+  OR banner.bg:"\FF\FD\1F" OR banner.bg:"\FF\FD\18"
+tags:
+- proto:telnet
+version: 20260519T120400Z

@@ -53,6 +53,7 @@ Changes after `v0.2604.0`.
   - Add Polylang x-redirect-by header value tagging, closes #61
   - Replace SSH software tag with proto:ssh and tighten generic SSH banner tagging, closes #65
   - Add generic HTTP banner/header protocol tagging, closes #64
+  - Add Telnet protocol negotiation banner tagging, closes #72
   - Merge ASP.NET favicon detection and add ASP.NET header tagging, closes #63
   - Add LiteSpeed header tagging, closes #58
   - Add Cisco Expressway server header tagging, closes #78
