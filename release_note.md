@@ -66,6 +66,7 @@ Changes after `v0.2604.0`.
   - Improve FortiGate title and default certificate subject tagging, closes #67
   - Add Icecast2 / ICY streaming protocol banner tagging, closes #69
   - Normalize remaining protocol and legacy hardware tag prefixes to `tag:proto:*` and `tag:type:*`
+  - Add RTSP protocol banner tagging, closes #70
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52

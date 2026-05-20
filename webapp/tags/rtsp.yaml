@@ -1,0 +1,5 @@
+description: RTSP protocol
+query: 'banner.bg:"rtsp/1.0" OR banner.lk:"allow: options, describe, setup, teardown, play"'
+tags:
+- tag:proto:rtsp
+version: 20260520T060656Z
