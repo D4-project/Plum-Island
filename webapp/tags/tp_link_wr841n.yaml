@@ -1,0 +1,7 @@
+description: TP-Link WR841N router
+query: http_headval:www-authenticate.lk:"tp-link wireless n router wr841n"
+tags:
+- tag:product:wr841n
+- tag:type:router
+- tag:vendor:tp-link
+version: 20260520T065655Z

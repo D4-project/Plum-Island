@@ -5,4 +5,5 @@ tags:
 - tag:vendor:mikrotik
 - tag:proto:ftp
 - tag:product:mikrotik-devices
+- tag:type:router
 version: 20260519T142825Z

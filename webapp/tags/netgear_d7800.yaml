@@ -1,0 +1,7 @@
+description: Netgear D7800 router
+query: http_headval:www-authenticate.lk:"netgear d7800"
+tags:
+- tag:product:d7800
+- tag:type:router
+- tag:vendor:netgear
+version: 20260520T065655Z

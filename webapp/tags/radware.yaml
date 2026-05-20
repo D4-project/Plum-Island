@@ -1,0 +1,7 @@
+description: Radware
+query: http_headval:www-authenticate.lk:radware
+tags:
+- tag:product:radware
+- tag:type:firewall
+- tag:vendor:radware
+version: 20260520T065655Z
