@@ -53,6 +53,85 @@ cd webapp
 python run.py
 ```
 
+## Docker (v0.2604.0)
+
+> **Supported release: v0.2604.0**
+> The `main` branch requires additional import steps not yet integrated into the Docker setup. Always build from the `v0.2604.0` tag.
+
+### Requirements
+
+- Docker Engine 24+
+- Docker Compose v2
+
+### Quick start
+
+```bash
+git clone https://github.com/D4-project/Plum-Island
+cd Plum-Island
+git checkout v0.2604.0
+cp .env.example .env
+```
+
+Edit `.env` and set at minimum:
+
+```
+MEILI_KEY=<a strong random string>
+```
+
+Then start the stack:
+
+```bash
+docker compose up --build
+```
+
+On first run the entrypoint will:
+1. Generate `webapp/config.py` from the environment variables
+2. Create the SQLite database and admin user
+3. Load initial TCP ports, tag rules, and NSE scripts via `tools/initial_setup.py`
+4. Print the admin credentials to stdout — save them before they scroll away
+
+```
+[plum] =================================================
+[plum]  Admin user    : admin
+[plum]  Admin password: <generated>
+[plum] =================================================
+```
+
+The webapp is then reachable at `http://localhost:5000`.
+
+### Configuration
+
+All settings are passed as environment variables (see `.env.example`):
+
+| Variable | Required | Description |
+|---|---|---|
+| `MEILI_KEY` | Yes | Meilisearch master key |
+| `SECRET_KEY` | No | Flask secret key (auto-generated if unset) |
+| `ADMIN_USER` | No | Admin username (default: `admin`) |
+| `ADMIN_EMAIL` | No | Admin email (default: `admin@plum.local`) |
+| `ADMIN_PASSWORD` | No | Admin password (auto-generated if unset) |
+| `PASSIVE_USER` | No | CIRCL Passive DNS username |
+| `PASSIVE_PWD` | No | CIRCL Passive DNS API key |
+
+### Persistence
+
+Data is stored in named Docker volumes that survive container restarts and rebuilds:
+
+| Volume | Contents |
+|---|---|
+| `plum_data` | SQLite database (`app.db`) |
+| `plum_jsons` | Scan result JSON files |
+| `plum_exports` | Async export jobs |
+| `kvrocks_data` | Kvrocks indexed data |
+| `meili_data` | Meilisearch index data |
+
+To stop the stack without losing data:
+
+```bash
+docker compose down        # stops containers, keeps volumes
+docker compose down -v     # stops containers AND deletes all volumes
+```
+
 ## Runtime services
 
 Plum Island expects:

@@ -1,0 +1,62 @@
+services:
+  webapp:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      MEILI_KEY: "${MEILI_KEY}"
+      MEILI_DATABASE_URI: "http://meilisearch:7700"
+      KVROCKS_HOST: "kvrocks"
+      KVROCKS_PORT: "6666"
+      SECRET_KEY: "${SECRET_KEY:-}"
+      ADMIN_USER: "${ADMIN_USER:-admin}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@plum.local}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      PASSIVE_USER: "${PASSIVE_USER:-}"
+      PASSIVE_PWD: "${PASSIVE_PWD:-}"
+    volumes:
+      - plum_data:/plum/data
+      - plum_jsons:/plum/webapp/app/jsons
+      - plum_exports:/plum/webapp/app/export_jobs
+    depends_on:
+      kvrocks:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  kvrocks:
+    image: apache/kvrocks:latest
+    ports:
+      - "6666:6666"
+    volumes:
+      - kvrocks_data:/var/lib/kvrocks
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c 'echo > /dev/tcp/localhost/6666'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12
+    ports:
+      - "7700:7700"
+    environment:
+      MEILI_MASTER_KEY: "${MEILI_KEY}"
+      MEILI_ENV: "production"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:7700/health | grep -q available"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  plum_data:
+  plum_jsons:
+  plum_exports:
+  kvrocks_data:
+  meili_data:
