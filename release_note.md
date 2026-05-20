@@ -70,6 +70,7 @@ Changes after `v0.2604.0`.
   - Improve Polycom detection with default certificate issuer and login title tagging, closes #74
   - Add Cisco ASA default certificate issuer tagging, closes #76
   - Add WWW-Authenticate realm tagging for RocketMQ, MOBOTIX, Netgear, Prometheus, Alertmanager, TP-Link, D-Link, Campbell, Wisenet, OpenClaw, OpenSearch, and Radware, closes #82
+  - Add FileZilla FTP Server default certificate issuer tagging, closes #75
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
