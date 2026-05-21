@@ -183,6 +183,23 @@ def _unfinished_job_count(scanprofile_id):
     )
 
 
+def _finished_job_scan_unit_count(cycle_id):
+    """
+    Count scan units from finished jobs attached to a cycle.
+    """
+    if cycle_id is None:
+        return 0
+    return (
+        db.session.query(func.coalesce(func.sum(Jobs.scan_unit_count), 0))
+        .filter(
+            Jobs.scanprofile_cycle_id == cycle_id,
+            Jobs.finished.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+
+
 def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     """
     Recalculate one running scan-profile cycle from persisted runtime state.
@@ -223,23 +240,46 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
 
     state_query = _active_applicable_state_query(profile)
     target_count = state_query.count()
-    completed_count = (
+    scan_unit_count = (
+        state_query.with_entities(
+            func.coalesce(func.sum(Targets.scan_unit_count), 0)
+        ).scalar()
+        or 0
+    )
+    completed_state_query = (
         state_query.filter(
             TargetScanStates.working.is_(False),
             TargetScanStates.last_scan.isnot(None),
             TargetScanStates.last_scan >= cycle.started_at,
-        ).count()
+        )
         if cycle.started_at is not None
-        else 0
+        else state_query.filter(False)
     )
+    completed_count = completed_state_query.count()
+    completed_state_scan_units = (
+        completed_state_query.with_entities(
+            func.coalesce(func.sum(Targets.scan_unit_count), 0)
+        ).scalar()
+        or 0
+    )
+    completed_scan_unit_count = max(
+        int(cycle.completed_scan_unit_count or 0),
+        int(completed_state_scan_units or 0),
+        int(_finished_job_scan_unit_count(cycle.id) or 0),
+    )
+    if scan_unit_count:
+        completed_scan_unit_count = min(completed_scan_unit_count, scan_unit_count)
     unfinished_jobs = _unfinished_job_count(scanprofile_id)
 
     cycle.target_count = target_count
     cycle.completed_target_count = completed_count
+    cycle.scan_unit_count = scan_unit_count
+    cycle.completed_scan_unit_count = completed_scan_unit_count
 
     if completed_count >= target_count and unfinished_jobs == 0:
         cycle.status = "finished"
         cycle.finished_at = cycle.finished_at or now
+        cycle.completed_scan_unit_count = cycle.scan_unit_count
         profile.current_cycle_id = None
         profile.last_cycle_finished_at = cycle.finished_at
     else:

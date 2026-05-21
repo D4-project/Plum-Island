@@ -13,6 +13,7 @@ import re
 from flask_appbuilder import Model
 from markupsafe import Markup as Esc
 from sqlalchemy import (
+    BigInteger,
     Column,
     Integer,
     String,
@@ -26,6 +27,7 @@ from sqlalchemy import (
 from flask_appbuilder.models.mixins import FileColumn
 from sqlalchemy import func
 from sqlalchemy.orm import relationship, object_session, validates
+from .utils.mutils import compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
 
 HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
@@ -142,6 +144,7 @@ class Jobs(Model):
         Integer, ForeignKey("scanprofile_cycles.id"), nullable=True
     )
     scanprofile_name = Column(String(256), nullable=True)
+    scan_unit_count = Column(BigInteger, default=1, nullable=False)
     scan_ports = Column(Text, nullable=True)
     scan_nses = Column(Text, nullable=True)
     scanprofile = relationship("ScanProfiles", back_populates="jobs")
@@ -653,6 +656,8 @@ class ScanProfileCycles(Model):
     status = Column(String(32), default="running", nullable=False)
     target_count = Column(Integer, default=0, nullable=False)
     completed_target_count = Column(Integer, default=0, nullable=False)
+    scan_unit_count = Column(BigInteger, default=0, nullable=False)
+    completed_scan_unit_count = Column(BigInteger, default=0, nullable=False)
 
     scanprofile = relationship(
         "ScanProfiles",
@@ -692,6 +697,27 @@ class ScanProfileCycles(Model):
             return "running"
         return value.strftime("%Y-%m-%d %H:%M:%S")
 
+    @staticmethod
+    def _format_percent(completed, total):
+        """
+        Render bounded scan-unit progress.
+        """
+        total = int(total or 0)
+        completed = int(completed or 0)
+        if total <= 0:
+            return 0.0
+        return min(100.0, max(0.0, (completed / total) * 100))
+
+    @staticmethod
+    def _progress_title(completed, total, target_completed, target_total):
+        """
+        Render compact cycle tooltip text.
+        """
+        return (
+            f"{int(completed or 0):,}/{int(total or 0):,} IP scan for "
+            f"{int(target_completed or 0):,}/{int(target_total or 0):,} target"
+        )
+
     def duration_html(self):
         """
         Current elapsed duration, or final duration after completion.
@@ -719,14 +745,17 @@ class ScanProfileCycles(Model):
 
     def progress_html(self):
         """
-        Render target completion counter for this cycle.
+        Render scan-unit completion percentage for this cycle.
         """
-        total = int(self.target_count or 0)
-        completed = int(self.completed_target_count or 0)
-        title = f"{completed} of {total} targets scanned in this cycle"
+        total = int(self.scan_unit_count or 0)
+        completed = int(self.completed_scan_unit_count or 0)
+        target_total = int(self.target_count or 0)
+        target_completed = int(self.completed_target_count or 0)
+        percent = self._format_percent(completed, total)
+        title = self._progress_title(completed, total, target_completed, target_total)
         return Esc(
             '<span class="label label-default" '
-            f'title="{_html_escape(title)}">{completed}/{total}</span>'
+            f'title="{_html_escape(title)}">{percent:.1f}%</span>'
         )
 
     def summary_badge_html(self, label):
@@ -735,18 +764,15 @@ class ScanProfileCycles(Model):
         """
         status = self.status or "running"
         label_class = "label-success" if status == "finished" else "label-info"
-        total = int(self.target_count or 0)
-        completed = int(self.completed_target_count or 0)
-        started_at = self._format_datetime(self.started_at)
-        finished_at = self._format_datetime(self.finished_at)
-        duration = self.duration_html()
-        title = (
-            f"{label}: {completed}/{total} targets; started {started_at}; "
-            f"finished {finished_at}; duration {duration}"
-        )
+        total = int(self.scan_unit_count or 0)
+        completed = int(self.completed_scan_unit_count or 0)
+        target_total = int(self.target_count or 0)
+        target_completed = int(self.completed_target_count or 0)
+        percent = self._format_percent(completed, total)
+        title = self._progress_title(completed, total, target_completed, target_total)
         return (
             f'<span class="label {label_class}" title="{_html_escape(title)}">'
-            f"{_html_escape(label)} {completed}/{total}</span>"
+            f"{_html_escape(label)} {percent:.1f}%</span>"
         )
 
     def previous_cycle_html(self):
@@ -779,11 +805,12 @@ class ScanProfileCycles(Model):
         started_at = self._format_datetime(previous_cycle.started_at)
         finished_at = self._format_datetime(previous_cycle.finished_at)
         duration = previous_cycle.duration_html()
-        completed = int(previous_cycle.completed_target_count or 0)
-        total = int(previous_cycle.target_count or 0)
+        completed = int(previous_cycle.completed_scan_unit_count or 0)
+        total = int(previous_cycle.scan_unit_count or 0)
+        percent = self._format_percent(completed, total)
         return Esc(
             '<div class="scan-cycle-previous">'
-            f'<span class="label label-success">tour -1 {completed}/{total}</span> '
+            f'<span class="label label-success">tour -1 {percent:.1f}%</span> '
             f"<span>start: {_html_escape(started_at)}</span> "
             f"<span>stop: {_html_escape(finished_at)}</span> "
             f"<span>duration: {_html_escape(duration)}</span>"
@@ -970,6 +997,15 @@ class Targets(Model):
     as_description = Column(String(256))  # AS Description.
     as_country = Column(String(2), default="ZZ")  # AS Country
     priority = Column(Integer, default=1)  # Priority, by default LOW
+    scan_unit_count = Column(BigInteger, default=1, nullable=False)
+
+    @validates("value")
+    def validate_value(self, key, value):
+        """
+        Maintain the precalculated scan-unit count when target value changes.
+        """
+        self.scan_unit_count = compute_scan_unit_count(value)
+        return value
 
     @validates("priority")
     def validate_priority(self, key, value):

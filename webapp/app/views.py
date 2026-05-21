@@ -2792,6 +2792,8 @@ class JobsView(ModelView):
             affected_profiles.setdefault(item.scanprofile_id, set()).update(
                 target.id for target in item.targets
             )
+        for profile_id in affected_profiles:
+            reconcile_scanprofile_cycle(profile_id)
         self.datamodel.delete_all(items)
         for profile_id, target_ids in affected_profiles.items():
             release_orphaned_scan_states_for_profile(profile_id, target_ids)

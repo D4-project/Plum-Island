@@ -7,6 +7,8 @@ import ipaddress
 import re
 import requests
 
+MAX_SCAN_UNIT_COUNT = 2**63 - 1
+
 
 def is_valid_uuid(value):
     """
@@ -88,6 +90,46 @@ def is_valid_ip_or_cidr(value: str):
         return str(net)
     except ValueError:
         return False
+
+
+def compute_scan_unit_count(value: str) -> int:
+    """
+    Return the number of concrete scan units represented by a target value.
+
+    FQDNs and single IPs count as one unit. CIDR ranges count by address count.
+    The value is capped to SQLite's signed integer range for very large IPv6
+    networks.
+    """
+    value = str(value or "").strip().rstrip(".")
+    if not value:
+        return 1
+
+    try:
+        ipaddress.ip_address(value)
+        return 1
+    except ValueError:
+        pass
+
+    try:
+        return min(
+            int(ipaddress.ip_network(value, strict=False).num_addresses),
+            MAX_SCAN_UNIT_COUNT,
+        )
+    except ValueError:
+        return 1
+
+
+def compute_scan_unit_count_list(values: str) -> int:
+    """
+    Return the scan-unit count for a comma-separated job target list.
+    """
+    total = 0
+    for value in str(values or "").split(","):
+        value = value.strip()
+        if not value:
+            continue
+        total = min(total + compute_scan_unit_count(value), MAX_SCAN_UNIT_COUNT)
+    return max(total, 1)
 
 
 def get_country(value):

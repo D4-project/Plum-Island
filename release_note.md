@@ -84,6 +84,7 @@ Changes after `v0.2604.0`.
 - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
 - Remove unused scheduler module-level job list, closes #102
+- Show scan profile cycle progress by concrete scan units instead of target rows, closes #118
 - Fix bot API SQLAlchemy limit calls to use integer arguments, closes #87
 - Bound Kvrocks rebuild memory use by preserving doc timestamps in place and parsing Meili pages batch-by-batch, closes #80
 - Store tag rule values as `namespace:value` while keeping `tag:*` search and Kvrocks keys

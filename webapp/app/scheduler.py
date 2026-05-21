@@ -23,7 +23,7 @@ from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_ta
 from .models import Reports
 from .models import CollectedHeaders
 from .models import TagRules
-from .utils.mutils import is_valid_fqdn, fetch_tlds
+from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json
 from .utils.reports import (
@@ -603,6 +603,7 @@ def _enqueue_profile_job(profile, job_value, scan_ports, scan_nses, chunk, scan_
     new_job.scanprofile_name = profile.name
     new_job.scan_ports = scan_ports
     new_job.scan_nses = scan_nses
+    new_job.scan_unit_count = compute_scan_unit_count_list(job_value)
     new_job.priority = profile.priority or 0
     new_job.scanprofile_cycle = scan_cycle
     for target in chunk["targets"]:
