@@ -81,7 +81,7 @@ class BotInfoSchema(Schema):
 
     # Custom validator for the parameters
     @validates("UID")
-    def validate_uid(self, value, **kwargs):
+    def validate_uid(self, value, **_kwargs):
         """
         UID Validation
         """
@@ -89,7 +89,7 @@ class BotInfoSchema(Schema):
             raise ValidationError("Invalid UID")
 
     @validates("JOB_UID")
-    def validate_job_uid(self, value, **kwargs):
+    def validate_job_uid(self, value, **_kwargs):
         """
         JOB_UID Validation
         """
@@ -97,7 +97,7 @@ class BotInfoSchema(Schema):
             raise ValidationError("Invalid JOB_UID")
 
     @validates("EXT_IP")
-    def validate_ext_ip(self, value, **kwargs):
+    def validate_ext_ip(self, value, **_kwargs):
         """
         IP Validation
         """
@@ -105,7 +105,7 @@ class BotInfoSchema(Schema):
             raise ValidationError("Invalid EXT_IP")
 
     @validates("AGENT_KEY")
-    def validate_agent_key(self, value, **kwargs):
+    def validate_agent_key(self, value, **_kwargs):
         """
         Validate Authorization to interact with Island
         """
@@ -135,7 +135,7 @@ class BulkTargetsSchema(Schema):
     )
 
     @validates("bulk")
-    def validate_bulk(self, value, **kwargs):  # pylint: disable=unused-argument
+    def validate_bulk(self, value, **_kwargs):
         """
         Ensure we have at least one target in the payload.
         """
