@@ -618,10 +618,11 @@ class KVrocksIndexer:
                         "No usable criteria get uid list from Base field: %s",
                         base_field,
                     )
-                    matching_keys = self.r.keys(f"{base_field}:*")
-                    if not matching_keys:
+                    partial_result = set()
+                    for key in self.r.scan_iter(match=f"{base_field}:*", count=1000):
+                        partial_result.update(self.r.smembers(key))
+                    if not partial_result:
                         return []
-                    partial_result = self.r.sunion(*matching_keys)
 
         if partial_result is None:
             return []
