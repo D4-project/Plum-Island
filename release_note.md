@@ -75,6 +75,7 @@ Changes after `v0.2604.0`.
   - Add Barracuda CloudGen Firewall server header tagging, closes #77
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
+- Return validation errors instead of TypeError for malformed bot UID fields, closes #86
 - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
 - Add curated HTTP header presence/value collection and structured Kvrocks search, closes #54
 - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)

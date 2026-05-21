@@ -81,28 +81,31 @@ class BotInfoSchema(Schema):
 
     # Custom validator for the parameters
     @validates("UID")
-    @validates("JOB_UID")
-    def validate_uid(self, value, data_key):
+    def validate_uid(self, value, **_kwargs):
         """
         UID Validation
         """
-        if len(value) != 36:
-            raise ValidationError(f"Invalid {data_key}")
-        if not is_valid_uuid(value):
-            raise ValidationError(f"Invalid {data_key}")
-        return True
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid UID")
+
+    @validates("JOB_UID")
+    def validate_job_uid(self, value, **_kwargs):
+        """
+        JOB_UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid JOB_UID")
 
     @validates("EXT_IP")
-    def validate_ext_ip(self, value, data_key):
+    def validate_ext_ip(self, value, **_kwargs):
         """
         IP Validation
         """
         if not is_valid_ip(value):  # Validate that IP is a public one.
-            raise ValidationError(f"Invalid {data_key}")
-        return True
+            raise ValidationError("Invalid EXT_IP")
 
     @validates("AGENT_KEY")
-    def validate_agent_key(self, value, data_key):
+    def validate_agent_key(self, value, **_kwargs):
         """
         Validate Authorization to interact with Island
         """
@@ -117,8 +120,8 @@ class BotInfoSchema(Schema):
             if check_password_hash(agentkey, value):
                 return True  # If the key is existing
         except NoResultFound as error:
-            raise ValidationError(f"Invalid {data_key}") from error
-        raise ValidationError(f"Invalid {data_key}")
+            raise ValidationError("Invalid AGENT_KEY") from error
+        raise ValidationError("Invalid AGENT_KEY")
 
 
 class BulkTargetsSchema(Schema):
@@ -132,7 +135,7 @@ class BulkTargetsSchema(Schema):
     )
 
     @validates("bulk")
-    def validate_bulk(self, value, data_key):  # pylint: disable=unused-argument
+    def validate_bulk(self, value, **_kwargs):
         """
         Ensure we have at least one target in the payload.
         """
