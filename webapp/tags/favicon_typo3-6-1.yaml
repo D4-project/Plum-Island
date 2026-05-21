@@ -1,7 +1,7 @@
 description: Typo3 6.1
 query: http_favicon_md5:8718C2998236C796896B725F264092EE
 tags:
-- tag:product:typo3-6-1
-- tag:type:cms
-- tag:vendor:typo3
-version: 20260508T144609Z
+- product:typo3-6-1
+- type:cms
+- vendor:typo3
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: phpMyBackupPro x
 query: http_favicon_md5:D361075DB94BB892FF3FB3717714B2DA
 tags:
-- tag:product:phpmybackuppro-x
-- tag:vendor:phpmybackuppro
-version: 20260508T144609Z
+- product:phpmybackuppro-x
+- vendor:phpmybackuppro
+version: 20260520T133458Z

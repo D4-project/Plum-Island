@@ -1,6 +1,6 @@
 description: Homegrown Website Hosting
 query: http_favicon_mmhash:-421986013
 tags:
-- tag:product:homegrown-website-hosting
-- tag:vendor:homegrown
-version: 20260508T144609Z
+- product:homegrown-website-hosting
+- vendor:homegrown
+version: 20260520T133458Z

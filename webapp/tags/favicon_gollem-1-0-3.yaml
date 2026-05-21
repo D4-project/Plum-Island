@@ -1,6 +1,6 @@
 description: gollem (1.0.3)
 query: http_favicon_md5:DB1E3FE4A9BA1BE201E913F9A401D794
 tags:
-- tag:product:gollem-1-0-3
-- tag:vendor:gollem
-version: 20260508T144609Z
+- product:gollem-1-0-3
+- vendor:gollem
+version: 20260520T133458Z

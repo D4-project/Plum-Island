@@ -1,6 +1,6 @@
 description: Zero byte favicon
 query: http_favicon_md5:D41D8CD98F00B204E9800998ECF8427E
 tags:
-- tag:product:zero-byte-favicon
-- tag:vendor:zero
-version: 20260508T144609Z
+- product:zero-byte-favicon
+- vendor:zero
+version: 20260520T133458Z

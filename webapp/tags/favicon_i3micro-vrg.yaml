@@ -1,6 +1,6 @@
 description: i3micro VRG
 query: http_favicon_md5:E4A509E78AFCA846CD0E6C0672797DE5
 tags:
-- tag:product:i3micro-vrg
-- tag:vendor:i3micro
-version: 20260508T144609Z
+- product:i3micro-vrg
+- vendor:i3micro
+version: 20260520T133458Z

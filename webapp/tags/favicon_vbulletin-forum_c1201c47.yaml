@@ -1,6 +1,6 @@
 description: vBulletin forum
 query: http_favicon_md5:C1201C47C81081C7F0930503CAE7F71A
 tags:
-- tag:product:vbulletin-forum
-- tag:vendor:vbulletin
-version: 20260508T144609Z
+- product:vbulletin-forum
+- vendor:vbulletin
+version: 20260520T133458Z

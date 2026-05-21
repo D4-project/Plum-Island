@@ -1,6 +1,6 @@
 description: Roller Weblogger Project
 query: http_favicon_md5:1CC16C64D0E471607677B036B3F06B6E
 tags:
-- tag:product:roller-weblogger-project
-- tag:vendor:roller
-version: 20260508T144609Z
+- product:roller-weblogger-project
+- vendor:roller
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Worldsoft CMS
 query: http_favicon_md5:E9E6C56F63122FB05E6899E1DEDD0734
 tags:
-- tag:product:worldsoft-cms
-- tag:vendor:worldsoft
-version: 20260508T144609Z
+- product:worldsoft-cms
+- vendor:worldsoft
+version: 20260520T133458Z

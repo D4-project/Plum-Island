@@ -2,4 +2,4 @@ description: Php Language
 query: http_cookiename:PHPSESSID or http_cookiename:CAKEPHP or http_server.lk:" php/" or http_headval:x-powered-by.bg:php/
 tags:
 - lang:php
-version: 20260509T103525Z
+version: 20260520T133458Z

@@ -1,7 +1,7 @@
 description: Qnap Nas
 query: x509_subject.lk:"QNAP NAS"
 tags:
-- tag:vendor:qnap
-- tag:vendor:nas
-- tag:product:qnap-nas
-version: 20260508T144609Z
+- vendor:qnap
+- vendor:nas
+- product:qnap-nas
+version: 20260520T133458Z

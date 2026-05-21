@@ -1,6 +1,6 @@
 description: hercules (3.05)
 query: http_favicon_md5:462794B1165C44409861FCAD7E185631
 tags:
-- tag:product:hercules-3-05
-- tag:vendor:hercules
-version: 20260508T144609Z
+- product:hercules-3-05
+- vendor:hercules
+version: 20260520T133458Z

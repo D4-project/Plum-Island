@@ -21,11 +21,17 @@ TAG_SPLIT_RE = re.compile(r"[\n,]+")
 def normalize_tags(tags):
     """
     Normalize tag values to unique lowercase strings.
+
+    The canonical stored value is namespace:value, for example product:gitlab.
+    Legacy tag:namespace:value inputs are accepted at import/edit boundaries and
+    collapsed to the canonical form.
     """
     normalized = []
     seen = set()
     for tag in tags or []:
         value = str(tag).strip().lower()
+        while value.startswith("tag:") and value.count(":") >= 2:
+            value = value.split(":", 1)[1].strip()
         if not value or value in seen:
             continue
         seen.add(value)

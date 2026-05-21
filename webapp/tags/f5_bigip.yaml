@@ -1,6 +1,6 @@
 description: F5 BIG-IP
 query: http_cookiename.bg:TS0 OR http_server.lk:bigip OR http_title.lk:"big-ip logout"
 tags:
-- tag:product:f5
-- tag:vendor:f5
-version: 20260508T144609Z
+- product:f5
+- vendor:f5
+version: 20260520T133458Z

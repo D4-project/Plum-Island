@@ -1,6 +1,6 @@
 description: Redmine x, Request Tracker x
 query: http_favicon_md5:6D85758ACB4F4BAA4D242BA451C91026
 tags:
-- tag:product:redmine-x-request-tracker-x
-- tag:vendor:redmine
-version: 20260508T144609Z
+- product:redmine-x-request-tracker-x
+- vendor:redmine
+version: 20260520T133458Z

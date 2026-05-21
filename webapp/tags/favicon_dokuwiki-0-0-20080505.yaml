@@ -1,6 +1,6 @@
 description: dokuwiki (0.0.20080505)
 query: http_favicon_md5:3EF81FAD2A3DEAEB19F02C9CF67ED8EB
 tags:
-- tag:product:dokuwiki-0-0-20080505
-- tag:vendor:dokuwiki
-version: 20260508T144609Z
+- product:dokuwiki-0-0-20080505
+- vendor:dokuwiki
+version: 20260520T133458Z

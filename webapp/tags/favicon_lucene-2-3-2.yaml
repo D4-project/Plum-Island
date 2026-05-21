@@ -1,6 +1,6 @@
 description: lucene (2.3.2)
 query: http_favicon_md5:B8FE2EC1FCC0477C0D0F00084D824071
 tags:
-- tag:product:lucene-2-3-2
-- tag:vendor:lucene
-version: 20260508T144609Z
+- product:lucene-2-3-2
+- vendor:lucene
+version: 20260520T133458Z

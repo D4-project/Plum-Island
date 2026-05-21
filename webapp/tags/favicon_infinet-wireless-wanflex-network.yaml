@@ -1,6 +1,6 @@
 description: InfiNet Wireless / WANFleX (Network)
 query: http_favicon_mmhash:1648531157
 tags:
-- tag:product:infinet-wireless-wanflex-network
-- tag:vendor:infinet
-version: 20260508T144609Z
+- product:infinet-wireless-wanflex-network
+- vendor:infinet
+version: 20260520T133458Z

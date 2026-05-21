@@ -1,6 +1,6 @@
 description: Dahua
 query: http_favicon_mmhash:-1466785234
 tags:
-- tag:product:dahua
-- tag:vendor:dahua
-version: 20260508T144609Z
+- product:dahua
+- vendor:dahua
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Hosteur web hosting
 query: http_favicon_md5:376CBEF2F074485F525BBF45DBFC2CBA
 tags:
-- tag:product:hosteur-web-hosting
-- tag:vendor:hosteur
-version: 20260508T144609Z
+- product:hosteur-web-hosting
+- vendor:hosteur
+version: 20260520T133458Z

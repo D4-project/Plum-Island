@@ -1,6 +1,6 @@
 description: Jboss
 query: http_favicon_mmhash:-656811182
 tags:
-- tag:product:jboss
-- tag:vendor:jboss
-version: 20260508T144609Z
+- product:jboss
+- vendor:jboss
+version: 20260520T133458Z

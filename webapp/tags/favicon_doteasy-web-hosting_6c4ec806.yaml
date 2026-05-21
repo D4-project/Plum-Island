@@ -1,6 +1,6 @@
 description: Doteasy web hosting
 query: http_favicon_md5:6C4EC806C82AB04D6B7D857E6FB68F95
 tags:
-- tag:product:doteasy-web-hosting
-- tag:vendor:doteasy
-version: 20260508T144609Z
+- product:doteasy-web-hosting
+- vendor:doteasy
+version: 20260520T133458Z

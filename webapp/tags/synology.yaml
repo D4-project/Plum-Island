@@ -3,7 +3,7 @@ query: http_title.lk:"-&nbsp;synology&nbsp;" OR http_title:"hello! welcome to sy
   web station!" OR http_title:"hallo! herzlich willkommen bei synology web station!"
   or x509_issuer:"synology inc. ca"
 tags:
-- tag:vendor:synology
-- tag:vendor:nas
-- tag:product:synology-nas
-version: 20260508T144609Z
+- vendor:synology
+- vendor:nas
+- product:synology-nas
+version: 20260520T133458Z

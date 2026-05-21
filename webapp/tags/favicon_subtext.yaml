@@ -1,6 +1,6 @@
 description: SubText
 query: http_favicon_md5:7F0F918A78CA8D4D5FF21EA84F2BAC68
 tags:
-- tag:product:subtext
-- tag:vendor:subtext
-version: 20260508T144609Z
+- product:subtext
+- vendor:subtext
+version: 20260520T133458Z

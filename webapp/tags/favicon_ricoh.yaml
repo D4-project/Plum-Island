@@ -1,6 +1,6 @@
 description: Ricoh
 query: http_favicon_mmhash:1135165421
 tags:
-- tag:product:ricoh
-- tag:vendor:ricoh
-version: 20260508T144609Z
+- product:ricoh
+- vendor:ricoh
+version: 20260520T133458Z

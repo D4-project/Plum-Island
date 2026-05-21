@@ -2,6 +2,6 @@ description: Kibana
 query: http_favicon_mmhash:-267431135 OR http_favicon_mmhash:-759754862 OR http_favicon_mmhash:-1200737715
   OR http_favicon_mmhash:75230260 OR http_favicon_mmhash:1668183286
 tags:
-- tag:product:kibana
-- tag:vendor:kibana
-version: 20260508T144609Z
+- product:kibana
+- vendor:kibana
+version: 20260520T133458Z

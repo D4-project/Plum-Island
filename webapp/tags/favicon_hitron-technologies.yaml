@@ -1,6 +1,6 @@
 description: Hitron Technologies
 query: http_favicon_mmhash:607846949
 tags:
-- tag:product:hitron-technologies
-- tag:vendor:hitron
-version: 20260508T144609Z
+- product:hitron-technologies
+- vendor:hitron
+version: 20260520T133458Z

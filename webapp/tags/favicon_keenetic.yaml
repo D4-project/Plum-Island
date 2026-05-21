@@ -1,6 +1,6 @@
 description: Keenetic
 query: http_favicon_mmhash:547282364
 tags:
-- tag:product:keenetic
-- tag:vendor:keenetic
-version: 20260508T144609Z
+- product:keenetic
+- vendor:keenetic
+version: 20260520T133458Z

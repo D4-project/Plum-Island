@@ -1,6 +1,6 @@
 description: Aruba (Virtual Controller)
 query: http_favicon_mmhash:1142227528
 tags:
-- tag:product:aruba-virtual-controller
-- tag:vendor:aruba
-version: 20260508T144609Z
+- product:aruba-virtual-controller
+- vendor:aruba
+version: 20260520T133458Z

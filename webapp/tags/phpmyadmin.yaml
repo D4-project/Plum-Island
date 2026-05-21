@@ -1,7 +1,7 @@
 description: PhpMyAdmin
 query: http_title.lk:phpmyadmin OR http_cookiename.bg:phpmyadmin_https
 tags:
-- tag:product:phpmyadmin
-- tag:vendor:phpmyadmin
-- tag:lang:php
-version: 20260508T144609Z
+- product:phpmyadmin
+- vendor:phpmyadmin
+- lang:php
+version: 20260520T133458Z

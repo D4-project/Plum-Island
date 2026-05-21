@@ -1,6 +1,6 @@
 description: NetComWireless (Network)
 query: http_favicon_mmhash:5542029
 tags:
-- tag:product:netcomwireless-network
-- tag:vendor:netcomwireless
-version: 20260508T144609Z
+- product:netcomwireless-network
+- vendor:netcomwireless
+version: 20260520T133458Z

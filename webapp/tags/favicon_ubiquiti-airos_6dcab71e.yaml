@@ -2,6 +2,6 @@ description: Ubiquiti AirOS
 query: http_favicon_md5:6DCAB71E60F0242907940F0FCDA69EA5 OR http_favicon_mmhash:-697231354
   OR http_favicon_mmhash:1020814938
 tags:
-- tag:product:ubiquiti-airos
-- tag:vendor:ubiquiti
-version: 20260508T144609Z
+- product:ubiquiti-airos
+- vendor:ubiquiti
+version: 20260520T133458Z

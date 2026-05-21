@@ -1,6 +1,6 @@
 description: Axcient Replibit Management Server
 query: http_favicon_mmhash:475379699
 tags:
-- tag:product:axcient-replibit-management-server
-- tag:vendor:axcient
-version: 20260508T144609Z
+- product:axcient-replibit-management-server
+- vendor:axcient
+version: 20260520T133458Z

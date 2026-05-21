@@ -1,6 +1,6 @@
 description: LiveJournal blog hosting
 query: http_favicon_md5:CE16CDE3E74E64131992DA97B266EE95
 tags:
-- tag:product:livejournal-blog-hosting
-- tag:vendor:livejournal
-version: 20260508T144609Z
+- product:livejournal-blog-hosting
+- vendor:livejournal
+version: 20260520T133458Z

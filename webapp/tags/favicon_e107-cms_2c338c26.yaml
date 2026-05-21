@@ -1,6 +1,6 @@
 description: e107 CMS
 query: http_favicon_md5:2C338C26309E13987D315D85F499D7F2
 tags:
-- tag:product:e107-cms
-- tag:vendor:e107
-version: 20260508T144609Z
+- product:e107-cms
+- vendor:e107
+version: 20260520T133458Z

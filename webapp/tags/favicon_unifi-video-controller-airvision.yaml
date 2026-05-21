@@ -1,6 +1,6 @@
 description: UniFi Video Controller (airVision)
 query: http_favicon_mmhash:768816037
 tags:
-- tag:product:unifi-video-controller-airvision
-- tag:vendor:unifi
-version: 20260508T144609Z
+- product:unifi-video-controller-airvision
+- vendor:unifi
+version: 20260520T133458Z

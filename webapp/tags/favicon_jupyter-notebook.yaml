@@ -1,6 +1,6 @@
 description: Jupyter Notebook
 query: http_favicon_mmhash:-895963602
 tags:
-- tag:product:jupyter-notebook
-- tag:vendor:jupyter
-version: 20260508T144609Z
+- product:jupyter-notebook
+- vendor:jupyter
+version: 20260520T133458Z

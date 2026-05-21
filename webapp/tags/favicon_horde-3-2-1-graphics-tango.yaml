@@ -1,6 +1,6 @@
 description: horde (3.2.1) - graphics/tango
 query: http_favicon_md5:7CC1A052C86CC3D487957F7092A6D8C3
 tags:
-- tag:product:horde-3-2-1-graphics-tango
-- tag:vendor:horde
-version: 20260508T144609Z
+- product:horde-3-2-1-graphics-tango
+- vendor:horde
+version: 20260520T133458Z

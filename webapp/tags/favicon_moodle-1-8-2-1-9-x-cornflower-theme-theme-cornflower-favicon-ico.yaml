@@ -1,6 +1,6 @@
 description: Moodle (1.8.2, 1.9.x, Cornflower Theme, /theme/cornflower/favicon.ico)
 query: http_favicon_md5:B6652D5D71F6F04A88A8443A8821510F
 tags:
-- tag:product:moodle-1-8-2-1-9-x-cornflower-theme-theme-cornflower-favicon-ico
-- tag:vendor:moodle
-version: 20260508T144609Z
+- product:moodle-1-8-2-1-9-x-cornflower-theme-theme-cornflower-favicon-ico
+- vendor:moodle
+version: 20260520T133458Z

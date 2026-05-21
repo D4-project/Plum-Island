@@ -1,7 +1,7 @@
 description: Dropbear SSH server
 query: banner.bg:ssh-2.0-dropbear
 tags:
-- tag:product:dropbear
-- tag:proto:ssh
-- tag:vendor:dropbear
-version: 20260519T142825Z
+- product:dropbear
+- proto:ssh
+- vendor:dropbear
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: OTRS x
 query: http_favicon_md5:49BF194D1ECCB1E5110957D14559D33D
 tags:
-- tag:product:otrs-x
-- tag:vendor:otrs
-version: 20260508T144609Z
+- product:otrs-x
+- vendor:otrs
+version: 20260520T133458Z

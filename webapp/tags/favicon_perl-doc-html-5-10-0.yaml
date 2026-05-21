@@ -1,6 +1,6 @@
 description: perl-doc-html (5.10.0)
 query: http_favicon_md5:82D746EB54B78B5449FBD583FC046AB2
 tags:
-- tag:product:perl-doc-html-5-10-0
-- tag:vendor:perl
-version: 20260508T144609Z
+- product:perl-doc-html-5-10-0
+- vendor:perl
+version: 20260520T133458Z

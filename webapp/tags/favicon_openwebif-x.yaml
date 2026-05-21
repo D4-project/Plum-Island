@@ -1,6 +1,6 @@
 description: OpenWebif x
 query: http_favicon_md5:9C34A7481BA0C153BB3E2A10E0EA811E
 tags:
-- tag:product:openwebif-x
-- tag:vendor:openwebif
-version: 20260508T144609Z
+- product:openwebif-x
+- vendor:openwebif
+version: 20260520T133458Z

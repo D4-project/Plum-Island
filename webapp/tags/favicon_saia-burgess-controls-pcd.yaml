@@ -1,6 +1,6 @@
 description: Saia Burgess Controls - PCD
 query: http_favicon_mmhash:-1547576879
 tags:
-- tag:product:saia-burgess-controls-pcd
-- tag:vendor:saia
-version: 20260508T144609Z
+- product:saia-burgess-controls-pcd
+- vendor:saia
+version: 20260520T133458Z

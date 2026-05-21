@@ -1,6 +1,6 @@
 description: Windows Azure
 query: http_favicon_mmhash:-2125083197
 tags:
-- tag:product:windows-azure
-- tag:vendor:windows
-version: 20260508T144609Z
+- product:windows-azure
+- vendor:windows
+version: 20260520T133458Z

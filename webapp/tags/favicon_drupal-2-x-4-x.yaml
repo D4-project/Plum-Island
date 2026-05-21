@@ -1,7 +1,7 @@
 description: Drupal 2.x-4.x
 query: http_favicon_md5:A4819787DB1DABE1A6B669D5D6DF3BFD
 tags:
-- tag:product:drupal-2-x-4-x
-- tag:type:cms
-- tag:vendor:drupal
-version: 20260508T144609Z
+- product:drupal-2-x-4-x
+- type:cms
+- vendor:drupal
+version: 20260520T133458Z

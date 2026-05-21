@@ -1,6 +1,6 @@
 description: Bluehost
 query: http_favicon_mmhash:-1119613926
 tags:
-- tag:product:bluehost
-- tag:vendor:bluehost
-version: 20260508T144609Z
+- product:bluehost
+- vendor:bluehost
+version: 20260520T133458Z

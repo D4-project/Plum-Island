@@ -1,6 +1,6 @@
 description: Tenda Web Master
 query: http_favicon_mmhash:-2145085239
 tags:
-- tag:product:tenda-web-master
-- tag:vendor:tenda
-version: 20260508T144609Z
+- product:tenda-web-master
+- vendor:tenda
+version: 20260520T133458Z

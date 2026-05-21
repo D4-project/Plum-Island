@@ -1,6 +1,6 @@
 description: INSTAR IP Cameras
 query: http_favicon_mmhash:-1169314298
 tags:
-- tag:product:instar-ip
-- tag:vendor:camera
-version: 20260508T144609Z
+- product:instar-ip
+- vendor:camera
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Aplikasi
 query: http_favicon_mmhash:494866796
 tags:
-- tag:product:aplikasi
-- tag:vendor:aplikasi
-version: 20260508T144609Z
+- product:aplikasi
+- vendor:aplikasi
+version: 20260520T133458Z

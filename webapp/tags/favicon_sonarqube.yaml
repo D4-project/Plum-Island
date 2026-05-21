@@ -1,6 +1,6 @@
 description: SonarQube
 query: http_favicon_mmhash:1485257654
 tags:
-- tag:product:sonarqube
-- tag:vendor:sonarqube
-version: 20260508T144609Z
+- product:sonarqube
+- vendor:sonarqube
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: HFS (HTTP File Server)
 query: http_favicon_mmhash:2124459909 OR http_favicon_mmhash:731374291
 tags:
-- tag:product:hfs-http-file-server
-- tag:vendor:hfs
-version: 20260508T144609Z
+- product:hfs-http-file-server
+- vendor:hfs
+version: 20260520T133458Z

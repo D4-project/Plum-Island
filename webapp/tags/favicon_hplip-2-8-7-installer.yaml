@@ -1,6 +1,6 @@
 description: hplip (2.8.7) - installer
 query: http_favicon_md5:5E99522B02F6ECADBB3665202357D775
 tags:
-- tag:product:hplip-2-8-7-installer
-- tag:vendor:hplip
-version: 20260508T144609Z
+- product:hplip-2-8-7-installer
+- vendor:hplip
+version: 20260520T133458Z

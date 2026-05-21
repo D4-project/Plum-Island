@@ -1,6 +1,6 @@
 description: ikiwiki (2.56ubuntu1)
 query: http_favicon_md5:32BF63AC2D3CFE82425CE8836C9CE87C
 tags:
-- tag:product:ikiwiki-2-56ubuntu1
-- tag:vendor:ikiwiki
-version: 20260508T144609Z
+- product:ikiwiki-2-56ubuntu1
+- vendor:ikiwiki
+version: 20260520T133458Z

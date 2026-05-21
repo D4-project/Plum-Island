@@ -1,6 +1,6 @@
 description: prewikka (0.9.14)
 query: http_favicon_md5:BA84999DFC070065F37A082AB0E36017
 tags:
-- tag:product:prewikka-0-9-14
-- tag:vendor:prewikka
-version: 20260508T144609Z
+- product:prewikka-0-9-14
+- vendor:prewikka
+version: 20260520T133458Z

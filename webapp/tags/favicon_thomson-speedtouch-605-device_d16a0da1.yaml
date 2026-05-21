@@ -1,6 +1,6 @@
 description: Thomson/Speedtouch 605 Device
 query: http_favicon_md5:D16A0DA12074DAE41980A6918D33F031
 tags:
-- tag:product:thomson-speedtouch-605-device
-- tag:vendor:thomson
-version: 20260508T144609Z
+- product:thomson-speedtouch-605-device
+- vendor:thomson
+version: 20260520T133458Z

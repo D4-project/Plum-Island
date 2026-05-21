@@ -1,6 +1,6 @@
 description: Biscom Delivery Server x
 query: http_favicon_md5:EB05F77BF80D66F0DB6B1F682FF08BEE
 tags:
-- tag:product:biscom-delivery-server-x
-- tag:vendor:biscom
-version: 20260508T144609Z
+- product:biscom-delivery-server-x
+- vendor:biscom
+version: 20260520T133458Z

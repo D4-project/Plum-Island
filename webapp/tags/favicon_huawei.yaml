@@ -1,6 +1,6 @@
 description: Huawei
 query: http_favicon_mmhash:281559989
 tags:
-- tag:product:huawei
-- tag:vendor:huawei
-version: 20260508T144609Z
+- product:huawei
+- vendor:huawei
+version: 20260520T133458Z

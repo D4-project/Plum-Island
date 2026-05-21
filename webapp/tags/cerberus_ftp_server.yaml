@@ -1,8 +1,8 @@
 description: Cerberus FTP Server
 query: banner.bg:ssh-2.0-cerberusftpserver_
 tags:
-- tag:product:cerberus-ftp-server
-- tag:proto:ssh
-- tag:product:sftp
-- tag:vendor:cerberus
-version: 20260519T142825Z
+- product:cerberus-ftp-server
+- proto:ssh
+- product:sftp
+- vendor:cerberus
+version: 20260520T133458Z

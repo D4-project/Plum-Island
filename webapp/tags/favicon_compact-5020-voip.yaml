@@ -1,6 +1,6 @@
 description: COMpact 5020 VoIP
 query: http_favicon_md5:CEB25C12C147093DC93AC8B2C18BEBFF
 tags:
-- tag:product:compact-5020-voip
-- tag:vendor:compact
-version: 20260508T144609Z
+- product:compact-5020-voip
+- vendor:compact
+version: 20260520T133458Z

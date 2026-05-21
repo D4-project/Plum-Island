@@ -6,7 +6,7 @@ A tag rule is a named search query with one or more tags attached. When a scan d
 ## YAML format
 
 Tag rules are stored under `webapp/tags/` as YAML files.
-The filename, without `.yaml`, is the rule name.
+The filename, with `.yaml`, is the rule name.
 
 Example:
 
@@ -14,8 +14,8 @@ Example:
 description: HashiCorp Vault
 query: http_favicon_mmhash:747250914 AND http_title.bg:Vault
 tags:
-- tag:product:hashicorp-vault
-- tag:vendor:hashicorp
+- product:hashicorp-vault
+- vendor:hashicorp
 version: 20260428T170756Z
 ```
 
@@ -30,7 +30,7 @@ Fields:
 
 ## Version policy
 
-`tools/import_tags.py` imports YAML rules into the SQLite database.
+`tools/tag_mgmt.py import` imports YAML rules into the SQLite database.
 
 Conflict policy:
 
@@ -45,31 +45,37 @@ This keeps local DB edits unless the YAML file carries a newer version.
 Import every YAML rule from `webapp/tags/`:
 
 ```bash
-.venv/bin/python tools/import_tags.py
+.venv/bin/python tools/tag_mgmt.py import --all
 ```
 
 Import one YAML file only:
 
 ```bash
-.venv/bin/python tools/import_tags.py --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/hashicorp_vault.yaml
+```
+
+Import the YAML rule matching an existing DB tag rule id:
+
+```bash
+.venv/bin/python tools/tag_mgmt.py import --id 42
 ```
 
 Preview changes without writing:
 
 ```bash
-.venv/bin/python tools/import_tags.py --dry-run
+.venv/bin/python tools/tag_mgmt.py import --all --dry-run
 ```
 
 Flush all tag rules from SQLite:
 
 ```bash
-.venv/bin/python tools/import_tags.py --flush_db
+.venv/bin/python tools/tag_mgmt.py delete --all
 ```
 
 Flush preview:
 
 ```bash
-.venv/bin/python tools/import_tags.py --flush_db --dry-run
+.venv/bin/python tools/tag_mgmt.py delete --all --dry-run
 ```
 
 ## Web UI
@@ -85,47 +91,49 @@ The Tag Rules UI supports:
 
 ## Reindexing
 
-After rules change, tags can be recomputed with `tools/reindex_tagrule.py`.
+After rules change, tags can be recomputed with `tools/tag_mgmt.py reindex`.
 
 List complete tags currently present in Kvrocks:
 
 ```bash
-.venv/bin/python tools/reindex_tagrule.py --list_tags
+.venv/bin/python tools/tag_mgmt.py list-tags
 ```
 
-The command prints tag keys such as:
+The command prints stored tag values such as:
 
 ```text
-tag:product:gitlab
-tag:vendor:gitlab
-tag:type:firewall
-tag:proto:http
+product:gitlab
+vendor:gitlab
+type:firewall
+proto:http
 ```
 
 ## Tag naming
 
-Tags use the normalized `tag:<namespace>:<value>` format.
+Stored YAML and SQLite tag values use the normalized `<namespace>:<value>` format.
 Common namespaces:
 
-- `tag:vendor:*` for vendor, project, or organization names
-- `tag:product:*` for software, product, service, or device family names
-- `tag:type:*` for broad asset families or roles, such as `firewall`, `router`, `cms`, `vpn`, or `webmail`
-- `tag:proto:*` for protocols or protocol families, such as `http`, `ssh`, `ftp`, `sip`, `telnet`, `bgp`, or `icy`
+- `vendor:*` for vendor, project, or organization names
+- `product:*` for software, product, service, or device family names
+- `type:*` for broad asset families or roles, such as `firewall`, `router`, `cms`, `vpn`, or `webmail`
+- `proto:*` for protocols or protocol families, such as `http`, `ssh`, `ftp`, `sip`, `telnet`, `bgp`, or `icy`
 - `vuln:*` for vulnerability-oriented classifications
 
-Do not use the old `soft:*` or `hard:*` prefixes in new rules. They were replaced by `tag:product:*`, `tag:vendor:*`, and `tag:type:*`.
+Do not prefix stored YAML tags with `tag:`. `tag:` is the search field and Kvrocks key prefix, so adding it to YAML would create duplicated keys such as `tag:tag:proto:bgp`.
 
-Do not use bare `proto:*` in new rules. Protocol tags must use `tag:proto:*`.
+Do not use the old `soft:*` or `hard:*` prefixes in new rules. They were replaced by `product:*`, `vendor:*`, and `type:*`.
 
-Favicon rules usually use `tag:product:<product>` and `tag:vendor:<vendor>`.
-Add `tag:type:*` when the favicon identifies an asset family rather than only a product.
+Protocol tags must use `proto:*` in YAML. Search for them as `tag:proto:*` in the UI.
 
-Protocol-only rules should tag with `tag:proto:*` and avoid product/vendor tags unless the signal identifies a specific implementation.
-For example, an HTTP banner prefix rule should use `tag:proto:http`; a HashiCorp Vault favicon rule should use `tag:product:hashicorp-vault` and `tag:vendor:hashicorp`.
+Favicon rules usually use `product:<product>` and `vendor:<vendor>`.
+Add `type:*` when the favicon identifies an asset family rather than only a product.
+
+Protocol-only rules should tag with `proto:*` and avoid product/vendor tags unless the signal identifies a specific implementation.
+For example, an HTTP banner prefix rule should use `proto:http`; a HashiCorp Vault favicon rule should use `product:hashicorp-vault` and `vendor:hashicorp`.
 
 # Source of information used.
 
-To build, and craft the detection rules, We based our knowledge on various open source;
+To build, and craft some of the detection rules, We based our knowledge on various open source;
 
 - https://github.com/OWASP/www-project-secure-headers
 - https://github.com/nmap/nmap/blob/9965fef7743c9f67dfe310b8e42c83cf170fa434/nselib/data/favicon-db

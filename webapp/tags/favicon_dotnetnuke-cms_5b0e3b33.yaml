@@ -1,6 +1,6 @@
 description: DotNetNuke CMS
 query: http_favicon_md5:5B0E3B33AA166C88CEE57F83DE1D4E55
 tags:
-- tag:product:dotnetnuke-cms
-- tag:vendor:dotnetnuke
-version: 20260508T144609Z
+- product:dotnetnuke-cms
+- vendor:dotnetnuke
+version: 20260520T133458Z

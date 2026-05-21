@@ -1,6 +1,6 @@
 description: Fireware Watchguard
 query: http_favicon_mmhash:-569941107
 tags:
-- tag:product:fireware-watchguard
-- tag:vendor:fireware
-version: 20260508T144609Z
+- product:fireware-watchguard
+- vendor:fireware
+version: 20260520T133458Z

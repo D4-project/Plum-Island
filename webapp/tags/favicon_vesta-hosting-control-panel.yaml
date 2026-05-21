@@ -1,6 +1,6 @@
 description: Vesta Hosting Control Panel
 query: http_favicon_mmhash:1954835352
 tags:
-- tag:product:vesta-hosting-control-panel
-- tag:vendor:vesta
-version: 20260508T144609Z
+- product:vesta-hosting-control-panel
+- vendor:vesta
+version: 20260520T133458Z

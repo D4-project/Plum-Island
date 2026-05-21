@@ -1,6 +1,6 @@
 description: Horde Gollem (File Manager) x
 query: http_favicon_md5:0E6A6ED665A9669B368D9A90B87976A9
 tags:
-- tag:product:horde-gollem-file-manager-x
-- tag:vendor:horde
-version: 20260508T144609Z
+- product:horde-gollem-file-manager-x
+- vendor:horde
+version: 20260520T133458Z

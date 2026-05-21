@@ -1,6 +1,6 @@
 description: truVision NVR (interlogix)
 query: http_favicon_mmhash:1782271534
 tags:
-- tag:product:truvision-nvr-interlogix
-- tag:vendor:truvision
-version: 20260508T144609Z
+- product:truvision-nvr-interlogix
+- vendor:truvision
+version: 20260520T133458Z

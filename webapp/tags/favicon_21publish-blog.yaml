@@ -1,6 +1,6 @@
 description: 21publish Blog
 query: http_favicon_md5:E08333841CBE40D15B18F49045F26614
 tags:
-- tag:product:21publish-blog
-- tag:vendor:blog
-version: 20260508T144609Z
+- product:21publish-blog
+- vendor:blog
+version: 20260520T133458Z

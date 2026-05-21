@@ -1,6 +1,6 @@
 description: ekmpowershop web store
 query: http_favicon_md5:BC96CB8D0841380F3504BB5584F78198
 tags:
-- tag:product:ekmpowershop-web-store
-- tag:vendor:ekmpowershop
-version: 20260508T144609Z
+- product:ekmpowershop-web-store
+- vendor:ekmpowershop
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Material Dashboard
 query: http_favicon_mmhash:1913538826
 tags:
-- tag:product:material-dashboard
-- tag:vendor:material
-version: 20260508T144609Z
+- product:material-dashboard
+- vendor:material
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: freevo (1.8.1)
 query: http_favicon_md5:093551287F13E0EE3805FEE23C6F0E12
 tags:
-- tag:product:freevo-1-8-1
-- tag:vendor:freevo
-version: 20260508T144609Z
+- product:freevo-1-8-1
+- vendor:freevo
+version: 20260520T133458Z

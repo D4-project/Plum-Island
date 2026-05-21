@@ -1,6 +1,6 @@
 description: CX
 query: http_favicon_mmhash:-532394952
 tags:
-- tag:product:cx
-- tag:vendor:cx
-version: 20260508T144609Z
+- product:cx
+- vendor:cx
+version: 20260520T133458Z

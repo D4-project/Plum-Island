@@ -1,6 +1,6 @@
 description: ISPConfig
 query: http_favicon_mmhash:483383992
 tags:
-- tag:product:ispconfig
-- tag:vendor:ispconfig
-version: 20260508T144609Z
+- product:ispconfig
+- vendor:ispconfig
+version: 20260520T133458Z

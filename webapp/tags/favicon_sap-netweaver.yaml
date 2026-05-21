@@ -1,6 +1,6 @@
 description: SAP Netweaver
 query: http_favicon_mmhash:-266008933
 tags:
-- tag:product:sap-netweaver
-- tag:vendor:sap
-version: 20260508T144609Z
+- product:sap-netweaver
+- vendor:sap
+version: 20260520T133458Z

@@ -1,7 +1,7 @@
 description: Zyxel ZyWALL
 query: http_favicon_mmhash:-440644339 OR http_favicon_mmhash:-484708885
 tags:
-- tag:vendor:zyxel
-- tag:vendor:firewall
-- tag:product:zywall
-version: 20260508T144609Z
+- vendor:zyxel
+- vendor:firewall
+- product:zywall
+version: 20260520T133458Z

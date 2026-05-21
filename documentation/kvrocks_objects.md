@@ -116,7 +116,7 @@ Current generic fields:
 ## Tag-specific updates
 
 Tag reindexing does not rebuild the whole Kvrocks index.
-`tools/reindex_tagrule.py` uses `replace_field_values_batch("tag", docs)` to replace only:
+`tools/tag_mgmt.py reindex` uses `replace_field_values_batch("tag", docs)` to replace only:
 
 ```text
 tag:{value}

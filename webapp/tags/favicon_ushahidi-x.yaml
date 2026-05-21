@@ -1,6 +1,6 @@
 description: Ushahidi x
 query: http_favicon_md5:7350C3F75CB80E857EFA88C2FD136DA5
 tags:
-- tag:product:ushahidi-x
-- tag:vendor:ushahidi
-version: 20260508T144609Z
+- product:ushahidi-x
+- vendor:ushahidi
+version: 20260520T133458Z

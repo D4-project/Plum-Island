@@ -1,6 +1,6 @@
 description: garlic-doc (1.6)
 query: http_favicon_md5:54B299F2F1C8B56C8C495F2DED6E3E0B
 tags:
-- tag:product:garlic-doc-1-6
-- tag:vendor:garlic
-version: 20260508T144609Z
+- product:garlic-doc-1-6
+- vendor:garlic
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: PLEX Server
 query: http_favicon_mmhash:-895890586
 tags:
-- tag:product:plex-server
-- tag:vendor:plex
-version: 20260508T144609Z
+- product:plex-server
+- vendor:plex
+version: 20260520T133458Z

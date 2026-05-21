@@ -1,6 +1,6 @@
 description: netdata dashboard
 query: http_favicon_mmhash:-182423204 OR http_favicon_mmhash:1585145626
 tags:
-- tag:product:netdata-dashboard
-- tag:vendor:netdata
-version: 20260508T144609Z
+- product:netdata-dashboard
+- vendor:netdata
+version: 20260520T133458Z

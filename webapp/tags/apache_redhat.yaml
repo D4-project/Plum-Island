@@ -2,6 +2,6 @@ description: Apache on Redhat
 query: http_favicon_md5:71E30C507CA3FA005E2D1322A5AA8FB2 OR http_server.lk:"Red Hat
   Enterprise Linux" OR http_server.lk:RedHat
 tags:
-- tag:product:apache
-- tag:vendor:redhat
-version: 20260508T144609Z
+- product:apache
+- vendor:redhat
+version: 20260520T133458Z

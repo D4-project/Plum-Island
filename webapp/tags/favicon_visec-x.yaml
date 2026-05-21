@@ -1,6 +1,6 @@
 description: VISEC x
 query: http_favicon_md5:2E5E985FE125E3F8FCA988A86689B127
 tags:
-- tag:product:visec-x
-- tag:vendor:visec
-version: 20260508T144609Z
+- product:visec-x
+- vendor:visec
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Realtek
 query: http_favicon_mmhash:2055322029
 tags:
-- tag:product:realtek
-- tag:vendor:realtek
-version: 20260508T144609Z
+- product:realtek
+- vendor:realtek
+version: 20260520T133458Z

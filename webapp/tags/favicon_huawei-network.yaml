@@ -1,6 +1,6 @@
 description: Huawei (Network)
 query: http_favicon_mmhash:-884776764 OR http_favicon_mmhash:987967490
 tags:
-- tag:product:huawei-network
-- tag:vendor:huawei
-version: 20260508T144609Z
+- product:huawei-network
+- vendor:huawei
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: twiki (4.1.2) - webpreferences
 query: http_favicon_md5:9789C9AB400EA0B9CA8FCBD9952133BD
 tags:
-- tag:product:twiki-4-1-2-webpreferences
-- tag:vendor:twiki
-version: 20260508T144609Z
+- product:twiki-4-1-2-webpreferences
+- vendor:twiki
+version: 20260520T133458Z

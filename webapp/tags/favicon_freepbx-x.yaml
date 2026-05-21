@@ -1,6 +1,6 @@
 description: FreePBX x
 query: http_favicon_md5:D134378A39C722E941AC25EED91CA93B
 tags:
-- tag:product:freepbx-x
-- tag:vendor:freepbx
-version: 20260508T144609Z
+- product:freepbx-x
+- vendor:freepbx
+version: 20260520T133458Z

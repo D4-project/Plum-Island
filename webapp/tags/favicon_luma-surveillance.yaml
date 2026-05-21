@@ -1,6 +1,6 @@
 description: Luma Surveillance
 query: http_favicon_mmhash:-1351901211
 tags:
-- tag:product:luma-surveillance
-- tag:vendor:luma
-version: 20260508T144609Z
+- product:luma-surveillance
+- vendor:luma
+version: 20260520T133458Z

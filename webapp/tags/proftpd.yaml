@@ -1,7 +1,7 @@
 description: ProFTPD FTP server
 query: banner.bg:"220 proftpd " AND banner.lk:server
 tags:
-- tag:proto:ftp
-- tag:product:proftpd
-- tag:vendor:proftpd
-version: 20260519T142825Z
+- proto:ftp
+- product:proftpd
+- vendor:proftpd
+version: 20260520T133458Z

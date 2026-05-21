@@ -1,6 +1,6 @@
 description: Lenel
 query: http_favicon_mmhash:538585915
 tags:
-- tag:product:lenel
-- tag:vendor:lenel
-version: 20260508T144609Z
+- product:lenel
+- vendor:lenel
+version: 20260520T133458Z

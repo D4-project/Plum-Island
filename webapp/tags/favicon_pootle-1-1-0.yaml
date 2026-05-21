@@ -1,6 +1,6 @@
 description: pootle (1.1.0)
 query: http_favicon_md5:8190EAD2EB45952151AB5065D0E56381
 tags:
-- tag:product:pootle-1-1-0
-- tag:vendor:pootle
-version: 20260508T144609Z
+- product:pootle-1-1-0
+- vendor:pootle
+version: 20260520T133458Z

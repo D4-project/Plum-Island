@@ -1,6 +1,6 @@
 description: Alfresco
 query: http_favicon_mmhash:1333537166
 tags:
-- tag:product:alfresco
-- tag:vendor:alfresco
-version: 20260508T144609Z
+- product:alfresco
+- vendor:alfresco
+version: 20260520T133458Z

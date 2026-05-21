@@ -1,6 +1,6 @@
 description: Liferay Portal
 query: http_favicon_mmhash:129457226
 tags:
-- tag:product:liferay-portal
-- tag:vendor:liferay
-version: 20260508T144609Z
+- product:liferay-portal
+- vendor:liferay
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: sork-vacation-h3 (3.0.1)
 query: http_favicon_md5:CB740847C45EA3FBBD80308B9AA4530A
 tags:
-- tag:product:sork-vacation-h3-3-0-1
-- tag:vendor:sork
-version: 20260508T144609Z
+- product:sork-vacation-h3-3-0-1
+- vendor:sork
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Serena Collage (4.6, servlet/images/collage_app.ico)
 query: http_favicon_md5:BD0F7466D35E8BA6CEDD9C27110C5C41
 tags:
-- tag:product:serena-collage-4-6-servlet-images-collage-app-ico
-- tag:vendor:serena
-version: 20260508T144609Z
+- product:serena-collage-4-6-servlet-images-collage-app-ico
+- vendor:serena
+version: 20260520T133458Z

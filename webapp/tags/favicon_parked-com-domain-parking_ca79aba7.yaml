@@ -1,6 +1,6 @@
 description: Parked.com domain parking
 query: http_favicon_md5:CA79ABA701B8ED97D4505BCD766DF6F3
 tags:
-- tag:product:parked-com-domain-parking
-- tag:vendor:parked
-version: 20260508T144609Z
+- product:parked-com-domain-parking
+- vendor:parked
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Multilaser
 query: http_favicon_mmhash:916642917
 tags:
-- tag:product:multilaser
-- tag:vendor:multilaser
-version: 20260508T144609Z
+- product:multilaser
+- vendor:multilaser
+version: 20260520T133458Z

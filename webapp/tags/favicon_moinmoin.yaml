@@ -1,6 +1,6 @@
 description: MoinMoin
 query: http_favicon_md5:B7F98DD27FEBE36B7275F22AD73C5E84
 tags:
-- tag:product:moinmoin
-- tag:vendor:moinmoin
-version: 20260508T144609Z
+- product:moinmoin
+- vendor:moinmoin
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Nmap Project
 query: http_favicon_md5:156515DA3C0F7DC6B2493BD5CE43F795
 tags:
-- tag:product:nmap-project
-- tag:vendor:nmap
-version: 20260508T144609Z
+- product:nmap-project
+- vendor:nmap
+version: 20260520T133458Z

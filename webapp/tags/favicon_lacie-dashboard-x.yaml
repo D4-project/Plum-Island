@@ -1,6 +1,6 @@
 description: LaCie Dashboard x
 query: http_favicon_md5:A7FE149A9F2582F38576D14D9B1F0F55
 tags:
-- tag:product:lacie-dashboard-x
-- tag:vendor:lacie
-version: 20260508T144609Z
+- product:lacie-dashboard-x
+- vendor:lacie
+version: 20260520T133458Z

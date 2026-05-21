@@ -1,6 +1,6 @@
 description: Moxapass ioLogik Remote Ethernet I/O Server
 query: http_favicon_mmhash:381100274
 tags:
-- tag:product:moxapass-iologik-remote-ethernet-i-o-server
-- tag:vendor:moxapass
-version: 20260508T144609Z
+- product:moxapass-iologik-remote-ethernet-i-o-server
+- vendor:moxapass
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Freebox OS
 query: http_favicon_mmhash:1838417872
 tags:
-- tag:product:freebox-os
-- tag:vendor:freebox
-version: 20260508T144609Z
+- product:freebox-os
+- vendor:freebox
+version: 20260520T133458Z

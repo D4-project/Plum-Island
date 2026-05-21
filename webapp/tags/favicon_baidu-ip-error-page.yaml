@@ -1,6 +1,6 @@
 description: Baidu (IP error page)
 query: http_favicon_mmhash:-1507567067
 tags:
-- tag:product:baidu-ip-error-page
-- tag:vendor:baidu
-version: 20260508T144609Z
+- product:baidu-ip-error-page
+- vendor:baidu
+version: 20260520T133458Z

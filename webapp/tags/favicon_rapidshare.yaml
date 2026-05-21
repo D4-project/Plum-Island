@@ -1,6 +1,6 @@
 description: RapidShare
 query: http_favicon_md5:05656826682AB3147092991EF5DE9EF3
 tags:
-- tag:product:rapidshare
-- tag:vendor:rapidshare
-version: 20260508T144609Z
+- product:rapidshare
+- vendor:rapidshare
+version: 20260520T133458Z

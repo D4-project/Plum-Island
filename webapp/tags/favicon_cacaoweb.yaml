@@ -1,6 +1,6 @@
 description: cacaoweb
 query: http_favicon_mmhash:-1738184811
 tags:
-- tag:product:cacaoweb
-- tag:vendor:cacaoweb
-version: 20260508T144609Z
+- product:cacaoweb
+- vendor:cacaoweb
+version: 20260520T133458Z

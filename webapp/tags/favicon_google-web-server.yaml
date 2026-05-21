@@ -1,6 +1,6 @@
 description: Google web server
 query: http_favicon_md5:09B565A51E14B721A323F0BA44B2982A
 tags:
-- tag:product:google-web-server
-- tag:vendor:google
-version: 20260508T144609Z
+- product:google-web-server
+- vendor:google
+version: 20260520T133458Z

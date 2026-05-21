@@ -1,6 +1,6 @@
 description: Stephen Turner Analog (6.0)
 query: http_favicon_md5:31C16DD034E6985B4BA929E251200580
 tags:
-- tag:product:stephen-turner-analog-6-0
-- tag:vendor:stephen
-version: 20260508T144609Z
+- product:stephen-turner-analog-6-0
+- vendor:stephen
+version: 20260520T133458Z

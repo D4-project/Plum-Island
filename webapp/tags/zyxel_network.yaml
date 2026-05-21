@@ -1,7 +1,7 @@
 description: ZyXEL (Network)
 query: http_favicon_mmhash:-882760066
 tags:
-- tag:vendor:zyxel
-- tag:type:router
-- tag:product:zyxel
-version: 20260508T144609Z
+- vendor:zyxel
+- type:router
+- product:zyxel
+version: 20260520T133458Z

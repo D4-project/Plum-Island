@@ -1,6 +1,6 @@
 description: glpi (0.70.2)
 query: http_favicon_md5:C9339A2ECDE0980F40BA22C2D237B94B
 tags:
-- tag:product:glpi-0-70-2
-- tag:vendor:glpi
-version: 20260508T144609Z
+- product:glpi-0-70-2
+- vendor:glpi
+version: 20260520T133458Z

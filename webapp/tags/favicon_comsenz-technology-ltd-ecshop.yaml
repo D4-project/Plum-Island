@@ -1,6 +1,6 @@
 description: Comsenz Technology Ltd ECShop
 query: http_favicon_md5:428B23DF874B41D904BBAE29057BDBA5
 tags:
-- tag:product:comsenz-technology-ltd-ecshop
-- tag:vendor:comsenz
-version: 20260508T144609Z
+- product:comsenz-technology-ltd-ecshop
+- vendor:comsenz
+version: 20260520T133458Z

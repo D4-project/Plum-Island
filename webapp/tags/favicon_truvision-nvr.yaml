@@ -1,6 +1,6 @@
 description: truVision (NVR)
 query: http_favicon_mmhash:-1093172228
 tags:
-- tag:product:truvision-nvr
-- tag:vendor:truvision
-version: 20260508T144609Z
+- product:truvision-nvr
+- vendor:truvision
+version: 20260520T133458Z

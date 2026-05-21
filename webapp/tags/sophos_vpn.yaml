@@ -1,6 +1,6 @@
 description: Sophos VPN
 query: http_favicon_md5:DC07CE58639E2DEEDDD787B3C7BF432E
 tags:
-- tag:product:sophosvpn
-- tag:vendor:sophos
-version: 20260508T144609Z
+- product:sophosvpn
+- vendor:sophos
+version: 20260520T133458Z

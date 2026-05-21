@@ -1,6 +1,6 @@
 description: Odoo
 query: http_favicon_mmhash:-617743584
 tags:
-- tag:product:odoo
-- tag:vendor:odoo
-version: 20260508T144609Z
+- product:odoo
+- vendor:odoo
+version: 20260520T133458Z

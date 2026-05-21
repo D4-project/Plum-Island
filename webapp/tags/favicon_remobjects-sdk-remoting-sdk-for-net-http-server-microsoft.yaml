@@ -1,6 +1,6 @@
 description: RemObjects SDK / Remoting SDK for .NET HTTP Server Microsoft
 query: http_favicon_mmhash:72005642
 tags:
-- tag:product:remobjects-sdk-remoting-sdk-for-net-http-server-microsoft
-- tag:vendor:remobjects
-version: 20260508T144609Z
+- product:remobjects-sdk-remoting-sdk-for-net-http-server-microsoft
+- vendor:remobjects
+version: 20260520T133458Z

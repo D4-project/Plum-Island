@@ -1,6 +1,6 @@
 description: couchdb (0.8.0-0.9.1)
 query: http_favicon_md5:2AB2AAE806E8393B70970B2EAACE82E0
 tags:
-- tag:product:couchdb-0-8-0-0-9-1
-- tag:vendor:couchdb
-version: 20260508T144609Z
+- product:couchdb-0-8-0-0-9-1
+- vendor:couchdb
+version: 20260520T133458Z

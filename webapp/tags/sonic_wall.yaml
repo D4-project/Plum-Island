@@ -2,7 +2,7 @@ description: Sonic Wall
 query: http_favicon_md5:60FA7ED2309D77DE1F9DC5E7C741AC48 or http_favicon_mmhash:631108382
   or http_favicon_mmhash:363324987 or http_title:"SonicWall - Authentication" or http_title.lk:"/sonicui/"
 tags:
-- tag:product:firewall
-- tag:product:sonicwall
-- tag:vendor:sonic
-version: 20260508T144609Z
+- product:firewall
+- product:sonicwall
+- vendor:sonic
+version: 20260520T133458Z

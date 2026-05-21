@@ -572,8 +572,9 @@ def parse_json(doc, db_conf_local, tag_rules=None):
             for port in doc.get("body").get("ports"):  # for each ports,
                 for script in port.get("scripts", []):  # We look at script results
                     if script.get("id") == script_name:  # If it is in the job list.
-                        parse_result = run_parser_action(
-                            action, script, target, db_conf
+                        parse_result = fuse_dicts(
+                            parse_result,
+                            run_parser_action(action, script, target, db_conf),
                         )
 
         final_result = fuse_dicts(final_result, parse_result)

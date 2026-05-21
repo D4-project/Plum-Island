@@ -11,5 +11,5 @@ query: banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB\x01" OR banner.bg:"\xFF\xFD"
   banner.lk:"\xFF\xFD\x1F" OR banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFD\x18"
   OR banner.bg:"\xFF\xFD" banner.lk:"\xFF\xFD\x18"
 tags:
-- tag:proto:telnet
-version: 20260519T142825Z
+- proto:telnet
+version: 20260520T133458Z

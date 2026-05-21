@@ -1,6 +1,6 @@
 description: Gogs
 query: http_favicon_mmhash:917966895
 tags:
-- tag:product:gogs
-- tag:vendor:gogs
-version: 20260508T144609Z
+- product:gogs
+- vendor:gogs
+version: 20260520T133458Z

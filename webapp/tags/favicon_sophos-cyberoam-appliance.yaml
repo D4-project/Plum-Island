@@ -1,6 +1,6 @@
 description: Sophos Cyberoam (appliance)
 query: http_favicon_mmhash:1601194732
 tags:
-- tag:product:sophos-cyberoam-appliance
-- tag:vendor:sophos
-version: 20260508T144609Z
+- product:sophos-cyberoam-appliance
+- vendor:sophos
+version: 20260520T133458Z

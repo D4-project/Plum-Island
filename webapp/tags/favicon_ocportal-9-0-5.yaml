@@ -1,6 +1,6 @@
 description: ocPortal 9.0.5
 query: http_favicon_md5:B9D28BD6822D2E09E01AA0AF5D7CCC34
 tags:
-- tag:product:ocportal-9-0-5
-- tag:vendor:ocportal
-version: 20260508T144609Z
+- product:ocportal-9-0-5
+- vendor:ocportal
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Aruba Network Devices (HTTP(S) login page)
 query: http_favicon_md5:DC0816F371699823E1E03E0078622D75
 tags:
-- tag:product:aruba-network-devices-http-s-login-page
-- tag:vendor:aruba
-version: 20260508T144609Z
+- product:aruba-network-devices-http-s-login-page
+- vendor:aruba
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: VMware Horizon
 query: http_favicon_mmhash:-1255992602 OR http_favicon_mmhash:1895360511 OR http_favicon_mmhash:-991123252
 tags:
-- tag:product:vmware-horizon
-- tag:vendor:vmware
-version: 20260508T144609Z
+- product:vmware-horizon
+- vendor:vmware
+version: 20260520T133458Z

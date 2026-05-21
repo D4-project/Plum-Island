@@ -3,4 +3,4 @@ query: http_title.lk:"listing" http_server.bg:"SimpleHTTP"
 tags:
 - vuln:opendir
 - lang:python
-version: 20260508T144609Z
+version: 20260520T133458Z

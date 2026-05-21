@@ -76,6 +76,7 @@ from .utils.kvrocks import KVrocksIndexer
 from .utils.ip2asn import get_asn_description_for_ip
 from .utils.tagrules import (
     compile_tag_rule_definition,
+    normalize_tags,
     normalize_tag_rule_fields,
 )
 from .utils.reports import (
@@ -832,7 +833,7 @@ class KVSearchView(BaseView):
             .order_by(TagRules.id.asc())
             .all()
         ):
-            for tag in rule.tags_list():
+            for tag in normalize_tags(rule.tags_list()):
                 candidate = str(tag).strip().lower()
                 if not candidate or candidate in seen:
                     continue
@@ -856,6 +857,7 @@ class KVSearchView(BaseView):
             )
         except Exception:
             logger.exception("Unable to load tag suggestions from Kvrocks")
+        values = normalize_tags(values)
         seen = set(values)
         for tag in cls._collect_rule_tags():
             if tag in seen:
@@ -2359,8 +2361,8 @@ class IPDetailView(BaseView):
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
             for tag in indexer.r.smembers(f"tags:{uid}"):
-                tag_value = str(tag or "").strip()
-                if tag_value:
+                tag_values = normalize_tags([tag])
+                for tag_value in tag_values:
                     ip_tags.add(tag_value)
             first_seen = self._safe_timestamp_to_display(
                 uid_timestamps.get("first_seen")

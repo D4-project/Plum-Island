@@ -1,6 +1,6 @@
 description: Citrix Access Server
 query: http_favicon_md5:F097F0ADF2B9E95A972D21E5E5AB746D
 tags:
-- tag:product:citrix-access-server
-- tag:vendor:citrix
-version: 20260508T144609Z
+- product:citrix-access-server
+- vendor:citrix
+version: 20260520T133458Z

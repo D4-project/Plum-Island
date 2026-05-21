@@ -1,6 +1,6 @@
 description: Chez.com web hosting
 query: http_favicon_md5:7CEB7789D54A151FDC75C59925351B7B
 tags:
-- tag:product:chez-com-web-hosting
-- tag:vendor:chez
-version: 20260508T144609Z
+- product:chez-com-web-hosting
+- vendor:chez
+version: 20260520T133458Z

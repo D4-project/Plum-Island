@@ -1,6 +1,6 @@
 description: Mersive Solstice
 query: http_favicon_mmhash:938616453
 tags:
-- tag:product:mersive-solstice
-- tag:vendor:mersive
-version: 20260508T144609Z
+- product:mersive-solstice
+- vendor:mersive
+version: 20260520T133458Z

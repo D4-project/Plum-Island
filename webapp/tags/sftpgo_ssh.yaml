@@ -1,8 +1,8 @@
 description: SFTPGo SSH
 query: banner.bg:ssh-2.0-sftpgo_
 tags:
-- tag:product:sftpgo
-- tag:proto:ssh
-- tag:product:sftp
-- tag:vendor:sftpgo
-version: 20260519T142825Z
+- product:sftpgo
+- proto:ssh
+- product:sftp
+- vendor:sftpgo
+version: 20260520T133458Z

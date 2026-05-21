@@ -1,6 +1,6 @@
 description: MagicMail x
 query: http_favicon_md5:2BA9B777483DA0A6A8B29C4AB39A10B2
 tags:
-- tag:product:magicmail-x
-- tag:vendor:magicmail
-version: 20260508T144609Z
+- product:magicmail-x
+- vendor:magicmail
+version: 20260520T133458Z

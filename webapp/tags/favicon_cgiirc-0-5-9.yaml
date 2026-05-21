@@ -1,6 +1,6 @@
 description: cgiirc (0.5.9)
 query: http_favicon_md5:F276B19AABCB4AE8CDA4D22625C6735F
 tags:
-- tag:product:cgiirc-0-5-9
-- tag:vendor:cgiirc
-version: 20260508T144609Z
+- product:cgiirc-0-5-9
+- vendor:cgiirc
+version: 20260520T133458Z

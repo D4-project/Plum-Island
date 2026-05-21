@@ -1,6 +1,6 @@
 description: HashiCorp Vault
 query: http_favicon_mmhash:747250914 AND http_title.bg:Vault
 tags:
-- tag:product:hashicorp-vault
-- tag:vendor:hashicorp
-version: 20260508T144609Z
+- product:hashicorp-vault
+- vendor:hashicorp
+version: 20260520T133458Z

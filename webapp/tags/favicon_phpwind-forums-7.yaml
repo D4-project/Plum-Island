@@ -1,6 +1,6 @@
 description: PHPWind Forums 7
 query: http_favicon_md5:4CFBB29D0D83685BA99323BC0D4D3513
 tags:
-- tag:product:phpwind-forums-7
-- tag:vendor:phpwind
-version: 20260508T144609Z
+- product:phpwind-forums-7
+- vendor:phpwind
+version: 20260520T133458Z

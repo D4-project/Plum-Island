@@ -1,6 +1,6 @@
 description: Entronix Energy Management Platform
 query: http_favicon_mmhash:-368490461
 tags:
-- tag:product:entronix-energy-management-platform
-- tag:vendor:entronix
-version: 20260508T144609Z
+- product:entronix-energy-management-platform
+- vendor:entronix
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: VZPP Plesk
 query: http_favicon_mmhash:-1268095485
 tags:
-- tag:product:vzpp-plesk
-- tag:vendor:vzpp
-version: 20260508T144609Z
+- product:vzpp-plesk
+- vendor:vzpp
+version: 20260520T133458Z

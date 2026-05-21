@@ -1,6 +1,6 @@
 description: Nomadix Access Gateway
 query: http_favicon_mmhash:2071993228
 tags:
-- tag:product:nomadix-access-gateway
-- tag:vendor:nomadix
-version: 20260508T144609Z
+- product:nomadix-access-gateway
+- vendor:nomadix
+version: 20260520T133458Z

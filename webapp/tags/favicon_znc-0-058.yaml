@@ -1,6 +1,6 @@
 description: znc (0.058)
 query: http_favicon_md5:33B04FB9F2EC918F5F14B41527E77F6D
 tags:
-- tag:product:znc-0-058
-- tag:vendor:znc
-version: 20260508T144609Z
+- product:znc-0-058
+- vendor:znc
+version: 20260520T133458Z

@@ -1,8 +1,8 @@
 description: Zyxel USG20 firewall
 query: banner.lk:"ftp server (usg20" OR http_title.lk:usg20-vpn
 tags:
-- tag:vendor:firewall
-- tag:vendor:zyxel
-- tag:vendor:usg20w
-- tag:product:zyxel-usg20-firewall
-version: 20260508T144609Z
+- vendor:firewall
+- vendor:zyxel
+- vendor:usg20w
+- product:zyxel-usg20-firewall
+version: 20260520T133458Z

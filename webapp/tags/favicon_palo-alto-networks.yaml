@@ -1,6 +1,6 @@
 description: Palo Alto Networks
 query: http_favicon_mmhash:-318947884
 tags:
-- tag:product:palo-alto-networks
-- tag:vendor:palo
-version: 20260508T144609Z
+- product:palo-alto-networks
+- vendor:palo
+version: 20260520T133458Z

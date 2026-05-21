@@ -1,6 +1,6 @@
 description: Archivematica
 query: http_favicon_mmhash:-1378182799
 tags:
-- tag:product:archivematica
-- tag:vendor:archivematica
-version: 20260508T144609Z
+- product:archivematica
+- vendor:archivematica
+version: 20260520T133458Z

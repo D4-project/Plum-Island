@@ -1,6 +1,6 @@
 description: Feng Office 2.3
 query: http_favicon_md5:51B916BDAF994CE73D3E5E6DFE2A46EE
 tags:
-- tag:product:feng-office-2-3
-- tag:vendor:feng
-version: 20260508T144609Z
+- product:feng-office-2-3
+- vendor:feng
+version: 20260520T133458Z

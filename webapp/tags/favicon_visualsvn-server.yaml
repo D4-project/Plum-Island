@@ -1,6 +1,6 @@
 description: VisualSVN Server
 query: http_favicon_mmhash:706602230
 tags:
-- tag:product:visualsvn-server
-- tag:vendor:visualsvn
-version: 20260508T144609Z
+- product:visualsvn-server
+- vendor:visualsvn
+version: 20260520T133458Z

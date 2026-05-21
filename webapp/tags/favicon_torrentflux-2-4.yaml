@@ -1,6 +1,6 @@
 description: torrentflux (2.4)
 query: http_favicon_md5:1DE863A5023E7E73F050A496E6B104AB
 tags:
-- tag:product:torrentflux-2-4
-- tag:vendor:torrentflux
-version: 20260508T144609Z
+- product:torrentflux-2-4
+- vendor:torrentflux
+version: 20260520T133458Z

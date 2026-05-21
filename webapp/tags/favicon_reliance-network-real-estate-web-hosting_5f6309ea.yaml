@@ -1,6 +1,6 @@
 description: Reliance Network real estate web hosting
 query: http_favicon_md5:5F6309EA0D1ADEAB12C18DC31BE49771
 tags:
-- tag:product:reliance-network-real-estate-web-hosting
-- tag:vendor:reliance
-version: 20260508T144609Z
+- product:reliance-network-real-estate-web-hosting
+- vendor:reliance
+version: 20260520T133458Z

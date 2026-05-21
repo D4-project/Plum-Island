@@ -1,6 +1,6 @@
 description: Iomega StorCenter ix4-300d x
 query: http_favicon_md5:E7DCE6AC6D8713A0B98407254CA33F80
 tags:
-- tag:product:iomega-storcenter-ix4-300d-x
-- tag:vendor:iomega
-version: 20260508T144609Z
+- product:iomega-storcenter-ix4-300d-x
+- vendor:iomega
+version: 20260520T133458Z

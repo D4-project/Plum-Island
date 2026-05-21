@@ -1,6 +1,6 @@
 description: Domain Technology Control 0.17.x-0.24.x
 query: http_favicon_md5:C86974467C2AC7B6902189944F812B9A
 tags:
-- tag:product:domain-technology-control-0-17-x-0-24-x
-- tag:vendor:domain
-version: 20260508T144609Z
+- product:domain-technology-control-0-17-x-0-24-x
+- vendor:domain
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: LimeSurvey
 query: http_favicon_md5:F89ABD3F358CB964D6B753A5A9DA49CF
 tags:
-- tag:product:limesurvey
-- tag:vendor:limesurvey
-version: 20260508T144609Z
+- product:limesurvey
+- vendor:limesurvey
+version: 20260520T133458Z

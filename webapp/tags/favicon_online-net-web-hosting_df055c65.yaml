@@ -1,6 +1,6 @@
 description: Online.net web hosting
 query: http_favicon_md5:DF055C65114B64B29EA68721FCDF9039
 tags:
-- tag:product:online-net-web-hosting
-- tag:vendor:online
-version: 20260508T144609Z
+- product:online-net-web-hosting
+- vendor:online
+version: 20260520T133458Z

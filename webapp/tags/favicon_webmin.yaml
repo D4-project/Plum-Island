@@ -2,6 +2,6 @@ description: Webmin
 query: http_favicon_mmhash:1453890729 OR http_favicon_mmhash:-1038557304 OR http_favicon_mmhash:1280907310
   OR http_favicon_mmhash:479413330
 tags:
-- tag:product:webmin
-- tag:vendor:webmin
-version: 20260508T144609Z
+- product:webmin
+- vendor:webmin
+version: 20260520T133458Z

@@ -1,5 +1,5 @@
 description: SSH
 query: banner.bg:ssh-2.0-
 tags:
-- tag:proto:ssh
-version: 20260519T142825Z
+- proto:ssh
+version: 20260520T133458Z

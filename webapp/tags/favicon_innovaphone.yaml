@@ -1,6 +1,6 @@
 description: innovaphone
 query: http_favicon_mmhash:671221099
 tags:
-- tag:product:innovaphone
-- tag:vendor:innovaphone
-version: 20260508T144609Z
+- product:innovaphone
+- vendor:innovaphone
+version: 20260520T133458Z

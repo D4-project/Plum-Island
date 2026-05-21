@@ -1,6 +1,6 @@
 description: CivicPlus government web sites
 query: http_favicon_md5:A1C686EB6E771878CF6040574A175933
 tags:
-- tag:product:civicplus-government-web-sites
-- tag:vendor:civicplus
-version: 20260508T144609Z
+- product:civicplus-government-web-sites
+- vendor:civicplus
+version: 20260520T133458Z

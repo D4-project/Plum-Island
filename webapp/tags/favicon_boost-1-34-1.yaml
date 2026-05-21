@@ -1,6 +1,6 @@
 description: boost (1.34.1)
 query: http_favicon_md5:EA84A69CB146A947FAC2AC7AF3946297
 tags:
-- tag:product:boost-1-34-1
-- tag:vendor:boost
-version: 20260508T144609Z
+- product:boost-1-34-1
+- vendor:boost
+version: 20260520T133458Z

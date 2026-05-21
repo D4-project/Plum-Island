@@ -1,6 +1,6 @@
 description: kdenetwork (4.1.4)
 query: http_favicon_md5:8AB2F1A55BCB0CAC227828AFD5927D39
 tags:
-- tag:product:kdenetwork-4-1-4
-- tag:vendor:kdenetwork
-version: 20260508T144609Z
+- product:kdenetwork-4-1-4
+- vendor:kdenetwork
+version: 20260520T133458Z

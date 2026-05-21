@@ -1,6 +1,6 @@
 description: Point2 Agent real estate marketing
 query: http_favicon_md5:2C0067D9382A7F1751FED2D200F38DB7
 tags:
-- tag:product:point2-agent-real-estate-marketing
-- tag:vendor:point2
-version: 20260508T144609Z
+- product:point2-agent-real-estate-marketing
+- vendor:point2
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Cisco VPN
 query: http_cookiename.bg:webvpnlogin
 tags:
-- tag:vendor:cisco
-- tag:product:cisco-vpn
-version: 20260508T144609Z
+- vendor:cisco
+- product:cisco-vpn
+version: 20260520T133458Z

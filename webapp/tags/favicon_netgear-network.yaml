@@ -1,6 +1,6 @@
 description: Netgear (Network)
 query: http_favicon_mmhash:1047213685
 tags:
-- tag:product:netgear-network
-- tag:vendor:netgear
-version: 20260508T144609Z
+- product:netgear-network
+- vendor:netgear
+version: 20260520T133458Z

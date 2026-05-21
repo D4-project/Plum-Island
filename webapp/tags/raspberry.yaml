@@ -1,7 +1,7 @@
 description: Raspberry
 query: banner.bg:ssh-2.0-openssh AND banner.lk:raspbian OR http_server.lk:raspbian
 tags:
-- tag:type:linux
-- tag:vendor:debian
-- tag:product:raspberry
-version: 20260519T142825Z
+- type:linux
+- vendor:debian
+- product:raspberry
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: TC-Group
 query: http_favicon_mmhash:-1734573358
 tags:
-- tag:product:tc-group
-- tag:vendor:tc
-version: 20260508T144609Z
+- product:tc-group
+- vendor:tc
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Parallels Plesk
 query: http_favicon_md5:1DB747255C64A30F9236E9D929E986CA
 tags:
-- tag:product:parallels-plesk
-- tag:vendor:parallels
-version: 20260508T144609Z
+- product:parallels-plesk
+- vendor:parallels
+version: 20260520T133458Z

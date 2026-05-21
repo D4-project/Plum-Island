@@ -1,6 +1,6 @@
 description: Hak5 Cloud C2
 query: http_favicon_md5:57F501D6FEE2FDB024795ABBDB750AD5
 tags:
-- tag:product:hak5-cloud-c2
-- tag:vendor:hak5
-version: 20260508T144609Z
+- product:hak5-cloud-c2
+- vendor:hak5
+version: 20260520T133458Z

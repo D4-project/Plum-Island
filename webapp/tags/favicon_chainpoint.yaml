@@ -1,6 +1,6 @@
 description: Chainpoint
 query: http_favicon_mmhash:2128230701
 tags:
-- tag:product:chainpoint
-- tag:vendor:chainpoint
-version: 20260508T144609Z
+- product:chainpoint
+- vendor:chainpoint
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: gonzui (1.2+cvs20070129)
 query: http_favicon_md5:921042508F011AE477D5D91B2A90D03F
 tags:
-- tag:product:gonzui-1-2-cvs20070129
-- tag:vendor:gonzui
-version: 20260508T144609Z
+- product:gonzui-1-2-cvs20070129
+- vendor:gonzui
+version: 20260520T133458Z

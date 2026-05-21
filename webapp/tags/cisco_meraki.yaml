@@ -1,6 +1,6 @@
 description: Cisco Meraki
 query: http_favicon_mmhash:163842882
 tags:
-- tag:vendor:cisco
-- tag:product:meraki
-version: 20260508T144609Z
+- vendor:cisco
+- product:meraki
+version: 20260520T133458Z

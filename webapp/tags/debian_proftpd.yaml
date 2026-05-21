@@ -1,7 +1,7 @@
 description: Debian ProFTPD FTP server
 query: banner.bg:"220 proftpd" AND banner.lk:server AND banner.lk:debian
 tags:
-- tag:vendor:debian
-- tag:proto:ftp
-- tag:product:proftpd
-version: 20260519T142825Z
+- vendor:debian
+- proto:ftp
+- product:proftpd
+version: 20260520T133458Z

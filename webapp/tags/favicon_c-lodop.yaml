@@ -1,6 +1,6 @@
 description: C-Lodop
 query: http_favicon_mmhash:-329747115
 tags:
-- tag:product:c-lodop
-- tag:vendor:c
-version: 20260508T144609Z
+- product:c-lodop
+- vendor:c
+version: 20260520T133458Z

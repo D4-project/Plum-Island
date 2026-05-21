@@ -1,6 +1,6 @@
 description: Windows
 query: http_server.lk:(Win64) or http_server.bg:microsoft-iis
 tags:
-- tag:vendor:windows
-- tag:product:windows
-version: 20260508T144609Z
+- vendor:windows
+- product:windows
+version: 20260520T133458Z

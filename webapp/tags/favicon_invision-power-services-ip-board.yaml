@@ -1,6 +1,6 @@
 description: Invision Power Services IP.Board
 query: http_favicon_md5:E2CAC3FAD9FA3388F639546F3BA09BC0
 tags:
-- tag:product:invision-power-services-ip-board
-- tag:vendor:invision
-version: 20260508T144609Z
+- product:invision-power-services-ip-board
+- vendor:invision
+version: 20260520T133458Z

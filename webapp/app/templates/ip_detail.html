@@ -41,11 +41,23 @@
 .ip-detail-tag-vuln {
     background: #d9534f;
 }
-.ip-detail-tag-hard {
-    background: #777;
+.ip-detail-tag-vendor {
+    background: #6f42c1;
+}
+.ip-detail-tag-product {
+    background: #2f6f73;
+}
+.ip-detail-tag-type {
+    background: #b45f06;
+}
+.ip-detail-tag-proto {
+    background: #337ab7;
 }
 .ip-detail-tag-lang {
     background: #5cb85c;
+}
+.ip-detail-tag-cpe {
+    background: #777;
 }
 .ip-quick-link {
     color: #337ab7;
@@ -331,7 +343,7 @@
             <div class="ip-detail-tags" aria-label="Tags">
                 {% for tag in ip_tags %}
                 {% set tag_prefix = tag.split(':', 1)[0] %}
-                <span class="ip-detail-tag{% if tag_prefix == 'vuln' %} ip-detail-tag-vuln{% elif tag_prefix == 'hard' %} ip-detail-tag-hard{% elif tag_prefix == 'lang' %} ip-detail-tag-lang{% endif %}">{{ tag }}</span>
+                <span class="ip-detail-tag{% if tag_prefix == 'vuln' %} ip-detail-tag-vuln{% elif tag_prefix == 'vendor' %} ip-detail-tag-vendor{% elif tag_prefix == 'product' %} ip-detail-tag-product{% elif tag_prefix == 'type' %} ip-detail-tag-type{% elif tag_prefix == 'proto' %} ip-detail-tag-proto{% elif tag_prefix == 'lang' %} ip-detail-tag-lang{% elif tag_prefix == 'cpe' or tag_prefix == 'hard' %} ip-detail-tag-cpe{% endif %}">{{ tag }}</span>
                 {% endfor %}
             </div>
             {% endif %}

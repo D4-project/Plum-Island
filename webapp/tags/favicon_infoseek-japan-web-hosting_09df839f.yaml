@@ -1,6 +1,6 @@
 description: Infoseek Japan web hosting
 query: http_favicon_md5:09DF839F1958F0ADD6B872DFF4E0AA21
 tags:
-- tag:product:infoseek-japan-web-hosting
-- tag:vendor:infoseek
-version: 20260508T144609Z
+- product:infoseek-japan-web-hosting
+- vendor:infoseek
+version: 20260520T133458Z

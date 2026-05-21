@@ -1,6 +1,6 @@
 description: Horde Agora (Forum) x
 query: http_favicon_md5:835306119474FEFB6B38AE314A37943A
 tags:
-- tag:product:horde-agora-forum-x
-- tag:vendor:horde
-version: 20260508T144609Z
+- product:horde-agora-forum-x
+- vendor:horde
+version: 20260520T133458Z

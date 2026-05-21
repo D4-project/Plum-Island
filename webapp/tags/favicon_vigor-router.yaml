@@ -1,7 +1,7 @@
 description: Vigor Router
 query: http_favicon_mmhash:104189364
 tags:
-- tag:product:vigor
-- tag:type:router
-- tag:vendor:vigor
-version: 20260508T144609Z
+- product:vigor
+- type:router
+- vendor:vigor
+version: 20260520T133458Z

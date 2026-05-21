@@ -1,6 +1,6 @@
 description: Iomega StorCenter px12-350r x
 query: http_favicon_md5:8DFAB2D881CE47DC41459C6C0C652BCF
 tags:
-- tag:product:iomega-storcenter-px12-350r-x
-- tag:vendor:iomega
-version: 20260508T144609Z
+- product:iomega-storcenter-px12-350r-x
+- vendor:iomega
+version: 20260520T133458Z

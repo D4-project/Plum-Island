@@ -1,6 +1,6 @@
 description: Combivox
 query: http_favicon_mmhash:-342262483
 tags:
-- tag:product:combivox
-- tag:vendor:combivox
-version: 20260508T144609Z
+- product:combivox
+- vendor:combivox
+version: 20260520T133458Z

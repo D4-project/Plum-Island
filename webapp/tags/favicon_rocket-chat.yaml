@@ -1,6 +1,6 @@
 description: Rocket Chat
 query: http_favicon_mmhash:225632504
 tags:
-- tag:product:rocket-chat
-- tag:vendor:rocket
-version: 20260508T144609Z
+- product:rocket-chat
+- vendor:rocket
+version: 20260520T133458Z

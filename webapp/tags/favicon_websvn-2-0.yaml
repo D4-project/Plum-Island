@@ -1,6 +1,6 @@
 description: websvn (2.0)
 query: http_favicon_md5:EF5169B040925A716359D131AFBEA033
 tags:
-- tag:product:websvn-2-0
-- tag:vendor:websvn
-version: 20260508T144609Z
+- product:websvn-2-0
+- vendor:websvn
+version: 20260520T133458Z

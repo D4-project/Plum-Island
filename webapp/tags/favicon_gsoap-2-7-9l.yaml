@@ -1,6 +1,6 @@
 description: gsoap (2.7.9l)
 query: http_favicon_md5:63D5627FC659ADFDD5B902ECAFE9100F
 tags:
-- tag:product:gsoap-2-7-9l
-- tag:vendor:gsoap
-version: 20260508T144609Z
+- product:gsoap-2-7-9l
+- vendor:gsoap
+version: 20260520T133458Z

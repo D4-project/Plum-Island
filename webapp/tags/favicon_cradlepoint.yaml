@@ -1,6 +1,6 @@
 description: CradlePoint
 query: http_favicon_mmhash:-1457536113
 tags:
-- tag:product:cradlepoint
-- tag:vendor:cradlepoint
-version: 20260508T144609Z
+- product:cradlepoint
+- vendor:cradlepoint
+version: 20260520T133458Z

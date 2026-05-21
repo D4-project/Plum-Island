@@ -1,6 +1,6 @@
 description: Roku Soundbridge
 query: http_favicon_md5:69AE01D0C74570D4D221E6C24A06D73B
 tags:
-- tag:product:roku-soundbridge
-- tag:vendor:roku
-version: 20260508T144609Z
+- product:roku-soundbridge
+- vendor:roku
+version: 20260520T133458Z

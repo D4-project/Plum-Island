@@ -1,7 +1,7 @@
 description: Apache on Linux
 query: http_favicon_md5:FF2C8612B75B5F9A6175E016FE4AA609
 tags:
-- tag:product:apache
-- tag:type:linux
-- tag:vendor:apache
-version: 20260508T144609Z
+- product:apache
+- type:linux
+- vendor:apache
+version: 20260520T133458Z

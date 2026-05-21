@@ -1,6 +1,6 @@
 description: bintec elmeg
 query: http_favicon_mmhash:-375623619 OR http_favicon_mmhash:1770799630
 tags:
-- tag:product:bintec-elmeg
-- tag:vendor:bintec
-version: 20260508T144609Z
+- product:bintec-elmeg
+- vendor:bintec
+version: 20260520T133458Z

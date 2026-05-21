@@ -1,6 +1,6 @@
 description: MK-AUTH
 query: http_favicon_mmhash:1490343308
 tags:
-- tag:product:mk-auth
-- tag:vendor:mk
-version: 20260508T144609Z
+- product:mk-auth
+- vendor:mk
+version: 20260520T133458Z

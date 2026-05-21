@@ -1,6 +1,6 @@
 description: horde-sam (0.1+cvs20080316) - silver
 query: http_favicon_md5:3995C585B76BD5AA67CB6385431D378A
 tags:
-- tag:product:horde-sam-0-1-cvs20080316-silver
-- tag:vendor:horde
-version: 20260508T144609Z
+- product:horde-sam-0-1-cvs20080316-silver
+- vendor:horde
+version: 20260520T133458Z

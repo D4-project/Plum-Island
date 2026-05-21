@@ -1,7 +1,7 @@
 description: Huawei - ADSL/Router
 query: http_favicon_mmhash:-1395400951
 tags:
-- tag:product:huawei
-- tag:vendor:adsl
-- tag:type:router
-version: 20260508T144609Z
+- product:huawei
+- vendor:adsl
+- type:router
+version: 20260520T133458Z

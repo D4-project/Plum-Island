@@ -1,6 +1,6 @@
 description: SimpleHelp (Remote Support)
 query: http_favicon_mmhash:1117165781
 tags:
-- tag:product:simplehelp-remote-support
-- tag:vendor:simplehelp
-version: 20260508T144609Z
+- product:simplehelp-remote-support
+- vendor:simplehelp
+version: 20260520T133458Z

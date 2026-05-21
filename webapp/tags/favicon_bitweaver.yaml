@@ -1,6 +1,6 @@
 description: Bitweaver
 query: http_favicon_md5:1A9A1EC2B8817A2F951C9F1793C9BC54
 tags:
-- tag:product:bitweaver
-- tag:vendor:bitweaver
-version: 20260508T144609Z
+- product:bitweaver
+- vendor:bitweaver
+version: 20260520T133458Z

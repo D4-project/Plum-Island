@@ -1,7 +1,7 @@
 description: Campbell Scientific CR1000X
 query: http_headval:www-authenticate.lk:cr1000x
 tags:
-- tag:product:cr1000x
-- tag:type:datalogger
-- tag:vendor:campbell-scientific
-version: 20260520T065655Z
+- product:cr1000x
+- type:datalogger
+- vendor:campbell-scientific
+version: 20260520T133458Z

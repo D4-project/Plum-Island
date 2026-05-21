@@ -1,6 +1,6 @@
 description: Gitweb
 query: http_favicon_md5:85138F44D577B03DFC738D3F27E04992
 tags:
-- tag:product:gitweb
-- tag:vendor:gitweb
-version: 20260508T144609Z
+- product:gitweb
+- vendor:gitweb
+version: 20260520T133458Z

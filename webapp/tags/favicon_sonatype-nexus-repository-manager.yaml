@@ -1,6 +1,6 @@
 description: Sonatype Nexus Repository Manager
 query: http_favicon_mmhash:-1546574541
 tags:
-- tag:product:sonatype-nexus-repository-manager
-- tag:vendor:sonatype
-version: 20260508T144609Z
+- product:sonatype-nexus-repository-manager
+- vendor:sonatype
+version: 20260520T133458Z

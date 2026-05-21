@@ -1,6 +1,6 @@
 description: Elastic (Database)
 query: http_favicon_mmhash:1611729805 OR http_favicon_mmhash:1552860581
 tags:
-- tag:product:elastic-database
-- tag:vendor:elastic
-version: 20260508T144609Z
+- product:elastic-database
+- vendor:elastic
+version: 20260520T133458Z

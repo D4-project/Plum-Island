@@ -1,6 +1,6 @@
 description: PowerMTA monitoring
 query: http_favicon_mmhash:-1788112745
 tags:
-- tag:product:powermta-monitoring
-- tag:vendor:powermta
-version: 20260508T144609Z
+- product:powermta-monitoring
+- vendor:powermta
+version: 20260520T133458Z

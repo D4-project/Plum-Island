@@ -1,6 +1,6 @@
 description: Avenet web hosting
 query: http_favicon_md5:E52C40433AA5F9256E521D7C139A05BD
 tags:
-- tag:product:avenet-web-hosting
-- tag:vendor:avenet
-version: 20260508T144609Z
+- product:avenet-web-hosting
+- vendor:avenet
+version: 20260520T133458Z

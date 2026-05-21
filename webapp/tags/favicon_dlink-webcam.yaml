@@ -4,7 +4,7 @@ query: http_favicon_mmhash:31972968 OR http_favicon_mmhash:-1354933624 OR http_f
   OR http_headval:www-authenticate.lk:dcs-6010l OR http_headval:www-authenticate.lk:dcs-932lb1_b1
   OR http_headval:www-authenticate.lk:dcs-5030l_54 OR http_headval:www-authenticate.lk:dcs-5222lb1
 tags:
-- tag:product:dlink-webcam
-- tag:type:camera
-- tag:vendor:dlink
-version: 20260520T065655Z
+- product:dlink-webcam
+- type:camera
+- vendor:dlink
+version: 20260520T133458Z

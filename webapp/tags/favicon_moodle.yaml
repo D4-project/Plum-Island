@@ -1,6 +1,6 @@
 description: Moodle
 query: http_favicon_mmhash:-438482901
 tags:
-- tag:product:moodle
-- tag:vendor:moodle
-version: 20260508T144609Z
+- product:moodle
+- vendor:moodle
+version: 20260520T133458Z

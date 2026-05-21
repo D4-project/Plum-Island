@@ -1,6 +1,6 @@
 description: gramps (3.0.1)
 query: http_favicon_md5:C16B0A5C9EB3BFD831349739D89704EC
 tags:
-- tag:product:gramps-3-0-1
-- tag:vendor:gramps
-version: 20260508T144609Z
+- product:gramps-3-0-1
+- vendor:gramps
+version: 20260520T133458Z

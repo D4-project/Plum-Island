@@ -1,6 +1,6 @@
 description: NETIASPOT (Network)
 query: http_favicon_mmhash:-978656757
 tags:
-- tag:product:netiaspot-network
-- tag:vendor:netiaspot
-version: 20260508T144609Z
+- product:netiaspot-network
+- vendor:netiaspot
+version: 20260520T133458Z

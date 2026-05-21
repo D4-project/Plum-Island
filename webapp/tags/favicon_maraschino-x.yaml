@@ -1,6 +1,6 @@
 description: Maraschino x
 query: http_favicon_md5:0A99A23F6B1F1BDDB94D2A2212598628
 tags:
-- tag:product:maraschino-x
-- tag:vendor:maraschino
-version: 20260508T144609Z
+- product:maraschino-x
+- vendor:maraschino
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: vtiger CRM x
 query: http_favicon_md5:D90CC1762BF724DB71D6DF86EFFAB63C
 tags:
-- tag:product:vtiger-crm-x
-- tag:vendor:vtiger
-version: 20260508T144609Z
+- product:vtiger-crm-x
+- vendor:vtiger
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: dtc (0.28.10)
 query: http_favicon_md5:BBA9F1C29F100D265865626541B20A50
 tags:
-- tag:product:dtc-0-28-10
-- tag:vendor:dtc
-version: 20260508T144609Z
+- product:dtc-0-28-10
+- vendor:dtc
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Niagara Web Server
 query: http_favicon_mmhash:-676077969
 tags:
-- tag:product:niagara-web-server
-- tag:vendor:niagara
-version: 20260508T144609Z
+- product:niagara-web-server
+- vendor:niagara
+version: 20260520T133458Z

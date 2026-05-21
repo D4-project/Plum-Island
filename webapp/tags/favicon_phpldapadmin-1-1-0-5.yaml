@@ -1,6 +1,6 @@
 description: phpldapadmin (1.1.0.5)
 query: http_favicon_md5:4B30EEC86E9910E663B5A9209E9593B6
 tags:
-- tag:product:phpldapadmin-1-1-0-5
-- tag:vendor:phpldapadmin
-version: 20260508T144609Z
+- product:phpldapadmin-1-1-0-5
+- vendor:phpldapadmin
+version: 20260520T133458Z

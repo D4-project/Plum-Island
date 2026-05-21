@@ -1,6 +1,6 @@
 description: myghty (1.1) - zblog
 query: http_favicon_md5:68B329DA9893E34099C7D8AD5CB9C940
 tags:
-- tag:product:myghty-1-1-zblog
-- tag:vendor:myghty
-version: 20260508T144609Z
+- product:myghty-1-1-zblog
+- vendor:myghty
+version: 20260520T133458Z

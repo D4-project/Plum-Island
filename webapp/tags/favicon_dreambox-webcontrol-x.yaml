@@ -1,6 +1,6 @@
 description: Dreambox WebControl x
 query: http_favicon_md5:D9AA63661D742D5F7C7300D02AC18D69
 tags:
-- tag:product:dreambox-webcontrol-x
-- tag:vendor:dreambox
-version: 20260508T144609Z
+- product:dreambox-webcontrol-x
+- vendor:dreambox
+version: 20260520T133458Z

@@ -1,7 +1,7 @@
 description: Roundcube
 query: http_cookiename.bg:roundcube
 tags:
-- tag:product:webmail
-- tag:product:roundcube
-- tag:vendor:roundcube
-version: 20260508T144609Z
+- product:webmail
+- product:roundcube
+- vendor:roundcube
+version: 20260520T133458Z

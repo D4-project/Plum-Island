@@ -1,6 +1,6 @@
 description: Univention Portal
 query: http_favicon_mmhash:-1697334194
 tags:
-- tag:product:univention-portal
-- tag:vendor:univention
-version: 20260508T144609Z
+- product:univention-portal
+- vendor:univention
+version: 20260520T133458Z

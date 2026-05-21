@@ -62,21 +62,27 @@ The file is intentionally plain YAML so permissions can be maintained without ed
 Imported NSE files are copied into the Flask upload folder and stored in the DB with their filename and SHA-256 hash.
 If a script with the same filename already exists, it is updated only when the content hash changed.
 
-### `import_tags.py`
+### `tag_mgmt.py`
 
-Import YAML tag rules from `webapp/tags/` into the SQLite application database.
+Manage tag YAML import, DB rules, and Kvrocks tag indexes. Running it without a subcommand prints help and does nothing.
+
+Import YAML tag rules from `webapp/tags/` into the SQLite application database:
 
 ```bash
-.venv/bin/python tools/import_tags.py
+.venv/bin/python tools/tag_mgmt.py import --all
 ```
 
-Useful options:
+Useful import options:
 
 ```bash
-.venv/bin/python tools/import_tags.py --dry-run
-.venv/bin/python tools/import_tags.py --tags-file webapp/tags/hashicorp_vault.yaml
-.venv/bin/python tools/import_tags.py --tags-dir webapp/tags
-.venv/bin/python tools/import_tags.py --flush_db
+.venv/bin/python tools/tag_mgmt.py import --all --dry-run
+.venv/bin/python tools/tag_mgmt.py import --id 42
+.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py import --all --tags-dir webapp/tags
+.venv/bin/python tools/tag_mgmt.py delete --all
+.venv/bin/python tools/tag_mgmt.py delete --id 42
+.venv/bin/python tools/tag_mgmt.py delete --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py flush-tag tag:proto:ssh
 ```
 
 Version policy:
@@ -85,33 +91,33 @@ Version policy:
 - existing rules are replaced only when the YAML version is newer than the DB timestamp
 - YAML rules without `version` do not replace existing DB rules
 
-### `reindex_tagrule.py`
-
 Recompute tags in Kvrocks after tag rule changes.
 
 Reindex all active rules:
 
 ```bash
-.venv/bin/python tools/reindex_tagrule.py --allrules
+.venv/bin/python tools/tag_mgmt.py reindex --allrules
 ```
 
 Reindex from one tag rule id:
 
 ```bash
-.venv/bin/python tools/reindex_tagrule.py 42
+.venv/bin/python tools/tag_mgmt.py reindex 42
 ```
 
 Flush existing tag indexes before recomputing:
 
 ```bash
-.venv/bin/python tools/reindex_tagrule.py --allrules --flush
+.venv/bin/python tools/tag_mgmt.py reindex --allrules --flush
 ```
 
-List complete tag keys currently indexed in Kvrocks:
+List complete tag values currently indexed in Kvrocks:
 
 ```bash
-.venv/bin/python tools/reindex_tagrule.py --list_tags
+.venv/bin/python tools/tag_mgmt.py list-tags
 ```
+
+`tools/import_tags.py` and `tools/reindex_tagrule.py` remain as compatibility wrappers.
 
 ## Search and dump tools
 

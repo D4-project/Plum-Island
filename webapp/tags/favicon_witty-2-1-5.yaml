@@ -1,6 +1,6 @@
 description: witty (2.1.5)
 query: http_favicon_md5:F6D0A100B6DBEB5899F0975A1203FD85
 tags:
-- tag:product:witty-2-1-5
-- tag:vendor:witty
-version: 20260508T144609Z
+- product:witty-2-1-5
+- vendor:witty
+version: 20260520T133458Z

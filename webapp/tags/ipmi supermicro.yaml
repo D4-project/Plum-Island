@@ -1,6 +1,6 @@
 description: "IPMI\_Supermicro"
 query: x509_issuer.lk:IPMI
 tags:
-- tag:vendor:supervision
-- tag:product:ipmi
-version: 20260508T144609Z
+- vendor:supervision
+- product:ipmi
+version: 20260520T133458Z

@@ -58,14 +58,14 @@ Changes after `v0.2604.0`.
   - Merge ASP.NET favicon detection and add ASP.NET header tagging, closes #63
   - Add LiteSpeed header tagging, closes #58
   - Add Cisco Expressway server header tagging, closes #78
-  - Rename detection tag prefixes from `hard`/`soft` to `tag:vendor`/`tag:product`, refs #50
+  - Rename detection tag prefixes from `hard`/`soft` to `vendor`/`product`, refs #50
   - Complete tag taxonomy normalization for vendor/product/type/protocol tags, closes #50
   - Add BGP protocol banner tagging, closes #71
   - Add HP iLO default certificate issuer tagging and rename iLO rule, closes #73
   - Improve Cisco router detection with IOS server and authentication realm tags, closes #79
   - Improve FortiGate title and default certificate subject tagging, closes #67
   - Add Icecast2 / ICY streaming protocol banner tagging, closes #69
-  - Normalize remaining protocol and legacy hardware tag prefixes to `tag:proto:*` and `tag:type:*`
+  - Normalize remaining protocol and legacy hardware tag prefixes to `proto:*` and `type:*`
   - Add RTSP protocol banner tagging, closes #70
   - Improve Polycom detection with default certificate issuer and login title tagging, closes #74
   - Add Cisco ASA default certificate issuer tagging, closes #76
@@ -82,6 +82,10 @@ Changes after `v0.2604.0`.
 - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
 - Remove unused scheduler module-level job list, closes #102
 - Fix bot API SQLAlchemy limit calls to use integer arguments, closes #87
+- Bound Kvrocks rebuild memory use by preserving doc timestamps in place and parsing Meili pages batch-by-batch, closes #80
+- Store tag rule values as `namespace:value` while keeping `tag:*` search and Kvrocks keys
+- Merge tag import and Kvrocks tag reindex commands into `tools/tag_mgmt.py`; import/delete now require `--all`, `--id`, or `--tags-file`
+- Accumulate repeated per-port parser results so multi-service banners can all receive tag rules
 - Make result parsing config explicit per call to avoid cross-thread parser state leaks, closes #88
 - Show inserted Tag Rule IDs in `import_tags.py` (`bf1afd5`)
 - Add `import_tags.py --flush-tag` to remove one tag from Kvrocks tag indexes, closes #47

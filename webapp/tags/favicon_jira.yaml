@@ -1,6 +1,6 @@
 description: JIRA
 query: http_favicon_mmhash:855273746
 tags:
-- tag:product:jira
-- tag:vendor:jira
-version: 20260508T144609Z
+- product:jira
+- vendor:jira
+version: 20260520T133458Z

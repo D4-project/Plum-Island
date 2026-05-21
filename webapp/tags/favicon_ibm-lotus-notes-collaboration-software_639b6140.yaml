@@ -1,6 +1,6 @@
 description: IBM Lotus Notes Collaboration Software
 query: http_favicon_md5:639B61409215D770A99667B446C80EA1
 tags:
-- tag:product:ibm-lotus-notes-collaboration-software
-- tag:vendor:ibm
-version: 20260508T144609Z
+- product:ibm-lotus-notes-collaboration-software
+- vendor:ibm
+version: 20260520T133458Z

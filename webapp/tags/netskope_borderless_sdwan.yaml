@@ -2,7 +2,7 @@ description: Netskope Borderless SD-WAN
 query: x509_issuer.bg:"Netskope Borderless SD-WAN Root" OR x509_issuer.bg:"Netskope
   Inc." OR x509_issuer.bg:"Borderless SD-WAN"
 tags:
-- tag:product:netskope
-- tag:product:sd-wan
-- tag:vendor:netskope
-version: 20260508T144609Z
+- product:netskope
+- product:sd-wan
+- vendor:netskope
+version: 20260520T133458Z

@@ -3,7 +3,7 @@ query: http_favicon_mmhash:15831193 OR http_favicon_mmhash:2087014467 OR http_fa
   OR http_title.bg:"Fireware XTM User Authentication" OR x509_subject.bg:WatchGuard
   OR x509_issuer.bg:WatchGuard OR x509_subject.bg:Fireware OR x509_issuer.bg:Fireware
 tags:
-- tag:product:firewall
-- tag:product:watchguard
-- tag:vendor:watchguard
-version: 20260508T144609Z
+- product:firewall
+- product:watchguard
+- vendor:watchguard
+version: 20260520T133458Z

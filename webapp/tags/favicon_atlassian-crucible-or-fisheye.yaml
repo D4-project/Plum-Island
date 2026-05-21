@@ -1,6 +1,6 @@
 description: Atlassian Crucible or Fisheye
 query: http_favicon_md5:01FEBF7C2BD75CD15DAE3AA093D80552
 tags:
-- tag:product:atlassian-crucible-or-fisheye
-- tag:vendor:atlassian
-version: 20260508T144609Z
+- product:atlassian-crucible-or-fisheye
+- vendor:atlassian
+version: 20260520T133458Z

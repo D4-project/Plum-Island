@@ -1,6 +1,6 @@
 description: WAMPSERVER
 query: http_favicon_mmhash:929825723 OR http_favicon_mmhash:443944613
 tags:
-- tag:product:wampserver
-- tag:vendor:wampserver
-version: 20260508T144609Z
+- product:wampserver
+- vendor:wampserver
+version: 20260520T133458Z

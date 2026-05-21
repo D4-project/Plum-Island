@@ -1,6 +1,6 @@
 description: Mailman
 query: http_favicon_md5:EB6D4CE00EC36AF7D439EBD4E5A395D7
 tags:
-- tag:product:mailman
-- tag:vendor:mailman
-version: 20260508T144609Z
+- product:mailman
+- vendor:mailman
+version: 20260520T133458Z

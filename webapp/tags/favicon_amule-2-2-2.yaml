@@ -1,6 +1,6 @@
 description: aMule (2.2.2)
 query: http_favicon_md5:99306A52C76E19E3C298A46616C5899C
 tags:
-- tag:product:amule-2-2-2
-- tag:vendor:amule
-version: 20260508T144609Z
+- product:amule-2-2-2
+- vendor:amule
+version: 20260520T133458Z

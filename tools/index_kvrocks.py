@@ -48,7 +48,6 @@ INDEX_FIELDS = [
     "banner",
 ]
 REBUILD_KEY_PATTERNS = [
-    "doc:*",
     "uid:*",
     "ip:*",
 ]
@@ -387,6 +386,29 @@ def iter_meili_documents(index, page_size, first_results=None):
         offset += len(results)
 
 
+def iter_meili_pages(index, page_size, first_results=None):
+    """
+    Yield Meilisearch documents page by page.
+
+    Keeping the page boundary visible lets the indexing loop apply backpressure:
+    one page is fetched, parsed, and indexed before the next page is requested.
+    """
+    offset = 0
+    if first_results is not None:
+        results = [dict(result) for result in first_results]
+        if results:
+            yield results
+        offset += len(results)
+
+    while True:
+        results, _total_count = fetch_meili_page(index, page_size, offset)
+        if not results:
+            break
+
+        yield [dict(result) for result in results]
+        offset += len(results)
+
+
 def snapshot_seen_values(indexer):
     """
     Snapshot existing document seen ranges before rebuilding keys.
@@ -436,13 +458,16 @@ def clean_tag_indexes(indexer):
 
 def rebuild_kvrocks(indexer, include_tags=False):
     """
-    Remove known Plum index keys while preserving seen timestamps in memory.
-    """
-    print("Snapshotting existing doc:{uid} timestamps", flush=True)
-    seen_snapshot = snapshot_seen_values(indexer)
-    print(f"Snapshot contains {len(seen_snapshot)} documents", flush=True)
+    Remove known Plum index keys while preserving doc hashes for timestamps.
 
-    print("Deleting known Plum Kvrocks index keys", flush=True)
+    Rebuilds keep doc:{uid} hashes in place so add_documents_batch() can merge
+    first_seen/last_seen per batch. This avoids the slow full doc:* timestamp
+    snapshot on large Kvrocks datasets.
+    """
+    print(
+        "Deleting known Plum Kvrocks index keys while preserving doc:{uid} hashes",
+        flush=True,
+    )
     deleted = indexer.r.delete(
         "all_ips",
         "all_uids",
@@ -463,7 +488,7 @@ def rebuild_kvrocks(indexer, include_tags=False):
             print(f"Deleted {deleted_for_pattern} keys matching {pattern}", flush=True)
 
     print(f"Deleted {deleted} keys before rebuild", flush=True)
-    return seen_snapshot
+    return None
 
 
 def parse_args(argv=None):
@@ -701,25 +726,27 @@ def parsed_documents_from_meili(
             initializer=init_parse_worker,
             initargs=(PARSER_CONF, seen_snapshot, tag_rules),
         ) as pool:
-            yield from pool.imap_unordered(
-                parse_meili_document_worker,
-                iter_meili_documents(index, batch_size, first_results=first_results),
-                chunksize=chunksize,
-            )
+            for page in iter_meili_pages(
+                index, batch_size, first_results=first_results
+            ):
+                yield from pool.imap_unordered(
+                    parse_meili_document_worker,
+                    page,
+                    chunksize=chunksize,
+                )
         return
 
-    for meili_doc in iter_meili_documents(
-        index, batch_size, first_results=first_results
-    ):
-        try:
-            yield parse_meili_document(
-                meili_doc,
-                seen_snapshot,
-                tag_rules=tag_rules,
-            ), None
-        except Exception as error:  # pylint: disable=broad-except
-            doc_id = dict(meili_doc).get("id", "<unknown>")
-            yield None, f"[WARN] Unable to parse Meili document {doc_id}: {error}"
+    for page in iter_meili_pages(index, batch_size, first_results=first_results):
+        for meili_doc in page:
+            try:
+                yield parse_meili_document(
+                    meili_doc,
+                    seen_snapshot,
+                    tag_rules=tag_rules,
+                ), None
+            except Exception as error:  # pylint: disable=broad-except
+                doc_id = dict(meili_doc).get("id", "<unknown>")
+                yield None, f"[WARN] Unable to parse Meili document {doc_id}: {error}"
 
 
 def index_documents_with_errors(

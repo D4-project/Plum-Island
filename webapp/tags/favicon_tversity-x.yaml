@@ -1,6 +1,6 @@
 description: TVersity x
 query: http_favicon_md5:300B5C3F134D7EC0BCA862CF113149D8
 tags:
-- tag:product:tversity-x
-- tag:vendor:tversity
-version: 20260508T144609Z
+- product:tversity-x
+- vendor:tversity
+version: 20260520T133458Z

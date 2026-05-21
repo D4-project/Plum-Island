@@ -1,8 +1,8 @@
 description: 'WordPress 3.x : Twenty Ten'
 query: http_favicon_md5:3EAD5AFA19537170BB980924397B70D6
 tags:
-- tag:product:wordpress-3-x-twenty-ten
-- tag:type:cms
-- tag:product:wordpress
-- tag:vendor:wordpress
-version: 20260508T144609Z
+- product:wordpress-3-x-twenty-ten
+- type:cms
+- product:wordpress
+- vendor:wordpress
+version: 20260520T133458Z

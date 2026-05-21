@@ -1,6 +1,6 @@
 description: OpenXPKI
 query: http_favicon_md5:83245B21512CC0A0E7A67C72C3A3F501
 tags:
-- tag:product:openxpki
-- tag:vendor:openxpki
-version: 20260508T144609Z
+- product:openxpki
+- vendor:openxpki
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: AContent x
 query: http_favicon_md5:28C34462A074C5311492759435549468
 tags:
-- tag:product:acontent-x
-- tag:vendor:acontent
-version: 20260508T144609Z
+- product:acontent-x
+- vendor:acontent
+version: 20260520T133458Z

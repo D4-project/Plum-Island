@@ -1,6 +1,6 @@
 description: Xinit Systems Ltd. Openfiler
 query: http_favicon_md5:4F88BA9F1298701251180E6B6467D43E
 tags:
-- tag:product:xinit-systems-ltd-openfiler
-- tag:vendor:xinit
-version: 20260508T144609Z
+- product:xinit-systems-ltd-openfiler
+- vendor:xinit
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Endian Firewall
 query: http_favicon_mmhash:-1225484776
 tags:
-- tag:product:endian-firewall
-- tag:vendor:endian
-version: 20260508T144609Z
+- product:endian-firewall
+- vendor:endian
+version: 20260520T133458Z

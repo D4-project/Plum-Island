@@ -1,6 +1,6 @@
 description: Traccar GPS tracking
 query: http_favicon_mmhash:-335153896
 tags:
-- tag:product:traccar-gps-tracking
-- tag:vendor:traccar
-version: 20260508T144609Z
+- product:traccar-gps-tracking
+- vendor:traccar
+version: 20260520T133458Z

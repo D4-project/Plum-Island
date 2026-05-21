@@ -1,6 +1,6 @@
 description: Mambo CMS
 query: http_favicon_md5:CEDDC34CBEC02D74FE40368E2DC1FA90
 tags:
-- tag:product:mambo-cms
-- tag:vendor:mambo
-version: 20260508T144609Z
+- product:mambo-cms
+- vendor:mambo
+version: 20260520T133458Z

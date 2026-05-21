@@ -1,6 +1,6 @@
 description: WHM
 query: http_favicon_mmhash:-649378830
 tags:
-- tag:product:whm
-- tag:vendor:whm
-version: 20260508T144609Z
+- product:whm
+- vendor:whm
+version: 20260520T133458Z

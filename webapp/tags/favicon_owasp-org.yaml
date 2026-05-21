@@ -1,6 +1,6 @@
 description: owasp.org
 query: http_favicon_md5:1F8C0B08FB6B556A6587517A8D5F290B
 tags:
-- tag:product:owasp-org
-- tag:vendor:owasp
-version: 20260508T144609Z
+- product:owasp-org
+- vendor:owasp
+version: 20260520T133458Z

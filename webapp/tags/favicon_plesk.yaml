@@ -1,6 +1,6 @@
 description: Plesk
 query: http_favicon_mmhash:-134375033 OR http_favicon_mmhash:-1050786453 OR http_favicon_mmhash:-981606721
 tags:
-- tag:product:plesk
-- tag:vendor:plesk
-version: 20260508T144609Z
+- product:plesk
+- vendor:plesk
+version: 20260520T133458Z

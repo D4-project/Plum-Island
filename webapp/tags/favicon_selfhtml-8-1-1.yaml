@@ -1,6 +1,6 @@
 description: selfhtml (8.1.1)
 query: http_favicon_md5:7F57BBD0956976E797B4E8EEBDC6D733
 tags:
-- tag:product:selfhtml-8-1-1
-- tag:vendor:selfhtml
-version: 20260508T144609Z
+- product:selfhtml-8-1-1
+- vendor:selfhtml
+version: 20260520T133458Z

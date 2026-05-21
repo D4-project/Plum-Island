@@ -1,6 +1,6 @@
 description: SAP Conversational AI
 query: http_favicon_mmhash:1347937389
 tags:
-- tag:product:sap-conversational-ai
-- tag:vendor:sap
-version: 20260508T144609Z
+- product:sap-conversational-ai
+- vendor:sap
+version: 20260520T133458Z

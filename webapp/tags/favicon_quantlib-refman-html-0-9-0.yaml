@@ -1,6 +1,6 @@
 description: quantlib-refman-html (0.9.0)
 query: http_favicon_md5:69F8A727F01A7E9B90A258BC30AAAE6A
 tags:
-- tag:product:quantlib-refman-html-0-9-0
-- tag:vendor:quantlib
-version: 20260508T144609Z
+- product:quantlib-refman-html-0-9-0
+- vendor:quantlib
+version: 20260520T133458Z

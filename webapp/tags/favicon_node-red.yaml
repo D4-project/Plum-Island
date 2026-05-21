@@ -1,6 +1,6 @@
 description: Node-RED
 query: http_favicon_mmhash:321591353
 tags:
-- tag:product:node-red
-- tag:vendor:node
-version: 20260508T144609Z
+- product:node-red
+- vendor:node
+version: 20260520T133458Z

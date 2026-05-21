@@ -1,6 +1,6 @@
 description: Arbor Networks
 query: http_favicon_mmhash:-1745552996
 tags:
-- tag:product:arbor-networks
-- tag:vendor:arbor
-version: 20260508T144609Z
+- product:arbor-networks
+- vendor:arbor
+version: 20260520T133458Z

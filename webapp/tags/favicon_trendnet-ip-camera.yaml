@@ -1,6 +1,6 @@
 description: Trendnet IP camera
 query: http_favicon_mmhash:512590457
 tags:
-- tag:product:trendnet
-- tag:vendor:camera
-version: 20260508T144609Z
+- product:trendnet
+- vendor:camera
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: SocialText
 query: http_favicon_md5:506190FC55CEAA132F1BC305ED8472CA
 tags:
-- tag:product:socialtext
-- tag:vendor:socialtext
-version: 20260508T144609Z
+- product:socialtext
+- vendor:socialtext
+version: 20260520T133458Z

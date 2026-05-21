@@ -1,6 +1,6 @@
 description: Sawmill
 query: http_favicon_md5:5A77E47FA23554A4166D2303580B0733
 tags:
-- tag:product:sawmill
-- tag:vendor:sawmill
-version: 20260508T144609Z
+- product:sawmill
+- vendor:sawmill
+version: 20260520T133458Z

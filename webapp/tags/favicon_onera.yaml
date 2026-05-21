@@ -1,6 +1,6 @@
 description: Onera
 query: http_favicon_mmhash:1234311970
 tags:
-- tag:product:onera
-- tag:vendor:onera
-version: 20260508T144609Z
+- product:onera
+- vendor:onera
+version: 20260520T133458Z

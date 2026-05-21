@@ -1,6 +1,6 @@
 description: Association of Liberal Democrat Councillors web hosting
 query: http_favicon_md5:35C5093C70B822D05219AF50F95FC546
 tags:
-- tag:product:association-of-liberal-democrat-councillors-web-hosting
-- tag:vendor:association
-version: 20260508T144609Z
+- product:association-of-liberal-democrat-councillors-web-hosting
+- vendor:association
+version: 20260520T133458Z

@@ -1,8 +1,8 @@
 description: Solarwinds Serv-U FTP Server SSH
 query: banner.bg:ssh-2.0-serv-u_
 tags:
-- tag:product:serv-u-ftp-server
-- tag:proto:ssh
-- tag:product:sftp
-- tag:vendor:solarwinds
-version: 20260519T142825Z
+- product:serv-u-ftp-server
+- proto:ssh
+- product:sftp
+- vendor:solarwinds
+version: 20260520T133458Z

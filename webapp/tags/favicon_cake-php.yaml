@@ -1,6 +1,6 @@
 description: Cake PHP
 query: http_favicon_mmhash:980692677
 tags:
-- tag:product:cake-php
-- tag:vendor:cake
-version: 20260508T144609Z
+- product:cake-php
+- vendor:cake
+version: 20260520T133458Z

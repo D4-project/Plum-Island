@@ -1,6 +1,6 @@
 description: Microsoft IIS
 query: http_favicon_mmhash:-1414475558
 tags:
-- tag:product:microsoft-iis
-- tag:vendor:microsoft
-version: 20260508T144609Z
+- product:microsoft-iis
+- vendor:microsoft
+version: 20260520T133458Z

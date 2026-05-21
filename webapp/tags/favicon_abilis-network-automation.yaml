@@ -1,6 +1,6 @@
 description: Abilis (Network/Automation)
 query: http_favicon_mmhash:-166151761
 tags:
-- tag:product:abilis-network-automation
-- tag:vendor:abilis
-version: 20260508T144609Z
+- product:abilis-network-automation
+- vendor:abilis
+version: 20260520T133458Z

@@ -4,7 +4,7 @@ query: http_favicon_mmhash:77044418 OR http_favicon_mmhash:-412369920 OR
   Login" OR http_favicon_md5:861EB7C7E50D176CA2D63F1C667BF956 OR http_server:"Polycom
   VVX Telephone HTTPd" OR http_title:"Poly - Configuration Utility"
 tags:
-- tag:product:polycom
-- tag:type:voip
-- tag:vendor:polycom
-version: 20260520T062247Z
+- product:polycom
+- type:voip
+- vendor:polycom
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: JBoss Application Server 7
 query: http_favicon_mmhash:937999361
 tags:
-- tag:product:jboss-application-server-7
-- tag:vendor:jboss
-version: 20260508T144609Z
+- product:jboss-application-server-7
+- vendor:jboss
+version: 20260520T133458Z

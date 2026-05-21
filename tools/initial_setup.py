@@ -89,15 +89,18 @@ def setup_runtime():
 
 def import_tag_rules(dry_run=False):
     """
-    Import YAML tag rules using the shared import_tags logic.
+    Import YAML tag rules using the shared tag management logic.
     """
-    from import_tags import import_rules  # pylint: disable=import-outside-toplevel
+    from tag_mgmt import import_rules  # pylint: disable=import-outside-toplevel
 
     args = SimpleNamespace(
         tags_dir=str(WEBAPP_DIR / "tags"),
         tags_file=None,
+        all=True,
+        rule_id=None,
         dry_run=dry_run,
         flush_db=False,
+        flush_tag=None,
         quiet=False,
     )
     summary = import_rules(args)

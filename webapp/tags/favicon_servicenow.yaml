@@ -1,6 +1,6 @@
 description: ServiceNow
 query: http_favicon_mmhash:86919334
 tags:
-- tag:product:servicenow
-- tag:vendor:servicenow
-version: 20260508T144609Z
+- product:servicenow
+- vendor:servicenow
+version: 20260520T133458Z

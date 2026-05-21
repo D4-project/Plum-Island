@@ -1,6 +1,6 @@
 description: gforge (4.6.99+svn6496) - images
 query: http_favicon_md5:27A097EC0DBFFB7DB436384635D50415
 tags:
-- tag:product:gforge-4-6-99-svn6496-images
-- tag:vendor:gforge
-version: 20260508T144609Z
+- product:gforge-4-6-99-svn6496-images
+- vendor:gforge
+version: 20260520T133458Z

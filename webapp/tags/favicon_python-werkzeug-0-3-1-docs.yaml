@@ -1,6 +1,6 @@
 description: python-werkzeug (0.3.1) - docs
 query: http_favicon_md5:6927DA350550F29BC641138825DFF36F
 tags:
-- tag:product:python-werkzeug-0-3-1-docs
-- tag:vendor:python
-version: 20260508T144609Z
+- product:python-werkzeug-0-3-1-docs
+- vendor:python
+version: 20260520T133458Z

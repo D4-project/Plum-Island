@@ -3,9 +3,9 @@ query: http_favicon_mmhash:-299287097 OR http_headval:www-authenticate:'Basic
   realm="level_15_access"' OR http_headval:www-authenticate:'Basic realm="level_15
   or view_access"' OR http_server:cisco-IOS
 tags:
-- tag:vendor:cisco
-- tag:type:router
-- tag:product:cisco-router
-- tag:product:ios
-- tag:cpe:cisco:ios
-version: 20260514T072713Z
+- vendor:cisco
+- type:router
+- product:cisco-router
+- product:ios
+- cpe:cisco:ios
+version: 20260520T133458Z

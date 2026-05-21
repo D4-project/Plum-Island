@@ -1,6 +1,6 @@
 description: chora2 (2.0.2)
 query: http_favicon_md5:A18421FBF34123C03FB8B3082E9D33C8
 tags:
-- tag:product:chora2-2-0-2
-- tag:vendor:chora2
-version: 20260508T144609Z
+- product:chora2-2-0-2
+- vendor:chora2
+version: 20260520T133458Z

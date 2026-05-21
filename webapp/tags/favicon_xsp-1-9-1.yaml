@@ -1,6 +1,6 @@
 description: xsp (1.9.1)
 query: http_favicon_md5:C0C4E7C0AC4DA24AB8FC842D7F96723C
 tags:
-- tag:product:xsp-1-9-1
-- tag:vendor:xsp
-version: 20260508T144609Z
+- product:xsp-1-9-1
+- vendor:xsp
+version: 20260520T133458Z

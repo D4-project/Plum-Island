@@ -1,6 +1,6 @@
 description: sslstrip
 query: http_favicon_md5:70625A6E60529A85CC51AD7DA2D5580D
 tags:
-- tag:product:sslstrip
-- tag:vendor:sslstrip
-version: 20260508T144609Z
+- product:sslstrip
+- vendor:sslstrip
+version: 20260520T133458Z

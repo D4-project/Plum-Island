@@ -1,7 +1,7 @@
 description: Drupal 7.x
 query: http_favicon_md5:B6341DFC213100C61DB4FB8775878CEC
 tags:
-- tag:product:drupal-7-x
-- tag:type:cms
-- tag:vendor:drupal
-version: 20260508T144609Z
+- product:drupal-7-x
+- type:cms
+- vendor:drupal
+version: 20260520T133458Z

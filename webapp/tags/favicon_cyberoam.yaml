@@ -1,6 +1,6 @@
 description: Cyberoam
 query: http_favicon_mmhash:1462981117
 tags:
-- tag:product:cyberoam
-- tag:vendor:cyberoam
-version: 20260508T144609Z
+- product:cyberoam
+- vendor:cyberoam
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Alexander Palmo Simple PHP Blog
 query: http_favicon_md5:A7947B1675701F2247921CF4C2B99A78
 tags:
-- tag:product:alexander-palmo-simple-php-blog
-- tag:vendor:alexander
-version: 20260508T144609Z
+- product:alexander-palmo-simple-php-blog
+- vendor:alexander
+version: 20260520T133458Z

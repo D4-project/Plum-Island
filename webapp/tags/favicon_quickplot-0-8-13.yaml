@@ -1,6 +1,6 @@
 description: quickplot (0.8.13)
 query: http_favicon_md5:B01625F4AA4CD64A180E46EF78F34877
 tags:
-- tag:product:quickplot-0-8-13
-- tag:vendor:quickplot
-version: 20260508T144609Z
+- product:quickplot-0-8-13
+- vendor:quickplot
+version: 20260520T133458Z

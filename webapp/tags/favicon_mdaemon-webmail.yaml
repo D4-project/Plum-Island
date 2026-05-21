@@ -1,6 +1,6 @@
 description: MDaemon Webmail
 query: http_favicon_mmhash:-766957661
 tags:
-- tag:product:mdaemon-webmail
-- tag:vendor:mdaemon
-version: 20260508T144609Z
+- product:mdaemon-webmail
+- vendor:mdaemon
+version: 20260520T133458Z

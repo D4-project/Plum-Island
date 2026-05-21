@@ -1,6 +1,6 @@
 description: Avigilon
 query: http_favicon_mmhash:1318124267
 tags:
-- tag:product:avigilon
-- tag:vendor:avigilon
-version: 20260508T144609Z
+- product:avigilon
+- vendor:avigilon
+version: 20260520T133458Z

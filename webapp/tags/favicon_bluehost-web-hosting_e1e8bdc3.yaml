@@ -1,6 +1,6 @@
 description: BlueHost web hosting
 query: http_favicon_md5:E1E8BDC3CE87340AB6EBE467519CF245
 tags:
-- tag:product:bluehost-web-hosting
-- tag:vendor:bluehost
-version: 20260508T144609Z
+- product:bluehost-web-hosting
+- vendor:bluehost
+version: 20260520T133458Z

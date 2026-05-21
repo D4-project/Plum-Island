@@ -1,6 +1,6 @@
 description: Horde Ansel (Photo Manager) x
 query: http_favicon_md5:B64A1155B80E0B06272F8B842B83FA57
 tags:
-- tag:product:horde-ansel-photo-manager-x
-- tag:vendor:horde
-version: 20260508T144609Z
+- product:horde-ansel-photo-manager-x
+- vendor:horde
+version: 20260520T133458Z

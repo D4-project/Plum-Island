@@ -1,8 +1,8 @@
 description: apache2 (2.2.9) docs-manual
 query: http_favicon_md5:31AA07FE236EE504C890A61D1F7F0A97 or http_favicon_mmhash:-632070065
 tags:
-- tag:product:apache-docs-manual
-- tag:product:apache_httpd
-- tag:vendor:apache
-- tag:proto:http
-version: 20260508T144609Z
+- product:apache-docs-manual
+- product:apache_httpd
+- vendor:apache
+- proto:http
+version: 20260520T133458Z

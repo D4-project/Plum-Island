@@ -1,7 +1,7 @@
 description: GlobalProtect
 query: http_title.lk:"/global-protect/login.esp"
 tags:
-- tag:product:globalprotect
-- tag:type:vpn
-- tag:vendor:palo-alto
-version: 20260508T144609Z
+- product:globalprotect
+- type:vpn
+- vendor:palo-alto
+version: 20260520T133458Z

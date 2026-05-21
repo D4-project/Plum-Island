@@ -1,6 +1,6 @@
 description: Zenoss Core x
 query: http_favicon_md5:C126F7E761813946FEA2E90FF7DDB838
 tags:
-- tag:product:zenoss-core-x
-- tag:vendor:zenoss
-version: 20260508T144609Z
+- product:zenoss-core-x
+- vendor:zenoss
+version: 20260520T133458Z

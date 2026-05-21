@@ -1,6 +1,6 @@
 description: hxxps://www.hws[.com/?host
 query: http_favicon_mmhash:1188645141
 tags:
-- tag:product:hxxps-www-hws-com-host
-- tag:vendor:hxxps
-version: 20260508T144609Z
+- product:hxxps-www-hws-com-host
+- vendor:hxxps
+version: 20260520T133458Z

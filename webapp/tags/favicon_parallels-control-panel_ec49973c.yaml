@@ -1,6 +1,6 @@
 description: Parallels Control Panel
 query: http_favicon_md5:EC49973C1991BF39FCDB53260467F39F
 tags:
-- tag:product:parallels-control-panel
-- tag:vendor:parallels
-version: 20260508T144609Z
+- product:parallels-control-panel
+- vendor:parallels
+version: 20260520T133458Z

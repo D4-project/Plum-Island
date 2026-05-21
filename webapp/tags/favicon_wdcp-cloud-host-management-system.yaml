@@ -1,6 +1,6 @@
 description: wdCP cloud host management system
 query: http_favicon_mmhash:1786752597 OR http_favicon_mmhash:255892555
 tags:
-- tag:product:wdcp-cloud-host-management-system
-- tag:vendor:wdcp
-version: 20260508T144609Z
+- product:wdcp-cloud-host-management-system
+- vendor:wdcp
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Schneider Electric Modicon 340 / BMX P34 CPU B
 query: http_favicon_md5:8C291E32E7C7C65124D19EB17BCECA87
 tags:
-- tag:product:schneider-electric-modicon-340-bmx-p34-cpu-b
-- tag:vendor:schneider
-version: 20260508T144609Z
+- product:schneider-electric-modicon-340-bmx-p34-cpu-b
+- vendor:schneider
+version: 20260520T133458Z

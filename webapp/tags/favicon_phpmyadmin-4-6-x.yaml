@@ -1,6 +1,6 @@
 description: phpmyadmin (4.6.x)
 query: http_favicon_md5:531B63A51234BB06C9D77F219EB25553
 tags:
-- tag:product:phpmyadmin-4-6-x
-- tag:vendor:phpmyadmin
-version: 20260508T144609Z
+- product:phpmyadmin-4-6-x
+- vendor:phpmyadmin
+version: 20260520T133458Z

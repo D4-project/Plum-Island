@@ -1,6 +1,6 @@
 description: Kyocera (Printer)
 query: http_favicon_mmhash:-50306417
 tags:
-- tag:product:kyocera-printer
-- tag:vendor:kyocera
-version: 20260508T144609Z
+- product:kyocera-printer
+- vendor:kyocera
+version: 20260520T133458Z

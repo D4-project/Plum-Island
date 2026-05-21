@@ -1,6 +1,6 @@
 description: Rapid7 (NeXpose)
 query: http_favicon_md5:E19FFB2BC890F5BDCA20F10BFDDB288D
 tags:
-- tag:product:rapid7-nexpose
-- tag:vendor:rapid7
-version: 20260508T144609Z
+- product:rapid7-nexpose
+- vendor:rapid7
+version: 20260520T133458Z

@@ -1,6 +1,6 @@
 description: Ubiquiti UNMS
 query: http_favicon_mmhash:1157789622
 tags:
-- tag:product:ubiquiti-unms
-- tag:vendor:ubiquiti
-version: 20260508T144609Z
+- product:ubiquiti-unms
+- vendor:ubiquiti
+version: 20260520T133458Z

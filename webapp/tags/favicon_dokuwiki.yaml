@@ -1,6 +1,6 @@
 description: DokuWiki
 query: http_favicon_mmhash:-630493013
 tags:
-- tag:product:dokuwiki
-- tag:vendor:dokuwiki
-version: 20260508T144609Z
+- product:dokuwiki
+- vendor:dokuwiki
+version: 20260520T133458Z
