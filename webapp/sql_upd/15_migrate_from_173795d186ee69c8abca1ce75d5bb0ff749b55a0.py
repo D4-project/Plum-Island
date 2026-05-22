@@ -18,6 +18,7 @@ DB_PATH = BASE_DIR / "app.db"
 COLLECTED_HEADERS = [
     "cache-control",
     "clear-site-data",
+    "content-type",
     "content-security-policy",
     "cross-origin-embedder-policy",
     "cross-origin-opener-policy",
@@ -130,6 +131,7 @@ VALUE_COLLECTED_HEADERS = {
     "x-php-version",
     "x-aspnet-version",
     "x-aspnetmvc-version",
+    "content-type",
     "www-authenticate",
 }
 

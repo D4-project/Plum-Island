@@ -564,13 +564,19 @@ class KVrocksIndexer:
             for field, values in remaining_criteria.items():
                 if not isinstance(values, list):
                     values = [values]
-                for value in values:
+                for value_index, value in enumerate(values):
                     base_field, suffix = self._split_field_modifier(field)
                     if base_field == "http_headval":
                         uids = self._get_uids_for_http_headval(value, suffix)
                         if uids:
                             partial_result = set(uids)
-                            remaining_criteria.pop(field)
+                            remaining_values = (
+                                values[:value_index] + values[value_index + 1 :]
+                            )
+                            if remaining_values:
+                                remaining_criteria[field] = remaining_values
+                            else:
+                                remaining_criteria.pop(field)
                             found_base = True
                             break
                     elif suffix == "":
@@ -580,7 +586,13 @@ class KVrocksIndexer:
                         uids = self.r.smembers(f"{base_field}:{value}")
                         if uids:
                             partial_result = set(uids)
-                            remaining_criteria.pop(field)
+                            remaining_values = (
+                                values[:value_index] + values[value_index + 1 :]
+                            )
+                            if remaining_values:
+                                remaining_criteria[field] = remaining_values
+                            else:
+                                remaining_criteria.pop(field)
                             found_base = True
                             break
                 if found_base:
@@ -708,12 +720,12 @@ class KVrocksIndexer:
             if not isinstance(values, list):
                 values = [values]
 
-            field_uids = set()
             for value in values:
                 base_field, suffix = self._split_field_modifier(field)
+                value_uids = set()
 
                 if base_field == "http_headval":
-                    field_uids.update(
+                    value_uids.update(
                         self._get_uids_for_http_headval(
                             value,
                             suffix,
@@ -726,17 +738,19 @@ class KVrocksIndexer:
                         if (suffix in ("like", "lk") and value in val) or (
                             suffix in ("begin", "bg") and val.startswith(value)
                         ):
-                            field_uids.update(
+                            value_uids.update(
                                 self.r.smembers(key).intersection(partial_result)
                             )
                 else:
-                    field_uids.update(
+                    value_uids.update(
                         self.r.smembers(f"{base_field}:{value}").intersection(
                             partial_result
                         )
                     )
 
-            partial_result = partial_result.intersection(field_uids)
+                partial_result = partial_result.intersection(value_uids)
+                if not partial_result:
+                    break
             if not partial_result:
                 break
 

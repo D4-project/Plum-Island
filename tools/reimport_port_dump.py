@@ -22,6 +22,8 @@ DEFAULT_INPUT_DIR = BASE_DIR / "meili_dump_port"
 DEFAULT_BATCH_SIZE = 1000
 DEFAULT_MEILI_TIMEOUT_MS = 60 * 60 * 1000
 DEFAULT_MEILI_INTERVAL_MS = 1000
+DEFAULT_MEILI_QUEUE_DEPTH = 8
+DEFAULT_MEILI_REPLACE_MODE = "swap"
 
 
 def parse_args(argv=None):
@@ -73,6 +75,26 @@ def parse_args(argv=None):
         ),
     )
     parser.add_argument(
+        "--meili-queue-depth",
+        type=int,
+        default=DEFAULT_MEILI_QUEUE_DEPTH,
+        help=(
+            "Number of Meilisearch add-document tasks to enqueue before "
+            f"waiting for the oldest one. Use 1 for serial mode. "
+            f"Default: {DEFAULT_MEILI_QUEUE_DEPTH}."
+        ),
+    )
+    parser.add_argument(
+        "--meili-replace-mode",
+        choices=("swap", "delete-all"),
+        default=DEFAULT_MEILI_REPLACE_MODE,
+        help=(
+            "How to replace Meilisearch data. swap imports into a temporary "
+            "index then atomically swaps it with the target. delete-all keeps "
+            f"the old behavior. Default: {DEFAULT_MEILI_REPLACE_MODE}."
+        ),
+    )
+    parser.add_argument(
         "--skip-meili",
         action="store_true",
         help="Do not replace OUT Meilisearch; only rebuild OUT Kvrocks.",
@@ -103,6 +125,8 @@ def parse_args(argv=None):
         parser.error("--meili-timeout-ms must be >= 1")
     if args.meili_interval_ms <= 0:
         parser.error("--meili-interval-ms must be >= 1")
+    if args.meili_queue_depth <= 0:
+        parser.error("--meili-queue-depth must be >= 1")
     return args
 
 
@@ -128,17 +152,42 @@ def iter_documents(json_files):
             continue
 
         if isinstance(obj, dict):
-            yield obj, None
+            yield strip_port_hashes_from_document(obj), None
         elif isinstance(obj, list):
             for item in obj:
                 if isinstance(item, dict):
-                    yield item, None
+                    yield strip_port_hashes_from_document(item), None
                 else:
                     yield None, (
                         f"[WARN] Unsupported item type in {json_file}: {type(item)}"
                     )
         else:
             yield None, f"[WARN] Unsupported JSON type in {json_file}: {type(obj)}"
+
+
+def strip_port_hashes_from_document(doc):
+    """
+    Return a Meilisearch document copy without per-port hsh256 helper fields.
+    """
+    cleaned_doc = dict(doc)
+    body = cleaned_doc.get("body")
+    if not isinstance(body, dict):
+        return cleaned_doc
+
+    cleaned_body = dict(body)
+    ports = cleaned_body.get("ports")
+    if isinstance(ports, list):
+        cleaned_ports = []
+        for port in ports:
+            if isinstance(port, dict):
+                cleaned_port = dict(port)
+                cleaned_port.pop("hsh256", None)
+                cleaned_ports.append(cleaned_port)
+            else:
+                cleaned_ports.append(port)
+        cleaned_body["ports"] = cleaned_ports
+    cleaned_doc["body"] = cleaned_body
+    return cleaned_doc
 
 
 def task_uid(task_info):
@@ -171,11 +220,26 @@ def wait_for_task(client, task_info, label, timeout_ms, interval_ms):
         f"(timeout={timeout_ms}ms interval={interval_ms}ms)",
         flush=True,
     )
-    client.wait_for_task(
-        uid,
-        timeout_in_ms=timeout_ms,
-        interval_in_ms=interval_ms,
-    )
+    try:
+        task = client.wait_for_task(
+            uid,
+            timeout_in_ms=timeout_ms,
+            interval_in_ms=interval_ms,
+        )
+    except Exception as error:  # pylint: disable=broad-except
+        raise SystemExit(f"Meili task {uid} wait failed: {error}") from None
+    status = getattr(task, "status", None)
+    if status != "succeeded":
+        error = getattr(task, "error", None)
+        raise SystemExit(f"Meili task {uid} ended with status={status}: {error}")
+    return task
+
+
+def format_queue_depth(depth):
+    """
+    Format queued Meilisearch task count.
+    """
+    return f"queued_tasks={depth}"
 
 
 def format_progress(count, total_count):
@@ -279,43 +343,48 @@ def print_out_targets(skip_meili=False, skip_kvrocks=False):
         )
 
 
-def flush_meili_batch(client, index, batch, timeout_ms, interval_ms, wait_tasks=True):
+def enqueue_meili_batch(index, batch, batch_number):
     """
-    Send one batch to Meilisearch and optionally wait for completion.
+    Send one batch to Meilisearch and return its task metadata.
     """
     if not batch:
-        return 0
-    task = index.add_documents(batch)
+        return None
     count = len(batch)
-    if wait_tasks:
-        wait_for_task(client, task, f"add {count} documents", timeout_ms, interval_ms)
+    task = index.add_documents(list(batch))
     batch.clear()
+    return task, count, f"add batch {batch_number} ({count} documents)"
+
+
+def wait_for_queued_meili_task(client, task_queue, timeout_ms, interval_ms):
+    """
+    Wait for the oldest queued Meilisearch task.
+    """
+    if not task_queue:
+        return 0
+    task_info, count, label = task_queue.pop(0)
+    wait_for_task(client, task_info, label, timeout_ms, interval_ms)
     return count
 
 
-def replace_meili_from_dump(
-    input_dir, batch_size, total_count, timeout_ms, interval_ms
+def import_meili_documents_to_index(
+    client,
+    index,
+    input_dir,
+    batch_size,
+    total_count,
+    timeout_ms,
+    interval_ms,
+    queue_depth,
 ):
     """
-    Delete all OUT Meili docs and import the port-scoped dump.
+    Import the port-scoped dump into one Meilisearch index.
     """
-    meili_url, index_name, client, index = build_out_meili_index()
-    print(
-        f"Replacing OUT Meilisearch documents at {meili_url} / index={index_name}",
-        flush=True,
-    )
-
-    wait_for_task(
-        client,
-        index.delete_all_documents(),
-        "delete all documents",
-        timeout_ms,
-        interval_ms,
-    )
-
     batch = []
+    task_queue = []
+    batch_number = 0
     processed_count = 0
-    indexed_count = 0
+    queued_count = 0
+    confirmed_count = 0
     error_count = 0
     started_at = time.monotonic()
 
@@ -328,36 +397,223 @@ def replace_meili_from_dump(
 
         batch.append(doc)
         if len(batch) >= batch_size:
-            indexed_count += flush_meili_batch(
-                client,
-                index,
-                batch,
-                timeout_ms,
-                interval_ms,
-            )
+            batch_number += 1
+            task_queue.append(enqueue_meili_batch(index, batch, batch_number))
+            queued_count += task_queue[-1][1]
             print(
                 "Meili progress: "
                 f"processed={format_progress(processed_count, total_count)} "
-                f"indexed={format_progress(indexed_count, total_count)} "
-                f"errors={error_count}",
+                f"queued={format_progress(queued_count, total_count)} "
+                f"confirmed={format_progress(confirmed_count, total_count)} "
+                f"{format_queue_depth(len(task_queue))} errors={error_count}",
                 flush=True,
             )
 
-    indexed_count += flush_meili_batch(
-        client,
-        index,
-        batch,
-        timeout_ms,
-        interval_ms,
-    )
+            if len(task_queue) >= queue_depth:
+                confirmed_count += wait_for_queued_meili_task(
+                    client,
+                    task_queue,
+                    timeout_ms,
+                    interval_ms,
+                )
+                print(
+                    "Meili progress: "
+                    f"processed={format_progress(processed_count, total_count)} "
+                    f"queued={format_progress(queued_count, total_count)} "
+                    f"confirmed={format_progress(confirmed_count, total_count)} "
+                    f"{format_queue_depth(len(task_queue))} errors={error_count}",
+                    flush=True,
+                )
+
+    final_task = enqueue_meili_batch(index, batch, batch_number + 1)
+    if final_task:
+        batch_number += 1
+        task_queue.append(final_task)
+        queued_count += final_task[1]
+        print(
+            "Meili progress: "
+            f"processed={format_progress(processed_count, total_count)} "
+            f"queued={format_progress(queued_count, total_count)} "
+            f"confirmed={format_progress(confirmed_count, total_count)} "
+            f"{format_queue_depth(len(task_queue))} errors={error_count}",
+            flush=True,
+        )
+
+    while task_queue:
+        confirmed_count += wait_for_queued_meili_task(
+            client,
+            task_queue,
+            timeout_ms,
+            interval_ms,
+        )
+        print(
+            "Meili progress: "
+            f"processed={format_progress(processed_count, total_count)} "
+            f"queued={format_progress(queued_count, total_count)} "
+            f"confirmed={format_progress(confirmed_count, total_count)} "
+            f"{format_queue_depth(len(task_queue))} errors={error_count}",
+            flush=True,
+        )
+
     elapsed = time.monotonic() - started_at
     print(
         "Meilisearch replace complete: "
-        f"processed={processed_count} indexed={indexed_count} "
-        f"errors={error_count} elapsed={elapsed:.1f}s",
+        f"processed={processed_count} queued={queued_count} "
+        f"confirmed={confirmed_count} errors={error_count} elapsed={elapsed:.1f}s",
         flush=True,
     )
-    return processed_count, indexed_count, error_count
+    return processed_count, confirmed_count, error_count
+
+
+def target_index_metadata(client, index_name, target_index, timeout_ms, interval_ms):
+    """
+    Return target primary key and settings, creating an empty target if missing.
+    """
+    primary_key = "id"
+    try:
+        primary_key = target_index.get_primary_key() or "id"
+        settings = dict(target_index.get_settings() or {})
+    except Exception as error:  # pylint: disable=broad-except
+        if "index_not_found" not in str(error):
+            raise SystemExit(f"Unable to read Meili target index {index_name}: {error}")
+        print(
+            f"Target Meilisearch index {index_name} missing; creating empty index",
+            flush=True,
+        )
+        wait_for_task(
+            client,
+            client.create_index(index_name, {"primaryKey": primary_key}),
+            f"create target index {index_name}",
+            timeout_ms,
+            interval_ms,
+        )
+        settings = {"filterableAttributes": ["ip"]}
+
+    if not settings.get("filterableAttributes"):
+        settings["filterableAttributes"] = ["ip"]
+    return primary_key, settings
+
+
+def create_import_index(
+    client, index_name, primary_key, settings, timeout_ms, interval_ms
+):
+    """
+    Create a temporary Meilisearch index and copy target settings into it.
+    """
+    import_index_name = f"{index_name}_import_{time.time_ns()}"
+    print(
+        f"Creating temporary Meilisearch index {import_index_name}",
+        flush=True,
+    )
+    wait_for_task(
+        client,
+        client.create_index(import_index_name, {"primaryKey": primary_key}),
+        f"create temporary index {import_index_name}",
+        timeout_ms,
+        interval_ms,
+    )
+
+    import_index = client.index(import_index_name)
+    if settings:
+        print(
+            f"Copying settings to temporary Meilisearch index {import_index_name}",
+            flush=True,
+        )
+        wait_for_task(
+            client,
+            import_index.update_settings(settings),
+            f"copy settings to {import_index_name}",
+            timeout_ms,
+            interval_ms,
+        )
+    return import_index_name, import_index
+
+
+def swap_import_index(client, index_name, import_index_name, timeout_ms, interval_ms):
+    """
+    Swap the fully imported temporary index into the target uid.
+    """
+    print(
+        f"Swapping Meilisearch indexes: {index_name} <-> {import_index_name}",
+        flush=True,
+    )
+    wait_for_task(
+        client,
+        client.swap_indexes([{"indexes": [index_name, import_index_name]}]),
+        f"swap {index_name} and {import_index_name}",
+        timeout_ms,
+        interval_ms,
+    )
+
+    print(
+        f"Deleting old Meilisearch content now held by {import_index_name}",
+        flush=True,
+    )
+    wait_for_task(
+        client,
+        client.delete_index(import_index_name),
+        f"delete old index {import_index_name}",
+        timeout_ms,
+        interval_ms,
+    )
+
+
+def replace_meili_from_dump(
+    input_dir,
+    batch_size,
+    total_count,
+    timeout_ms,
+    interval_ms,
+    queue_depth,
+    replace_mode,
+):
+    """
+    Replace OUT Meili docs and import the port-scoped dump.
+    """
+    meili_url, index_name, client, target_index = build_out_meili_index()
+    print(
+        "Replacing OUT Meilisearch documents at "
+        f"{meili_url} / index={index_name} mode={replace_mode}",
+        flush=True,
+    )
+
+    if replace_mode == "delete-all":
+        wait_for_task(
+            client,
+            target_index.delete_all_documents(),
+            "delete all documents",
+            timeout_ms,
+            interval_ms,
+        )
+        return import_meili_documents_to_index(
+            client,
+            target_index,
+            input_dir,
+            batch_size,
+            total_count,
+            timeout_ms,
+            interval_ms,
+            queue_depth,
+        )
+
+    primary_key, settings = target_index_metadata(
+        client, index_name, target_index, timeout_ms, interval_ms
+    )
+    import_index_name, import_index = create_import_index(
+        client, index_name, primary_key, settings, timeout_ms, interval_ms
+    )
+    result = import_meili_documents_to_index(
+        client,
+        import_index,
+        input_dir,
+        batch_size,
+        total_count,
+        timeout_ms,
+        interval_ms,
+        queue_depth,
+    )
+    swap_import_index(client, index_name, import_index_name, timeout_ms, interval_ms)
+    return result
 
 
 def load_tool_config(batch_size):
@@ -465,7 +721,8 @@ def main(argv=None):
     print(
         "Starting full port dump re-import: "
         f"input_dir={input_dir} docs={total_count} batch_size={batch_size} "
-        f"workers={args.workers}",
+        f"workers={args.workers} meili_queue_depth={args.meili_queue_depth} "
+        f"meili_replace_mode={args.meili_replace_mode}",
         flush=True,
     )
     print_out_targets(
@@ -482,6 +739,8 @@ def main(argv=None):
             total_count,
             args.meili_timeout_ms,
             args.meili_interval_ms,
+            args.meili_queue_depth,
+            args.meili_replace_mode,
         )
     if not args.skip_kvrocks:
         rebuild_kvrocks_from_dump(input_dir, batch_size, args.workers, total_count)

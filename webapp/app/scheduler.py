@@ -3,25 +3,27 @@ This module manage asynchrone tasks
 """
 
 import os
-import secrets
 import logging
 import shutil
 import uuid
 import json
 import time
+import copy
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from netaddr import IPNetwork, cidr_merge
 import meilisearch
 from meilisearch.errors import MeilisearchApiError
+from nmap2json.smarthash import port_smart_hash
 from requests.exceptions import HTTPError
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 from . import db
 from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
 from .models import Reports
-from .models import CollectedHeaders
+from .models import CollectedHeaders, ensure_default_collected_headers
 from .models import TagRules
 from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
@@ -57,6 +59,117 @@ DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
+UNKNOWN_FAVICON_MD5_RE = re.compile(
+    r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_banner_outputs(port):
+    """
+    Remove accidental newlines inside banner NSE output strings.
+    """
+    for script in port.get("scripts") or []:
+        if script.get("id") != "banner":
+            continue
+        output = script.get("output")
+        if isinstance(output, str):
+            script["output"] = output.replace("\n", "")
+
+
+def _normalize_unknown_favicon_outputs(port):
+    """
+    Convert legacy http-favicon unknown-MD5 output to http-mm-sha-favicon shape.
+    """
+    for script in port.get("scripts") or []:
+        output = script.get("output")
+        if not isinstance(output, str):
+            continue
+        match = UNKNOWN_FAVICON_MD5_RE.search(output)
+        if not match:
+            continue
+
+        favicon_md5 = match.group(1).lower()
+        script["id"] = "http-mm-sha-favicon"
+        script["favicon_md5"] = favicon_md5
+        script["output"] = f"\n favicon_md5: {favicon_md5}"
+
+
+def _add_port_hash(port):
+    """
+    Return a deep-copied port object with computed hsh256.
+    """
+    port_copy = copy.deepcopy(port)
+    _clean_banner_outputs(port_copy)
+    _normalize_unknown_favicon_outputs(port_copy)
+    port_hash = port_smart_hash(port_copy)
+    hashed_port = {}
+    hash_inserted = False
+    for key, value in port_copy.items():
+        if key == "hsh256":
+            continue
+        hashed_port[key] = value
+        if key == "portid":
+            hashed_port["hsh256"] = port_hash
+            hash_inserted = True
+    if not hash_inserted:
+        hashed_port["hsh256"] = port_hash
+    return hashed_port
+
+
+def _strip_port_hash(port):
+    """
+    Return a port copy without the internal hsh256 helper field.
+    """
+    public_port = copy.deepcopy(port)
+    public_port.pop("hsh256", None)
+    return public_port
+
+
+def _port_document_uuid(ip, port):
+    """
+    Return deterministic UUID for one IP/port/hash report.
+    """
+    port_id = str(port.get("portid") or "").strip()
+    port_hash = str(port.get("hsh256") or "").strip()
+    if not ip or not port_id or not port_hash:
+        return None
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{ip}:{port_id}:{port_hash}"))
+
+
+def _split_scan_result_by_port(scan_result):
+    """
+    Build one Meilisearch document per port from one scanner result.
+    """
+    if not isinstance(scan_result, dict):
+        return []
+
+    ip = scan_result.get("addr")
+    ports = scan_result.get("ports") or []
+    if not ip or not isinstance(ports, list):
+        return []
+
+    port_documents = []
+    for port in ports:
+        if not isinstance(port, dict):
+            continue
+        hashed_port = _add_port_hash(port)
+        doc_id = _port_document_uuid(ip, hashed_port)
+        if not doc_id:
+            continue
+
+        port_hash = hashed_port["hsh256"]
+        body = copy.deepcopy(scan_result)
+        body["ports"] = [_strip_port_hash(hashed_port)]
+        body["hsh256"] = port_hash
+        port_documents.append(
+            {
+                "id": doc_id,
+                "ip": ip,
+                "body": body,
+            }
+        )
+    return port_documents
 
 
 def _run_scheduler_step(step_label, step_func):
@@ -1113,6 +1226,7 @@ def task_export_to_dbs():
         db.session.query(TagRules).filter(TagRules.active == True).all()
     )
     parser_config = dict(db.app.config)
+    ensure_default_collected_headers(db.session)
     parser_config["HTTP_HEADER_COLLECTION"] = {
         str(row.header_name or "").strip().lower(): bool(row.collect_value)
         for row in db.session.query(CollectedHeaders).all()
@@ -1178,30 +1292,26 @@ def task_export_to_dbs():
 
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                item = {}
-                for item in data:
-                    ipuid = str(
-                        uuid.uuid5(
-                            uuid.NAMESPACE_DNS, item.get("hsh256", secrets.randbits(64))
+                if isinstance(data, dict):
+                    scan_results = [data]
+                elif isinstance(data, list):
+                    scan_results = data
+                else:
+                    scan_results = []
+                for item in scan_results:
+                    for object_to_save in _split_scan_result_by_port(item):
+                        parsed_doc = parse_json(
+                            object_to_save,
+                            parser_config,
+                            tag_rules=active_tag_rules,
                         )
-                    )
-                    object_to_save = {
-                        "id": ipuid,
-                        "ip": item.get("addr"),
-                        "body": item,
-                    }
-                    parsed_doc = parse_json(
-                        object_to_save,
-                        parser_config,
-                        tag_rules=active_tag_rules,
-                    )
-                    pending_meili.append(object_to_save)
-                    pending_kvrocks.append(parsed_doc)
-                    pending_job_refs.append(job["id"])
-                    outstanding_docs[job["id"]] += 1
+                        pending_meili.append(object_to_save)
+                        pending_kvrocks.append(parsed_doc)
+                        pending_job_refs.append(job["id"])
+                        outstanding_docs[job["id"]] += 1
 
-                    if len(pending_meili) >= batch_size:
-                        flush_batch()
+                        if len(pending_meili) >= batch_size:
+                            flush_batch()
 
             completed_jobs.add(job["id"])
             if outstanding_docs[job["id"]] == 0:

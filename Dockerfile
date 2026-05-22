@@ -9,6 +9,7 @@ LABEL org.opencontainers.image.version="0.2604.0" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 

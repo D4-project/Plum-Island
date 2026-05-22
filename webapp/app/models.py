@@ -388,6 +388,129 @@ class Nses(Model):
         return self.name
 
 
+DEFAULT_COLLECTED_HEADERS = (
+    "cache-control",
+    "clear-site-data",
+    "content-type",
+    "content-security-policy",
+    "cross-origin-embedder-policy",
+    "cross-origin-opener-policy",
+    "cross-origin-resource-policy",
+    "permissions-policy",
+    "referrer-policy",
+    "strict-transport-security",
+    "x-content-type-options",
+    "x-dns-prefetch-control",
+    "x-frame-options",
+    "x-permitted-cross-domain-policies",
+    "$wsep",
+    "host-header",
+    "k-proxy-request",
+    "liferay-portal",
+    "oraclecommercecloud-version",
+    "pega-host",
+    "powered-by",
+    "product",
+    "sourcemap",
+    "www-authenticate",
+    "x-aspnet-version",
+    "x-aspnetmvc-version",
+    "x-atmosphere-error",
+    "x-atmosphere-first-request",
+    "x-atmosphere-tracking-id",
+    "x-b3-parentspanid",
+    "x-b3-sampled",
+    "x-b3-spanid",
+    "x-b3-traceid",
+    "x-beserver",
+    "x-backside-transport",
+    "x-cf-powered-by",
+    "x-cms",
+    "x-calculatedbetarget",
+    "x-cocoon-version",
+    "x-content-encoded-by",
+    "x-diaginfo",
+    "x-envoy-attempt-count",
+    "x-envoy-external-address",
+    "x-envoy-internal",
+    "x-envoy-original-dst-host",
+    "x-envoy-upstream-service-time",
+    "x-feserver",
+    "x-framework",
+    "x-generated-by",
+    "x-generator",
+    "x-gitlab-meta",
+    "x-jitsi-release",
+    "x-joomla-version",
+    "x-kubernetes-pf-flowschema-ui",
+    "x-kubernetes-pf-prioritylevel-uid",
+    "x-litespeed-cache",
+    "x-litespeed-purge",
+    "x-litespeed-tag",
+    "x-litespeed-vary",
+    "x-litespeed-cache-control",
+    "x-mod-pagespeed",
+    "x-nextjs-cache",
+    "x-nextjs-matched-path",
+    "x-nextjs-page",
+    "x-nextjs-redirect",
+    "x-owa-version",
+    "x-old-content-length",
+    "x-oneagent-js-injection",
+    "x-page-speed",
+    "x-php-version",
+    "x-powered-by",
+    "x-powered-by-plesk",
+    "x-powered-cms",
+    "x-redirect-by",
+    "x-server-powered-by",
+    "x-sourcefiles",
+    "x-sourcemap",
+    "x-turbo-charged-by",
+    "x-umbraco-version",
+    "x-varnish-backend",
+    "x-varnish-server",
+    "x-woodpecker-version",
+    "x-dtagentid",
+    "x-dthealthcheck",
+    "x-dtinjectedservlet",
+    "x-ruxit-js-agent",
+)
+
+DEFAULT_VALUE_COLLECTED_HEADERS = frozenset(
+    {
+        "x-powered-by",
+        "x-server-powered-by",
+        "powered-by",
+        "product",
+        "x-generator",
+        "x-generated-by",
+        "x-powered-cms",
+        "x-varnish-backend",
+        "x-varnish-server",
+        "x-cms",
+        "x-framework",
+        "x-redirect-by",
+        "x-turbo-charged-by",
+        "liferay-portal",
+        "x-content-encoded-by",
+        "x-cf-powered-by",
+        "x-owa-version",
+        "x-cocoon-version",
+        "x-jitsi-release",
+        "oraclecommercecloud-version",
+        "x-woodpecker-version",
+        "x-joomla-version",
+        "x-umbraco-version",
+        "x-php-version",
+        "x-aspnet-version",
+        "x-aspnetmvc-version",
+        "content-type",
+        "www-authenticate",
+    }
+)
+
+
 class CollectedHeaders(Model):
     """
     Curated HTTP headers indexed from the Nmap http-headers NSE output.
@@ -410,6 +533,38 @@ class CollectedHeaders(Model):
 
     def __repr__(self):
         return self.header_name
+
+
+def ensure_default_collected_headers(session):
+    """
+    Seed fresh installs with the curated HTTP header collection defaults.
+    """
+    existing = {
+        row.header_name: row
+        for row in session.query(CollectedHeaders)
+        .filter(CollectedHeaders.header_name.in_(DEFAULT_COLLECTED_HEADERS))
+        .all()
+    }
+    changed = False
+
+    for header_name in DEFAULT_COLLECTED_HEADERS:
+        collect_value = header_name in DEFAULT_VALUE_COLLECTED_HEADERS
+        row = existing.get(header_name)
+        if row is None:
+            session.add(
+                CollectedHeaders(
+                    header_name=header_name,
+                    collect_value=collect_value,
+                )
+            )
+            changed = True
+            continue
+        if collect_value and not row.collect_value:
+            row.collect_value = True
+            changed = True
+
+    if changed:
+        session.commit()
 
 
 class TagRules(Model):

@@ -875,7 +875,7 @@ function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.j
         statusEl.textContent = 'Export ready. Starting download...';
     } else if (data.status === 'error') {
         statusEl.textContent = 'Export failed';
-        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${data.error || 'Unexpected error'}</div>`;
+        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(data.error || 'Unexpected error')}</div>`;
     }
 }
 
@@ -907,7 +907,7 @@ async function pollExport(jobId, config) {
         stopExportPolling();
         const errorEl = document.getElementById('export-error');
         document.getElementById('export-status-text').textContent = 'Export failed';
-        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${error?.message || 'Unexpected error'}</div>`;
+        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(error?.message || 'Unexpected error')}</div>`;
         return 'error';
     }
 }
@@ -950,7 +950,7 @@ async function startExport(config) {
         }
     } catch (error) {
         document.getElementById('export-status-text').textContent = 'Export failed';
-        document.getElementById('export-error').innerHTML = `<div class="alert alert-danger mt-2" role="alert">${error?.message || 'Unexpected error'}</div>`;
+        document.getElementById('export-error').innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(error?.message || 'Unexpected error')}</div>`;
     }
 }
 
@@ -962,7 +962,73 @@ async function startFullExport() {
     await startExport(EXPORT_CONFIGS.json);
 }
 
+function splitQueryTokens(query) {
+    const tokens = [];
+    let current = '';
+    let quote = null;
+    let escaped = false;
+
+    for (const char of String(query || '')) {
+        if (escaped) {
+            current += char;
+            escaped = false;
+            continue;
+        }
+        if (char === '\\') {
+            current += char;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            current += char;
+            if (char === quote) {
+                quote = null;
+            }
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            current += char;
+            quote = char;
+            continue;
+        }
+        if (/\s/.test(char)) {
+            if (current) {
+                tokens.push(current);
+                current = '';
+            }
+            continue;
+        }
+        current += char;
+    }
+    if (current) {
+        tokens.push(current);
+    }
+    return tokens;
+}
+
+function hasMultiplePortTerms(query) {
+    let portTermsInGroup = 0;
+    for (const token of splitQueryTokens(query)) {
+        if (token.toUpperCase() === 'OR') {
+            portTermsInGroup = 0;
+            continue;
+        }
+        if (token.toLowerCase().startsWith('port:')) {
+            portTermsInGroup += 1;
+            if (portTermsInGroup > 1) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 async function search() {
+    const query = document.getElementById('query').value || '';
+    if (hasMultiplePortTerms(query)) {
+        window.alert('Search is currently single port based. Please search one port at a time.');
+        return;
+    }
     await runSearchPage(null, false);
 }
 
@@ -1097,7 +1163,7 @@ async function runSearchPage(cursorTs, append) {
     try {
         timeRange = getSearchTimeRange();
     } catch (error) {
-        errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${error?.message || 'Invalid time range'}</div>`;
+        errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(error?.message || 'Invalid time range')}</div>`;
         infoDiv.innerHTML = '';
         if (!append) {
             hitsDiv.innerHTML = '';
@@ -1144,7 +1210,7 @@ async function runSearchPage(cursorTs, append) {
             scannedDays += Number(pagination.scanned_days || 0);
 
             if (data.status === false) {
-                errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
+                errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(data.msg_error)}</div>`;
                 hasMore = false;
                 break;
             }
@@ -1206,7 +1272,7 @@ async function runSearchPage(cursorTs, append) {
             return;
         }
         console.error('KV search failed', error);
-        errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${error?.message || 'Unexpected error'}</div>`;
+        errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${escapeHtml(error?.message || 'Unexpected error')}</div>`;
         infoDiv.innerHTML = '';
         if (!append) {
             hitsDiv.innerHTML = '';
@@ -1230,7 +1296,10 @@ async function loadUid(uid, targetId) {
         json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>
             line.replace(/\\n/g, '\\n\n' + indent + '  ')
         );
-        target.innerHTML = `<pre>${json}</pre>`;
+        target.textContent = '';
+        const pre = document.createElement('pre');
+        pre.textContent = json;
+        target.appendChild(pre);
         target.style.display = 'block';
     } else {
         target.style.display = 'none';
@@ -1561,7 +1630,7 @@ document.addEventListener('DOMContentLoaded', () => {
     <div class="search-toolbar">
         <div class="search-toolbar-input">
             <div class="search-query-wrapper">
-                <input type="text" id="query" class="form-control" placeholder="Query {{ total_scan_count }} scans...">
+                <input type="text" id="query" class="form-control" placeholder="Query {{ total_scan_count }} Ports scans...">
                 <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Tag suggestions"></div>
             </div>
             <div class="search-time-range">

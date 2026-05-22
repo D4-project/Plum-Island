@@ -2,13 +2,11 @@
 """
 Split IP-scoped Meilisearch dump documents into one document per port.
 
-The smart-hash implementation is copied from D4-project/nmap2json:
-https://github.com/D4-project/nmap2json/blob/main/src/nmap2json/smarthash.py
+Port hsh256 values are computed with D4-project/nmap2json smarthash.
 """
 
 import argparse
 import copy
-import hashlib
 import json
 import re
 import time
@@ -16,185 +14,17 @@ import uuid
 from pathlib import Path
 
 import redis
+from nmap2json.smarthash import port_smart_hash
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = BASE_DIR / "meili_dump"
 DEFAULT_OUTPUT_DIR = BASE_DIR / "meili_dump_port"
 DEFAULT_CONFIG_FILE = BASE_DIR / "config.yaml"
 
-HEADERS_TOCLEAN = [
-    "CF-Ray",
-    "content-security-policy-report-only",
-    "ETag",
-    "request-id",
-    "Via",
-    "www-authenticate",
-    "X-Amz-Cf-Id",
-    "x-amz-id-2",
-    "x-amz-request-id",
-    "x-gitlab-meta",
-    "x-iplb-instance",
-    "x-iplb-request-id",
-    "x-ntap-sg-trace-id",
-    "x-request-id",
-    "x-runtime",
-]
-
-SMART_HASH_SCRIPTS = ["http-headers", "http-security-headers"]
 UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
 )
-
-
-def filter_keys(obj: dict | list, exclude_keys: list):
-    """
-    Recursively filter out specified keys from dictionaries and lists.
-    """
-    if isinstance(obj, dict):
-        return {
-            key: filter_keys(value, exclude_keys)
-            for key, value in obj.items()
-            if key not in exclude_keys
-        }
-    if isinstance(obj, list):
-        return [filter_keys(item, exclude_keys) for item in obj]
-    return obj
-
-
-def headers_smart_hash(obj: dict, exclude_keys=None):
-    """
-    Generate sha256 of normalized host result.
-    """
-    exclude_keys = exclude_keys or []
-    filtered = filter_keys(obj, exclude_keys)
-    filtered = master_clean(filtered, SMART_HASH_SCRIPTS)
-    obj_str = json.dumps(filtered)
-    return hashlib.sha256(obj_str.encode("utf-8")).hexdigest()
-
-
-def port_smart_hash(port: dict, exclude_keys=None):
-    """
-    Generate sha256 of normalized port result.
-    """
-    exclude_keys = exclude_keys or ["hsh256"]
-    filtered = filter_keys({"ports": [port]}, exclude_keys)
-    filtered = master_clean(filtered, SMART_HASH_SCRIPTS)
-    obj_str = json.dumps(filtered["ports"][0])
-    return hashlib.sha256(obj_str.encode("utf-8")).hexdigest()
-
-
-def mask_same_length(match):
-    """
-    Replace non-space characters by X while keeping length.
-    """
-    return "".join("X" if char != " " else " " for char in match.group(0))
-
-
-def mask_value(match):
-    """
-    Replace the second regex group with X.
-    """
-    value = match.group(2)
-    masked = "X" * len(value)
-    return f"{match.group(1)}{masked}"
-
-
-def mask_cookie_value(match):
-    """
-    Replace cookie values.
-    """
-    key = match.group(1)
-    suffix = match.group(3) or ""
-    masked = "[REDACTED]"
-    return f"{key}={masked}{suffix}"
-
-
-def no_time(nt_input: str):
-    """
-    Remove HTTP-date values from a string.
-    """
-    pattern = (
-        r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2}[- ]"
-        + "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-        + r"[- ]\d{4} \d{2}:\d{2}:\d{2} [A-Z]{2,4}"
-    )
-    return re.sub(pattern, mask_same_length, nt_input)
-
-
-def no_uid(nu_input: str):
-    """
-    Remove UUID references from a string.
-    """
-    pattern = r"(?:[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})"
-    return re.sub(pattern, mask_same_length, nu_input)
-
-
-def anonymise_nonce(an_input: str):
-    """
-    Replace CSP nonce values.
-    """
-    pattern = re.compile(r'nonce[-=]"?([a-zA-Z0-9_\-\+]+)')
-    return pattern.sub(mask_same_length, an_input)
-
-
-def anonymise_correlation_id(an_corr: str):
-    """
-    Replace correlation_id values.
-    """
-    pattern = re.compile(r'(correlation_id"[:]"([a-zA-Z0-9_\-\+]+))')
-    return pattern.sub(mask_same_length, an_corr)
-
-
-def anonymise_cookies(ac_input):
-    """
-    Anonymize cookie values.
-    """
-    pattern = re.compile(r"(Set-Cookie:\s*[^=]+)=([^;]+)(;[^\n]*|$)", re.IGNORECASE)
-    return pattern.sub(mask_cookie_value, ac_input)
-
-
-def anonymise_headers(input_text: str, headers: list):
-    """
-    Anonymize volatile headers and volatile header parameters.
-    """
-    for header in headers:
-        if re.search(
-            rf"^\s*{re.escape(header)}\s*:", input_text, re.IGNORECASE | re.MULTILINE
-        ):
-            if header.lower().startswith(
-                "content-security-policy"
-            ) or header.lower().startswith("www-authenticate"):
-                input_text = anonymise_nonce(input_text)
-                continue
-            if header.lower().startswith("x-gitlab-meta"):
-                input_text = anonymise_correlation_id(input_text)
-                continue
-        pattern = re.compile(
-            rf"(^\s*{re.escape(header)}\s*:\s*)(.+)", re.IGNORECASE | re.MULTILINE
-        )
-        input_text = pattern.sub(mask_value, input_text)
-    return input_text
-
-
-def master_clean(not_dedup_nmap_result: dict, scripts: list):
-    """
-    Remove non-relevant volatile data before hashing.
-    """
-    result = not_dedup_nmap_result.copy()
-
-    for port in result.get("ports", []):
-        if port.get("scripts"):
-            for item in port.get("scripts"):
-                for script in scripts:
-                    if item.get("id") == script:
-                        to_clean = item.get("output")
-                        cleaned = anonymise_headers(
-                            anonymise_cookies(no_uid(no_time(to_clean))),
-                            HEADERS_TOCLEAN,
-                        )
-                        item["output"] = cleaned
-    return result
 
 
 def parse_args():
@@ -302,6 +132,15 @@ def add_port_hash(port):
     return hashed_port
 
 
+def strip_port_hash(port):
+    """
+    Return a port copy without the internal hsh256 helper field.
+    """
+    public_port = copy.deepcopy(port)
+    public_port.pop("hsh256", None)
+    return public_port
+
+
 def clean_banner_outputs(port):
     """
     Remove accidental newlines inside banner NSE output strings.
@@ -358,8 +197,9 @@ def build_port_document(source_doc, source_port):
     ip = source_doc.get("ip") or source_body.get("addr")
     hashed_port = add_port_hash(source_port)
     body = copy.deepcopy(source_body)
-    body["ports"] = [hashed_port]
-    body["hsh256"] = hashed_port["hsh256"]
+    port_hash = hashed_port["hsh256"]
+    body["ports"] = [strip_port_hash(hashed_port)]
+    body["hsh256"] = port_hash
 
     doc = copy.deepcopy(source_doc)
     doc["id"] = port_document_uuid(ip, hashed_port)

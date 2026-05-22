@@ -634,6 +634,7 @@ def load_reindex_runtime():
     from app.models import (  # pylint: disable=import-outside-toplevel
         CollectedHeaders,
         TagRules,
+        ensure_default_collected_headers,
     )
     from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
         KVrocksIndexer,
@@ -651,6 +652,7 @@ def load_reindex_runtime():
         "db": db,
         "CollectedHeaders": CollectedHeaders,
         "TagRules": TagRules,
+        "ensure_default_collected_headers": ensure_default_collected_headers,
         "KVrocksIndexer": KVrocksIndexer,
         "fetch_tlds": fetch_tlds,
         "parse_json": parse_json,
@@ -699,10 +701,13 @@ def ensure_parser_tlds(app_config, fetch_tlds):
             existing_tlds.add(tld)
 
 
-def configure_parser_http_headers(app_config, db, collected_headers_model):
+def configure_parser_http_headers(
+    app_config, db, collected_headers_model, ensure_default_headers
+):
     """
     Add DB-backed HTTP header collection config to parser settings.
     """
+    ensure_default_headers(db.session)
     app_config["HTTP_HEADER_COLLECTION"] = {
         str(row.header_name or "").strip().lower(): bool(row.collect_value)
         for row in db.session.query(collected_headers_model).all()
@@ -845,6 +850,7 @@ def reindex_tags(args):
     db = runtime["db"]
     CollectedHeaders = runtime["CollectedHeaders"]
     TagRules = runtime["TagRules"]
+    ensure_default_collected_headers = runtime["ensure_default_collected_headers"]
     KVrocksIndexer = runtime["KVrocksIndexer"]
     fetch_tlds = runtime["fetch_tlds"]
     parse_json = runtime["parse_json"]
@@ -853,7 +859,12 @@ def reindex_tags(args):
     with app.app_context():
         configure_parser_from_tools_config(app.config, tools_config)
         ensure_parser_tlds(app.config, fetch_tlds)
-        configure_parser_http_headers(app.config, db, CollectedHeaders)
+        configure_parser_http_headers(
+            app.config,
+            db,
+            CollectedHeaders,
+            ensure_default_collected_headers,
+        )
 
         active_rules = (
             db.session.query(TagRules)

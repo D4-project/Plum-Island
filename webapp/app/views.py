@@ -68,6 +68,7 @@ from .models import (
     Ports,
     TargetScanStates,
     ScanProfileCycles,
+    ensure_default_collected_headers,
     is_valid_http_header_name,
 )
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
@@ -2356,14 +2357,15 @@ class IPDetailView(BaseView):
         unmapped_documents = []
         warnings = []
         requested_hostnames = set()
-        ip_tags = set()
         has_ip_only_filter = False
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
+            uid_tags = set()
             for tag in indexer.r.smembers(f"tags:{uid}"):
                 tag_values = normalize_tags([tag])
                 for tag_value in tag_values:
-                    ip_tags.add(tag_value)
+                    uid_tags.add(tag_value)
+            uid_tags = sorted(uid_tags, key=str.lower)
             first_seen = self._safe_timestamp_to_display(
                 uid_timestamps.get("first_seen")
             )
@@ -2379,6 +2381,7 @@ class IPDetailView(BaseView):
                         "uid": uid,
                         "first_seen": first_seen,
                         "last_seen": last_seen,
+                        "tags": uid_tags,
                         "warning": warning_message,
                     }
                 )
@@ -2402,6 +2405,7 @@ class IPDetailView(BaseView):
                         "uid": uid,
                         "first_seen": first_seen,
                         "last_seen": last_seen,
+                        "tags": uid_tags,
                         "warning": "Document has no port details.",
                     }
                 )
@@ -2442,6 +2446,7 @@ class IPDetailView(BaseView):
                         "ptr_records": ptr_records,
                         "resolved_hosts": resolved_hosts,
                         "user_hostnames": sorted(set(user_hostnames), key=str.lower),
+                        "tags": uid_tags,
                         "port": port,
                     }
                 )
@@ -2468,7 +2473,6 @@ class IPDetailView(BaseView):
             unmapped_documents=unmapped_documents,
             has_ip_only_filter=has_ip_only_filter,
             requested_hostnames=sorted(requested_hostnames, key=str.lower),
-            ip_tags=sorted(ip_tags, key=str.lower),
             warnings=warnings,
         )
 
@@ -4030,3 +4034,4 @@ appbuilder.add_view(
     StatsView, "Stats", icon="fa-arrow-up-right-dots", category="Status"
 )
 db.create_all()
+ensure_default_collected_headers(db.session)

@@ -1,6 +1,16 @@
 {% extends "appbuilder/base.html" %}
 {% import 'appbuilder/general/lib.html' as lib %}
 
+{% macro render_ip_tag(tag) -%}
+    {%- set tag_prefix = tag.split(':', 1)[0] -%}
+    {%- if tag_prefix == 'vendor' and ':' in tag -%}
+        {%- set vendor_value = tag.split(':', 1)[1] -%}
+        <a class="ip-detail-tag ip-detail-tag-vendor" href="https://vulnerability.circl.lu/search?vendor={{ vendor_value|urlencode }}" target="_blank" rel="noopener noreferrer">{{ tag }}</a>
+    {%- else -%}
+        <span class="ip-detail-tag{% if tag_prefix == 'vuln' %} ip-detail-tag-vuln{% elif tag_prefix == 'vendor' %} ip-detail-tag-vendor{% elif tag_prefix == 'product' %} ip-detail-tag-product{% elif tag_prefix == 'type' %} ip-detail-tag-type{% elif tag_prefix == 'proto' %} ip-detail-tag-proto{% elif tag_prefix == 'lang' %} ip-detail-tag-lang{% elif tag_prefix == 'cpe' or tag_prefix == 'hard' %} ip-detail-tag-cpe{% endif %}">{{ tag }}</span>
+    {%- endif -%}
+{%- endmacro %}
+
 {% block content %}
 {{ lib.panel_begin(title, "IP Detail") }}
 
@@ -28,6 +38,14 @@
     align-items: center;
     flex-wrap: wrap;
     gap: 0.35rem;
+}
+.ip-port-observation-tags {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-left: 0.4rem;
+    vertical-align: middle;
 }
 .ip-detail-tag {
     background: #337ab7;
@@ -348,13 +366,7 @@
             {% if ip_tags %}
             <div class="ip-detail-tags" aria-label="Tags">
                 {% for tag in ip_tags %}
-                {% set tag_prefix = tag.split(':', 1)[0] %}
-                {% if tag_prefix == 'vendor' and ':' in tag %}
-                {% set vendor_value = tag.split(':', 1)[1] %}
-                <a class="ip-detail-tag ip-detail-tag-vendor" href="https://vulnerability.circl.lu/search?vendor={{ vendor_value|urlencode }}" target="_blank" rel="noopener noreferrer">{{ tag }}</a>
-                {% else %}
-                <span class="ip-detail-tag{% if tag_prefix == 'vuln' %} ip-detail-tag-vuln{% elif tag_prefix == 'vendor' %} ip-detail-tag-vendor{% elif tag_prefix == 'product' %} ip-detail-tag-product{% elif tag_prefix == 'type' %} ip-detail-tag-type{% elif tag_prefix == 'proto' %} ip-detail-tag-proto{% elif tag_prefix == 'lang' %} ip-detail-tag-lang{% elif tag_prefix == 'cpe' or tag_prefix == 'hard' %} ip-detail-tag-cpe{% endif %}">{{ tag }}</span>
-                {% endif %}
+                {{ render_ip_tag(tag) }}
                 {% endfor %}
             </div>
             {% endif %}
@@ -493,6 +505,13 @@
                 <div class="ip-port-observation-meta">
                     First seen: {{ observation.first_seen or "N/A" }}
                     | Last seen: {{ observation.last_seen or "N/A" }}
+                    {% if observation.tags %}
+                    <span class="ip-port-observation-tags" aria-label="Tags">
+                        {% for tag in observation.tags %}
+                        {{ render_ip_tag(tag) }}
+                        {% endfor %}
+                    </span>
+                    {% endif %}
                 </div>
                 {% if observation.resolved_hosts or observation.ptr_records %}
                 <div class="ip-hosts-block">

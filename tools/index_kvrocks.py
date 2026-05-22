@@ -212,6 +212,7 @@ def load_collected_header_collection():
         from app import app, db  # pylint: disable=import-outside-toplevel
         from app.models import (  # pylint: disable=import-outside-toplevel
             CollectedHeaders,
+            ensure_default_collected_headers,
         )
     except Exception as error:  # pylint: disable=broad-except
         print(f"[WARN] Unable to import app header config: {error}", flush=True)
@@ -219,6 +220,7 @@ def load_collected_header_collection():
 
     try:
         with app.app_context():
+            ensure_default_collected_headers(db.session)
             return {
                 str(row.header_name or "").strip().lower(): bool(row.collect_value)
                 for row in db.session.query(CollectedHeaders).all()
