@@ -3,6 +3,6 @@ query: 'http_favicon_md5:45210ACE96CE9C893F8C27C5DECAB10D OR http_favicon_mmhash
   OR banner.lk:"user-agent: fritz!os" OR banner.begin:"fritz!boxfonwlan7390 ftp server"
   OR banner.lk:"user-agent: avm fritz!bo"'
 tags:
-- vendor:fritzbox
-- product:fritz-box
+- vendor:avm
+- product:Fritz!Box
 version: 20260520T133458Z

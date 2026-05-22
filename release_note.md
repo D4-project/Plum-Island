@@ -73,6 +73,7 @@ Changes after `v0.2604.0`.
   - Add FileZilla FTP Server default certificate issuer tagging, closes #75
   - Add HPE Comware switch banner tagging, closes #115
   - Add Barracuda CloudGen Firewall server header tagging, closes #77
+  - Rename FRITZ!Box vendor tag from `fritzbox` to `avm`
 - Make bot job submission idempotent (`ac9c7fe`)
 - Prevent concurrent scanner agents from claiming the same queued job
 - Return validation errors instead of TypeError for malformed bot UID fields, closes #86
