@@ -290,6 +290,81 @@ def get_http_etag(data: dict, target: str):
     return {"http_etag": http_etag}
 
 
+def _suffix_is_allowed(suffix, suffix_str, db_conf):
+    """
+    Check suffix validity across pyfaup-rs API variants.
+    """
+    if db_conf["ONLINETLD"]:
+        if suffix_str in db_conf["TLDS"]:
+            return True
+    else:
+        is_known = getattr(suffix, "is_known", None)
+        if callable(is_known) and is_known():
+            return True
+
+    return suffix_str in db_conf["TLDADD"]
+
+
+def _split_hostname_from_suffix(hostname, suffix_str):
+    """
+    Compute domain/subdomain when pyfaup-rs does not expose those attributes.
+    """
+    if not suffix_str:
+        return "", ""
+
+    suffix_tail = f".{suffix_str}"
+    if hostname.endswith(suffix_tail):
+        root = hostname[: -len(suffix_tail)]
+    else:
+        root = hostname.rsplit(".", 1)[0]
+
+    if not root:
+        return "", ""
+
+    if "." not in root:
+        return f"{root}.{suffix_str}", ""
+
+    subdomain, domain_label = root.rsplit(".", 1)
+    domain = f"{domain_label}.{suffix_str}"
+    return domain, subdomain
+
+
+def _parse_hostname_parts(hostname, db_conf):
+    """
+    Parse one hostname using pyfaup-rs, with compatibility for builds that do not
+    expose domain/subdomain attributes on Url.
+    """
+    hostname = str(hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        return None
+
+    try:
+        url = Url(f"http://{hostname}")
+    except (ValueError, TypeError):
+        return None
+
+    suffix = getattr(url, "suffix", None)
+    if not suffix:
+        return None
+
+    suffix_str = str(suffix).lower()
+    if not _suffix_is_allowed(suffix, suffix_str, db_conf):
+        return None
+
+    fallback_domain, fallback_subdomain = _split_hostname_from_suffix(
+        hostname, suffix_str
+    )
+    domain = getattr(url, "domain", None) or fallback_domain
+    subdomain = getattr(url, "subdomain", None) or fallback_subdomain
+
+    return {
+        "fqdn": hostname,
+        "host": str(subdomain).lower() if subdomain else "",
+        "domain": str(domain).lower() if domain else "",
+        "tld": suffix_str,
+    }
+
+
 def get_hosts(data: dict, target: str, db_conf: dict):
     """
     extract fqdn.
@@ -302,32 +377,15 @@ def get_hosts(data: dict, target: str, db_conf: dict):
         fqdn_hosts_candidates = fqdn_regex.findall(str(body))
         if fqdn_hosts_candidates:
             for host in fqdn_hosts_candidates:
-                try:
-                    url = Url(f"http://{str.lower(host)}")
-                    subdomain = url.subdomain  # Host
-                    suffix = url.suffix  # TLD
-
-                    parse = False
-                    if suffix:
-                        suffix_str = str(url.suffix).lower()  # TLD
-                        if db_conf["ONLINETLD"]:
-                            if suffix_str in db_conf["TLDS"]:
-                                parse = True
-                        else:
-                            if suffix.is_known():
-                                parse = True
-
-                        if suffix_str in db_conf["TLDADD"]:
-                            parse = True
-
-                    if parse:
-                        fqdn_hosts.append(str.lower(host))
-                        if subdomain:
-                            hosts.append(str.lower(subdomain))
-                        tlds.append(suffix_str)
-                        domains.append(str.lower(url.domain))
-                except (ValueError, TypeError):
-                    pass
+                parsed_host = _parse_hostname_parts(host, db_conf)
+                if not parsed_host:
+                    continue
+                fqdn_hosts.append(parsed_host["fqdn"])
+                if parsed_host["host"]:
+                    hosts.append(parsed_host["host"])
+                tlds.append(parsed_host["tld"])
+                if parsed_host["domain"]:
+                    domains.append(parsed_host["domain"])
 
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
 
@@ -336,40 +394,7 @@ def _parse_valid_hostname(hostname, db_conf: dict):
     """
     Parse one hostname using the configured domain validation rules.
     """
-    hostname = str(hostname or "").strip().lower().rstrip(".")
-    if not hostname:
-        return None
-
-    try:
-        url = Url(f"http://{hostname}")
-    except (ValueError, TypeError):
-        return None
-
-    suffix = url.suffix
-    if not suffix:
-        return None
-
-    suffix_str = str(suffix).lower()
-    parse = False
-    if db_conf["ONLINETLD"]:
-        if suffix_str in db_conf["TLDS"]:
-            parse = True
-    else:
-        if suffix.is_known():
-            parse = True
-
-    if suffix_str in db_conf["TLDADD"]:
-        parse = True
-
-    if not parse:
-        return None
-
-    return {
-        "fqdn": hostname,
-        "host": str(url.subdomain).lower() if url.subdomain else "",
-        "domain": str(url.domain).lower() if url.domain else "",
-        "tld": suffix_str,
-    }
+    return _parse_hostname_parts(hostname, db_conf)
 
 
 def get_fqdn_requested(data: dict, target: str, db_conf: dict):
