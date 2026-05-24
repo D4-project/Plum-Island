@@ -22,6 +22,11 @@ import re
 from pyfaup import Url  # pylint: disable=no-name-in-module
 
 try:
+    from pyfaup import FaupCompat  # pylint: disable=no-name-in-module
+except ImportError:
+    FaupCompat = None
+
+try:
     from .tagrules import apply_tag_rules_to_document
 except ImportError:
     from tagrules import apply_tag_rules_to_document
@@ -301,6 +306,8 @@ def _suffix_is_allowed(suffix, suffix_str, db_conf):
         is_known = getattr(suffix, "is_known", None)
         if callable(is_known) and is_known():
             return True
+        if is_known is None:
+            return True
 
     return suffix_str in db_conf["TLDADD"]
 
@@ -345,8 +352,48 @@ def _parse_hostname_parts(hostname, db_conf):
 
     suffix = getattr(url, "suffix", None)
     if not suffix:
+        return _parse_hostname_parts_compat(hostname, db_conf)
+
+    return _build_hostname_parts(
+        hostname,
+        suffix,
+        getattr(url, "domain", None),
+        getattr(url, "subdomain", None),
+        db_conf,
+    )
+
+
+def _parse_hostname_parts_compat(hostname, db_conf):
+    """
+    Parse with pyfaup-rs FaupCompat when Url exposes only raw URL fields.
+    """
+    if FaupCompat is None:
         return None
 
+    try:
+        parser = FaupCompat()
+        parser.decode(f"http://{hostname}")
+        parsed = parser.get()
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+    suffix = parsed.get("tld")
+    if not suffix:
+        return None
+
+    return _build_hostname_parts(
+        hostname,
+        suffix,
+        parsed.get("domain"),
+        parsed.get("subdomain"),
+        db_conf,
+    )
+
+
+def _build_hostname_parts(hostname, suffix, domain, subdomain, db_conf):
+    """
+    Build normalized hostname parts from pyfaup Url or FaupCompat output.
+    """
     suffix_str = str(suffix).lower()
     if not _suffix_is_allowed(suffix, suffix_str, db_conf):
         return None
@@ -354,8 +401,8 @@ def _parse_hostname_parts(hostname, db_conf):
     fallback_domain, fallback_subdomain = _split_hostname_from_suffix(
         hostname, suffix_str
     )
-    domain = getattr(url, "domain", None) or fallback_domain
-    subdomain = getattr(url, "subdomain", None) or fallback_subdomain
+    domain = domain or fallback_domain
+    subdomain = subdomain or fallback_subdomain
 
     return {
         "fqdn": hostname,
