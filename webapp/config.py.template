@@ -155,6 +155,8 @@ UPLOAD_FOLDER = basedir + "/app/static/uploads/"
 # The image upload folder, when using models with images
 IMG_UPLOAD_FOLDER = basedir + "/app/static/uploads/"
 
+MAX_CONTENT_LENGTH = 64 * 1024 * 1024  # 64 MB hard cap on incoming requests
+
 # The folder where scan results will be stored.
 JSON_FOLDER = basedir + "/app/jsons"
 
