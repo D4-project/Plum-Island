@@ -25,6 +25,10 @@ DEFAULT_ROLE_FILE = WEBAPP_DIR / "security_roles" / "read_only.yaml"
 TCP_PORT_MIN = 1
 TCP_PORT_MAX = 65534
 PORT_INSERT_BATCH_SIZE = 1000
+DEFAULT_SCAN_PROFILE_NAME = "Default banner scan"
+DEFAULT_SCAN_PROFILE_PORTS = (22, 80, 443)
+DEFAULT_SCAN_PROFILE_NSES = ("banner.nse",)
+DEFAULT_SCAN_PROFILE_PRIORITY = 0
 
 
 def parse_args():
@@ -53,6 +57,16 @@ def parse_args():
         "--skip-ports",
         action="store_true",
         help="Do not create the default TCP protocol and TCP ports.",
+    )
+    parser.add_argument(
+        "--skip-headers",
+        action="store_true",
+        help="Do not create the default HTTP header tagging collection.",
+    )
+    parser.add_argument(
+        "--skip-profiles",
+        action="store_true",
+        help="Do not create default scan profiles.",
     )
     parser.add_argument(
         "--role-file",
@@ -182,6 +196,163 @@ def seed_tcp_ports(dry_run=False):
         "TCP ports: "
         f"inserted={inserted} skipped={skipped} "
         f"range={TCP_PORT_MIN}-{TCP_PORT_MAX} dry_run={dry_run}"
+    )
+
+
+def seed_http_header_collection(dry_run=False):
+    """
+    Ensure the default HTTP header collection rows are available.
+    """
+    from app import app, db  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        CollectedHeaders,
+        DEFAULT_COLLECTED_HEADERS,
+        DEFAULT_VALUE_COLLECTED_HEADERS,
+        ensure_default_collected_headers,
+    )
+
+    with app.app_context():
+        existing = {
+            row.header_name: row.collect_value
+            for row in db.session.query(CollectedHeaders)
+            .filter(CollectedHeaders.header_name.in_(DEFAULT_COLLECTED_HEADERS))
+            .all()
+        }
+        inserted = sum(
+            1 for header_name in DEFAULT_COLLECTED_HEADERS if header_name not in existing
+        )
+        enabled_values = sum(
+            1
+            for header_name in DEFAULT_VALUE_COLLECTED_HEADERS
+            if header_name in existing and not existing[header_name]
+        )
+
+        if dry_run:
+            db.session.rollback()
+        else:
+            ensure_default_collected_headers(db.session)
+
+    print(
+        "HTTP header collection: "
+        f"inserted={inserted} enabled_values={enabled_values} dry_run={dry_run}"
+    )
+
+
+def seed_default_scan_profile(dry_run=False):
+    """
+    Ensure the default all-target banner scan profile exists.
+    """
+    from sqlalchemy import func  # pylint: disable=import-outside-toplevel
+
+    from app import app, db  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        Nses,
+        Ports,
+        Protos,
+        ScanProfiles,
+        TargetScanStates,
+        Targets,
+    )
+
+    with app.app_context():
+        tcp_proto = (
+            db.session.query(Protos)
+            .filter(func.lower(Protos.value) == "tcp")
+            .one_or_none()
+        )
+        if tcp_proto is None:
+            tcp_proto = Protos(value="TCP", name="Transmission Control Protocol")
+            db.session.add(tcp_proto)
+
+        ports = (
+            db.session.query(Ports)
+            .filter(
+                Ports.proto_id == tcp_proto.id,
+                Ports.value.in_(DEFAULT_SCAN_PROFILE_PORTS),
+            )
+            .order_by(Ports.value.asc())
+            .all()
+        )
+        port_values = {port.value for port in ports}
+        missing_ports = sorted(set(DEFAULT_SCAN_PROFILE_PORTS) - port_values)
+        created_ports = 0
+        for port in missing_ports:
+            ports.append(
+                Ports(
+                    value=port,
+                    name=f"TCP/{port}",
+                    proto=tcp_proto,
+                    proto_to_port=f"{port}:{tcp_proto.id or 0}",
+                )
+            )
+            created_ports += 1
+        if missing_ports and not dry_run:
+            db.session.flush()
+            for port in ports:
+                port.proto_to_port = f"{port.value}:{tcp_proto.id}"
+
+        nses = (
+            db.session.query(Nses)
+            .filter(Nses.name.in_(DEFAULT_SCAN_PROFILE_NSES))
+            .order_by(Nses.name.asc())
+            .all()
+        )
+        nse_names = {nse.name for nse in nses}
+        missing_nses = sorted(set(DEFAULT_SCAN_PROFILE_NSES) - nse_names)
+        if missing_nses:
+            raise RuntimeError(
+                "Default scan profile NSE scripts missing: "
+                + ", ".join(missing_nses)
+                + "; run without --skip-nse"
+            )
+
+        profile = (
+            db.session.query(ScanProfiles)
+            .filter(ScanProfiles.name == DEFAULT_SCAN_PROFILE_NAME)
+            .one_or_none()
+        )
+        created = profile is None
+        if profile is None:
+            profile = ScanProfiles(name=DEFAULT_SCAN_PROFILE_NAME)
+            db.session.add(profile)
+
+        profile.apply_to_all = True
+        profile.priority = DEFAULT_SCAN_PROFILE_PRIORITY
+        if not profile.scan_cycle_minutes or profile.scan_cycle_minutes <= 0:
+            profile.scan_cycle_minutes = 720
+        profile.ports = ports
+        profile.nses = nses
+
+        new_states = 0
+        active_targets = db.session.query(Targets).filter(Targets.active == True).all()
+        if not created:
+            existing_target_ids = {
+                target_id
+                for (target_id,) in db.session.query(TargetScanStates.target_id).filter(
+                    TargetScanStates.scanprofile_id == profile.id
+                )
+            }
+        else:
+            existing_target_ids = set()
+
+        for target in active_targets:
+            if target.id in existing_target_ids:
+                continue
+            profile.scan_states.append(TargetScanStates(target=target, working=False))
+            new_states += 1
+
+        if dry_run:
+            db.session.rollback()
+        else:
+            db.session.commit()
+
+    print(
+        "Default scan profile: "
+        f"name={DEFAULT_SCAN_PROFILE_NAME!r} created={created} "
+        f"ports={','.join(str(port) for port in DEFAULT_SCAN_PROFILE_PORTS)} "
+        f"created_ports={created_ports} "
+        f"nses={','.join(DEFAULT_SCAN_PROFILE_NSES)} "
+        f"apply_to_all=True target_states={new_states} dry_run={dry_run}"
     )
 
 
@@ -421,12 +592,18 @@ def main():
     if not args.skip_ports:
         seed_tcp_ports(dry_run=args.dry_run)
 
+    if not args.skip_headers:
+        seed_http_header_collection(dry_run=args.dry_run)
+
     if not args.skip_tags:
         import_tag_rules(dry_run=args.dry_run)
 
     if not args.skip_nse:
         repo_path = clone_or_update_repo(args.nse_repo_url, args.nse_repo_dir)
         import_nse_scripts(repo_path, dry_run=args.dry_run)
+
+    if not args.skip_profiles:
+        seed_default_scan_profile(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

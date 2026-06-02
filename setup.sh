@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 CONFIG_FILE="config.py"
 echo "P.L.U.M. by C.I.R.C.L"
 echo "Installation Starting... "
@@ -21,8 +23,8 @@ if [  -f "webapp/$CONFIG_FILE" ]; then
   fi
 
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+VENV_PYTHON="$PWD/.venv/bin/python"
+"$VENV_PYTHON" -m pip install -r requirements.txt
 key=`head -c32 /dev/urandom | base64`
 csrf=`head -c32 /dev/urandom | base64`
 cd webapp
@@ -77,11 +79,11 @@ while true; do
     fi
 done
 
-flask fab create-admin --username Admin --firstname Admin --lastname Admin --email PlumAdmin@changeme.xxx --password $key
+"$VENV_PYTHON" -m flask fab create-admin --username Admin --firstname Admin --lastname Admin --email PlumAdmin@changeme.xxx --password $key
 cd ..
 echo ""
-echo "Loading initial TCP ports, tag rules and NSE scripts..."
-if ! .venv/bin/python tools/initial_setup.py; then
+echo "Loading initial TCP ports, HTTP header tagging, tag rules, NSE scripts and default scan profile..."
+if ! "$VENV_PYTHON" tools/initial_setup.py; then
   echo "ERROR: Initial TCP ports/tag/NSE setup failed."
   exit 1
 fi

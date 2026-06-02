@@ -87,7 +87,7 @@ docker compose up --build
 On first run the entrypoint will:
 1. Generate `webapp/config.py` from the environment variables
 2. Create the SQLite database and admin user
-3. Load initial TCP ports, tag rules, and NSE scripts via `tools/initial_setup.py`
+3. Load initial TCP ports, HTTP header tagging, tag rules, NSE scripts, and default scan profile via `tools/initial_setup.py`
 4. Print the admin credentials to stdout — save them before they scroll away
 
 ```

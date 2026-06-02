@@ -33,11 +33,14 @@ Important settings:
 Load initial database content after the Flask database has been created.
 `setup.sh` calls this script automatically after `flask fab create-admin`.
 
-It performs three actions:
+It performs these actions:
 
 - create/update security roles from `webapp/security_roles/*.yaml`
+- create the default TCP protocol and TCP ports
+- create the default HTTP header tagging collection from `webapp/app/models.py`
 - import YAML tag rules from `webapp/tags/` into the application database
 - clone/update `https://github.com/D4-project/Plum-Rules-NSE` into `external/Plum-Rules-NSE` and import every `.nse` file into the `nses` table
+- create an all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
 
 Manual run:
 
@@ -50,8 +53,11 @@ Useful options:
 ```bash
 .venv/bin/python tools/initial_setup.py --dry-run
 .venv/bin/python tools/initial_setup.py --skip-roles
+.venv/bin/python tools/initial_setup.py --skip-ports
+.venv/bin/python tools/initial_setup.py --skip-headers
 .venv/bin/python tools/initial_setup.py --skip-tags
 .venv/bin/python tools/initial_setup.py --skip-nse
+.venv/bin/python tools/initial_setup.py --skip-profiles
 .venv/bin/python tools/initial_setup.py --role-file webapp/security_roles/read_only.yaml
 .venv/bin/python tools/initial_setup.py --nse-repo-dir /path/to/Plum-Rules-NSE
 ```
