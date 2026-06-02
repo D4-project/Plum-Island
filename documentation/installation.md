@@ -142,10 +142,10 @@ docker network create plum_net
 
 This is already declared as an external network in Plum-Island's `docker-compose.yml`. The `webapp` service joins it automatically when the stack starts. Only `webapp` is exposed on `plum_net`; `kvrocks` and `meilisearch` remain on the internal stack network.
 
-**In the Plum-Agent stack**, set the Island URL to the `webapp` service name:
+**In the Plum-Agent stack**, set the Island URL to the `plum-webapp` service name:
 
 ```bash
-PLUM_ISLAND=http://webapp:5000
+PLUM_ISLAND=http://plum-webapp:5000
 ```
 
 Start both stacks (order does not matter):
