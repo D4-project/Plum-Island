@@ -1,12 +1,12 @@
 services:
-  webapp:
+  plum-webapp:
     build: .
     ports:
       - "5000:5000"
     environment:
       MEILI_KEY: "${MEILI_KEY}"
-      MEILI_DATABASE_URI: "http://meilisearch:7700"
-      KVROCKS_HOST: "kvrocks"
+      MEILI_DATABASE_URI: "http://plum-meilisearch:7700"
+      KVROCKS_HOST: "plum-kvrocks"
       KVROCKS_PORT: "6666"
       SECRET_KEY: "${SECRET_KEY:-}"
       ADMIN_USER: "${ADMIN_USER:-admin}"
@@ -19,13 +19,13 @@ services:
       - plum_jsons:/plum/webapp/app/jsons
       - plum_exports:/plum/webapp/app/export_jobs
     depends_on:
-      kvrocks:
+      plum-kvrocks:
         condition: service_healthy
-      meilisearch:
+      plum-meilisearch:
         condition: service_healthy
     restart: unless-stopped
 
-  kvrocks:
+  plum-kvrocks:
     image: apache/kvrocks:latest
     ports:
       - "6666:6666"
@@ -38,7 +38,7 @@ services:
       retries: 10
     restart: unless-stopped
 
-  meilisearch:
+  plum-meilisearch:
     image: getmeili/meilisearch:v1.22.2
     ports:
       - "7700:7700"
