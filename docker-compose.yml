@@ -24,6 +24,9 @@ services:
       meilisearch:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - default
+      - plum_net
 
   kvrocks:
     image: apache/kvrocks:latest
@@ -60,3 +63,7 @@ volumes:
   plum_exports:
   kvrocks_data:
   meili_data:
+
+networks:
+  plum_net:
+    external: true
