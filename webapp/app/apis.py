@@ -658,16 +658,26 @@ class Api(BaseApi):
         # Write the result file BEFORE mutating ORM state.
         # If the write fails (disk full, OSError, malformed JSON), the job
         # must not be marked finished — the agent can retry and resubmit.
+        result_payload = botinfo.get("RESULT")
+        if result_payload is None:
+            logger.warning(
+                "Bot %s submitted job %s without RESULT payload",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            db.session.rollback()
+            return self.response(400, message="missing result")
+
         base = os.path.join(
             db.app.config.get("JSON_FOLDER"),
             botinfo.get("JOB_UID")[0],
             f"{botinfo.get('JOB_UID')}.json",
         )
         try:
-            result_data = json.loads(botinfo.get("RESULT"))
+            result_data = json.loads(result_payload)
             with open(base, "w", encoding="utf-8") as f:
                 json.dump(result_data, f, indent=2)
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, TypeError, json.JSONDecodeError):
             logger.exception(
                 "Failed to write result file for job %s", botinfo.get("JOB_UID")
             )
