@@ -11,8 +11,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
 
     : "${MEILI_KEY:?MEILI_KEY environment variable is required}"
     _SECRET="${SECRET_KEY:-$(head -c32 /dev/urandom | base64)}"
-    _MEILI_URI="${MEILI_DATABASE_URI:-http://meilisearch:7700}"
-    _KVROCKS_HOST="${KVROCKS_HOST:-kvrocks}"
+    _MEILI_URI="${MEILI_DATABASE_URI:-http://plum-meilisearch:7700}"
+    _KVROCKS_HOST="${KVROCKS_HOST:-plum-kvrocks}"
     _KVROCKS_PORT="${KVROCKS_PORT:-6666}"
 
     sed -i "s|^SECRET_KEY *=.*|SECRET_KEY = \"${_SECRET}\"|" "$CONFIG_FILE"
