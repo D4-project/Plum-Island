@@ -49,6 +49,16 @@ prepare_export_jobs_folder(app.config["EXPORT_JOBS_FOLDER"])
 db = SQLA(app)
 appbuilder = AppBuilder(app, db.session, security_manager_class=CustomSecurityManager)
 
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["500/hour"],
+    storage_uri="memory://",
+)
+
 # Import views and APIs
 # pylint: disable=C0413
 from . import views
