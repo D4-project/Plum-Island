@@ -733,6 +733,7 @@ def main(argv=None):
     if not args.skip_kvrocks:
         prepare_index_kvrocks_runtime()
     if not args.skip_meili:
+        index_kvrocks.install_graceful_interrupt_handler()
         replace_meili_from_dump(
             input_dir,
             batch_size,
