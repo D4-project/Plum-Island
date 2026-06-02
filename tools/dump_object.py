@@ -132,6 +132,15 @@ def parse_args(argv=None):
         action="store_true",
         help="List dumpable indexed criteria and exit.",
     )
+    parser.add_argument(
+        "--target",
+        choices=("in", "out"),
+        default="in",
+        help=(
+            "Kvrocks endpoint from tools/config.yaml to inspect. "
+            "Use out after reimport/index_kvrocks wrote to OUT_KVROCKS_*."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -144,15 +153,16 @@ def list_dumpable():
     print("http_headval:<header_name>")
 
 
-def dump_target(target):
+def dump_target(target, endpoint="in"):
     """
     Print `count,value` lines to stdout for one indexed target.
     """
     from kvrocks import KVrocksIndexer  # pylint: disable=import-outside-toplevel
 
     config = load_config()
-    kvrocks_host = config.get("IN_KVROCKS_HOST", "localhost")
-    kvrocks_port = config.get("IN_KVROCKS_PORT", 6666)
+    prefix = "OUT" if endpoint == "out" else "IN"
+    kvrocks_host = config.get(f"{prefix}_KVROCKS_HOST", "localhost")
+    kvrocks_port = config.get(f"{prefix}_KVROCKS_PORT", 6666)
     indexer = KVrocksIndexer(kvrocks_host, kvrocks_port)
 
     results = []
@@ -183,7 +193,7 @@ def main(argv=None):
     if not args.field:
         raise SystemExit("Missing dump field. Run with --list-dumpable.")
 
-    dump_target(normalize_dump_target(args.field))
+    dump_target(normalize_dump_target(args.field), endpoint=args.target)
 
 
 if __name__ == "__main__":
