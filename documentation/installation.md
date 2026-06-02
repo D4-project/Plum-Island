@@ -130,6 +130,36 @@ docker compose down        # stops containers, keeps volumes
 docker compose down -v     # stops containers AND deletes all volumes
 ```
 
+### Connecting Plum-Agent
+
+Plum-Agent runs as a separate Docker Compose stack. Because each stack gets its own isolated bridge network by default, the agent container cannot reach the Island `webapp` service unless they share an external network.
+
+**One-time setup — create the shared network on the host:**
+
+```bash
+docker network create plum_net
+```
+
+This is already declared as an external network in Plum-Island's `docker-compose.yml`. The `webapp` service joins it automatically when the stack starts. Only `webapp` is exposed on `plum_net`; `kvrocks` and `meilisearch` remain on the internal stack network.
+
+**In the Plum-Agent stack**, set the Island URL to the `webapp` service name:
+
+```bash
+PLUM_ISLAND=http://webapp:5000
+```
+
+Start both stacks (order does not matter):
+
+```bash
+# Plum-Island directory
+docker compose up -d
+
+# Plum-Agent directory
+docker compose up -d
+```
+
+See the [Plum-Agent repository](https://github.com/D4-project/Plum-Agent) for agent installation and configuration.
+
 ## Runtime services
 
 Plum Island expects:
