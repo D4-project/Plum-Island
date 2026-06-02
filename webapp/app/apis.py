@@ -21,7 +21,7 @@ from flask import request
 from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from werkzeug.security import check_password_hash
-from marshmallow import Schema, fields, validates, ValidationError
+from marshmallow import Schema, fields, validates, validate, ValidationError
 from .models import (
     Targets,
     Bots,
@@ -66,6 +66,7 @@ class BotInfoSchema(Schema):
     )
     RESULT = fields.String(
         required=False,
+        validate=validate.Length(max=50 * 1024 * 1024),
         metadata={"description": "Result of scan"},
     )
     JOB_UID = fields.String(
@@ -74,8 +75,9 @@ class BotInfoSchema(Schema):
     )
     NSE_HASHES = fields.Dict(
         required=False,
-        keys=fields.String(),
-        values=fields.String(),
+        keys=fields.String(validate=validate.Length(max=256)),
+        values=fields.String(validate=validate.Length(max=64)),
+        validate=validate.Length(max=50),
         metadata={"description": "Cached NSE SHA256 hashes keyed by NSE filename"},
     )
 
@@ -655,21 +657,28 @@ class Api(BaseApi):
             )
             return self.response(429, message="job submitted too quickly")
 
-        job_bot.finished = True
-        job_bot.active = False
-        job_bot.job_end = now
-        submitting_bot.running = False
-        submitting_bot.last_seen = now
-
-        # Save the Job
-        # Build path
+        # Build path first
         base = os.path.join(
             db.app.config.get("JSON_FOLDER"),
             botinfo.get("JOB_UID")[0],
             f"{botinfo.get('JOB_UID')}.json",
         )
-        with open(base, "w", encoding="utf-8") as f:
-            json.dump(json.loads(botinfo.get("RESULT")), f, indent=2)
+        # Write file BEFORE mutating ORM state
+        try:
+            result_data = json.loads(botinfo.get("RESULT"))
+            with open(base, "w", encoding="utf-8") as f:
+                json.dump(result_data, f, indent=2)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.exception("Failed to write result file for job %s: %s", botinfo.get("JOB_UID"), exc)
+            db.session.rollback()
+            return self.response(500, message="result storage failed")
+
+        # Only mutate ORM after file is safely written
+        job_bot.finished = True
+        job_bot.active = False
+        job_bot.job_end = now
+        submitting_bot.running = False
+        submitting_bot.last_seen = now
 
         logger.debug("job_bot: %s", job_bot)
         # Check if we release the Target as Ready for a new Turn
