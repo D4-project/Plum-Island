@@ -11,13 +11,16 @@ from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from .security import CustomSecurityManager  # Custom Security menu
 
-# Loggin configuration
-logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
-logging.getLogger().setLevel(logging.DEBUG)
-
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+
+# Logging configuration — level is read from config so production deployments
+# can use WARNING or INFO without patching source code.
+logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
+_log_level_name = str(app.config.get("LOG_LEVEL", "WARNING")).upper()
+_log_level = getattr(logging, _log_level_name, logging.WARNING)
+logging.getLogger().setLevel(_log_level)
 
 
 @event.listens_for(Engine, "connect")
