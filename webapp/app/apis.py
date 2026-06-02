@@ -655,21 +655,40 @@ class Api(BaseApi):
             )
             return self.response(429, message="job submitted too quickly")
 
-        job_bot.finished = True
-        job_bot.active = False
-        job_bot.job_end = now
-        submitting_bot.running = False
-        submitting_bot.last_seen = now
+        # Write the result file BEFORE mutating ORM state.
+        # If the write fails (disk full, OSError, malformed JSON), the job
+        # must not be marked finished — the agent can retry and resubmit.
+        result_payload = botinfo.get("RESULT")
+        if result_payload is None:
+            logger.warning(
+                "Bot %s submitted job %s without RESULT payload",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            db.session.rollback()
+            return self.response(400, message="missing result")
 
-        # Save the Job
-        # Build path
         base = os.path.join(
             db.app.config.get("JSON_FOLDER"),
             botinfo.get("JOB_UID")[0],
             f"{botinfo.get('JOB_UID')}.json",
         )
-        with open(base, "w", encoding="utf-8") as f:
-            json.dump(json.loads(botinfo.get("RESULT")), f, indent=2)
+        try:
+            result_data = json.loads(result_payload)
+            with open(base, "w", encoding="utf-8") as f:
+                json.dump(result_data, f, indent=2)
+        except (OSError, TypeError, json.JSONDecodeError):
+            logger.exception(
+                "Failed to write result file for job %s", botinfo.get("JOB_UID")
+            )
+            db.session.rollback()
+            return self.response(500, message="result storage failed")
+
+        job_bot.finished = True
+        job_bot.active = False
+        job_bot.job_end = now
+        submitting_bot.running = False
+        submitting_bot.last_seen = now
 
         logger.debug("job_bot: %s", job_bot)
         # Check if we release the Target as Ready for a new Turn
