@@ -91,7 +91,7 @@ Current generic fields:
 | `domain` | yes | yes | Parsed registered domain |
 | `domain_requested` | yes | yes | Requested domain |
 | `tld` | yes | yes | Top-level domain |
-| `tag` | yes | no | Computed tags, e.g. `soft:gitlab` |
+| `tag` | yes | no | Computed tags, e.g. `product:gitlab` |
 | `port` | yes | no | Open port as string |
 | `http_title` | yes | yes | HTML title |
 | `http_favicon_path` | yes | yes | Favicon path/source |

@@ -33,6 +33,7 @@ The search index supports fields such as:
 - `ip`, `net`, `port`
 - `fqdn`, `fqdn_requested`, `domain`, `domain_requested`, `host`, `tld`
 - `http_title`, `http_cookiename`, `http_etag`, `http_server`
+- `http_header`, `http_headval`
 - `http_favicon_path`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`
 - `banner`
 - `x509_issuer`, `x509_subject`, `x509_san`, `x509_md5`, `x509_sha1`, `x509_sha256`
@@ -57,7 +58,8 @@ Example:
 description: HashiCorp Vault
 query: http_favicon_mmhash:747250914 AND http_title.bg:Vault
 tags:
-- soft:hashicorp-vault
+- product:hashicorp-vault
+- vendor:hashicorp
 version: 20260428T170756Z
 ```
 
@@ -73,6 +75,7 @@ See [Reports documentation](documentation/reports.md) for report configuration, 
 ## Documentation
 
 - [Installation](documentation/installation.md)
+- [Migration](documentation/migration.md)
 - [Search](documentation/search.md)
 - [Tagging](documentation/tagging.md)
 - [Reports](documentation/reports.md)
@@ -86,3 +89,35 @@ See [Reports documentation](documentation/reports.md) for report configuration, 
 - Flask AppBuilder 4.8
 - Meilisearch 1.22.2+
 - Kvrocks unstable build 8f04af34+, with RocksDB 10.4.2+
+
+Python package dependencies are listed in [requirements.txt](requirements.txt):
+
+- `flask-appbuilder==4.8.1`
+- `flask-Limiter==3.12`
+- `APScheduler>=3.11.0`
+- `netaddr>=1.3.0`
+- `meilisearch>=0.37.0`
+- `redis>=6.4.0`
+- `PyYAML>=6.0.3`
+- `pyfaup-rs>=0.4.9`
+- `pybgpranking2>=2.0.2`
+- `pyipasnhistory>=0.1`
+- `nmap2json`
+
+## Quick setup
+
+```bash
+git clone https://github.com/D4-project/Plum-Island
+cd Plum-Island
+./setup.sh
+```
+
+The setup script creates a local Python virtual environment, installs `requirements.txt`, creates the Flask AppBuilder admin user, and loads initial data:
+
+- default TCP ports
+- HTTP header tagging collection
+- YAML tag rules from `webapp/tags/`
+- NSE scripts from `https://github.com/D4-project/Plum-Rules-NSE`
+- all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
+
+See [Installation documentation](documentation/installation.md) for Meilisearch, Kvrocks, Passive DNS, Docker, and runtime configuration details.

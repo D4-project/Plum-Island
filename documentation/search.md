@@ -39,8 +39,9 @@ Supported modifiers:
 | -------- | ----- | ------- |
 | `like` | `lk` | Substring match |
 | `begin` | `bg` | Prefix match |
+| `not` | `nt` | Exclude exact matches for fields that support generic modifiers |
 
-No modifier means exact match. like without any scope reducer may slowdown the research.
+No modifier means exact match. `like` without any scope reducer may slow down the research. `http_headval` supports only header-scoped `like` and `begin` modifiers.
 
 ## Searchable fields
 

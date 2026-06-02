@@ -43,7 +43,7 @@ if [ ! -f "$DB_PATH" ]; then
     echo "[plum]  Admin password: $_ADMIN_PWD"
     echo "[plum] ================================================="
 
-    echo "[plum] Loading initial TCP ports, tag rules and NSE scripts..."
+    echo "[plum] Loading initial TCP ports, HTTP header tagging, tag rules, NSE scripts and default scan profile..."
     python ../tools/initial_setup.py
 fi
 

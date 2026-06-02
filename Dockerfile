@@ -1,10 +1,6 @@
-# Supported release: v0.2604.0
-# Build this image from a checkout of tag v0.2604.0.
-# The main branch requires additional import steps (tag rules, header
-# collection) that are not yet integrated into the Docker setup.
 FROM python:3.13-slim
 
-LABEL org.opencontainers.image.version="0.2604.0" \
+LABEL org.opencontainers.image.version="unreleased" \
       org.opencontainers.image.source="https://github.com/D4-project/Plum-Island" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 

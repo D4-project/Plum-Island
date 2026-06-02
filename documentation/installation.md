@@ -19,7 +19,7 @@ cd Plum-Island
 ./setup.sh
 ```
 
-It will ask for location of KVRocks and MeilliSearch
+It will ask for location of Kvrocks and Meilisearch:
 ```
 -------------------------
 Basic Configuration:
@@ -32,7 +32,7 @@ Enable CIRCL Passive DNS enrichment ? (y/n) : y
 CIRCL Passive DNS username : you@example.org
 CIRCL Passive DNS API key/password : YouNeedToChangeItToo
 -------------------------
-KvRocsk Configuration : 127.0.0.1:6666
+Kvrocks Configuration : 127.0.0.1:6666
 Meili Configuration : http://127.0.0.1:7700 using YouNeedToChangeMeInProduction
 CIRCL Passive DNS : enabled for you@example.org
 You may change all this configuration later in config.py
@@ -45,6 +45,8 @@ Leave it disabled if you do not have CIRCL Passive DNS credentials; the IP detai
 
 Review `webapp/config.py` and adapt it to your environment.
 
+For upgrades from `v0.2604.0`, follow the [migration guide](migration.md) instead of running a fresh setup against production data.
+
 For a local demo run:
 
 ```bash
@@ -53,10 +55,7 @@ cd webapp
 python run.py
 ```
 
-## Docker (v0.2604.0)
-
-> **Supported release: v0.2604.0**
-> The `main` branch requires additional import steps not yet integrated into the Docker setup. Always build from the `v0.2604.0` tag.
+## Docker
 
 ### Requirements
 
@@ -68,7 +67,6 @@ python run.py
 ```bash
 git clone https://github.com/D4-project/Plum-Island
 cd Plum-Island
-git checkout v0.2604.0
 cp .env.example .env
 ```
 
