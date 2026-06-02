@@ -505,28 +505,60 @@ def create_import_index(
         f"Creating temporary Meilisearch index {import_index_name}",
         flush=True,
     )
-    wait_for_task(
-        client,
-        client.create_index(import_index_name, {"primaryKey": primary_key}),
-        f"create temporary index {import_index_name}",
-        timeout_ms,
-        interval_ms,
-    )
-
-    import_index = client.index(import_index_name)
-    if settings:
-        print(
-            f"Copying settings to temporary Meilisearch index {import_index_name}",
-            flush=True,
-        )
+    try:
         wait_for_task(
             client,
-            import_index.update_settings(settings),
-            f"copy settings to {import_index_name}",
+            client.create_index(import_index_name, {"primaryKey": primary_key}),
+            f"create temporary index {import_index_name}",
             timeout_ms,
             interval_ms,
         )
+
+        import_index = client.index(import_index_name)
+        if settings:
+            print(
+                f"Copying settings to temporary Meilisearch index {import_index_name}",
+                flush=True,
+            )
+            wait_for_task(
+                client,
+                import_index.update_settings(settings),
+                f"copy settings to {import_index_name}",
+                timeout_ms,
+                interval_ms,
+            )
+    except (KeyboardInterrupt, SystemExit):
+        cleanup_import_index(client, import_index_name, timeout_ms, interval_ms)
+        raise
     return import_index_name, import_index
+
+
+def cleanup_import_index(client, import_index_name, timeout_ms, interval_ms):
+    """
+    Best-effort cleanup for a temporary Meilisearch import index.
+    """
+    if not import_index_name:
+        return
+    print(
+        f"Cleaning temporary Meilisearch index {import_index_name}",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        wait_for_task(
+            client,
+            client.delete_index(import_index_name),
+            f"delete temporary index {import_index_name}",
+            timeout_ms,
+            interval_ms,
+        )
+    except (Exception, SystemExit) as error:  # pylint: disable=broad-exception-caught
+        print(
+            f"[WARN] Unable to delete temporary Meilisearch index "
+            f"{import_index_name}: {error}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def swap_import_index(client, index_name, import_index_name, timeout_ms, interval_ms):
@@ -599,20 +631,30 @@ def replace_meili_from_dump(
     primary_key, settings = target_index_metadata(
         client, index_name, target_index, timeout_ms, interval_ms
     )
-    import_index_name, import_index = create_import_index(
-        client, index_name, primary_key, settings, timeout_ms, interval_ms
-    )
-    result = import_meili_documents_to_index(
-        client,
-        import_index,
-        input_dir,
-        batch_size,
-        total_count,
-        timeout_ms,
-        interval_ms,
-        queue_depth,
-    )
-    swap_import_index(client, index_name, import_index_name, timeout_ms, interval_ms)
+    import_index_name = None
+    swap_started = False
+    try:
+        import_index_name, import_index = create_import_index(
+            client, index_name, primary_key, settings, timeout_ms, interval_ms
+        )
+        result = import_meili_documents_to_index(
+            client,
+            import_index,
+            input_dir,
+            batch_size,
+            total_count,
+            timeout_ms,
+            interval_ms,
+            queue_depth,
+        )
+        swap_started = True
+        swap_import_index(
+            client, index_name, import_index_name, timeout_ms, interval_ms
+        )
+    except (KeyboardInterrupt, SystemExit):
+        if not swap_started:
+            cleanup_import_index(client, import_index_name, timeout_ms, interval_ms)
+        raise
     return result
 
 
@@ -733,7 +775,6 @@ def main(argv=None):
     if not args.skip_kvrocks:
         prepare_index_kvrocks_runtime()
     if not args.skip_meili:
-        index_kvrocks.install_graceful_interrupt_handler()
         replace_meili_from_dump(
             input_dir,
             batch_size,
