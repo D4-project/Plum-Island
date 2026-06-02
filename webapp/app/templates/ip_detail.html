@@ -360,7 +360,7 @@
     <div>
         <div class="ip-detail-title-row">
             <h2 class="ip-detail-title">{{ ip }}</h2>
-            <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('{{ ip }}', this)" title="Copy {{ ip }}" aria-label="Copy {{ ip }}">
+            <button type="button" id="ip-copy-button" class="ip-quick-link" title="Copy IP" aria-label="Copy IP">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i>
             </button>
             {% if ip_tags %}
@@ -634,12 +634,6 @@
 </div>
 
 <script>
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value === null || value === undefined ? '' : String(value);
-    return div.innerHTML;
-}
-
 (function () {
     const ip = {{ ip | tojson }};
     const loadingEl = document.getElementById('ip-info-loading');
@@ -789,7 +783,11 @@ function escapeHtml(value) {
         .then(({ ok, payload, status }) => {
             pdnsLoadingEl.style.display = 'none';
             if (payload && payload.disabled) {
-                pdnsResultsEl.innerHTML = `<div class="text-muted">${escapeHtml(payload.message)}</div>`;
+                const messageEl = document.createElement('div');
+                messageEl.className = 'text-muted';
+                messageEl.textContent = payload.message || '';
+                pdnsResultsEl.innerHTML = '';
+                pdnsResultsEl.appendChild(messageEl);
                 return;
             }
             if (!ok) {
@@ -848,6 +846,12 @@ function escapeHtml(value) {
         }
     }
     window.copyIpToClipboard = copyIpToClipboard;
+    const copyButton = document.getElementById('ip-copy-button');
+    if (copyButton) {
+        copyButton.title = `Copy ${ip}`;
+        copyButton.setAttribute('aria-label', `Copy ${ip}`);
+        copyButton.addEventListener('click', () => copyIpToClipboard(ip, copyButton));
+    }
 
     function formatUrlHost(hostValue) {
         if (!hostValue) {

@@ -111,21 +111,38 @@ function hasTimestampValue(value) {
 
 function buildTimestampMeta(first, last) {
     if (!hasTimestampValue(first) && !hasTimestampValue(last)) {
-        return '';
+        return null;
     }
     const firstDisplay = hasTimestampValue(first) ? formatTimestampWithRaw(first) : 'N/A';
     const lastDisplay = hasTimestampValue(last) ? formatTimestampWithRaw(last) : 'N/A';
-    return `<span class="timestamp-meta">
-        <span class="timestamp-chip timestamp-first">
-            <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
-            ${firstDisplay}
-        </span>
-        <span class="timestamp-separator">|</span>
-        <span class="timestamp-chip timestamp-last">
-            ${lastDisplay}
-            <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
-        </span>
-    </span>`;
+
+    const meta = document.createElement('span');
+    meta.className = 'timestamp-meta';
+
+    const firstChip = document.createElement('span');
+    firstChip.className = 'timestamp-chip timestamp-first';
+    const firstIcon = document.createElement('i');
+    firstIcon.className = 'fa-solid fa-backward-step';
+    firstIcon.setAttribute('aria-hidden', 'true');
+    firstChip.appendChild(firstIcon);
+    firstChip.appendChild(document.createTextNode(` ${firstDisplay}`));
+
+    const separator = document.createElement('span');
+    separator.className = 'timestamp-separator';
+    separator.textContent = '|';
+
+    const lastChip = document.createElement('span');
+    lastChip.className = 'timestamp-chip timestamp-last';
+    lastChip.appendChild(document.createTextNode(`${lastDisplay} `));
+    const lastIcon = document.createElement('i');
+    lastIcon.className = 'fa-solid fa-forward-step';
+    lastIcon.setAttribute('aria-hidden', 'true');
+    lastChip.appendChild(lastIcon);
+
+    meta.appendChild(firstChip);
+    meta.appendChild(separator);
+    meta.appendChild(lastChip);
+    return meta;
 }
 
 function copyIpToClipboard(ip, triggerEl) {
@@ -657,18 +674,25 @@ function renderTagSuggestions(suggestions, context) {
 
     tagSuggestItems = suggestions;
     tagSuggestContext = context;
-    menu.innerHTML = suggestions
-        .map((suggestion, index) => `
-            <button
-                type="button"
-                class="tag-suggest-item"
-                data-index="${index}"
-            >
-                <span class="tag-suggest-label">${escapeHtml(suggestion.label)}</span>
-                <span class="tag-suggest-kind">${escapeHtml(suggestion.kind)}</span>
-            </button>
-        `)
-        .join('');
+    menu.textContent = '';
+    suggestions.forEach((suggestion, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'tag-suggest-item';
+        button.dataset.index = String(index);
+
+        const label = document.createElement('span');
+        label.className = 'tag-suggest-label';
+        label.textContent = suggestion.label || '';
+        button.appendChild(label);
+
+        const kind = document.createElement('span');
+        kind.className = 'tag-suggest-kind';
+        kind.textContent = suggestion.kind || '';
+        button.appendChild(kind);
+
+        menu.appendChild(button);
+    });
     menu.style.display = 'block';
 
     [...menu.querySelectorAll('.tag-suggest-item')].forEach((button) => {
@@ -790,10 +814,16 @@ function buildExportPayload() {
     };
 }
 
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value === null || value === undefined ? '' : String(value);
-    return div.innerHTML;
+function setAlertMessage(container, message, alertClass = 'alert-danger', extraClass = 'mt-2') {
+    if (!container) {
+        return;
+    }
+    container.textContent = '';
+    const alert = document.createElement('div');
+    alert.className = ['alert', alertClass, extraClass].filter(Boolean).join(' ');
+    alert.setAttribute('role', 'alert');
+    alert.textContent = message === null || message === undefined ? '' : String(message);
+    container.appendChild(alert);
 }
 
 function resetExportModal(config) {
@@ -831,24 +861,39 @@ function updateExportWarnings(data) {
     const warnings = data.warnings || [];
     const warningCount = Number(data.warning_count || warnings.length || 0);
     if (warningCount <= 0) {
-        warningEl.innerHTML = '';
+        warningEl.textContent = '';
         return;
     }
 
-    const visibleWarnings = warnings
-        .map((warning) => `<li>${escapeHtml(warning)}</li>`)
-        .join('');
     const hiddenCount = Math.max(0, warningCount - warnings.length);
-    const hiddenText = hiddenCount > 0
-        ? `<p class="mb-0">${hiddenCount} additional warnings not shown.</p>`
-        : '';
-    warningEl.innerHTML = `
-        <div class="alert alert-warning mt-2" role="alert">
-            <strong>${warningCount} warning${warningCount > 1 ? 's' : ''}</strong>
-            ${visibleWarnings ? `<ul class="mb-0">${visibleWarnings}</ul>` : ''}
-            ${hiddenText}
-        </div>
-    `;
+    warningEl.textContent = '';
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-warning mt-2';
+    alert.setAttribute('role', 'alert');
+
+    const title = document.createElement('strong');
+    title.textContent = `${warningCount} warning${warningCount > 1 ? 's' : ''}`;
+    alert.appendChild(title);
+
+    if (warnings.length) {
+        const list = document.createElement('ul');
+        list.className = 'mb-0';
+        warnings.forEach((warning) => {
+            const item = document.createElement('li');
+            item.textContent = warning;
+            list.appendChild(item);
+        });
+        alert.appendChild(list);
+    }
+
+    if (hiddenCount > 0) {
+        const hiddenText = document.createElement('p');
+        hiddenText.className = 'mb-0';
+        hiddenText.textContent = `${hiddenCount} additional warnings not shown.`;
+        alert.appendChild(hiddenText);
+    }
+
+    warningEl.appendChild(alert);
 }
 
 function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.json) {
@@ -875,7 +920,7 @@ function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.j
         statusEl.textContent = 'Export ready. Starting download...';
     } else if (data.status === 'error') {
         statusEl.textContent = 'Export failed';
-        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(data.error || 'Unexpected error')}</div>`;
+        setAlertMessage(errorEl, data.error || 'Unexpected error');
     }
 }
 
@@ -907,7 +952,7 @@ async function pollExport(jobId, config) {
         stopExportPolling();
         const errorEl = document.getElementById('export-error');
         document.getElementById('export-status-text').textContent = 'Export failed';
-        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(error?.message || 'Unexpected error')}</div>`;
+        setAlertMessage(errorEl, error?.message || 'Unexpected error');
         return 'error';
     }
 }
@@ -950,7 +995,7 @@ async function startExport(config) {
         }
     } catch (error) {
         document.getElementById('export-status-text').textContent = 'Export failed';
-        document.getElementById('export-error').innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(error?.message || 'Unexpected error')}</div>`;
+        setAlertMessage(document.getElementById('export-error'), error?.message || 'Unexpected error');
     }
 }
 
@@ -1058,31 +1103,56 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         const requestedHostname = findRequestedHostnameForUids(sortedUids, requestedHostnames);
         const detailUrl = buildIpDetailUrl(ipLabel, requestedHostname);
 
-        // IP accordion
-        ipPanel.innerHTML = `
-            <div class="panel-heading">
-                <h4 class="panel-title">
-                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${resultIndex}">
-                        ${escapeHtml(ipLabel)}
-                    </a>
-                    <a class="ip-detail-link" href="${detailUrl}" title="Open details for ${escapeHtml(ipLabel)}">
-                        <i class="fa fa-info-circle" aria-hidden="true"></i>
-                    </a>
-                    <button type="button" class="ip-quick-link" data-ip="${escapeHtml(ipLabel)}" onclick="copyIpToClipboard(this.dataset.ip, this)" title="Copy ${escapeHtml(ipLabel)}">
-                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
-                    </button>
-                    ${ipMeta}
-                </h4>
-            </div>
-            <div id="collapse-ip-${resultIndex}" class="panel-collapse collapse">
-                <div class="panel-body" id="uids-${resultIndex}">
-                    <!-- UID panels will go here -->
-                </div>
-            </div>
-        `;
-        hitsDiv.appendChild(ipPanel);
+        const heading = document.createElement('div');
+        heading.className = 'panel-heading';
+        const title = document.createElement('h4');
+        title.className = 'panel-title';
 
-        const uidsDiv = document.getElementById(`uids-${resultIndex}`);
+        const collapseLink = document.createElement('a');
+        collapseLink.setAttribute('data-toggle', 'collapse');
+        collapseLink.setAttribute('data-parent', '#hits');
+        collapseLink.href = `#collapse-ip-${resultIndex}`;
+        collapseLink.textContent = ipLabel;
+        title.appendChild(collapseLink);
+
+        const detailLink = document.createElement('a');
+        detailLink.className = 'ip-detail-link';
+        detailLink.href = detailUrl;
+        detailLink.title = `Open details for ${ipLabel}`;
+        const detailIcon = document.createElement('i');
+        detailIcon.className = 'fa fa-info-circle';
+        detailIcon.setAttribute('aria-hidden', 'true');
+        detailLink.appendChild(detailIcon);
+        title.appendChild(detailLink);
+
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.className = 'ip-quick-link';
+        copyButton.dataset.ip = ipLabel;
+        copyButton.title = `Copy ${ipLabel}`;
+        copyButton.addEventListener('click', () => copyIpToClipboard(copyButton.dataset.ip, copyButton));
+        const copyIcon = document.createElement('i');
+        copyIcon.className = 'fa-regular fa-copy';
+        copyIcon.setAttribute('aria-hidden', 'true');
+        copyButton.appendChild(copyIcon);
+        title.appendChild(copyButton);
+
+        if (ipMeta) {
+            title.appendChild(ipMeta);
+        }
+
+        heading.appendChild(title);
+        ipPanel.appendChild(heading);
+
+        const collapse = document.createElement('div');
+        collapse.id = `collapse-ip-${resultIndex}`;
+        collapse.className = 'panel-collapse collapse';
+        const uidsDiv = document.createElement('div');
+        uidsDiv.className = 'panel-body';
+        uidsDiv.id = `uids-${resultIndex}`;
+        collapse.appendChild(uidsDiv);
+        ipPanel.appendChild(collapse);
+        hitsDiv.appendChild(ipPanel);
 
         sortedUids.forEach((uid, uidIndex) => {
             const uidPanel = document.createElement('div');
@@ -1091,18 +1161,32 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
             const uidLabel = uid;
             const uidMeta = uidTimestamp
                 ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
-                : '';
-            uidPanel.innerHTML = `
-                <div class="panel-heading">
-                    <h5 class="panel-title">
-                        <a href="#" data-uid="${escapeHtml(uid)}" data-target="uid-body-${resultIndex}-${uidIndex}" onclick="loadUid(this.dataset.uid, this.dataset.target); return false;">
-                            ${escapeHtml(uidLabel)}
-                        </a>
-                        ${uidMeta}
-                    </h5>
-                </div>
-                <div id="uid-body-${resultIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
-            `;
+                : null;
+            const uidHeading = document.createElement('div');
+            uidHeading.className = 'panel-heading';
+            const uidTitle = document.createElement('h5');
+            uidTitle.className = 'panel-title';
+            const uidLink = document.createElement('a');
+            uidLink.href = '#';
+            uidLink.dataset.uid = uid;
+            uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
+            uidLink.textContent = uidLabel;
+            uidLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+            });
+            uidTitle.appendChild(uidLink);
+            if (uidMeta) {
+                uidTitle.appendChild(uidMeta);
+            }
+            uidHeading.appendChild(uidTitle);
+            uidPanel.appendChild(uidHeading);
+
+            const uidBody = document.createElement('div');
+            uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
+            uidBody.className = 'panel-body';
+            uidBody.style.display = 'none';
+            uidPanel.appendChild(uidBody);
             uidsDiv.appendChild(uidPanel);
         });
     });
@@ -1163,8 +1247,8 @@ async function runSearchPage(cursorTs, append) {
     try {
         timeRange = getSearchTimeRange();
     } catch (error) {
-        errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(error?.message || 'Invalid time range')}</div>`;
-        infoDiv.innerHTML = '';
+        setAlertMessage(errorDiv, error?.message || 'Invalid time range', 'alert-warning', '');
+        infoDiv.textContent = '';
         if (!append) {
             hitsDiv.innerHTML = '';
         }
@@ -1210,7 +1294,7 @@ async function runSearchPage(cursorTs, append) {
             scannedDays += Number(pagination.scanned_days || 0);
 
             if (data.status === false) {
-                errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(data.msg_error)}</div>`;
+                setAlertMessage(errorDiv, data.msg_error || '', 'alert-warning', '');
                 hasMore = false;
                 break;
             }
@@ -1248,9 +1332,9 @@ async function runSearchPage(cursorTs, append) {
                 ? `${totalDays} days`
                 : `${effectiveScannedDays}/${totalDays} days`;
             if (hasMore && renderedCount > 0) {
-                infoDiv.innerHTML = `Showing first ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
+                infoDiv.textContent = `Showing first ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
             } else {
-                infoDiv.innerHTML = `Showing ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
+                infoDiv.textContent = `Showing ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
             }
 
             if (!hasMore) {
@@ -1272,8 +1356,8 @@ async function runSearchPage(cursorTs, append) {
             return;
         }
         console.error('KV search failed', error);
-        errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${escapeHtml(error?.message || 'Unexpected error')}</div>`;
-        infoDiv.innerHTML = '';
+        setAlertMessage(errorDiv, `Search failed: ${error?.message || 'Unexpected error'}`, 'alert-danger', '');
+        infoDiv.textContent = '';
         if (!append) {
             hitsDiv.innerHTML = '';
         }
@@ -1289,7 +1373,7 @@ async function runSearchPage(cursorTs, append) {
 async function loadUid(uid, targetId) {
     const target = document.getElementById(targetId);
     if (target.style.display === 'none' || target.innerHTML === '') {
-        const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
+        const res = await fetch(`/meilisearchview/getuid?uid=${encodeURIComponent(uid)}`);
         const data = await readJsonResponse(res);
         let json = JSON.stringify(data, null, 2);
         // garde l'indentation devant les lignes ajoutées

@@ -6,41 +6,41 @@
 
 
 <script>
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value === null || value === undefined ? '' : String(value);
-    return div.innerHTML;
-}
-
 async function search() {
     const query = document.getElementById('query').value;
     const res = await fetch(`/meilisearchview/query?q=${encodeURIComponent(query)}`);
     const data = await res.json();
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
-    infoDiv.innerHTML = `Found ${data.estimatedTotalHits} scans in ${data.processingTimeMs}ms`;
+    infoDiv.textContent = `Found ${data.estimatedTotalHits} scans in ${data.processingTimeMs}ms`;
     hitsDiv.innerHTML = '';
 
     data.hits.forEach((hit, index) => {
         const panel = document.createElement('div');
         panel.className = 'panel panel-default';
-        panel.innerHTML = `
-            <div class="panel-heading">
-                <h4 class="panel-title">
-                    <a data-toggle="collapse" data-parent="#hits" href="#collapse${index}">
-                        ${escapeHtml(hit.ip)} (ID: ${escapeHtml(hit.id)})
-                    </a>
-                </h4>
-            </div>
-            <div id="collapse${index}" class="panel-collapse collapse">
-            </div>
-        `;
+        const heading = document.createElement('div');
+        heading.className = 'panel-heading';
+        const title = document.createElement('h4');
+        title.className = 'panel-title';
+        const link = document.createElement('a');
+        link.setAttribute('data-toggle', 'collapse');
+        link.setAttribute('data-parent', '#hits');
+        link.href = `#collapse${index}`;
+        link.textContent = `${hit.ip || ''} (ID: ${hit.id || ''})`;
+        title.appendChild(link);
+        heading.appendChild(title);
+        panel.appendChild(heading);
+
+        const collapse = document.createElement('div');
+        collapse.id = `collapse${index}`;
+        collapse.className = 'panel-collapse collapse';
         const bodyPre = document.createElement('pre');
         bodyPre.textContent = JSON.stringify(hit.body, null, 2);
         const bodyDiv = document.createElement('div');
         bodyDiv.className = 'panel-body';
         bodyDiv.appendChild(bodyPre);
-        panel.querySelector(`#collapse${index}`).appendChild(bodyDiv);
+        collapse.appendChild(bodyDiv);
+        panel.appendChild(collapse);
         hitsDiv.appendChild(panel);
     });
 }

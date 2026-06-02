@@ -85,12 +85,6 @@ const targetSearchTimeRange = {{ get_target_search_time_range(pk) | tojson }};
 const TARGET_SEARCH_PAGE_SIZE = 500;
 const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
 
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value === null || value === undefined ? '' : String(value);
-    return div.innerHTML;
-}
-
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
@@ -206,11 +200,15 @@ async function search() {
 
     const data = aggregateData;
     const time = (data.processingTimeMs || 0).toFixed(3);
-    infoDiv.innerHTML = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
+    infoDiv.textContent = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
 
-    errorDiv.innerHTML = ``;
+    errorDiv.textContent = '';
     if (data.status === false) {
-    errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(data.msg_error)}</div>`;
+        const warning = document.createElement('div');
+        warning.className = 'alert alert-warning';
+        warning.setAttribute('role', 'alert');
+        warning.textContent = data.msg_error || '';
+        errorDiv.appendChild(warning);
     }
     hitsDiv.innerHTML = '';
 
@@ -218,30 +216,57 @@ async function search() {
         const ipPanel = document.createElement('div');
         ipPanel.className = 'panel panel-default';
 
-        // IP accordion
-        ipPanel.innerHTML = `
-            <div class="panel-heading">
-                <div class="target-result-title-row">
-                    <h4 class="panel-title">
-                        <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
-                            ${escapeHtml(ip)}
-                        </a>
-                    </h4>
-                    <a class="target-ip-action" href="/ip/${encodeURIComponent(ip)}" title="Open details for ${escapeHtml(ip)}" aria-label="Open details for ${escapeHtml(ip)}">
-                        <i class="fa fa-info-circle" aria-hidden="true"></i>
-                    </a>
-                    <button type="button" class="target-ip-action" data-ip="${escapeHtml(ip)}" onclick="copyIpToClipboard(this.dataset.ip, this)" title="Copy ${escapeHtml(ip)}" aria-label="Copy ${escapeHtml(ip)}">
-                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
-                    </button>
-                </div>
-            </div>
-            <div id="collapse-ip-${ipIndex}" class="panel-collapse collapse">
-                <div class="panel-body" id="uids-${ipIndex}">
-                    <!-- UID panels will go here -->
-                </div>
-            </div>
-        `;
-        const detailLink = ipPanel.querySelector('.target-ip-action[href]');
+        const heading = document.createElement('div');
+        heading.className = 'panel-heading';
+        const titleRow = document.createElement('div');
+        titleRow.className = 'target-result-title-row';
+
+        const title = document.createElement('h4');
+        title.className = 'panel-title';
+        const collapseLink = document.createElement('a');
+        collapseLink.setAttribute('data-toggle', 'collapse');
+        collapseLink.setAttribute('data-parent', '#hits');
+        collapseLink.href = `#collapse-ip-${ipIndex}`;
+        collapseLink.textContent = ip;
+        title.appendChild(collapseLink);
+        titleRow.appendChild(title);
+
+        const detailLink = document.createElement('a');
+        detailLink.className = 'target-ip-action';
+        detailLink.href = `/ip/${encodeURIComponent(ip)}`;
+        detailLink.title = `Open details for ${ip}`;
+        detailLink.setAttribute('aria-label', `Open details for ${ip}`);
+        const detailIcon = document.createElement('i');
+        detailIcon.className = 'fa fa-info-circle';
+        detailIcon.setAttribute('aria-hidden', 'true');
+        detailLink.appendChild(detailIcon);
+        titleRow.appendChild(detailLink);
+
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.className = 'target-ip-action';
+        copyButton.dataset.ip = ip;
+        copyButton.title = `Copy ${ip}`;
+        copyButton.setAttribute('aria-label', `Copy ${ip}`);
+        copyButton.addEventListener('click', () => copyIpToClipboard(copyButton.dataset.ip, copyButton));
+        const copyIcon = document.createElement('i');
+        copyIcon.className = 'fa-regular fa-copy';
+        copyIcon.setAttribute('aria-hidden', 'true');
+        copyButton.appendChild(copyIcon);
+        titleRow.appendChild(copyButton);
+
+        heading.appendChild(titleRow);
+        ipPanel.appendChild(heading);
+
+        const collapse = document.createElement('div');
+        collapse.id = `collapse-ip-${ipIndex}`;
+        collapse.className = 'panel-collapse collapse';
+        const uidsDiv = document.createElement('div');
+        uidsDiv.className = 'panel-body';
+        uidsDiv.id = `uids-${ipIndex}`;
+        collapse.appendChild(uidsDiv);
+        ipPanel.appendChild(collapse);
+
         if (detailLink && targetRequestedHostname) {
             const url = new URL(detailLink.getAttribute('href'), window.location.origin);
             url.searchParams.set('hostname', targetRequestedHostname);
@@ -249,20 +274,31 @@ async function search() {
         }
         hitsDiv.appendChild(ipPanel);
 
-        const uidsDiv = document.getElementById(`uids-${ipIndex}`);
         uids.forEach((uid, uidIndex) => {
             const uidPanel = document.createElement('div');
             uidPanel.className = 'panel panel-info';
-            uidPanel.innerHTML = `
-                <div class="panel-heading">
-                    <h5 class="panel-title">
-                        <a href="#" data-uid="${escapeHtml(uid)}" data-target="uid-body-${ipIndex}-${uidIndex}" onclick="loadUid(this.dataset.uid, this.dataset.target); return false;">
-                            ${escapeHtml(uid)}
-                        </a>
-                    </h5>
-                </div>
-                <div id="uid-body-${ipIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
-            `;
+            const uidHeading = document.createElement('div');
+            uidHeading.className = 'panel-heading';
+            const uidTitle = document.createElement('h5');
+            uidTitle.className = 'panel-title';
+            const uidLink = document.createElement('a');
+            uidLink.href = '#';
+            uidLink.dataset.uid = uid;
+            uidLink.dataset.target = `uid-body-${ipIndex}-${uidIndex}`;
+            uidLink.textContent = uid;
+            uidLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+            });
+            uidTitle.appendChild(uidLink);
+            uidHeading.appendChild(uidTitle);
+            uidPanel.appendChild(uidHeading);
+
+            const uidBody = document.createElement('div');
+            uidBody.id = `uid-body-${ipIndex}-${uidIndex}`;
+            uidBody.className = 'panel-body';
+            uidBody.style.display = 'none';
+            uidPanel.appendChild(uidBody);
             uidsDiv.appendChild(uidPanel);
         });
     });
@@ -271,7 +307,7 @@ async function search() {
 async function loadUid(uid, targetId) {
     const target = document.getElementById(targetId);
     if (target.style.display === 'none' || target.innerHTML === '') {
-        const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
+        const res = await fetch(`/meilisearchview/getuid?uid=${encodeURIComponent(uid)}`);
         const data = await readJsonResponse(res);
         let json = JSON.stringify(data, null, 2);
         // garde l'indentation devant les lignes ajoutées
