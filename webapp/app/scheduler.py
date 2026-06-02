@@ -18,6 +18,7 @@ import meilisearch
 from meilisearch.errors import MeilisearchApiError
 from nmap2json.smarthash import port_smart_hash
 from requests.exceptions import HTTPError
+import redis
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 from . import db
@@ -178,7 +179,12 @@ def _run_scheduler_step(step_label, step_func):
     """
     started_at = time.perf_counter()
     logger.info("Scheduler TASK: starting %s", step_label)
-    summary = step_func()
+    try:
+        summary = step_func()
+    except Exception:
+        logger.exception("Scheduler TASK: %s raised an unhandled exception", step_label)
+        elapsed = time.perf_counter() - started_at
+        return {"elapsed": elapsed, "summary": {}, "error": True}
     elapsed = time.perf_counter() - started_at
     summary_text = _format_scheduler_summary(summary)
     if summary_text:
@@ -244,6 +250,9 @@ def task_master_of_puppets():
             step_durations["cleanup_search_sessions"]["elapsed"],
             step_durations["cleanup_export_jobs"]["elapsed"],
         )
+    except Exception:
+        logger.exception("Scheduler TASK: unhandled exception in tick")
+        db.app.config["scheduler_failures"] = db.app.config.get("scheduler_failures", 0) + 1
     finally:
         db.session.remove()
 
@@ -1351,9 +1360,9 @@ def task_export_to_dbs():
             "batches": batch_count,
             "jobs_marked_exported": updated_rows,
         }
-    except (MeilisearchApiError, HTTPError):
+    except (MeilisearchApiError, HTTPError, redis.exceptions.RedisError, OSError, json.JSONDecodeError):
         db.session.rollback()
-        logger.error("Unable to export to Meili database")
+        logger.exception("Unable to export to Meili database")
         return {
             "jobs_scanned": len(job_snapshots),
             "documents_exported": total_documents,
