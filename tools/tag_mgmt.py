@@ -182,6 +182,8 @@ def parse_args(argv=None):
         ]
         if sum(selectors) > 1:
             parser.error("import accepts only one of --all, --id, or --tags-file")
+        elif sum(selectors) == 0:
+            parser.error("one of --all, --id, or --tags-file is required")
     if args.command == "delete":
         selectors = [
             bool(args.all),
@@ -190,6 +192,8 @@ def parse_args(argv=None):
         ]
         if sum(selectors) > 1:
             parser.error("delete accepts only one of --all, --id, or --tags-file")
+        elif sum(selectors) == 0:
+            parser.error("one of --all, --id, or --tags-file is required")
     return args
 
 
@@ -292,8 +296,8 @@ def normalize_flush_tag(raw_tag):
     Normalize a CLI tag value to the stored Kvrocks tag value.
     """
     tag = str(raw_tag or "").strip().lower()
-    while tag.startswith("tag:") and tag.count(":") >= 2:
-        tag = tag.split(":", 1)[1].strip()
+    if tag.startswith("tag:"):
+        tag = tag[4:].strip()
     if not tag:
         raise ValueError("Tag name is required")
     return tag
@@ -437,7 +441,7 @@ def get_yaml_files(args, rule_name=None):
             raise FileNotFoundError(f"Tag YAML file not found: {tags_file}")
         return [tags_file]
 
-    if not getattr(args, "all", True):
+    if not getattr(args, "all", False):
         return []
 
     return list(iter_yaml_files(tags_dir))
@@ -447,7 +451,7 @@ def should_replace(source_version, db_rule):
     """
     Return True when the YAML rule is newer than the DB row.
     """
-    db_version = db_rule.updated_at or db_rule.created_at or datetime.max
+    db_version = db_rule.updated_at or db_rule.created_at or datetime.min
     return source_version > db_version
 
 

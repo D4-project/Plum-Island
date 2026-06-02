@@ -797,6 +797,8 @@ def main():
     """
     suppress_connection_debug_logs()
     args = parse_args()
+    global STOP_REQUESTED
+    STOP_REQUESTED = False
     load_config()
     if args.batch_size is None:
         args.batch_size = BATCH_SIZE
