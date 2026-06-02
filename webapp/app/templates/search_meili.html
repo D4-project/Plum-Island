@@ -6,6 +6,12 @@
 
 
 <script>
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value === null || value === undefined ? '' : String(value);
+    return div.innerHTML;
+}
+
 async function search() {
     const query = document.getElementById('query').value;
     const res = await fetch(`/meilisearchview/query?q=${encodeURIComponent(query)}`);
@@ -22,16 +28,19 @@ async function search() {
             <div class="panel-heading">
                 <h4 class="panel-title">
                     <a data-toggle="collapse" data-parent="#hits" href="#collapse${index}">
-                        ${hit.ip} (ID: ${hit.id})
+                        ${escapeHtml(hit.ip)} (ID: ${escapeHtml(hit.id)})
                     </a>
                 </h4>
             </div>
             <div id="collapse${index}" class="panel-collapse collapse">
-                <div class="panel-body">
-                    <pre>${JSON.stringify(hit.body, null, 2)}</pre>
-                </div>
             </div>
         `;
+        const bodyPre = document.createElement('pre');
+        bodyPre.textContent = JSON.stringify(hit.body, null, 2);
+        const bodyDiv = document.createElement('div');
+        bodyDiv.className = 'panel-body';
+        bodyDiv.appendChild(bodyPre);
+        panel.querySelector(`#collapse${index}`).appendChild(bodyDiv);
         hitsDiv.appendChild(panel);
     });
 }

@@ -85,6 +85,12 @@ const targetSearchTimeRange = {{ get_target_search_time_range(pk) | tojson }};
 const TARGET_SEARCH_PAGE_SIZE = 500;
 const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
 
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value === null || value === undefined ? '' : String(value);
+    return div.innerHTML;
+}
+
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
@@ -204,7 +210,7 @@ async function search() {
 
     errorDiv.innerHTML = ``;
     if (data.status === false) {
-    errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${data.msg_error}</div>`;
+    errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(data.msg_error)}</div>`;
     }
     hitsDiv.innerHTML = '';
 
@@ -218,13 +224,13 @@ async function search() {
                 <div class="target-result-title-row">
                     <h4 class="panel-title">
                         <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${ipIndex}">
-                            ${ip}
+                            ${escapeHtml(ip)}
                         </a>
                     </h4>
-                    <a class="target-ip-action" href="/ip/${encodeURIComponent(ip)}" title="Open details for ${ip}" aria-label="Open details for ${ip}">
+                    <a class="target-ip-action" href="/ip/${encodeURIComponent(ip)}" title="Open details for ${escapeHtml(ip)}" aria-label="Open details for ${escapeHtml(ip)}">
                         <i class="fa fa-info-circle" aria-hidden="true"></i>
                     </a>
-                    <button type="button" class="target-ip-action" onclick="copyIpToClipboard('${ip}', this)" title="Copy ${ip}" aria-label="Copy ${ip}">
+                    <button type="button" class="target-ip-action" data-ip="${escapeHtml(ip)}" onclick="copyIpToClipboard(this.dataset.ip, this)" title="Copy ${escapeHtml(ip)}" aria-label="Copy ${escapeHtml(ip)}">
                         <i class="fa-regular fa-copy" aria-hidden="true"></i>
                     </button>
                 </div>
@@ -250,8 +256,8 @@ async function search() {
             uidPanel.innerHTML = `
                 <div class="panel-heading">
                     <h5 class="panel-title">
-                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${ipIndex}-${uidIndex}'); return false;">
-                            ${uid}
+                        <a href="#" data-uid="${escapeHtml(uid)}" data-target="uid-body-${ipIndex}-${uidIndex}" onclick="loadUid(this.dataset.uid, this.dataset.target); return false;">
+                            ${escapeHtml(uid)}
                         </a>
                     </h5>
                 </div>
@@ -272,7 +278,10 @@ async function loadUid(uid, targetId) {
         json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>
             line.replace(/\\n/g, '\\n\n' + indent + '  ')
         );
-        target.innerHTML = `<pre>${json}</pre>`;
+        const pre = document.createElement('pre');
+        pre.textContent = json;
+        target.innerHTML = '';
+        target.appendChild(pre);
         target.style.display = 'block';
     } else {
         target.style.display = 'none';

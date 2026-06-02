@@ -1063,12 +1063,12 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
             <div class="panel-heading">
                 <h4 class="panel-title">
                     <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${resultIndex}">
-                        ${ipLabel}
+                        ${escapeHtml(ipLabel)}
                     </a>
-                    <a class="ip-detail-link" href="${detailUrl}" title="Open details for ${ipLabel}">
+                    <a class="ip-detail-link" href="${detailUrl}" title="Open details for ${escapeHtml(ipLabel)}">
                         <i class="fa fa-info-circle" aria-hidden="true"></i>
                     </a>
-                    <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
+                    <button type="button" class="ip-quick-link" data-ip="${escapeHtml(ipLabel)}" onclick="copyIpToClipboard(this.dataset.ip, this)" title="Copy ${escapeHtml(ipLabel)}">
                         <i class="fa-regular fa-copy" aria-hidden="true"></i>
                     </button>
                     ${ipMeta}
@@ -1095,8 +1095,8 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
             uidPanel.innerHTML = `
                 <div class="panel-heading">
                     <h5 class="panel-title">
-                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${resultIndex}-${uidIndex}'); return false;">
-                            ${uidLabel}
+                        <a href="#" data-uid="${escapeHtml(uid)}" data-target="uid-body-${resultIndex}-${uidIndex}" onclick="loadUid(this.dataset.uid, this.dataset.target); return false;">
+                            ${escapeHtml(uidLabel)}
                         </a>
                         ${uidMeta}
                     </h5>

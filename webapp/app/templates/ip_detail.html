@@ -634,6 +634,12 @@
 </div>
 
 <script>
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value === null || value === undefined ? '' : String(value);
+    return div.innerHTML;
+}
+
 (function () {
     const ip = {{ ip | tojson }};
     const loadingEl = document.getElementById('ip-info-loading');
@@ -783,7 +789,7 @@
         .then(({ ok, payload, status }) => {
             pdnsLoadingEl.style.display = 'none';
             if (payload && payload.disabled) {
-                pdnsResultsEl.innerHTML = `<div class="text-muted">${payload.message}</div>`;
+                pdnsResultsEl.innerHTML = `<div class="text-muted">${escapeHtml(payload.message)}</div>`;
                 return;
             }
             if (!ok) {
