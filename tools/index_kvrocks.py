@@ -840,11 +840,10 @@ def main():
                 "Meilisearch returned no documents; refusing to rebuild Kvrocks"
             )
 
-    seen_snapshot = (
+    seen_snapshot = None
+    if args.rebuild or args.rebuild_from_meili:
+        seen_snapshot = snapshot_seen_values(indexer)
         rebuild_kvrocks(indexer, include_tags=args.retag)
-        if args.rebuild or args.rebuild_from_meili
-        else None
-    )
 
     if args.rebuild_from_meili:
         source_docs = parsed_documents_from_meili(
