@@ -30,7 +30,7 @@ Meili Database Port : 7700
 Meili Database Password : YouNeedToChangeMeInProduction
 Enable CIRCL Passive DNS enrichment ? (y/n) : y
 CIRCL Passive DNS username : you@example.org
-CIRCL Passive DNS API key/password :
+CIRCL Passive DNS API key/password : YouNeedToChangeItToo
 -------------------------
 KvRocsk Configuration : 127.0.0.1:6666
 Meili Configuration : http://127.0.0.1:7700 using YouNeedToChangeMeInProduction

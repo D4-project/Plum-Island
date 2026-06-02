@@ -1,8 +1,32 @@
-# Plum Island - Next Release - Unreleased
+# Plum Island - Searing Spring Release - v0.2606.0
 
-Changes after `v0.2604.0`.
+## v0.2606.0 Highlight
+- HTTP header name and/or value acquisition engine.
+- Switch from host to port in database - 86 Headers.
+- Huge improvement of devices/software discovery - 844 Tags. 
+- Docker availability and support thank's to t0kubetsu.  
 
-## Changes
+## v0.2606.0 Changes 
+- Other changes:
+  - Make bot job submission idempotent (`ac9c7fe`)
+  - Prevent concurrent scanner agents from claiming the same queued job
+  - Return validation errors instead of TypeError for malformed bot UID fields, closes #86
+  - Add scan profile cycle tracking with current and previous cycle visibility, closes #52
+  - Add curated HTTP header presence/value collection and structured Kvrocks search, closes #54
+  - Improve Kvrocks rebuild tooling: direct Meili rebuild, multiprocessing parser workers, retag mode, graceful Ctrl+C, quieter logs, and progress output (`23b9d83`)
+  - Prevent network info refresh from crashing on FQDN targets, closes #116
+  - Avoid blocking Kvrocks wildcard fallback searches on Redis KEYS, closes #90
+  - Split tools Meilisearch config into `IN_MEILI_*` and `OUT_MEILI_*`; remove legacy `MEILI_*` tool config keys (`ef4ceec`)
+  - Rework `index_meili.py` to import dumps into `OUT_MEILI_*`, with batching and optional `--progress` (`ef4ceec`)
+  - Scheduler FQDN/IP job batching now fills 256-item packets when due targets remain, closes #51
+  - Remove unused scheduler module-level job list, closes #102
+  - Show scan profile cycle progress by concrete scan units instead of target rows, closes #118
+  - Fix bot API SQLAlchemy limit calls to use integer arguments, closes #87
+  - Bound Kvrocks rebuild memory use by preserving doc timestamps in place and parsing Meili pages batch-by-batch, closes #80
+  - Make result parsing config explicit per call to avoid cross-thread parser state leaks, closes #88
+  - Fix `setup.sh` to use explicit venv Python/Flask commands and seed HTTP header tagging plus a default banner scan profile during initial setup
+  - Add required tool dependency update (`acbe2d1`)
+  - Harden job result rendering against banner HTML injection, closes #37 (`7224443`)
 - Tag-related changes:
   - Dropbear SSH (`eac052b`), FRITZ!Box SIP (`ff2fcc6`), Microsoft SMTP gateway (`b19b027`)
   - SIP protocol and SIP_Phone WWW-Authenticate realm tagging, closes #26 (`0227c6a`)
@@ -100,6 +124,10 @@ Changes after `v0.2604.0`.
   - Fix `setup.sh` to use explicit venv Python/Flask commands and seed HTTP header tagging plus a default banner scan profile during initial setup
   - Add required tool dependency update (`acbe2d1`)
   - Harden job result rendering against banner HTML injection, closes #37 (`7224443`)
+
+## v0.2606.0 Current Limitation
+- Only TCP Supported.
+- IPv6 scan not supported yet.
 
 # Plum Island - MarmotUp Release - v0.2604.0
 
