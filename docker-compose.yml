@@ -18,6 +18,7 @@ services:
       - plum_data:/plum/data
       - plum_jsons:/plum/webapp/app/jsons
       - plum_exports:/plum/webapp/app/export_jobs
+      - plum_uploads:/plum/webapp/app/static/uploads
     depends_on:
       kvrocks:
         condition: service_healthy
@@ -58,5 +59,6 @@ volumes:
   plum_data:
   plum_jsons:
   plum_exports:
+  plum_uploads:
   kvrocks_data:
   meili_data:
