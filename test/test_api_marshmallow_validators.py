@@ -32,6 +32,27 @@ class BotInfoSchemaValidationTest(TestCase):
 
         self.assertEqual(context.exception.messages, {"JOB_UID": ["Invalid JOB_UID"]})
 
+    def test_valid_uid_passes(self):
+        """A well-formed UUID4 string must not raise ValidationError."""
+        try:
+            BotInfoSchema().load(
+                {"UID": "550e8400-e29b-41d4-a716-446655440000"}, partial=True
+            )
+        except ValidationError as exc:
+            self.fail(f"Valid UID unexpectedly raised: {exc}")
+
+    def test_private_ip_rejected(self):
+        """A private IP address must be rejected on EXT_IP."""
+        with self.assertRaises(ValidationError) as context:
+            BotInfoSchema().load({"EXT_IP": "192.168.1.1"}, partial=True)
+        self.assertIn("EXT_IP", context.exception.messages)
+
+    def test_short_agent_key_rejected(self):
+        """An AGENT_KEY shorter than 80 characters must raise ValidationError."""
+        with self.assertRaises(ValidationError) as context:
+            BotInfoSchema().load({"AGENT_KEY": "tooshort"}, partial=True)
+        self.assertIn("AGENT_KEY", context.exception.messages)
+
 
 if __name__ == "__main__":
     main()
