@@ -9,6 +9,7 @@ This module contains all code related to API's.
 """
 
 import base64
+import hashlib
 import os
 import json
 import logging
@@ -16,6 +17,7 @@ import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi, has_access
 from flask_appbuilder.api import BaseApi, expose, safe, protect
+from flask_appbuilder.filemanager import FileManager
 from flask import request
 
 from sqlalchemy import func, distinct
@@ -28,6 +30,8 @@ from .models import (
     ApiKeys,
     Jobs,
     Nses,
+    Ports,
+    Protos,
     TargetScanStates,
     assoc_jobs_targets,
 )
@@ -761,6 +765,461 @@ class Api(BaseApi):
         return self.response(200, message="ready")
 
 
+class NsesApi(BaseApi):
+    """
+    REST API for managing NSE (Nmap Script Engine) scripts.
+
+    Provides programmatic equivalents of the /nsesview HTML form: list, create,
+    and delete NSE entries.  File upload uses multipart/form-data; all other
+    responses are JSON.
+    """
+
+    route_base = "/api/v1/nses"
+    openapi_spec_tag = "NSE Scripts API"
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        summary: List all NSE scripts.
+        responses:
+            200:
+                description: Array of NSE script metadata objects.
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                result:
+                                    type: array
+                                    items:
+                                        type: object
+                                        properties:
+                                            id:
+                                                type: integer
+                                            name:
+                                                type: string
+                                            hash:
+                                                type: string
+        """
+        nses = db.session.query(Nses).order_by(Nses.name.asc()).all()
+        return self.response(
+            200,
+            result=[{"id": n.id, "name": n.name, "hash": n.hash} for n in nses],
+        )
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        summary: Upload a new NSE script.
+        description: |
+            Accepts a multipart/form-data request with a single field named
+            ``filebody`` containing the .nse file.  The filename must end in
+            ``.nse``; the stored script name is derived from the uploaded
+            filename (not a separate form field).  If an entry with the same
+            name already exists it is updated in-place; duplicate SHA256 hashes
+            are rejected.
+        parameters:
+            - in: formData
+              name: filebody
+              required: true
+              type: file
+              description: The .nse script file to upload.
+        responses:
+            201:
+                description: NSE script created or updated successfully.
+            400:
+                description: Missing file, wrong extension, or duplicate hash.
+        """
+        upload = request.files.get("filebody")
+        if not upload or not getattr(upload, "filename", ""):
+            return self.response_400(message="Field 'filebody' with a .nse file is required")
+
+        filename = os.path.basename(upload.filename)
+        if not filename.lower().endswith(".nse"):
+            return self.response_400(message="Only .nse files are allowed")
+
+        file_bytes = upload.read()
+        upload.stream.seek(0)
+        sha256sum = hashlib.sha256(file_bytes).hexdigest()
+
+        existing_by_hash = db.session.query(Nses).filter(Nses.hash == sha256sum).one_or_none()
+        existing_by_name = db.session.query(Nses).filter(Nses.name == filename).one_or_none()
+
+        if existing_by_hash is not None and (
+            existing_by_name is None or existing_by_name.id != existing_by_hash.id
+        ):
+            return self.response_400(
+                message="An NSE script with this file content (SHA256) already exists under a different name"
+            )
+
+        file_manager = FileManager()
+        item = existing_by_name
+
+        if item is not None:
+            # Update: replace file on disk and refresh hash.
+            if item.filebody:
+                file_manager.delete_file(item.filebody)
+            stored_name = file_manager.generate_name(item, upload)
+            item.filebody = file_manager.save_file(upload, stored_name)
+            item.hash = sha256sum
+            db.session.commit()
+            status = 200
+        else:
+            item = Nses()
+            item.name = filename
+            item.hash = sha256sum
+            stored_name = file_manager.generate_name(item, upload)
+            item.filebody = file_manager.save_file(upload, stored_name)
+            db.session.add(item)
+            db.session.commit()
+            status = 201
+
+        return self.response(
+            status,
+            result={"id": item.id, "name": item.name, "hash": item.hash},
+        )
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        summary: Get a single NSE script by ID.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+        responses:
+            200:
+                description: NSE script metadata.
+            404:
+                description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        return self.response(200, result={"id": item.id, "name": item.name, "hash": item.hash})
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        summary: Update an NSE script by ID.
+        description: |
+            Replace the file content (``filebody``) and/or rename (``name`` form
+            field) an existing NSE script.  At least one must be supplied.
+            Duplicate SHA256 hashes and name collisions with other records are
+            rejected.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+            - in: formData
+              name: filebody
+              required: false
+              type: file
+              description: New .nse script file.
+            - in: formData
+              name: name
+              required: false
+              type: string
+              description: New script name (must end in .nse; suffix appended if omitted).
+        responses:
+            200:
+                description: NSE script updated successfully.
+            400:
+                description: Missing payload, wrong extension, duplicate hash, or name collision.
+            404:
+                description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        upload = request.files.get("filebody")
+        new_name = request.form.get("name")
+
+        if not upload and not new_name:
+            return self.response_400(message="Provide at least a new 'filebody' or a new 'name'")
+
+        if upload and getattr(upload, "filename", ""):
+            filename = os.path.basename(upload.filename)
+            if not filename.lower().endswith(".nse"):
+                return self.response_400(message="Only .nse files are allowed")
+            file_bytes = upload.read()
+            upload.stream.seek(0)
+            sha256sum = hashlib.sha256(file_bytes).hexdigest()
+            collision = (
+                db.session.query(Nses)
+                .filter(Nses.hash == sha256sum, Nses.id != pk)
+                .one_or_none()
+            )
+            if collision is not None:
+                return self.response_400(
+                    message="An NSE script with this file content (SHA256) already exists under a different name"
+                )
+            file_manager = FileManager()
+            if item.filebody:
+                file_manager.delete_file(item.filebody)
+            stored_name = file_manager.generate_name(item, upload)
+            item.filebody = file_manager.save_file(upload, stored_name)
+            item.hash = sha256sum
+
+        if new_name:
+            if not new_name.lower().endswith(".nse"):
+                new_name = f"{new_name}.nse"
+            collision = (
+                db.session.query(Nses)
+                .filter(Nses.name == new_name, Nses.id != pk)
+                .one_or_none()
+            )
+            if collision is not None:
+                return self.response_400(message=f"An NSE script named '{new_name}' already exists")
+            item.name = new_name
+
+        db.session.commit()
+        return self.response(200, result={"id": item.id, "name": item.name, "hash": item.hash})
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        summary: Delete an NSE script by ID.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+              description: ID of the NSE script to delete.
+        responses:
+            200:
+                description: NSE script deleted successfully.
+            404:
+                description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        file_manager = FileManager()
+        if item.filebody:
+            file_manager.delete_file(item.filebody)
+
+        db.session.delete(item)
+        db.session.commit()
+        return self.response(200, message=f"NSE '{item.name}' deleted")
+
+
+class PortsApi(BaseApi):
+    """
+    REST API for managing scan ports.
+
+    Provides programmatic equivalents of the /portsview HTML form: list, create,
+    read, update, and delete port entries.  All requests and responses are JSON.
+    The ``proto`` field in request bodies is the protocol label (e.g. ``"TCP"``);
+    the API resolves the matching Protos record internally.
+    """
+
+    route_base = "/api/v1/ports"
+    openapi_spec_tag = "Ports API"
+
+    def _serialize(self, port):
+        return {
+            "id": port.id,
+            "value": port.value,
+            "name": port.name,
+            "proto": str(port.proto),
+        }
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        summary: List all ports.
+        responses:
+            200:
+                description: Array of port objects sorted by protocol then port number.
+        """
+        ports = (
+            db.session.query(Ports)
+            .join(Protos, Ports.proto_id == Protos.id)
+            .order_by(Protos.value, Ports.value)
+            .all()
+        )
+        return self.response(200, result=[self._serialize(p) for p in ports])
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        summary: Create a new port.
+        description: |
+            Accepts a JSON body with ``value`` (integer 1–65535), ``name``
+            (description string), and ``proto`` (protocol label, e.g. ``"TCP"``).
+            Returns the created port object with status 201.
+        responses:
+            201:
+                description: Port created successfully.
+            400:
+                description: Missing/invalid fields or duplicate port/protocol combination.
+        """
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return self.response_400(message="JSON body required")
+
+        port_value = data.get("value")
+        name = str(data.get("name", "")).strip()
+        proto_str = str(data.get("proto", "")).upper().strip()
+
+        if port_value is None or not name or not proto_str:
+            return self.response_400(message="Fields 'value', 'name', and 'proto' are required")
+
+        if not isinstance(port_value, int) or port_value < 1 or port_value > 65535:
+            return self.response_400(message="'value' must be an integer between 1 and 65535")
+
+        proto = db.session.query(Protos).filter(Protos.value == proto_str).one_or_none()
+        if proto is None:
+            return self.response_400(message=f"Unknown protocol '{proto_str}'")
+
+        proto_to_port = f"{port_value}:{proto.id}"
+        if db.session.query(Ports).filter(Ports.proto_to_port == proto_to_port).one_or_none():
+            return self.response_400(message=f"Port {proto_str}:{port_value} already exists")
+
+        item = Ports(value=port_value, name=name, proto_id=proto.id, proto_to_port=proto_to_port)
+        db.session.add(item)
+        db.session.commit()
+        return self.response(201, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        summary: Get a single port by ID.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+        responses:
+            200:
+                description: Port object.
+            404:
+                description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        summary: Update a port by ID.
+        description: |
+            Accepts a JSON body with any subset of ``value``, ``name``, and
+            ``proto``.  At least one field must be present.
+        responses:
+            200:
+                description: Updated port object.
+            400:
+                description: Invalid fields or resulting duplicate combination.
+            404:
+                description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        data = request.get_json(force=True)
+        if not isinstance(data, dict) or not any(k in data for k in ("value", "name", "proto")):
+            return self.response_400(
+                message="JSON body with at least one of 'value', 'name', 'proto' required"
+            )
+
+        port_value = item.value
+        name = item.name
+        proto_id = item.proto_id
+
+        if "value" in data:
+            port_value = data["value"]
+            if not isinstance(port_value, int) or port_value < 1 or port_value > 65535:
+                return self.response_400(message="'value' must be an integer between 1 and 65535")
+
+        if "name" in data:
+            name = str(data["name"]).strip()
+            if not name:
+                return self.response_400(message="'name' cannot be empty")
+
+        if "proto" in data:
+            proto_str = str(data["proto"]).upper().strip()
+            proto = db.session.query(Protos).filter(Protos.value == proto_str).one_or_none()
+            if proto is None:
+                return self.response_400(message=f"Unknown protocol '{proto_str}'")
+            proto_id = proto.id
+
+        proto_to_port = f"{port_value}:{proto_id}"
+        collision = (
+            db.session.query(Ports)
+            .filter(Ports.proto_to_port == proto_to_port, Ports.id != pk)
+            .one_or_none()
+        )
+        if collision is not None:
+            proto_label = str(db.session.query(Protos).filter(Protos.id == proto_id).one().value)
+            return self.response_400(message=f"Port {proto_label}:{port_value} already exists")
+
+        item.value = port_value
+        item.name = name
+        item.proto_id = proto_id
+        item.proto_to_port = proto_to_port
+        db.session.commit()
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        summary: Delete a port by ID.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+        responses:
+            200:
+                description: Port deleted.
+            404:
+                description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        label = str(item)
+        db.session.delete(item)
+        db.session.commit()
+        return self.response(200, message=f"Port '{label}' deleted")
+
+
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
+appbuilder.add_api(NsesApi)
+appbuilder.add_api(PortsApi)
