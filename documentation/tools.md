@@ -26,6 +26,21 @@ Important settings:
 - `OUT_KVROCKS_HOST`, `OUT_KVROCKS_PORT`: Kvrocks output used by some export helpers
 - `PLUMISLAND`, `PLUMAPIUSER`, `PLUMAPIPWD`: API access for webapp import helpers
 
+## API import role
+
+### `Feeder`
+
+`Feeder` is the least-privilege role for automated target import tools.
+Fresh installs create it automatically, and migration `17` adds it on upgraded instances.
+
+The role only grants:
+
+- `can_post` on `PublicTargetsApi`: required by `tools/import_whois_ranges.py`
+- `can_bulk_import` on `TargetsApi`: required by `tools/import_fqdns.py`
+
+Use a dedicated Plum user with only the `Feeder` role for automated imports.
+Do not reuse an admin account in tool configuration files.
+
 ## Tag tools
 
 ### `initial_setup.py`
@@ -340,6 +355,74 @@ Review the script before use.
 
 ## Target and FQDN tools
 
+### `import_whois_ranges.py`
+
+Download RIR WHOIS sources, find records matching configured countries or words, convert matching `inetnum` ranges to CIDR, reduce locally covered CIDRs, and import them into Plum through the API.
+
+The tool reads `tools/range_import.yaml`.
+Start from the sample:
+
+```bash
+cp tools/range_import.yaml.sample tools/range_import.yaml
+chmod 600 tools/range_import.yaml
+```
+
+Example:
+
+```yaml
+base_url: "http://localhost:5000"
+country:
+  - "LU"
+words:
+  - "luxembourg"
+username: "feeder-user"
+password: "..."
+```
+
+Run a parse-only check:
+
+```bash
+.venv/bin/python tools/import_whois_ranges.py --dry-run
+```
+
+Run and import into Plum:
+
+```bash
+.venv/bin/python tools/import_whois_ranges.py
+```
+
+Useful options:
+
+```bash
+.venv/bin/python tools/import_whois_ranges.py --forcedownload
+.venv/bin/python tools/import_whois_ranges.py --debug
+```
+
+Behavior and safety:
+
+- active sources are hardcoded in the script; disabled sources are ignored
+- downloads are stored under `tools/tmp/`
+- cached source files older than 24 hours are downloaded again
+- `--forcedownload` ignores the 24-hour cache freshness check
+- compressed downloads are written atomically via `.part` files
+- compressed download size is capped at 512 MiB
+- gzip sources are decompressed while parsing
+- country matching is case-insensitive after normalization
+- `words` matching is case-insensitive and can match any line in a record
+- duplicate CIDRs are removed
+- CIDRs already covered by a wider CIDR in the local import set are skipped
+- CIDRs are imported through the Plum API, never by direct DB writes
+- `netname` is used as target description when available
+- logs are written to `tools/log/import_whois_ranges.log`
+- log files rotate daily and keep 14 days
+
+Security notes:
+
+- use a dedicated user with the `Feeder` role
+- keep `tools/range_import.yaml` out of git
+- keep `tools/range_import.yaml` mode `600`; the tool warns when it is too open
+- `base_url` must be HTTPS unless it points to localhost/loopback
+
 ### `import_fqdns.py`
 
 Bulk-import newline-delimited targets through the Plum Island API.
@@ -350,10 +433,11 @@ The input file can contain FQDNs, IPs, and CIDR ranges.
 ```
 
 The tool authenticates with `PLUMISLAND`, `PLUMAPIUSER`, and `PLUMAPIPWD` from `tools/config.yaml`.
+Use a dedicated Plum user with the `Feeder` role for this tool.
 
 ### `last_fqdns.py`
 
-Extract uniqure FQDNs seen during the last N hours from Kvocks.
+Extract unique FQDNs seen during the last N hours from Kvrocks.
 
 ```bash
 cd tools

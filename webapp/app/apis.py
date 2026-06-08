@@ -15,7 +15,7 @@ import logging
 import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi, has_access
-from flask_appbuilder.api import BaseApi, expose, safe, protect
+from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, protect
 from flask import request
 
 from sqlalchemy import func, distinct
@@ -302,6 +302,68 @@ class PublicTargetsApi(ModelRestApi):
     """
 
     datamodel = SQLAInterface(Targets)
+
+    def _coverage_error(self, item):
+        return TargetsView._target_coverage_error(item)
+
+    def post_headless(self):
+        """
+        POST/Add target with CIDR coverage validation before insert.
+        """
+        if not request.is_json:
+            return self.response_400(message="Request is not JSON")
+        try:
+            item = self.add_model_schema.load(request.json)
+        except ValidationError as err:
+            return self.response_422(message=err.messages)
+
+        coverage_error = self._coverage_error(item)
+        if coverage_error:
+            return self.response_422(message=coverage_error)
+
+        self.pre_add(item)
+        try:
+            self.datamodel.add(item, raise_exception=True)
+            self.post_add(item)
+            return self.response(
+                201,
+                **{
+                    API_RESULT_RES_KEY: self.add_model_schema.dump(item, many=False),
+                    "id": self.datamodel.get_pk_value(item),
+                },
+            )
+        except IntegrityError as error:
+            return self.response_422(message=str(error.orig))
+
+    def put_headless(self, pk):
+        """
+        PUT/Edit target with CIDR coverage validation before update.
+        """
+        item = self.datamodel.get(pk, self._base_filters)
+        if not request.is_json:
+            return self.response_400(message="Request is not JSON")
+        if not item:
+            return self.response_404()
+        try:
+            data = self._merge_update_item(item, request.json)
+            item = self.edit_model_schema.load(data, instance=item)
+        except ValidationError as err:
+            return self.response_422(message=err.messages)
+
+        coverage_error = self._coverage_error(item)
+        if coverage_error:
+            return self.response_422(message=coverage_error)
+
+        self.pre_update(item)
+        try:
+            self.datamodel.edit(item, raise_exception=True)
+            self.post_update(item)
+            return self.response(
+                200,
+                **{API_RESULT_RES_KEY: self.edit_model_schema.dump(item, many=False)},
+            )
+        except IntegrityError as error:
+            return self.response_422(message=str(error.orig))
 
 
 class TargetsApi(BaseApi):

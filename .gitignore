@@ -7,4 +7,7 @@ dev-*
 tools/meili_dump
 tools/meili_dump_port
 tools/config.yaml
+tools/range_import.yaml
+tools/log/
+tools/tmp/
 external/
