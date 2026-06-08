@@ -30,6 +30,8 @@ from .models import (
     ApiKeys,
     Jobs,
     Nses,
+    Ports,
+    Protos,
     TargetScanStates,
     assoc_jobs_targets,
 )
@@ -1019,7 +1021,205 @@ class NsesApi(BaseApi):
         return self.response(200, message=f"NSE '{item.name}' deleted")
 
 
+class PortsApi(BaseApi):
+    """
+    REST API for managing scan ports.
+
+    Provides programmatic equivalents of the /portsview HTML form: list, create,
+    read, update, and delete port entries.  All requests and responses are JSON.
+    The ``proto`` field in request bodies is the protocol label (e.g. ``"TCP"``);
+    the API resolves the matching Protos record internally.
+    """
+
+    route_base = "/api/v1/ports"
+    openapi_spec_tag = "Ports API"
+
+    def _serialize(self, port):
+        return {
+            "id": port.id,
+            "value": port.value,
+            "name": port.name,
+            "proto": str(port.proto),
+        }
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        summary: List all ports.
+        responses:
+            200:
+                description: Array of port objects sorted by protocol then port number.
+        """
+        ports = (
+            db.session.query(Ports)
+            .join(Protos, Ports.proto_id == Protos.id)
+            .order_by(Protos.value, Ports.value)
+            .all()
+        )
+        return self.response(200, result=[self._serialize(p) for p in ports])
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        summary: Create a new port.
+        description: |
+            Accepts a JSON body with ``value`` (integer 1–65535), ``name``
+            (description string), and ``proto`` (protocol label, e.g. ``"TCP"``).
+            Returns the created port object with status 201.
+        responses:
+            201:
+                description: Port created successfully.
+            400:
+                description: Missing/invalid fields or duplicate port/protocol combination.
+        """
+        data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            return self.response_400(message="JSON body required")
+
+        port_value = data.get("value")
+        name = str(data.get("name", "")).strip()
+        proto_str = str(data.get("proto", "")).upper().strip()
+
+        if port_value is None or not name or not proto_str:
+            return self.response_400(message="Fields 'value', 'name', and 'proto' are required")
+
+        if not isinstance(port_value, int) or port_value < 1 or port_value > 65535:
+            return self.response_400(message="'value' must be an integer between 1 and 65535")
+
+        proto = db.session.query(Protos).filter(Protos.value == proto_str).one_or_none()
+        if proto is None:
+            return self.response_400(message=f"Unknown protocol '{proto_str}'")
+
+        proto_to_port = f"{port_value}:{proto.id}"
+        if db.session.query(Ports).filter(Ports.proto_to_port == proto_to_port).one_or_none():
+            return self.response_400(message=f"Port {proto_str}:{port_value} already exists")
+
+        item = Ports(value=port_value, name=name, proto_id=proto.id, proto_to_port=proto_to_port)
+        db.session.add(item)
+        db.session.commit()
+        return self.response(201, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        summary: Get a single port by ID.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+        responses:
+            200:
+                description: Port object.
+            404:
+                description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        summary: Update a port by ID.
+        description: |
+            Accepts a JSON body with any subset of ``value``, ``name``, and
+            ``proto``.  At least one field must be present.
+        responses:
+            200:
+                description: Updated port object.
+            400:
+                description: Invalid fields or resulting duplicate combination.
+            404:
+                description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        data = request.get_json(force=True)
+        if not isinstance(data, dict) or not any(k in data for k in ("value", "name", "proto")):
+            return self.response_400(
+                message="JSON body with at least one of 'value', 'name', 'proto' required"
+            )
+
+        port_value = item.value
+        name = item.name
+        proto_id = item.proto_id
+
+        if "value" in data:
+            port_value = data["value"]
+            if not isinstance(port_value, int) or port_value < 1 or port_value > 65535:
+                return self.response_400(message="'value' must be an integer between 1 and 65535")
+
+        if "name" in data:
+            name = str(data["name"]).strip()
+            if not name:
+                return self.response_400(message="'name' cannot be empty")
+
+        if "proto" in data:
+            proto_str = str(data["proto"]).upper().strip()
+            proto = db.session.query(Protos).filter(Protos.value == proto_str).one_or_none()
+            if proto is None:
+                return self.response_400(message=f"Unknown protocol '{proto_str}'")
+            proto_id = proto.id
+
+        proto_to_port = f"{port_value}:{proto_id}"
+        collision = (
+            db.session.query(Ports)
+            .filter(Ports.proto_to_port == proto_to_port, Ports.id != pk)
+            .one_or_none()
+        )
+        if collision is not None:
+            proto_label = str(db.session.query(Protos).filter(Protos.id == proto_id).one().value)
+            return self.response_400(message=f"Port {proto_label}:{port_value} already exists")
+
+        item.value = port_value
+        item.name = name
+        item.proto_id = proto_id
+        item.proto_to_port = proto_to_port
+        db.session.commit()
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        summary: Delete a port by ID.
+        parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                  type: integer
+        responses:
+            200:
+                description: Port deleted.
+            404:
+                description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        label = str(item)
+        db.session.delete(item)
+        db.session.commit()
+        return self.response(200, message=f"Port '{label}' deleted")
+
+
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
 appbuilder.add_api(NsesApi)
+appbuilder.add_api(PortsApi)
