@@ -178,23 +178,19 @@ def resolve_fqdns(fqdns, workers=25):
     return results
 
 
-def print_fqdns(filtered, resolve, resolutions=None):
+def count_resolved(resolutions):
     """
-    Print FQDN output to stdout, resolving names when requested.
+    Count FQDNs with at least one resolved address.
     """
-    if resolve == "yes":
-        logger.info("Resolve FQDNs: yes")
-        if resolutions is None:
-            resolutions = resolve_fqdns(filtered, workers=25)
-        for fqdn in filtered:
-            data = resolutions.get(fqdn, {"addresses": [], "error": "no result"})
-            if data["addresses"]:
-                print(f"{fqdn} -> {', '.join(data['addresses'])}")
-            else:
-                reason = data.get("error") or "no answer"
-                print(f"{fqdn} -> ERROR: {reason}")
-        return
+    if not resolutions:
+        return 0
+    return sum(1 for data in resolutions.values() if data.get("addresses"))
 
+
+def print_fqdns(filtered):
+    """
+    Print FQDN output to stdout.
+    """
     for fqdn in filtered:
         print(fqdn)
 
@@ -214,39 +210,52 @@ def learn_fqdns(config, filtered, resolutions=None):
     regexes = compile_learn_regexes(config)
     if not regexes:
         logger.warning("Learn enabled but last_fqdns_learn has no valid regex")
-        return
+        return 0
 
     candidates = [
         fqdn for fqdn in filtered if any(regex.search(fqdn) for regex in regexes)
     ]
     logger.info("Learn regex matched FQDN count: %d", len(candidates))
     if not filtered:
-        return
+        return 0
 
     if resolutions is None:
         resolutions = resolve_fqdns(filtered, workers=25)
 
     if not candidates:
-        return
+        return 0
 
     learned = [
         fqdn for fqdn in candidates if resolutions.get(fqdn, {}).get("addresses")
     ]
     logger.info("Learn resolved FQDN count: %d", len(learned))
     if not learned:
-        return
+        return 0
 
     base_url, username, password = load_plum_config(config)
     token = get_access_token(base_url, username, password)
 
+    imported_count = 0
     for chunk_index, chunk in enumerate(chunk_items(learned), start=1):
         result = bulk_import_targets(base_url, token, "\n".join(chunk))
+        imported_count += len(chunk)
         logger.info(
             "Learn import chunk %d submitted FQDN count: %d",
             chunk_index,
             len(chunk),
         )
         logger.debug("Learn import chunk %d result: %s", chunk_index, result)
+    return imported_count
+
+
+def print_summary(found_count, resolved_count, plum_imported_count):
+    """
+    Print final stdout stats for the run.
+    """
+    print("")
+    print(f"FQDN found: {found_count}")
+    print(f"FQDN resolved: {resolved_count}")
+    print(f"FQDN imported into Plum: {plum_imported_count}")
 
 
 def main():
@@ -316,11 +325,18 @@ def main():
     logger.info("Unique FQDN count: %d", len(filtered))
 
     resolutions = None
-    if args.learn:
+    plum_imported_count = 0
+    if args.resolve == "yes":
+        logger.info("Resolve FQDNs: yes")
         resolutions = resolve_fqdns(filtered, workers=25)
-        learn_fqdns(config, filtered, resolutions=resolutions)
 
-    print_fqdns(filtered, args.resolve, resolutions=resolutions)
+    if args.learn:
+        if resolutions is None:
+            resolutions = resolve_fqdns(filtered, workers=25)
+        plum_imported_count = learn_fqdns(config, filtered, resolutions=resolutions)
+
+    print_fqdns(filtered)
+    print_summary(len(filtered), count_resolved(resolutions), plum_imported_count)
 
 
 if __name__ == "__main__":

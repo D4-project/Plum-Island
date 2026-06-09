@@ -450,6 +450,11 @@ Optionally resolve every FQDN:
 .venv/bin/python tools/last_fqdns.py --hours 24 --resolve yes
 ```
 
+Resolution results are logged, not printed to stdout.
+With `--debug`, each successful or failed FQDN resolution is shown on the console.
+Stdout remains a plain FQDN list so it can still be piped to other tools.
+At the end of the output, the tool prints a short summary with found, resolved, and Plum-imported FQDN counts.
+
 The tool reads `tools/config.yaml` and logs to `tools/log/last_fqdns.log`.
 Log files rotate daily and keep 14 days.
 Use `--debug` to show debug logs on the console.
