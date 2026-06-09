@@ -7,18 +7,20 @@ This tool may resolve directly for PDNS accounting.
 # pylint: disable=import-error,wrong-import-position,broad-exception-caught
 
 import argparse
-import concurrent.futures
-import ipaddress
-import logging
-import logging.handlers
 import re
-import socket
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import yaml
-from rich.logging import RichHandler
+from lib.config import (
+    load_yaml_config,
+    plum_credentials_from_config,
+    require_config_values,
+)
+from lib.dns import count_resolved, is_ipv4_address, resolve_fqdns
+from lib.iterables import chunk_items
+from lib.plum_api import bulk_import_targets, get_access_token
+from lib.tool_logging import get_logger, setup_logger as setup_tool_logger
 
 THIS_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = THIS_DIR / "config.yaml"
@@ -28,50 +30,27 @@ RESOLVE_PROGRESS_INTERVAL = 100
 
 sys.path.append(str(THIS_DIR.parent / "webapp" / "app" / "utils"))
 from kvrocks import KVrocksIndexer  # noqa: E402
-from import_fqdns import bulk_import_targets, get_access_token  # noqa: E402
 
-logger = logging.getLogger("Plum_Agent")
-logger.setLevel(logging.DEBUG)
+logger = get_logger()
 
 
 def setup_logger(debug=False):
     """
     Configure Rich console logging and the persistent daily-rotated log file.
     """
-    if logger.handlers:
-        return
-
-    console_handler = RichHandler()
-    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    logger.addHandler(console_handler)
-
-    LOG_DIR.mkdir(exist_ok=True)
-    file_handler = logging.handlers.TimedRotatingFileHandler(
-        LOG_DIR / "last_fqdns.log",
-        when="midnight",
-        interval=1,
-        backupCount=14,
-        encoding="utf-8",
-    )
-    file_handler.suffix = "%Y-%m-%d"
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", datefmt="[%X]")
-    )
-    logger.addHandler(file_handler)
+    return setup_tool_logger(LOG_DIR / "last_fqdns.log", debug=debug, logger=logger)
 
 
 def load_config():
     """
     Load tool settings from tools/config.yaml.
     """
-    with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
-        config = yaml.safe_load(config_file) or {}
-
-    host = config.get("OUT_KVROCKS_HOST")
-    port = config.get("OUT_KVROCKS_PORT")
-    if not host or not port:
-        raise KeyError(f"Missing OUT_KVROCKS_HOST/OUT_KVROCKS_PORT in {CONFIG_PATH}")
+    config = load_yaml_config(CONFIG_PATH)
+    require_config_values(
+        config,
+        ("OUT_KVROCKS_HOST", "OUT_KVROCKS_PORT"),
+        CONFIG_PATH,
+    )
     return config
 
 
@@ -79,15 +58,7 @@ def load_plum_config(config):
     """
     Load Plum API settings from config.yaml.
     """
-    missing = [
-        name
-        for name in ("PLUMISLAND", "PLUMAPIUSER", "PLUMAPIPWD")
-        if not config.get(name)
-    ]
-    if missing:
-        raise KeyError(f"Missing {', '.join(missing)} in {CONFIG_PATH}")
-
-    return config["PLUMISLAND"], config["PLUMAPIUSER"], config["PLUMAPIPWD"]
+    return plum_credentials_from_config(config, CONFIG_PATH)
 
 
 def compile_learn_regexes(config):
@@ -112,95 +83,12 @@ def compile_learn_regexes(config):
     return regexes
 
 
-def resolve_single_fqdn(fqdn):
-    """
-    Resolve a single FQDN using socket.getaddrinfo.
-    """
-    try:
-        infos = socket.getaddrinfo(fqdn, None)
-    except socket.gaierror as exc:
-        return [], str(exc)
-    except TimeoutError as exc:  # pragma: no cover - defensive
-        return [], str(exc)
-
-    addresses = []
-    for info in infos:
-        sockaddr = info[4]
-        if sockaddr:
-            addresses.append(sockaddr[0])
-    return sorted(set(addresses)), None
-
-
-def resolve_fqdns(fqdns, workers=25):
-    """
-    Resolve a list of FQDNs concurrently using socket.getaddrinfo.
-    """
-    results = {}
-    total = len(fqdns)
-    resolved_count = 0
-    failed_count = 0
-    logger.info("Resolve FQDN count: %d", total)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        future_map = {
-            executor.submit(resolve_single_fqdn, fqdn): fqdn for fqdn in fqdns
-        }
-        for processed_count, future in enumerate(
-            concurrent.futures.as_completed(future_map), start=1
-        ):
-            fqdn = future_map[future]
-            try:
-                addresses, error = future.result()
-            except Exception as exc:  # pragma: no cover - defensive
-                addresses, error = [], str(exc)
-                logger.debug("FQDN resolve worker failed for %s: %s", fqdn, exc)
-            if addresses:
-                resolved_count += 1
-                logger.debug("Resolve success %s -> %s", fqdn, ", ".join(addresses))
-            else:
-                failed_count += 1
-                logger.debug("Resolve failed %s: %s", fqdn, error or "no answer")
-            results[fqdn] = {"addresses": addresses, "error": error}
-            if processed_count % RESOLVE_PROGRESS_INTERVAL == 0:
-                logger.info(
-                    "Resolve progress: %d/%d resolved=%d failed=%d",
-                    processed_count,
-                    total,
-                    resolved_count,
-                    failed_count,
-                )
-    logger.info(
-        "Resolve complete: %d/%d resolved=%d failed=%d",
-        total,
-        total,
-        resolved_count,
-        failed_count,
-    )
-    return results
-
-
-def count_resolved(resolutions):
-    """
-    Count FQDNs with at least one resolved address.
-    """
-    if not resolutions:
-        return 0
-    return sum(1 for data in resolutions.values() if data.get("addresses"))
-
-
 def log_fqdns(filtered):
     """
     Log FQDN output without writing to stdout.
     """
     for fqdn in filtered:
         logger.debug("Found FQDN: %s", fqdn)
-
-
-def chunk_items(items, chunk_size=CHUNK_SIZE):
-    """
-    Yield items in fixed-size chunks.
-    """
-    for start in range(0, len(items), chunk_size):
-        yield items[start : start + chunk_size]
 
 
 def learn_fqdns(config, filtered, resolutions=None):
@@ -220,7 +108,12 @@ def learn_fqdns(config, filtered, resolutions=None):
         return 0
 
     if resolutions is None:
-        resolutions = resolve_fqdns(filtered, workers=25)
+        resolutions = resolve_fqdns(
+            filtered,
+            workers=25,
+            progress_interval=RESOLVE_PROGRESS_INTERVAL,
+            logger=logger,
+        )
 
     if not candidates:
         return 0
@@ -236,7 +129,7 @@ def learn_fqdns(config, filtered, resolutions=None):
     token = get_access_token(base_url, username, password)
 
     created_count = 0
-    for chunk_index, chunk in enumerate(chunk_items(learned), start=1):
+    for chunk_index, chunk in enumerate(chunk_items(learned, CHUNK_SIZE), start=1):
         result = bulk_import_targets(base_url, token, "\n".join(chunk))
         chunk_created_count = count_created_targets(result)
         created_count += chunk_created_count
@@ -329,24 +222,30 @@ def main():
     for uid in uid_list:
         unique_fqdns.update(redis_client.smembers(f"fqdns:{uid}"))
 
-    def is_ipv4(label):
-        try:
-            return isinstance(ipaddress.ip_address(label), ipaddress.IPv4Address)
-        except ValueError:
-            return False
-
-    filtered = sorted(fqdn for fqdn in unique_fqdns if fqdn and not is_ipv4(fqdn))
+    filtered = sorted(
+        fqdn for fqdn in unique_fqdns if fqdn and not is_ipv4_address(fqdn)
+    )
     logger.info("Unique FQDN count: %d", len(filtered))
 
     resolutions = None
     plum_imported_count = 0
     if args.resolve == "yes":
         logger.info("Resolve FQDNs: yes")
-        resolutions = resolve_fqdns(filtered, workers=25)
+        resolutions = resolve_fqdns(
+            filtered,
+            workers=25,
+            progress_interval=RESOLVE_PROGRESS_INTERVAL,
+            logger=logger,
+        )
 
     if args.learn:
         if resolutions is None:
-            resolutions = resolve_fqdns(filtered, workers=25)
+            resolutions = resolve_fqdns(
+                filtered,
+                workers=25,
+                progress_interval=RESOLVE_PROGRESS_INTERVAL,
+                logger=logger,
+            )
         plum_imported_count = learn_fqdns(config, filtered, resolutions=resolutions)
 
     log_fqdns(filtered)

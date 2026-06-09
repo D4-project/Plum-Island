@@ -8,8 +8,6 @@ Download registry sources and print/import configured country ranges as CIDR.
 import argparse
 import gzip
 import ipaddress
-import logging
-import logging.handlers
 import os
 import stat
 import sys
@@ -18,22 +16,17 @@ from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
-import requests
-import yaml
-from rich.logging import RichHandler
+from lib.config import load_yaml_config
+from lib.plum_api import create_target, get_access_token, validate_base_url
+from lib.tool_logging import get_logger, setup_logger as setup_tool_logger
 
 THIS_DIR = Path(__file__).resolve().parent
-TOOLS_DIR = THIS_DIR.parent
 RANGE_IMPORT_CONFIG = THIS_DIR / "range_import.yaml"
 DOWNLOAD_DIR = THIS_DIR / "tmp"
 DOWNLOAD_MAX_AGE_SECONDS = 24 * 60 * 60
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
-MAX_API_ERROR_LOG_BYTES = 500
-MAX_RETRIES = 2
-RETRY_DELAY_SECONDS = 3
 DEFAULT_DESCRIPTION = "WHOIS range import"
-LOCAL_HTTP_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 SOURCES = [
     {
@@ -73,36 +66,16 @@ SOURCES = [
     },
 ]
 
-sys.path.insert(0, str(TOOLS_DIR))
-
-logger = logging.getLogger("Plum_Agent")
-logger.setLevel(logging.DEBUG)
+logger = get_logger()
 
 
 def setup_logger(debug=False):
     """Configure Rich console logging and the persistent import log file."""
-    if logger.handlers:
-        return
-
-    console_handler = RichHandler()
-    console_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    logger.addHandler(console_handler)
-
-    log_dir = THIS_DIR / "log"
-    log_dir.mkdir(exist_ok=True)
-    file_handler = logging.handlers.TimedRotatingFileHandler(
-        log_dir / "import_whois_ranges.log",
-        when="midnight",
-        interval=1,
-        backupCount=14,
-        encoding="utf-8",
+    return setup_tool_logger(
+        THIS_DIR / "log" / "import_whois_ranges.log",
+        debug=debug,
+        logger=logger,
     )
-    file_handler.suffix = "%Y-%m-%d"
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s", datefmt="[%X]")
-    )
-    logger.addHandler(file_handler)
 
 
 def url_filename(url):
@@ -371,8 +344,7 @@ def load_range_import_config(require_credentials=False):
         raise FileNotFoundError(f"Missing config: {RANGE_IMPORT_CONFIG}")
 
     warn_config_permissions(RANGE_IMPORT_CONFIG)
-    with RANGE_IMPORT_CONFIG.open("r", encoding="utf-8") as config_file:
-        config = yaml.safe_load(config_file) or {}
+    config = load_yaml_config(RANGE_IMPORT_CONFIG)
 
     base_url = config.get("base_url") or config.get("PLUMISLAND")
     username = (
@@ -416,27 +388,6 @@ def warn_config_permissions(path):
         )
 
 
-def validate_base_url(base_url):
-    """Reject unsafe API base URLs before credentials are sent."""
-    parsed = urlparse(base_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError("base_url must be an absolute http(s) URL")
-    if parsed.scheme == "https":
-        return
-
-    hostname = parsed.hostname or ""
-    if hostname.lower() in LOCAL_HTTP_HOSTS:
-        return
-
-    try:
-        if ipaddress.ip_address(hostname).is_loopback:
-            return
-    except ValueError:
-        pass
-
-    raise ValueError("Refuse to send Plum credentials over HTTP except localhost")
-
-
 def normalize_country_codes(value):
     """Normalize configured country values to uppercase ISO code strings."""
     if isinstance(value, str):
@@ -469,82 +420,6 @@ def normalize_words(value):
         if str(candidate).strip()
     }
     return sorted(words)
-
-
-def get_access_token(base_url, username, password):
-    """Authenticate against Plum and return a bearer token."""
-    login_url = f"{base_url}/api/v1/security/login"
-    login_payload = {"username": username, "password": password, "provider": "db"}
-
-    login_response = requests.post(login_url, json=login_payload, timeout=10)
-    login_response.raise_for_status()
-
-    return login_response.json()["access_token"]
-
-
-def create_target(base_url, access_token, cidr, description):
-    """Create one Plum target, retry transient failures, and skip duplicates."""
-    target_url = f"{base_url}/api/v1/publictargetsapi/"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "value": cidr,
-        "description": description[:256],
-        "active": True,
-    }
-
-    attempts = 0
-    while True:
-        try:
-            response = requests.post(
-                target_url,
-                headers=headers,
-                json=payload,
-                timeout=10,
-            )
-            if (
-                response.status_code in (400, 409, 422)
-                and "already" in response.text.lower()
-            ):
-                logger.debug("Target already exists: %s", cidr)
-                return None
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as error:
-            status_code = (
-                error.response.status_code if error.response is not None else None
-            )
-            if status_code in (400, 409, 422):
-                logger.warning("Target import skipped %s: %s", cidr, api_error(error))
-                return None
-            if status_code == 500 and attempts < MAX_RETRIES:
-                attempts += 1
-                time.sleep(RETRY_DELAY_SECONDS)
-                continue
-            raise
-        except (
-            TimeoutError,
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ReadTimeout,
-        ):
-            if attempts < MAX_RETRIES:
-                attempts += 1
-                time.sleep(RETRY_DELAY_SECONDS)
-                continue
-            raise
-
-
-def api_error(error):
-    """Return a bounded API error string safe for logs."""
-    if error.response is None:
-        return str(error)
-
-    text = error.response.text.replace("\r", "\\r").replace("\n", "\\n")
-    if len(text) > MAX_API_ERROR_LOG_BYTES:
-        text = f"{text[:MAX_API_ERROR_LOG_BYTES]}..."
-    return f"HTTP {error.response.status_code}: {text}"
 
 
 def main():

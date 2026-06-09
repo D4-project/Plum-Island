@@ -5,18 +5,30 @@ It accept FQDNS and IP's and CIDR
 
 
 """
+
 import argparse
 import json
-import time
+import sys
 from pathlib import Path
 
-import requests
-import yaml
+from lib.config import load_yaml_config, plum_credentials_from_config
+from lib.dns import is_ip_or_cidr, resolve_fqdn
+from lib.iterables import chunk_items
+from lib.plum_api import bulk_import_targets, get_access_token
+from lib.tool_logging import get_logger, setup_logger as setup_tool_logger
 
 CONFIG_PATH = Path(__file__).with_name("config.yaml")
+LOG_DIR = Path(__file__).with_name("log")
 CHUNK_SIZE = 150  # How many lines to import at once with the API
-MAX_RETRIES = 2  # SQL lite need to be removed one day.
-RETRY_DELAY_SECONDS = 3
+
+logger = get_logger()
+
+
+def setup_logger(debug=False):
+    """
+    Configure Rich console logging and the persistent daily-rotated log file.
+    """
+    return setup_tool_logger(LOG_DIR / "import_fqdns.log", debug=debug, logger=logger)
 
 
 def load_plum_config() -> tuple[str, str, str]:
@@ -24,75 +36,8 @@ def load_plum_config() -> tuple[str, str, str]:
     Load API base URL and credentials from config.yaml.
     """
 
-    with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
-        config = yaml.safe_load(config_file) or {}
-
-    try:
-        base_url = config["PLUMISLAND"]
-        username = config["PLUMAPIUSER"]
-        password = config["PLUMAPIPWD"]
-    except KeyError as exc:
-        missing = exc.args[0]
-        raise KeyError(f"Missing '{missing}' in {CONFIG_PATH}") from exc
-
-    return base_url, username, password
-
-
-def get_access_token(base_url: str, username: str, password: str) -> str:
-    """
-    Authenticate against Flask AppBuilder API and return access token.
-    """
-
-    login_url = f"{base_url}/api/v1/security/login"
-    login_payload = {"username": username, "password": password, "provider": "db"}
-
-    login_response = requests.post(login_url, json=login_payload, timeout=10)
-    login_response.raise_for_status()
-
-    login_data = login_response.json()
-    access_token = login_data["access_token"]
-    return access_token
-
-
-def bulk_import_targets(base_url: str, access_token: str, bulk_payload: str) -> dict:
-    """
-    Call the bulk_import endpoint with the given access token and bulk payload.
-    """
-
-    bulk_import_url = f"{base_url}/targets_api/bulk_import"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-    payload = {"bulk": bulk_payload}
-
-    attempts = 0
-    while True:
-        try:
-            response = requests.post(
-                bulk_import_url,
-                headers=headers,
-                json=payload,
-                timeout=10,
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as err:
-            status_code = err.response.status_code if err.response is not None else None
-            if status_code == 500 and attempts < MAX_RETRIES:
-                attempts += 1
-                time.sleep(RETRY_DELAY_SECONDS)
-                continue
-            raise
-        except (
-            TimeoutError,
-            requests.exceptions.ConnectionError,
-            requests.exceptions.ReadTimeout,
-        ) as err:
-            if attempts < MAX_RETRIES:
-                time.sleep(RETRY_DELAY_SECONDS)
-                continue
-            raise
+    config = load_yaml_config(CONFIG_PATH)
+    return plum_credentials_from_config(config, CONFIG_PATH)
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,12 +48,27 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Bulk-import FQDNs/IPs/CIDRs into Plum-Island.",
     )
-    parser.add_argument(
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
         "-f",
         "--file",
-        required=True,
         dest="input_file",
         help="Path to the newline-delimited targets file.",
+    )
+    input_group.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read newline-delimited targets from standard input.",
+    )
+    parser.add_argument(
+        "--fqdn-resolving",
+        action="store_true",
+        help="Only import FQDN entries that resolve to at least one IP address.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="show debug logs on console, including each FQDN resolution",
     )
     return parser.parse_args()
 
@@ -122,18 +82,37 @@ def load_targets_file(file_path: str | Path) -> list[str]:
     if not path.is_file():
         raise FileNotFoundError(f"Targets file not found: {path}")
 
-    entries: list[str] = []
-
-    # Read all lines, and Trim,
     with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            entry = raw_line.strip()
-            if entry:
-                entries.append(entry)
+        entries = load_targets_lines(handle)
 
     if not entries:
         raise ValueError(f"No targets found in {path}")
 
+    return entries
+
+
+def load_targets_stdin() -> list[str]:
+    """
+    Read targets from standard input and return cleaned entries.
+    """
+
+    entries = load_targets_lines(sys.stdin)
+    if not entries:
+        raise ValueError("No targets found on stdin")
+
+    return entries
+
+
+def load_targets_lines(lines) -> list[str]:
+    """
+    Return non-empty stripped target lines.
+    """
+
+    entries: list[str] = []
+    for raw_line in lines:
+        entry = raw_line.strip()
+        if entry:
+            entries.append(entry)
     return entries
 
 
@@ -142,19 +121,56 @@ def chunk_targets(entries: list[str], chunk_size: int = CHUNK_SIZE):
     Yield the targets list in chunks of at most `chunk_size`.
     """
 
-    for start in range(0, len(entries), chunk_size):
-        yield entries[start : start + chunk_size]
+    yield from chunk_items(entries, chunk_size)
+
+
+def filter_targets_by_fqdn_resolution(entries: list[str]) -> list[str]:
+    """
+    Keep IP/CIDR entries and only keep FQDNs that resolve to an IP.
+    """
+
+    filtered = []
+    skipped = 0
+
+    logger.info("Resolve FQDN filter input count: %d", len(entries))
+    for entry in entries:
+        if is_ip_or_cidr(entry):
+            logger.debug("Keep IP/CIDR target: %s", entry)
+            filtered.append(entry)
+            continue
+
+        addresses = resolve_fqdn(entry)
+        if addresses:
+            logger.debug("Resolve success %s -> %s", entry, ", ".join(addresses))
+            filtered.append(entry)
+        else:
+            skipped += 1
+            logger.debug("Resolve failed %s: no answer", entry)
+
+    logger.info(
+        "FQDN resolving filter: %d kept, %d unresolved FQDN skipped",
+        len(filtered),
+        skipped,
+    )
+    return filtered
 
 
 if __name__ == "__main__":
     args = parse_args()
+    setup_logger(debug=args.debug)
     base_url, username, password = load_plum_config()
-    targets = load_targets_file(args.input_file)
+    targets = load_targets_stdin() if args.stdin else load_targets_file(args.input_file)
+    logger.info("Targets loaded: %d", len(targets))
+    if args.fqdn_resolving:
+        targets = filter_targets_by_fqdn_resolution(targets)
+        if not targets:
+            logger.info("No targets to import after FQDN resolving filter")
+            raise SystemExit(0)
 
     token = get_access_token(base_url, username, password)
 
     for chunk_index, chunk in enumerate(chunk_targets(targets), start=1):
         bulk_payload = "\n".join(chunk)
         result = bulk_import_targets(base_url, token, bulk_payload)
-        print(f"Chunk {chunk_index} ({len(chunk)} entries)")
-        print(json.dumps(result, indent=4))
+        logger.info("Chunk %d (%d entries)", chunk_index, len(chunk))
+        logger.debug("Chunk %d result: %s", chunk_index, json.dumps(result, indent=4))
