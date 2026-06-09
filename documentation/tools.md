@@ -438,20 +438,43 @@ Use a dedicated Plum user with the `Feeder` role for this tool.
 ### `last_fqdns.py`
 
 Extract unique FQDNs seen during the last N hours from Kvrocks.
+This is useful when Plum receives passive DNS observations from a sensor and you want to resolve recently observed names.
 
 ```bash
-cd tools
-../.venv/bin/python last_fqdns.py --hours 24
+.venv/bin/python tools/last_fqdns.py --hours 24
 ```
 
 Optionally resolve every FQDN:
 
 ```bash
-cd tools
-../.venv/bin/python last_fqdns.py --hours 24 --resolve yes
+.venv/bin/python tools/last_fqdns.py --hours 24 --resolve yes
 ```
 
-This tool currently expects to be executed from `tools/` because it reads `config.yaml` and imports utility modules with relative paths.
+The tool reads `tools/config.yaml` and logs to `tools/log/last_fqdns.log`.
+Log files rotate daily and keep 14 days.
+Use `--debug` to show debug logs on the console.
+
+Learning mode can add recently seen FQDNs back into Plum targets.
+It is intended for focused learning on domains or TLDs you explicitly care about, for example a country TLD, an owned zone, or a watched customer domain.
+Configure regexes in `tools/config.yaml`:
+
+```yaml
+last_fqdns_learn:
+  - ".lu$"
+  - "(^|\\.)example\\.com$"
+```
+
+Then run:
+
+```bash
+.venv/bin/python tools/last_fqdns.py --hours 24 --learn
+```
+
+With `--learn`, all listed FQDNs are resolved.
+Only FQDNs matching at least one `last_fqdns_learn` regex are imported, and only when they return at least one address.
+The regexes do not limit resolution; they only decide which successfully resolved names are learned as Plum targets.
+Imports use the Plum API credentials from `PLUMISLAND`, `PLUMAPIUSER`, and `PLUMAPIPWD`.
+Without `--learn`, no target import is performed.
 
 ## Notes
 
