@@ -187,12 +187,12 @@ def count_resolved(resolutions):
     return sum(1 for data in resolutions.values() if data.get("addresses"))
 
 
-def print_fqdns(filtered):
+def log_fqdns(filtered):
     """
-    Print FQDN output to stdout.
+    Log FQDN output without writing to stdout.
     """
     for fqdn in filtered:
-        print(fqdn)
+        logger.debug("Found FQDN: %s", fqdn)
 
 
 def chunk_items(items, chunk_size=CHUNK_SIZE):
@@ -235,27 +235,41 @@ def learn_fqdns(config, filtered, resolutions=None):
     base_url, username, password = load_plum_config(config)
     token = get_access_token(base_url, username, password)
 
-    imported_count = 0
+    created_count = 0
     for chunk_index, chunk in enumerate(chunk_items(learned), start=1):
         result = bulk_import_targets(base_url, token, "\n".join(chunk))
-        imported_count += len(chunk)
+        chunk_created_count = count_created_targets(result)
+        created_count += chunk_created_count
         logger.info(
-            "Learn import chunk %d submitted FQDN count: %d",
+            "Learn import chunk %d submitted=%d created=%d",
             chunk_index,
             len(chunk),
+            chunk_created_count,
         )
         logger.debug("Learn import chunk %d result: %s", chunk_index, result)
-    return imported_count
+    return created_count
 
 
-def print_summary(found_count, resolved_count, plum_imported_count):
+def count_created_targets(result):
     """
-    Print final stdout stats for the run.
+    Count newly created targets from the API bulk-import response log.
     """
-    print("")
-    print(f"FQDN found: {found_count}")
-    print(f"FQDN resolved: {resolved_count}")
-    print(f"FQDN imported into Plum: {plum_imported_count}")
+    message = result.get("message", {}) if isinstance(result, dict) else {}
+    log_lines = message.get("log", []) if isinstance(message, dict) else []
+    return sum(
+        1
+        for line in log_lines
+        if line.endswith(" FQDN Processed") or line.endswith(" Processed")
+    )
+
+
+def log_summary(found_count, resolved_count, plum_imported_count):
+    """
+    Log final stats for the run.
+    """
+    logger.info("FQDN found: %d", found_count)
+    logger.info("FQDN resolved: %d", resolved_count)
+    logger.info("New FQDN in Plum: %d", plum_imported_count)
 
 
 def main():
@@ -335,8 +349,8 @@ def main():
             resolutions = resolve_fqdns(filtered, workers=25)
         plum_imported_count = learn_fqdns(config, filtered, resolutions=resolutions)
 
-    print_fqdns(filtered)
-    print_summary(len(filtered), count_resolved(resolutions), plum_imported_count)
+    log_fqdns(filtered)
+    log_summary(len(filtered), count_resolved(resolutions), plum_imported_count)
 
 
 if __name__ == "__main__":

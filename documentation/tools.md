@@ -452,8 +452,8 @@ Optionally resolve every FQDN:
 
 Resolution results are logged, not printed to stdout.
 With `--debug`, each successful or failed FQDN resolution is shown on the console.
-Stdout remains a plain FQDN list so it can still be piped to other tools.
-At the end of the output, the tool prints a short summary with found, resolved, and Plum-imported FQDN counts.
+FQDNs are logged at debug level, not printed.
+At the end of the run, the tool logs a short summary with found, resolved, and newly created Plum FQDN target counts.
 
 The tool reads `tools/config.yaml` and logs to `tools/log/last_fqdns.log`.
 Log files rotate daily and keep 14 days.

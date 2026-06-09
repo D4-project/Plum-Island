@@ -9,7 +9,7 @@
   - Block target creation when an existing wider CIDR already covers the candidate target across GUI, GUI bulk import, and API import paths.
   - Add daily rotating logs and Rich console logging for WHOIS range and last-FQDN tooling.
   - Extend `tools/last_fqdns.py` with `--learn` to resolve Passive DNS-observed FQDNs and import only configured domain/TLD regex matches that resolve.
-  - Add last-FQDN resolution progress logs and per-FQDN debug resolution output.
+  - Add last-FQDN resolution progress logs, per-FQDN debug resolution output, and newly created Plum target count.
   - Fix `KVrocksIndexer` constructor arguments at scheduler startup, closes #148.
   - Fix `tag_mgmt.py` flush-tag key corruption, zero-selector handling, datetime sentinel, and interrupted import STOP_REQUESTED reset, closes #150.
   - Clean up interrupted Meilisearch import indexes.
