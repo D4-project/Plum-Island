@@ -24,6 +24,7 @@ THIS_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = THIS_DIR / "config.yaml"
 LOG_DIR = THIS_DIR / "log"
 CHUNK_SIZE = 150
+RESOLVE_PROGRESS_INTERVAL = 100
 
 sys.path.append(str(THIS_DIR.parent / "webapp" / "app" / "utils"))
 from kvrocks import KVrocksIndexer  # noqa: E402
@@ -135,18 +136,45 @@ def resolve_fqdns(fqdns, workers=25):
     Resolve a list of FQDNs concurrently using socket.getaddrinfo.
     """
     results = {}
+    total = len(fqdns)
+    resolved_count = 0
+    failed_count = 0
+    logger.info("Resolve FQDN count: %d", total)
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
             executor.submit(resolve_single_fqdn, fqdn): fqdn for fqdn in fqdns
         }
-        for future in concurrent.futures.as_completed(future_map):
+        for processed_count, future in enumerate(
+            concurrent.futures.as_completed(future_map), start=1
+        ):
             fqdn = future_map[future]
             try:
                 addresses, error = future.result()
             except Exception as exc:  # pragma: no cover - defensive
                 addresses, error = [], str(exc)
                 logger.debug("FQDN resolve worker failed for %s: %s", fqdn, exc)
+            if addresses:
+                resolved_count += 1
+                logger.debug("Resolve success %s -> %s", fqdn, ", ".join(addresses))
+            else:
+                failed_count += 1
+                logger.debug("Resolve failed %s: %s", fqdn, error or "no answer")
             results[fqdn] = {"addresses": addresses, "error": error}
+            if processed_count % RESOLVE_PROGRESS_INTERVAL == 0:
+                logger.info(
+                    "Resolve progress: %d/%d resolved=%d failed=%d",
+                    processed_count,
+                    total,
+                    resolved_count,
+                    failed_count,
+                )
+    logger.info(
+        "Resolve complete: %d/%d resolved=%d failed=%d",
+        total,
+        total,
+        resolved_count,
+        failed_count,
+    )
     return results
 
 
@@ -243,7 +271,7 @@ def main():
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="show debug logs on console",
+        help="show debug logs on console, including each FQDN resolution",
     )
     parser.add_argument(
         "--learn",
