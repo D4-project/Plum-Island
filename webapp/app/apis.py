@@ -8,14 +8,18 @@
 This module contains all code related to API's.
 """
 
+# pylint: disable=too-many-lines
+
 import base64
+import hashlib
 import os
 import json
 import logging
 import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_appbuilder import ModelRestApi, has_access
+from flask_appbuilder import ModelRestApi
 from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, protect
+from flask_appbuilder.filemanager import FileManager
 from flask import request
 
 from sqlalchemy import func, distinct
@@ -823,6 +827,387 @@ class Api(BaseApi):
         return self.response(200, message="ready")
 
 
+class NsesApi(BaseApi):
+    """
+    REST API for managing NSE (Nmap Script Engine) scripts.
+
+    Provides programmatic equivalents of the /nsesview HTML form. File upload
+    uses multipart/form-data; all other responses are JSON.
+    """
+
+    route_base = "/api/v1/nses"
+    openapi_spec_tag = "NSE Scripts API"
+
+    @staticmethod
+    def _serialize_nse(item):
+        return {"id": item.id, "name": item.name, "hash": item.hash}
+
+    @staticmethod
+    def _normalize_nse_name(value, append_suffix=False):
+        raw_name = (value or "").strip()
+        if not raw_name:
+            raise ValueError("NSE script name cannot be empty")
+
+        name = os.path.basename(raw_name)
+        if not name or name in {".", ".."}:
+            raise ValueError("NSE script name cannot be empty")
+
+        if append_suffix and not name.lower().endswith(".nse"):
+            name = f"{name}.nse"
+
+        if name.lower() == ".nse":
+            raise ValueError("NSE script name cannot be empty")
+
+        if not name.lower().endswith(".nse"):
+            raise ValueError("Only .nse files are allowed")
+
+        return name
+
+    @classmethod
+    def _upload_metadata(cls, upload):
+        if upload is None or not getattr(upload, "filename", ""):
+            raise ValueError("Field 'filebody' with a .nse file is required")
+
+        filename = cls._normalize_nse_name(upload.filename)
+        file_bytes = upload.read()
+        upload.stream.seek(0)
+        return filename, hashlib.sha256(file_bytes).hexdigest()
+
+    @staticmethod
+    def _delete_uploaded_file(file_manager, file_name):
+        if not file_name:
+            return
+        try:
+            file_manager.delete_file(file_name)
+        except OSError:
+            logger.exception("Failed to delete NSE upload file %s", file_name)
+
+    @staticmethod
+    def _save_uploaded_file(file_manager, item, upload):
+        stored_name = file_manager.generate_name(item, upload)
+        return file_manager.save_file(upload, stored_name)
+
+    @staticmethod
+    def _duplicate_value_response():
+        return BaseApi.response(
+            400,
+            message="An NSE script with this name or SHA256 already exists",
+        )
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        ---
+        get:
+          summary: List all NSE scripts.
+          responses:
+            "200":
+              description: Array of NSE script metadata objects.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            name:
+                              type: string
+                            hash:
+                              type: string
+        """
+        nses = db.session.query(Nses).order_by(Nses.name.asc()).all()
+        return self.response(
+            200,
+            result=[self._serialize_nse(item) for item in nses],
+        )
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        ---
+        post:
+          summary: Upload a new NSE script.
+          description: |
+            Accepts a multipart/form-data request with a single field named
+            ``filebody`` containing the .nse file.  The filename must end in
+            ``.nse``; the stored script name is derived from the uploaded
+            filename (not a separate form field).  If an entry with the same
+            name already exists it is updated in-place; duplicate SHA256 hashes
+            are rejected.
+          requestBody:
+            required: true
+            content:
+              multipart/form-data:
+                schema:
+                  type: object
+                  required:
+                    - filebody
+                  properties:
+                    filebody:
+                      type: string
+                      format: binary
+                      description: The .nse script file to upload.
+          responses:
+            "200":
+              description: Existing NSE script updated successfully.
+            "201":
+              description: NSE script created successfully.
+            "400":
+              description: Missing file, wrong extension, or duplicate hash.
+        """
+        upload = request.files.get("filebody")
+        try:
+            filename, sha256sum = self._upload_metadata(upload)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        existing_by_hash = (
+            db.session.query(Nses).filter(Nses.hash == sha256sum).one_or_none()
+        )
+        existing_by_name = (
+            db.session.query(Nses).filter(Nses.name == filename).one_or_none()
+        )
+
+        if existing_by_hash is not None and (
+            existing_by_name is None or existing_by_name.id != existing_by_hash.id
+        ):
+            return self.response_400(
+                message="An NSE script with this file content (SHA256) already exists under a different name"
+            )
+
+        file_manager = FileManager()
+        item = existing_by_name
+        old_filebody = item.filebody if item is not None else None
+        new_filebody = None
+
+        if item is not None:
+            new_filebody = self._save_uploaded_file(file_manager, item, upload)
+            item.filebody = new_filebody
+            item.hash = sha256sum
+            status = 200
+        else:
+            item = Nses()
+            item.name = filename
+            item.hash = sha256sum
+            new_filebody = self._save_uploaded_file(file_manager, item, upload)
+            item.filebody = new_filebody
+            db.session.add(item)
+            status = 201
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            self._delete_uploaded_file(file_manager, new_filebody)
+            return self._duplicate_value_response()
+
+        if old_filebody and old_filebody != new_filebody:
+            self._delete_uploaded_file(file_manager, old_filebody)
+
+        return self.response(
+            status,
+            result=self._serialize_nse(item),
+        )
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        ---
+        get:
+          summary: Get a single NSE script by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+          responses:
+            "200":
+              description: NSE script metadata.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                          name:
+                            type: string
+                          hash:
+                            type: string
+            "404":
+              description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        return self.response(200, result=self._serialize_nse(item))
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        ---
+        put:
+          summary: Update an NSE script by ID.
+          description: |
+            Replace the file content (``filebody``) and/or rename (``name`` form
+            field) an existing NSE script.  At least one must be supplied.
+            Duplicate SHA256 hashes and name collisions with other records are
+            rejected.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+          requestBody:
+            required: true
+            content:
+              multipart/form-data:
+                schema:
+                  type: object
+                  properties:
+                    filebody:
+                      type: string
+                      format: binary
+                      description: New .nse script file.
+                    name:
+                      type: string
+                      description: New script name; .nse suffix is appended if omitted.
+          responses:
+            "200":
+              description: NSE script updated successfully.
+            "400":
+              description: Missing payload, wrong extension, duplicate hash, or name collision.
+            "404":
+              description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        upload = request.files.get("filebody")
+        has_upload_field = upload is not None
+        has_name_field = "name" in request.form
+        new_name = None
+
+        if not has_upload_field and not has_name_field:
+            return self.response_400(
+                message="Provide at least a new 'filebody' or a new 'name'"
+            )
+
+        try:
+            if has_name_field:
+                new_name = self._normalize_nse_name(
+                    request.form.get("name"),
+                    append_suffix=True,
+                )
+
+                collision = (
+                    db.session.query(Nses)
+                    .filter(Nses.name == new_name, Nses.id != pk)
+                    .one_or_none()
+                )
+                if collision is not None:
+                    raise ValueError(f"An NSE script named '{new_name}' already exists")
+
+            if has_upload_field:
+                _, sha256sum = self._upload_metadata(upload)
+
+                collision = (
+                    db.session.query(Nses)
+                    .filter(Nses.hash == sha256sum, Nses.id != pk)
+                    .one_or_none()
+                )
+                if collision is not None:
+                    raise ValueError(
+                        "An NSE script with this file content (SHA256) already exists "
+                        "under a different name"
+                    )
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        file_manager = FileManager()
+        old_filebody = item.filebody
+        new_filebody = None
+
+        if has_upload_field:
+            new_filebody = self._save_uploaded_file(file_manager, item, upload)
+            item.filebody = new_filebody
+            item.hash = sha256sum
+
+        if new_name is not None:
+            item.name = new_name
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            self._delete_uploaded_file(file_manager, new_filebody)
+            return self._duplicate_value_response()
+
+        if old_filebody and new_filebody and old_filebody != new_filebody:
+            self._delete_uploaded_file(file_manager, old_filebody)
+
+        return self.response(200, result=self._serialize_nse(item))
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        ---
+        delete:
+          summary: Delete an NSE script by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the NSE script to delete.
+          responses:
+            "200":
+              description: NSE script deleted successfully.
+            "404":
+              description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        file_manager = FileManager()
+        old_filebody = item.filebody
+        item_name = item.name
+
+        db.session.delete(item)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self._duplicate_value_response()
+
+        self._delete_uploaded_file(file_manager, old_filebody)
+        return self.response(200, message=f"NSE '{item_name}' deleted")
+
+
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
+appbuilder.add_api(NsesApi)
