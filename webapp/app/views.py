@@ -12,6 +12,7 @@ import calendar
 from datetime import datetime, timedelta, timezone
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -2636,6 +2637,72 @@ class TargetsView(ModelView):
         return redirect(self.get_redirect())
 
     @staticmethod
+    def find_covering_target(value, exclude_id=None):
+        """
+        Return an existing target that already covers `value`.
+
+        Avoid scanning all targets: preselect by IPv4 string prefixes and exact
+        generated supernet strings, then validate with ipaddress.
+        """
+        normalized = is_valid_ip_or_cidr(value)
+        if not normalized:
+            return None
+
+        new_network = ipaddress.ip_network(normalized, strict=False)
+        candidate_values = {str(new_network)}
+
+        try:
+            candidate_values.update(
+                str(new_network.supernet(new_prefix=prefix))
+                for prefix in range(0, new_network.prefixlen)
+            )
+        except ValueError:
+            pass
+
+        filters = [Targets.value.in_(candidate_values)]
+        if new_network.version == 4:
+            octets = str(new_network.network_address).split(".")
+            filters.append(Targets.value.like(f"{octets[0]}.{octets[1]}.%"))
+            filters.append(Targets.value.like(f"{octets[0]}.%"))
+
+        query = db.session.query(Targets).filter(or_(*filters))
+        if exclude_id is not None:
+            query = query.filter(Targets.id != exclude_id)
+
+        candidates = query.all()
+        for target in candidates:
+            try:
+                existing_network = ipaddress.ip_network(target.value, strict=False)
+            except ValueError:
+                continue
+            if (
+                existing_network.version == new_network.version
+                and new_network.subnet_of(existing_network)
+            ):
+                return target
+
+        return None
+
+    @staticmethod
+    def _target_coverage_error(item):
+        covering_target = TargetsView.find_covering_target(
+            item.value, exclude_id=getattr(item, "id", None)
+        )
+        if covering_target is None:
+            return None
+        return f"Target {item.value} already covered by {covering_target.value}"
+
+    def pre_add(self, item):
+        error = self._target_coverage_error(item)
+        if error:
+            raise Exception(error)
+
+    def pre_update(self, item):
+        error = self._target_coverage_error(item)
+        if error:
+            raise Exception(error)
+
+    @staticmethod
     def do_bulk_import(ips):
         """
         Import a list of bulk Ip's into the targets
@@ -2660,11 +2727,18 @@ class TargetsView(ModelView):
                     db.session.rollback()
                     log += f"{ip_clean} Not Processed, Target already in the database\n"
             elif is_valid_ip(ip_clean) or is_valid_cidr(ip_clean):
+                normalized = is_valid_ip_or_cidr(ip_clean)
+                covering_target = TargetsView.find_covering_target(normalized)
+                if covering_target is not None:
+                    log += (
+                        f"{ip_clean} Not Processed, Target already covered by "
+                        f"{covering_target.value}\n"
+                    )
+                    continue
+
                 new_target = Targets()
                 new_target.description = "Bulk Import"
-                new_target.value = is_valid_ip_or_cidr(
-                    ip_clean
-                )  # Set the First Ip in CIDR
+                new_target.value = normalized  # Set the First Ip in CIDR
                 db.session.add(new_target)
                 try:
                     db.session.commit()

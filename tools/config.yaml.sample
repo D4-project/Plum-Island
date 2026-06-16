@@ -7,10 +7,17 @@ INDEX_NAME: "plum"
 # Source KV for Reading 
 IN_KVROCKS_PORT: 6666
 IN_KVROCKS_HOST: localhost
+# Optional when IN_KVROCKS requires auth.
+IN_KVROCKS_PASSWORD: ""
 
 # Dest KV for writing
 OUT_KVROCKS_PORT: 6666
 OUT_KVROCKS_HOST: localhost
+
+# Optional last_fqdns.py --learn regexes.
+# Matching FQDNs are imported into Plum targets only when they resolve.
+last_fqdns_learn:
+  - ".lu$"
 
 ONLINETLD: false
 TLDADD:
