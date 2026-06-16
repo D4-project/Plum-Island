@@ -1,0 +1,7 @@
+base_url: "http://localhost:5000"
+country:
+  - "LU"
+words:
+  - "luxembourg"
+username: ""
+password: ""
