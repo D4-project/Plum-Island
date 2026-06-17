@@ -9,3 +9,4 @@ pyfaup-rs>=0.4.9
 pybgpranking2>=2.0.2
 pyipasnhistory>=0.1
 nmap2json
+rich

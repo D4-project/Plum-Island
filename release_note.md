@@ -1,3 +1,37 @@
+# Plum Island - Master
+
+## Since Last release Changes.
+
+- Tooling and target import:
+  - Add `tools/import_whois_ranges.py` to download RIR WHOIS sources, extract matching country/word IPv4 ranges, reduce covered CIDRs, and import targets through the Plum API.
+  - Add `tools/range_import.yaml.sample` and ignore local WHOIS import config/cache/log files.
+  - Add the least-privilege `Feeder` API role for automated target imports, with install and migration support.
+  - Block target creation when an existing wider CIDR already covers the candidate target across GUI, GUI bulk import, and API import paths.
+  - Add daily rotating logs and Rich console logging for WHOIS range and last-FQDN tooling.
+  - Extend `tools/last_fqdns.py` with `--learn` to resolve Passive DNS-observed FQDNs and import only configured domain/TLD regex matches that resolve.
+  - Add last-FQDN resolution progress logs, per-FQDN debug resolution output, and newly created Plum target count.
+  - Fix `KVrocksIndexer` constructor arguments at scheduler startup, closes #148.
+  - Fix `tag_mgmt.py` flush-tag key corruption, zero-selector handling, datetime sentinel, and interrupted import STOP_REQUESTED reset, closes #150.
+  - Clean up interrupted Meilisearch import indexes.
+- Webapp fixes and hardening:
+  - Add authenticated REST CRUD API for scan profile management with OpenAPI documentation, closes #176.
+  - Add authenticated REST CRUD API for scan port management with OpenAPI documentation, closes #174.
+  - Add authenticated REST CRUD API for NSE script management with OpenAPI documentation, closes #172.
+  - Write bot job result files before marking jobs finished, closes #162.
+  - Harden `/bot_api/sndjob` result parsing failures.
+  - Align `webapp/run.py` port with `docker-compose.yml`, closes #164.
+  - Complete template XSS hardening by building dynamic target/search/detail HTML with DOM APIs and escaping dynamic values, closes #151.
+- Docker and deployment:
+  - Add `plum_net` external Docker network for Plum-Agent connectivity, closes #165.
+  - Rename Docker Compose services with the `plum-` prefix, closes #166.
+  - Use the `plum-webapp` service name in agent connectivity documentation.
+  - Persist NSE uploads across container rebuilds, closes #168.
+- Documentation:
+  - Add getting started documentation, closes #170.
+  - Document the Feeder role, WHOIS range import, and Passive DNS FQDN learning workflow.
+
+
+
 # Plum Island - Searing Spring Release - v0.2606.0
 
 ## v0.2606.0 Highlight

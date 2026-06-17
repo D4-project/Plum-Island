@@ -88,6 +88,12 @@ if ! "$VENV_PYTHON" tools/initial_setup.py; then
   exit 1
 fi
 echo ""
+echo "Creating feeder API role..."
+if ! "$VENV_PYTHON" webapp/sql_upd/17_migrate_from_d7c3198bc3b3a7d6cf0ae39860fd1cfb58c1a4e3.py; then
+  echo "ERROR: Feeder API role setup failed."
+  exit 1
+fi
+echo ""
 echo configured with username admin
 echo and password: $key
 echo change your password and email in the web interface.
