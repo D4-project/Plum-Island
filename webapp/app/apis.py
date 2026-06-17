@@ -34,6 +34,7 @@ from .models import (
     Nses,
     Ports,
     Protos,
+    ScanProfiles,
     TargetScanStates,
     assoc_jobs_targets,
 )
@@ -829,6 +830,492 @@ class Api(BaseApi):
         return self.response(200, message="ready")
 
 
+class ScanProfilesApi(BaseApi):
+    """
+    REST API for managing scan profiles.
+
+    Provides programmatic equivalents of the /scanprofilesview HTML form: list,
+    create, read, update, and delete scan profile entries. All requests and
+    responses are JSON.
+    """
+
+    route_base = "/api/v1/scanprofiles"
+    openapi_spec_tag = "Scan Profiles API"
+    _allowed_fields = {
+        "name",
+        "port_ids",
+        "nse_ids",
+        "scan_cycle_minutes",
+        "priority",
+        "apply_to_all",
+    }
+
+    @staticmethod
+    def _serialize(profile):
+        return {
+            "id": profile.id,
+            "name": profile.name,
+            "scan_cycle_minutes": profile.scan_cycle_minutes,
+            "priority": profile.priority,
+            "apply_to_all": profile.apply_to_all,
+            "port_ids": sorted(port.id for port in profile.ports),
+            "nse_ids": sorted(nse.id for nse in profile.nses),
+        }
+
+    @staticmethod
+    def _require_json_object(data):
+        if not isinstance(data, dict):
+            raise ValueError("JSON body required")
+
+    @classmethod
+    def _reject_unknown_fields(cls, data):
+        unknown = sorted(set(data) - cls._allowed_fields)
+        if unknown:
+            raise ValueError(f"Unknown fields: {unknown}")
+
+    @classmethod
+    def _require_update_fields(cls, data):
+        if not any(field in data for field in cls._allowed_fields):
+            raise ValueError("JSON body with at least one supported field required")
+
+    @staticmethod
+    def _normalize_profile_name(value, message):
+        if not isinstance(value, str):
+            raise ValueError(message)
+
+        name = value.strip()
+        if not name:
+            raise ValueError(message)
+
+        return name
+
+    @staticmethod
+    def _normalize_positive_integer(value, field_name):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"'{field_name}' must be a positive integer")
+
+        return value
+
+    @staticmethod
+    def _normalize_priority(value):
+        if isinstance(value, bool) or value not in (0, 1, 2, 3, 4):
+            raise ValueError("'priority' must be 0, 1, 2, 3, or 4")
+
+        return value
+
+    @staticmethod
+    def _normalize_boolean(value, field_name):
+        if not isinstance(value, bool):
+            raise ValueError(f"'{field_name}' must be a boolean")
+
+        return value
+
+    @staticmethod
+    def _normalize_id_list(value, field_name, allow_empty=True):
+        if value is None:
+            value = []
+
+        if not isinstance(value, list):
+            raise ValueError(f"'{field_name}' must be a list of integer IDs")
+
+        seen = set()
+        item_ids = []
+        for item_id in value:
+            if isinstance(item_id, bool) or not isinstance(item_id, int) or item_id < 1:
+                raise ValueError(
+                    f"'{field_name}' must be a list of positive integer IDs"
+                )
+            if item_id not in seen:
+                seen.add(item_id)
+                item_ids.append(item_id)
+
+        if not allow_empty and not item_ids:
+            raise ValueError("'port_ids' must contain at least one port ID")
+
+        return item_ids
+
+    @staticmethod
+    def _get_related_records(model, item_ids, label):
+        if not item_ids:
+            return []
+
+        records = db.session.query(model).filter(model.id.in_(item_ids)).all()
+        records_by_id = {record.id: record for record in records}
+        missing = [item_id for item_id in item_ids if item_id not in records_by_id]
+        if missing:
+            raise ValueError(f"Unknown {label} IDs: {missing}")
+
+        return [records_by_id[item_id] for item_id in item_ids]
+
+    @staticmethod
+    def _profile_exists(name, current_id=None):
+        query = db.session.query(ScanProfiles).filter(ScanProfiles.name == name)
+        if current_id is not None:
+            query = query.filter(ScanProfiles.id != current_id)
+        return query.first() is not None
+
+    def _validated_create_payload(self, data):
+        self._require_json_object(data)
+        self._reject_unknown_fields(data)
+
+        if "name" not in data:
+            raise ValueError("'name' is required")
+
+        name = self._normalize_profile_name(data["name"], "'name' is required")
+        if self._profile_exists(name):
+            raise ValueError(f"Profile '{name}' already exists")
+
+        port_ids = self._normalize_id_list(
+            data.get("port_ids", []),
+            "port_ids",
+            allow_empty=False,
+        )
+        nse_ids = self._normalize_id_list(data.get("nse_ids", []), "nse_ids")
+
+        return {
+            "name": name,
+            "scan_cycle_minutes": self._normalize_positive_integer(
+                data.get("scan_cycle_minutes", 720),
+                "scan_cycle_minutes",
+            ),
+            "priority": self._normalize_priority(data.get("priority", 0)),
+            "apply_to_all": self._normalize_boolean(
+                data.get("apply_to_all", False),
+                "apply_to_all",
+            ),
+            "ports": self._get_related_records(Ports, port_ids, "port"),
+            "nses": self._get_related_records(Nses, nse_ids, "NSE"),
+        }
+
+    def _validated_update_payload(self, data, pk):
+        self._require_json_object(data)
+        self._reject_unknown_fields(data)
+        self._require_update_fields(data)
+
+        payload = {}
+        if "name" in data:
+            name = self._normalize_profile_name(data["name"], "'name' cannot be empty")
+            if self._profile_exists(name, current_id=pk):
+                raise ValueError(f"Profile '{name}' already exists")
+            payload["name"] = name
+
+        if "scan_cycle_minutes" in data:
+            payload["scan_cycle_minutes"] = self._normalize_positive_integer(
+                data["scan_cycle_minutes"],
+                "scan_cycle_minutes",
+            )
+
+        if "priority" in data:
+            payload["priority"] = self._normalize_priority(data["priority"])
+
+        if "apply_to_all" in data:
+            payload["apply_to_all"] = self._normalize_boolean(
+                data["apply_to_all"],
+                "apply_to_all",
+            )
+
+        if "port_ids" in data:
+            port_ids = self._normalize_id_list(
+                data["port_ids"],
+                "port_ids",
+                allow_empty=False,
+            )
+            payload["ports"] = self._get_related_records(Ports, port_ids, "port")
+
+        if "nse_ids" in data:
+            nse_ids = self._normalize_id_list(data["nse_ids"], "nse_ids")
+            payload["nses"] = self._get_related_records(Nses, nse_ids, "NSE")
+
+        return payload
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        ---
+        get:
+          summary: List all scan profiles.
+          responses:
+            "200":
+              description: Array of scan profile objects sorted by name.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            name:
+                              type: string
+                            scan_cycle_minutes:
+                              type: integer
+                            priority:
+                              type: integer
+                            apply_to_all:
+                              type: boolean
+                            port_ids:
+                              type: array
+                              items:
+                                type: integer
+                            nse_ids:
+                              type: array
+                              items:
+                                type: integer
+        """
+        profiles = (
+            db.session.query(ScanProfiles).order_by(ScanProfiles.name.asc()).all()
+        )
+        return self.response(
+            200, result=[self._serialize(profile) for profile in profiles]
+        )
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        ---
+        post:
+          summary: Create a new scan profile.
+          description: |
+            Accepts a JSON body with ``name`` and at least one port ID in
+            ``port_ids``. Optional fields are ``nse_ids``,
+            ``scan_cycle_minutes`` (default 720), ``priority`` (0-4, default 0),
+            and ``apply_to_all`` (boolean, default false).
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required:
+                    - name
+                    - port_ids
+                  properties:
+                    name:
+                      type: string
+                    port_ids:
+                      type: array
+                      minItems: 1
+                      items:
+                        type: integer
+                    nse_ids:
+                      type: array
+                      items:
+                        type: integer
+                    scan_cycle_minutes:
+                      type: integer
+                      minimum: 1
+                    priority:
+                      type: integer
+                      enum: [0, 1, 2, 3, 4]
+                    apply_to_all:
+                      type: boolean
+          responses:
+            "201":
+              description: Scan profile created successfully.
+            "400":
+              description: Missing/invalid fields or duplicate name.
+        """
+        data = request.get_json(silent=True)
+        try:
+            payload = self._validated_create_payload(data)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        item = ScanProfiles(**payload)
+        db.session.add(item)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self.response_400(
+                message=f"Profile '{payload['name']}' already exists"
+            )
+
+        return self.response(201, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        ---
+        get:
+          summary: Get a single scan profile by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the scan profile to retrieve.
+          responses:
+            "200":
+              description: Scan profile object.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                          name:
+                            type: string
+                          scan_cycle_minutes:
+                            type: integer
+                          priority:
+                            type: integer
+                          apply_to_all:
+                            type: boolean
+                          port_ids:
+                            type: array
+                            items:
+                              type: integer
+                          nse_ids:
+                            type: array
+                            items:
+                              type: integer
+            "404":
+              description: Scan profile not found.
+        """
+        item = (
+            db.session.query(ScanProfiles).filter(ScanProfiles.id == pk).one_or_none()
+        )
+        if item is None:
+            return self.response_404()
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        ---
+        put:
+          summary: Update a scan profile by ID.
+          description: |
+            Accepts a JSON body with any subset of ``name``, ``port_ids``,
+            ``nse_ids``, ``scan_cycle_minutes``, ``priority``, and
+            ``apply_to_all``. At least one supported field must be present.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the scan profile to update.
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    port_ids:
+                      type: array
+                      minItems: 1
+                      items:
+                        type: integer
+                    nse_ids:
+                      type: array
+                      items:
+                        type: integer
+                    scan_cycle_minutes:
+                      type: integer
+                      minimum: 1
+                    priority:
+                      type: integer
+                      enum: [0, 1, 2, 3, 4]
+                    apply_to_all:
+                      type: boolean
+          responses:
+            "200":
+              description: Updated scan profile object.
+            "400":
+              description: Invalid fields or name collision.
+            "404":
+              description: Scan profile not found.
+        """
+        item = (
+            db.session.query(ScanProfiles).filter(ScanProfiles.id == pk).one_or_none()
+        )
+        if item is None:
+            return self.response_404()
+
+        data = request.get_json(silent=True)
+        try:
+            payload = self._validated_update_payload(data, pk)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        for field_name, value in payload.items():
+            setattr(item, field_name, value)
+        item.priority_retag_pending = True
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self.response_400(
+                message="Scan profile update violates a unique constraint"
+            )
+
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        ---
+        delete:
+          summary: Delete a scan profile by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the scan profile to delete.
+          responses:
+            "200":
+              description: Scan profile deleted.
+            "400":
+              description: Scan profile could not be deleted.
+            "404":
+              description: Scan profile not found.
+        """
+        item = (
+            db.session.query(ScanProfiles).filter(ScanProfiles.id == pk).one_or_none()
+        )
+        if item is None:
+            return self.response_404()
+
+        name = item.name
+        db.session.delete(item)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self.response_400(
+                message=f"Scan profile '{name}' could not be deleted"
+            )
+
+        return self.response(200, message=f"Scan profile '{name}' deleted")
+
+
 class NsesApi(BaseApi):
     """
     REST API for managing NSE (Nmap Script Engine) scripts.
@@ -1597,5 +2084,6 @@ class PortsApi(BaseApi):
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
+appbuilder.add_api(ScanProfilesApi)
 appbuilder.add_api(NsesApi)
 appbuilder.add_api(PortsApi)

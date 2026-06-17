@@ -18,6 +18,7 @@ from app.apis import (
     BotInfoSchema,
     NsesApi,
     PortsApi,
+    ScanProfilesApi,
 )
 
 
@@ -104,6 +105,79 @@ class PortsApiValidationTest(TestCase):
     def test_proto_to_port_uses_model_tuple_format(self):
         """Generated uniqueness value follows the model-documented format."""
         self.assertEqual(PortsApi._proto_to_port(22, 1), "22:1")
+
+
+class ScanProfilesApiValidationTest(TestCase):
+    """Tests for ScanProfiles API input normalization helpers."""
+
+    def test_normalize_profile_name_strips_whitespace(self):
+        """Profile names are normalized before storage."""
+        self.assertEqual(
+            ScanProfilesApi._normalize_profile_name(" All TCP ", "bad"),
+            "All TCP",
+        )
+
+    def test_normalize_profile_name_rejects_empty_values(self):
+        """Blank or non-string names are invalid."""
+        for value in ("", "   ", None):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    ScanProfilesApi._normalize_profile_name(value, "bad")
+
+    def test_normalize_positive_integer_rejects_bool_and_invalid_values(self):
+        """Positive integer fields must not accept bools or strings."""
+        self.assertEqual(
+            ScanProfilesApi._normalize_positive_integer(720, "scan_cycle_minutes"),
+            720,
+        )
+        for value in (0, -1, "720", True):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    ScanProfilesApi._normalize_positive_integer(
+                        value,
+                        "scan_cycle_minutes",
+                    )
+
+    def test_normalize_priority_rejects_bool_and_out_of_range(self):
+        """Priority only accepts the scheduler priority values."""
+        self.assertEqual(ScanProfilesApi._normalize_priority(0), 0)
+        self.assertEqual(ScanProfilesApi._normalize_priority(4), 4)
+        for value in (-1, 5, "1", True):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    ScanProfilesApi._normalize_priority(value)
+
+    def test_normalize_boolean_is_strict(self):
+        """JSON boolean fields must not coerce arbitrary truthy values."""
+        self.assertTrue(ScanProfilesApi._normalize_boolean(True, "apply_to_all"))
+        self.assertFalse(ScanProfilesApi._normalize_boolean(False, "apply_to_all"))
+        for value in ("false", 1, None):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    ScanProfilesApi._normalize_boolean(value, "apply_to_all")
+
+    def test_normalize_id_list_deduplicates_valid_ids(self):
+        """Relationship ID lists keep input order while removing duplicates."""
+        self.assertEqual(
+            ScanProfilesApi._normalize_id_list([3, 1, 3], "port_ids"),
+            [3, 1],
+        )
+
+    def test_normalize_id_list_rejects_invalid_values(self):
+        """ID lists must be lists of positive integers."""
+        for value in ("123", [0], [-1], [True], [None]):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    ScanProfilesApi._normalize_id_list(value, "port_ids")
+
+    def test_normalize_id_list_can_require_at_least_one_port(self):
+        """Scan profile create/update cannot leave the profile without ports."""
+        with self.assertRaises(ValueError):
+            ScanProfilesApi._normalize_id_list(
+                [],
+                "port_ids",
+                allow_empty=False,
+            )
 
 
 if __name__ == "__main__":
