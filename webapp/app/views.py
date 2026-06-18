@@ -617,8 +617,9 @@ class MeiliSearchView(BaseView):
         try:
             result = index.get_document(uid)
             return jsonify(vars(result))  # doc is already a dict-like
-        except Exception as e:
-            return jsonify({"error": str(e)}), 404
+        except Exception:
+            logger.exception("Error fetching Meilisearch document uid=%s", uid)
+            return jsonify({"error": "Document not found"}), 404
 
 
 class KVSearchView(BaseView):
