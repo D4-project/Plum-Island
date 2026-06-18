@@ -98,6 +98,11 @@ CONFIG_AWARE_ACTIONS = {
     "get_http_header",
 }
 
+# Explicit dispatch table — avoids globals() lookup and documents the callable surface.
+# Must stay in sync with ALLOW.  Populated after all functions are defined; see
+# the bottom of this module.
+_PARSER_DISPATCH: dict = {}
+
 fqdn_regex = re.compile(
     r"""(?:^|[\s(\/<>|@'"=\:])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-_]{2,})+)(?=$|[\?\s#&\/<>'",)])""",
     re.MULTILINE,
@@ -184,18 +189,6 @@ def iter_http_header_lines(body):
             yield header_name, header_value
 
 
-def insensitive(input_list):
-    """
-    Put all data in lowercase along the "real one".
-    """
-    combined = []
-    for x in input_list:
-        if x:
-            combined.append(x)  # original
-            combined.append(x.lower())  # lowercase
-    return combined
-
-
 def get_ssl_info(data: dict, target: str, _general: bool = False):
     """
     Parse a Nmap script ssl-certs
@@ -255,7 +248,7 @@ def run_parser_action(action, script, target, db_conf):
     """
     Call one configured parser action with explicit config when required.
     """
-    parser = globals()[action]
+    parser = _PARSER_DISPATCH[action]
     if action in CONFIG_AWARE_ACTIONS:
         return parser(script, target, db_conf)
     return parser(script, target)
@@ -571,6 +564,13 @@ def get_http_header(data: dict, target: str, db_conf: dict):
     return {"http_header": http_header, "http_headval": http_headval}
 
 
+def hsh(data: dict, target: str):
+    """
+    Not yet implemented — returns empty result without crashing.
+    """
+    return {}
+
+
 def get_http_server(data: dict, target: str):
     """
     Parse the HTTP Server header value.
@@ -611,6 +611,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):
     """
 
     db_conf = normalize_db_conf(db_conf_local)
+    body = doc.get("body") or {}
+    ports = body.get("ports") or []
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
@@ -618,8 +620,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):
         # result = {}  # Parsing result array
 
         # Check if rule contains a splitter.
-        if not ":" in parsing_rule:
-            raise TypeError
+        if ":" not in parsing_rule:
+            raise TypeError(f"Parsing rule missing ':' separator: {parsing_rule!r}")
         action = parsing_rule.split(":")
         target = action[1]
         script_name = target.split(".")[1]
@@ -629,19 +631,19 @@ def parse_json(doc, db_conf_local, tag_rules=None):
         # print(f"doing action {action} on {target}")
 
         # Check if rules contains a legitimate parsing method
-        if not action in ALLOW:
-            raise TypeError
+        if action not in ALLOW:
+            raise TypeError(f"Action {action!r} is not in the allow list")
 
         parse_result = {}
         # print(f"Looking {target} for section >{section}<")
         if section == "b":
-            for script in doc.get("body"):
-                if script == script_name:  # If it is in the job list.
-                    script = doc.get("body").get(script)
-                    parse_result = run_parser_action(action, script, target, db_conf)
+            for script_key in body:
+                if script_key == script_name:  # If it is in the job list.
+                    script_data = body.get(script_key)
+                    parse_result = run_parser_action(action, script_data, target, db_conf)
 
         elif section == "p":
-            for port in doc.get("body").get("ports"):  # for each ports,
+            for port in ports:  # for each ports,
                 for script in port.get("scripts", []):  # We look at script results
                     if script.get("id") == script_name:  # If it is in the job list.
                         parse_result = fuse_dicts(
@@ -651,19 +653,19 @@ def parse_json(doc, db_conf_local, tag_rules=None):
 
         final_result = fuse_dicts(final_result, parse_result)
 
-    ports = []
-    for port in doc.get("body").get("ports"):
-        ports.append(port.get("portid"))
+    port_list = []
+    for port in ports:
+        port_list.append(port.get("portid"))
 
     uid = doc.get("id")
     ip = doc.get("ip")
-    last_seen = doc.get("body").get("endtime")
+    last_seen = body.get("endtime")
 
     final_result = final_result | {
         "uid": uid,
         "ip": ip,
         "last_seen": last_seen,
-        "port": ports,
+        "port": port_list,
     }
 
     computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
@@ -671,3 +673,21 @@ def parse_json(doc, db_conf_local, tag_rules=None):
         final_result["tag"] = computed_tags
 
     return final_result
+
+
+# Populate the dispatch table now that all functions are defined.
+_PARSER_DISPATCH.update(
+    {
+        "get_http_cookies": get_http_cookies,
+        "get_hosts": get_hosts,
+        "get_fqdn_requested": get_fqdn_requested,
+        "get_http_header": get_http_header,
+        "get_http_server": get_http_server,
+        "get_http_title": get_http_title,
+        "get_http_etag": get_http_etag,
+        "get_banner": get_banner,
+        "get_ssl_info": get_ssl_info,
+        "hsh": hsh,
+        "get_favicon": get_favicon,
+    }
+)
