@@ -15,6 +15,7 @@ import hashlib
 import os
 import json
 import logging
+import threading
 import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi
@@ -125,8 +126,12 @@ class BotInfoSchema(Schema):
             )
             if check_password_hash(agentkey, value):
                 return True  # If the key is existing
-        except NoResultFound as error:
-            raise ValidationError("Invalid AGENT_KEY") from error
+        except NoResultFound:
+            # Dummy comparison to prevent timing oracle on key index existence
+            check_password_hash(
+                "pbkdf2:sha256:260000$plum_timing_dummy$" + "a" * 64, value
+            )
+            raise ValidationError("Invalid AGENT_KEY")
         raise ValidationError("Invalid AGENT_KEY")
 
 
@@ -265,41 +270,45 @@ def _get_available_job_priorities():
     return priorities
 
 
+_priority_lock = threading.Lock()
+
+
 def _select_weighted_priority(available_priorities):
     """
     Smooth weighted round-robin over currently non-empty priority queues.
     """
-    available_priorities = set(available_priorities or [])
-    if not available_priorities:
-        return []
+    with _priority_lock:
+        available_priorities = set(available_priorities or [])
+        if not available_priorities:
+            return []
 
-    state = db.app.config.setdefault(
-        "priority_weighted_round_robin",
-        {priority: 0 for priority in PRIORITY_WEIGHTS},
-    )
-    for priority in PRIORITY_WEIGHTS:
-        state.setdefault(priority, 0)
-        if priority not in available_priorities:
-            state[priority] = 0
+        state = db.app.config.setdefault(
+            "priority_weighted_round_robin",
+            {priority: 0 for priority in PRIORITY_WEIGHTS},
+        )
+        for priority in PRIORITY_WEIGHTS:
+            state.setdefault(priority, 0)
+            if priority not in available_priorities:
+                state[priority] = 0
 
-    total_weight = 0
-    for priority in sorted(available_priorities, reverse=True):
-        weight = PRIORITY_WEIGHTS[priority]
-        state[priority] += weight
-        total_weight += weight
+        total_weight = 0
+        for priority in sorted(available_priorities, reverse=True):
+            weight = PRIORITY_WEIGHTS[priority]
+            state[priority] += weight
+            total_weight += weight
 
-    selected_priority = max(
-        available_priorities,
-        key=lambda priority: (state[priority], priority),
-    )
-    state[selected_priority] -= total_weight
-    db.app.config["priority_weighted_round_robin"] = state
+        selected_priority = max(
+            available_priorities,
+            key=lambda priority: (state[priority], priority),
+        )
+        state[selected_priority] -= total_weight
+        db.app.config["priority_weighted_round_robin"] = state
 
-    fallback_priorities = sorted(
-        available_priorities - {selected_priority},
-        reverse=True,
-    )
-    return [selected_priority] + fallback_priorities
+        fallback_priorities = sorted(
+            available_priorities - {selected_priority},
+            reverse=True,
+        )
+        return [selected_priority] + fallback_priorities
 
 
 class PublicTargetsApi(ModelRestApi):
@@ -673,11 +682,18 @@ class Api(BaseApi):
             return self.response(404, message="job not found")
 
         if job_bot.finished and not job_bot.active:
+            if job_bot.bot_id != submitting_bot.id:
+                logger.warning(
+                    "Bot %s tried to submit already-completed job %s owned by bot_id %s",
+                    botinfo.get("UID"),
+                    job_bot.uid,
+                    job_bot.bot_id,
+                )
+                return self.response(403, message="forbidden")
             logger.info(
-                "Bot %s resubmitted already completed job %s assigned to bot_id %s; returning idempotent success",
+                "Bot %s resubmitted already completed job %s; returning idempotent success",
                 botinfo.get("UID"),
                 job_bot.uid,
-                job_bot.bot_id,
             )
             submitting_bot.running = False
             submitting_bot.last_seen = utcnow_naive()
