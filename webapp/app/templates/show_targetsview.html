@@ -74,16 +74,23 @@
   </div>
   <div class="panel-body" id="addrAccordion">
 <div id="info" class="mt-2"></div>
+<div id="target-search-spinner" class="target-search-status mt-1" role="status" aria-live="polite" style="display:none;">
+  <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+  <span>Searching...</span>
+</div>
 <div id="msg_error" class="panel-group mt-2"></div>
 <div id="hits" class="panel-group mt-2"></div>
+<div id="load-more-container" class="mt-2"></div>
 
 
 <script>
 const targetSearchQuery = {{ get_target_value(pk) | tojson }};
 const targetRequestedHostname = {{ get_target_requested_hostname(pk) | tojson }};
 const targetSearchTimeRange = {{ get_target_search_time_range(pk) | tojson }};
-const TARGET_SEARCH_PAGE_SIZE = 500;
+const TARGET_SEARCH_PAGE_SIZE = 100;
 const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
+const TARGET_SEARCH_WINDOW_SECONDS = 86400;
+let targetSearchState = null;
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -130,89 +137,246 @@ function copyIpToClipboard(ip, triggerEl) {
     }
 }
 
-    window.addEventListener('DOMContentLoaded', async () => {
+window.addEventListener('DOMContentLoaded', async () => {
   await search();
 });
 
+function formatProcessingTime(milliseconds) {
+    return `${Number(milliseconds || 0).toFixed(3)}ms`;
+}
+
+function getTargetSearchTotalDays() {
+    const fromTs = Number(targetSearchTimeRange.from_ts);
+    const toTs = Number(targetSearchTimeRange.to_ts);
+    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs < fromTs) {
+        return null;
+    }
+    return Math.max(1, Math.ceil((toTs - fromTs + 1) / TARGET_SEARCH_WINDOW_SECONDS));
+}
+
+function setTargetSearchLoading(isLoading, message = 'Searching...') {
+    const spinner = document.getElementById('target-search-spinner');
+    if (!spinner) {
+        return;
+    }
+    const messageEl = spinner.querySelector('span');
+    if (messageEl) {
+        messageEl.textContent = message;
+    }
+    spinner.style.display = isLoading ? 'inline-flex' : 'none';
+}
+
+function setTargetLoadMoreLoading() {
+    const container = document.getElementById('load-more-container');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = `
+        <span class="target-search-status text-muted" role="status" aria-live="polite">
+            <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+            <span>Loading more...</span>
+        </span>
+    `;
+}
+
+function renderTargetLoadMoreButton() {
+    const container = document.getElementById('load-more-container');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-default';
+    button.innerHTML = '<i class="fa fa-plus" aria-hidden="true"></i> Load more';
+    button.addEventListener('click', () => loadNextTargetResults(true));
+    container.appendChild(button);
+}
+
+function renderTargetSearchSummary(data, hasMore) {
+    const infoDiv = document.getElementById('info');
+    if (!infoDiv || !targetSearchState) {
+        return;
+    }
+
+    const time = formatProcessingTime(targetSearchState.processingTimeMs);
+    const totalDays = getTargetSearchTotalDays();
+    let daySuffix = '';
+    if (totalDays !== null) {
+        const effectiveDays = hasMore
+            ? Math.min(targetSearchState.scannedDays || 0, totalDays)
+            : totalDays;
+        const daySummary = effectiveDays >= totalDays
+            ? `${totalDays} days`
+            : `${effectiveDays}/${totalDays} days`;
+        daySuffix = ` for ${daySummary}`;
+    }
+
+    const uidCount = data.uid_count !== undefined && data.uid_count !== null
+        ? data.uid_count
+        : (targetSearchState.uidCount || 0);
+    const ipCount = data.ip_count !== undefined && data.ip_count !== null
+        ? data.ip_count
+        : (targetSearchState.ipCount || 0);
+    const prefix = hasMore && targetSearchState.renderedCount > 0
+        ? 'Showing first'
+        : 'Showing';
+    infoDiv.textContent = `${prefix} ${targetSearchState.renderedCount} results in ${time}${daySuffix} out of ${uidCount} scans on ${ipCount} hosts.`;
+}
+
+function showTargetSearchWarning(message) {
+    const errorDiv = document.getElementById('msg_error');
+    if (!errorDiv) {
+        return;
+    }
+    errorDiv.textContent = '';
+    const warning = document.createElement('div');
+    warning.className = 'alert alert-warning';
+    warning.setAttribute('role', 'alert');
+    warning.textContent = message || '';
+    errorDiv.appendChild(warning);
+}
 
 async function search() {
     const hitsDiv = document.getElementById('hits');
     const infoDiv = document.getElementById('info');
     const errorDiv = document.getElementById('msg_error');
-    const aggregateData = {
-        status: true,
-        results: {},
+    const loadMoreDiv = document.getElementById('load-more-container');
+
+    targetSearchState = {
+        searchId: null,
+        nextCursor: null,
+        windowDays: 1,
+        hasMore: true,
+        renderedCount: 0,
         processingTimeMs: 0,
-        uid_count: 0,
-        ip_count: 0,
-        msg_error: ''
+        scannedDays: 0,
+        uidCount: 0,
+        ipCount: 0
     };
 
-    let hasMore = true;
-    let searchId = null;
-    let nextCursor = null;
-    let windowDays = 1;
+    infoDiv.textContent = '';
+    errorDiv.textContent = '';
+    hitsDiv.innerHTML = '';
+    loadMoreDiv.innerHTML = '';
+    await loadNextTargetResults(false);
+}
 
-    while (hasMore) {
-        const params = new URLSearchParams({
-            q: targetSearchQuery,
-            limit: String(TARGET_SEARCH_PAGE_SIZE),
-            window_days: String(windowDays)
-        });
-        if (targetSearchTimeRange.from_ts && targetSearchTimeRange.to_ts) {
-            params.set('from_ts', String(targetSearchTimeRange.from_ts));
-            params.set('to_ts', String(targetSearchTimeRange.to_ts));
-        }
-        if (searchId) {
-            params.set('search_id', searchId);
-        }
-        if (nextCursor !== null && nextCursor !== undefined) {
-            params.set('cursor_ts', String(nextCursor));
-        }
-
-        const res = await fetch(`/kvsearchview/query?${params.toString()}`);
-        const data = await readJsonResponse(res);
-        const pagination = data.pagination || {};
-
-        aggregateData.processingTimeMs += Number(data.processingTimeMs || 0);
-        aggregateData.uid_count = data.uid_count;
-        aggregateData.ip_count = data.ip_count;
-        searchId = data.search_id || searchId;
-
-        if (data.status === false) {
-            aggregateData.status = false;
-            aggregateData.msg_error = data.msg_error || 'Search failed';
-            break;
-        }
-
-        Object.assign(aggregateData.results, data.results || {});
-        hasMore = Boolean(pagination.has_more);
-        nextCursor = pagination.next_cursor;
-
-        if (Object.keys(data.results || {}).length === 0) {
-            windowDays = Math.min(windowDays * 2, MAX_TARGET_SEARCH_WINDOW_DAYS);
-        } else if (pagination.stopped_in_window) {
-            windowDays = Number(pagination.window_days || windowDays || 1);
-        } else {
-            windowDays = 1;
-        }
+async function loadNextTargetResults(append) {
+    if (!targetSearchState || !targetSearchState.hasMore) {
+        return;
     }
 
-    const data = aggregateData;
-    const time = (data.processingTimeMs || 0).toFixed(3);
-    infoDiv.textContent = `Found ${Object.keys(data.results).length} Results in ${time}ms out of ${data.uid_count} scans on ${data.ip_count} hosts`;
+    const hitsDiv = document.getElementById('hits');
+    const loadMoreDiv = document.getElementById('load-more-container');
+    const errorDiv = document.getElementById('msg_error');
+    let addedThisRun = 0;
+    let hasMore = targetSearchState.hasMore;
+    let lastData = null;
 
     errorDiv.textContent = '';
-    if (data.status === false) {
-        const warning = document.createElement('div');
-        warning.className = 'alert alert-warning';
-        warning.setAttribute('role', 'alert');
-        warning.textContent = data.msg_error || '';
-        errorDiv.appendChild(warning);
+    loadMoreDiv.innerHTML = '';
+    setTargetSearchLoading(!append, 'Searching...');
+    if (append) {
+        setTargetLoadMoreLoading();
     }
-    hitsDiv.innerHTML = '';
 
-    Object.entries(data.results).forEach(([ip, uids], ipIndex) => {
+    try {
+        while (addedThisRun < TARGET_SEARCH_PAGE_SIZE && hasMore) {
+            const remaining = TARGET_SEARCH_PAGE_SIZE - addedThisRun;
+            const cursorBefore = targetSearchState.nextCursor;
+            const params = new URLSearchParams({
+                q: targetSearchQuery,
+                limit: String(remaining),
+                window_days: String(targetSearchState.windowDays)
+            });
+            if (targetSearchTimeRange.from_ts && targetSearchTimeRange.to_ts) {
+                params.set('from_ts', String(targetSearchTimeRange.from_ts));
+                params.set('to_ts', String(targetSearchTimeRange.to_ts));
+            }
+            if (targetSearchState.searchId) {
+                params.set('search_id', targetSearchState.searchId);
+            }
+            if (targetSearchState.nextCursor !== null && targetSearchState.nextCursor !== undefined) {
+                params.set('cursor_ts', String(targetSearchState.nextCursor));
+            }
+
+            const res = await fetch(`/kvsearchview/query?${params.toString()}`);
+            const data = await readJsonResponse(res);
+            lastData = data;
+            const pagination = data.pagination || {};
+
+            targetSearchState.processingTimeMs += Number(data.processingTimeMs || 0);
+            targetSearchState.scannedDays += Number(pagination.scanned_days || 0);
+            targetSearchState.uidCount = data.uid_count;
+            targetSearchState.ipCount = data.ip_count;
+            targetSearchState.searchId = data.search_id || targetSearchState.searchId;
+
+            if (data.status === false) {
+                showTargetSearchWarning(data.msg_error || 'Search failed');
+                hasMore = false;
+                break;
+            }
+
+            const returnedIps = renderTargetResults(data.results || {}, targetSearchState.renderedCount, hitsDiv);
+            if (returnedIps.length > 0) {
+                targetSearchState.renderedCount += returnedIps.length;
+                addedThisRun += returnedIps.length;
+            }
+
+            hasMore = Boolean(pagination.has_more);
+            targetSearchState.nextCursor = pagination.next_cursor;
+
+            if (returnedIps.length === 0) {
+                targetSearchState.windowDays = Math.min(
+                    targetSearchState.windowDays * 2,
+                    MAX_TARGET_SEARCH_WINDOW_DAYS
+                );
+            } else if (pagination.stopped_in_window) {
+                targetSearchState.windowDays = Number(
+                    pagination.window_days || targetSearchState.windowDays || 1
+                );
+            } else {
+                targetSearchState.windowDays = 1;
+            }
+
+            renderTargetSearchSummary(data, hasMore);
+
+            if (!hasMore) {
+                break;
+            }
+            if (
+                targetSearchState.nextCursor === null
+                || targetSearchState.nextCursor === undefined
+                || String(targetSearchState.nextCursor) === String(cursorBefore)
+            ) {
+                break;
+            }
+
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+    } catch (error) {
+        console.error('Target search failed', error);
+        showTargetSearchWarning(`Search failed: ${error?.message || 'Unexpected error'}`);
+        if (!append) {
+            hitsDiv.innerHTML = '';
+        }
+        hasMore = false;
+    } finally {
+        targetSearchState.hasMore = hasMore;
+        setTargetSearchLoading(false);
+        loadMoreDiv.innerHTML = '';
+        if (lastData && lastData.status && hasMore) {
+            renderTargetLoadMoreButton();
+        }
+    }
+}
+
+function renderTargetResults(results, baseIndex, hitsDiv) {
+    const returnedIps = [];
+    Object.entries(results).forEach(([ip, uids], ipIndex) => {
+        const resultIndex = baseIndex + ipIndex;
+        returnedIps.push(ip);
         const ipPanel = document.createElement('div');
         ipPanel.className = 'panel panel-default';
 
@@ -226,7 +390,7 @@ async function search() {
         const collapseLink = document.createElement('a');
         collapseLink.setAttribute('data-toggle', 'collapse');
         collapseLink.setAttribute('data-parent', '#hits');
-        collapseLink.href = `#collapse-ip-${ipIndex}`;
+        collapseLink.href = `#collapse-ip-${resultIndex}`;
         collapseLink.textContent = ip;
         title.appendChild(collapseLink);
         titleRow.appendChild(title);
@@ -259,11 +423,11 @@ async function search() {
         ipPanel.appendChild(heading);
 
         const collapse = document.createElement('div');
-        collapse.id = `collapse-ip-${ipIndex}`;
+        collapse.id = `collapse-ip-${resultIndex}`;
         collapse.className = 'panel-collapse collapse';
         const uidsDiv = document.createElement('div');
         uidsDiv.className = 'panel-body';
-        uidsDiv.id = `uids-${ipIndex}`;
+        uidsDiv.id = `uids-${resultIndex}`;
         collapse.appendChild(uidsDiv);
         ipPanel.appendChild(collapse);
 
@@ -284,7 +448,7 @@ async function search() {
             const uidLink = document.createElement('a');
             uidLink.href = '#';
             uidLink.dataset.uid = uid;
-            uidLink.dataset.target = `uid-body-${ipIndex}-${uidIndex}`;
+            uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
             uidLink.textContent = uid;
             uidLink.addEventListener('click', (event) => {
                 event.preventDefault();
@@ -295,13 +459,14 @@ async function search() {
             uidPanel.appendChild(uidHeading);
 
             const uidBody = document.createElement('div');
-            uidBody.id = `uid-body-${ipIndex}-${uidIndex}`;
+            uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
             uidBody.className = 'panel-body';
             uidBody.style.display = 'none';
             uidPanel.appendChild(uidBody);
             uidsDiv.appendChild(uidPanel);
         });
     });
+    return returnedIps;
 }
 
 async function loadUid(uid, targetId) {
@@ -353,6 +518,12 @@ async function loadUid(uid, targetId) {
 
   .target-result-title-row .panel-title {
     margin: 0;
+  }
+
+  .target-search-status {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.5rem;
   }
 
   .target-ip-action {

@@ -16,6 +16,7 @@
 - Webapp fixes and hardening:
   - Add authenticated REST CRUD API for scan port management with OpenAPI documentation, closes #174.
   - Add authenticated REST CRUD API for NSE script management with OpenAPI documentation, closes #172.
+  - Add incremental target scan-result loading with search timing and a load-more control, closes #182.
   - Skip non-external IP scan results during parsing to avoid localhost/private DB pollution, closes #120.
   - Limit bot status editing to the `active` flag so agents can be suspended, closes #124.
   - Write bot job result files before marking jobs finished, closes #162.
