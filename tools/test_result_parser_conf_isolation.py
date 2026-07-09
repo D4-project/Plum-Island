@@ -21,7 +21,7 @@ def build_document(hostname, headers):
     """
     return {
         "id": hostname,
-        "ip": "192.0.2.1",
+        "ip": "93.184.216.34",
         "body": {
             "endtime": "2026-05-19T00:00:00",
             "hostnames": [{"name": hostname, "type": "user"}],
