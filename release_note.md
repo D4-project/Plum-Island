@@ -14,6 +14,7 @@
   - Fix `tag_mgmt.py` flush-tag key corruption, zero-selector handling, datetime sentinel, and interrupted import STOP_REQUESTED reset, closes #150.
   - Clean up interrupted Meilisearch import indexes.
 - Webapp fixes and hardening:
+  - Limit bot status editing to the `active` flag so agents can be suspended, closes #124.
   - Write bot job result files before marking jobs finished, closes #162.
   - Harden `/bot_api/sndjob` result parsing failures.
   - Align `webapp/run.py` port with `docker-compose.yml`, closes #164.
