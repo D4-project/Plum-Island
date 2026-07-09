@@ -130,6 +130,62 @@ class BotInfoSchema(Schema):
         raise ValidationError("Invalid AGENT_KEY")
 
 
+class BotJobReleaseSchema(Schema):
+    """
+    Schema for interrupted job release requests.
+    """
+
+    UID = fields.String(required=True, metadata={"description": "Uniq Bot ID"})
+    AGENT_KEY = fields.String(
+        required=True,
+        metadata={"description": "Bot Agent access Key"},
+    )
+    JOB_UID = fields.String(
+        required=True,
+        metadata={"description": "Uid of the scan job to release"},
+    )
+    ERROR = fields.String(
+        required=False,
+        allow_none=True,
+        metadata={"description": "Optional interruption reason"},
+    )
+
+    @validates("UID")
+    def validate_uid(self, value, **_kwargs):
+        """
+        UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid UID")
+
+    @validates("JOB_UID")
+    def validate_job_uid(self, value, **_kwargs):
+        """
+        JOB_UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid JOB_UID")
+
+    @validates("AGENT_KEY")
+    def validate_agent_key(self, value, **_kwargs):
+        """
+        Validate Authorization to interact with Island
+        """
+        if len(value) != 16 + 64:
+            raise ValidationError("Invalid Agent Key")
+
+        keyidx = value[0:16]
+        try:
+            agentkey = (
+                db.session.query(ApiKeys).filter(ApiKeys.keyidx == keyidx).one().key
+            )
+            if check_password_hash(agentkey, value):
+                return True
+        except NoResultFound as error:
+            raise ValidationError("Invalid AGENT_KEY") from error
+        raise ValidationError("Invalid AGENT_KEY")
+
+
 class BulkTargetsSchema(Schema):
     """
     Schema for Targets bulk import via API
@@ -242,6 +298,42 @@ def _claim_job_for_bot(job_id, bot_id, now):
             synchronize_session=False,
         )
     )
+
+
+def _release_interrupted_job(job, bot, now):
+    """
+    Release an interrupted job assigned to a bot.
+
+    Mutates only jobs assigned to the requesting bot. Finished jobs and already
+    released queued jobs are treated as idempotent success.
+    """
+    if job.finished:
+        if job.bot_id == bot.id:
+            bot.running = False
+            bot.last_seen = now
+        return True, "already finished"
+
+    if job.bot_id is None:
+        if job.active:
+            return False, "forbidden"
+        return True, "already released"
+
+    if job.bot_id != bot.id:
+        return False, "forbidden"
+
+    if not job.active:
+        job.bot_id = None
+        job.job_start = None
+        bot.running = False
+        bot.last_seen = now
+        return True, "already released"
+
+    job.active = False
+    job.bot_id = None
+    job.job_start = None
+    bot.running = False
+    bot.last_seen = now
+    return True, "released"
 
 
 def _get_available_job_priorities():
@@ -613,6 +705,78 @@ class Api(BaseApi):
         db.session.commit()
 
         return self.response(200, message=ret_msg)
+
+    @expose("/releasejob", methods=["POST"])
+    @safe
+    def releasejobs(self):
+        """
+        Bot to Island connection to release an interrupted job.
+        """
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                data = json.loads(data)
+
+            botinfoschema = BotJobReleaseSchema()
+            botinfo = botinfoschema.load(data)
+
+        except ValidationError as err:
+            return self.response_400(
+                message=f"Invalid input: {flat_marsh_error(err.messages)}"
+            )
+
+        logger.debug(
+            "Agent UID %s releasing interrupted job %s",
+            botinfo.get("UID"),
+            botinfo.get("JOB_UID"),
+        )
+
+        releasing_bot = _get_bot_by_uid(botinfo.get("UID"))
+        if releasing_bot is None:
+            logger.warning(
+                "Unknown or inactive bot %s tried to release job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(403, message="forbidden")
+
+        job_bot = (
+            db.session.query(Jobs)
+            .filter(Jobs.uid == botinfo.get("JOB_UID"))
+            .limit(1)
+            .scalar()
+        )
+        if job_bot is None:
+            logger.warning(
+                "Bot %s tried to release unknown job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(404, message="job not found")
+
+        released, state = _release_interrupted_job(
+            job_bot,
+            releasing_bot,
+            utcnow_naive(),
+        )
+        if not released:
+            logger.warning(
+                "Bot %s tried to release job %s assigned to bot_id %s",
+                botinfo.get("UID"),
+                job_bot.uid,
+                job_bot.bot_id,
+            )
+            return self.response(403, message="forbidden")
+
+        logger.info(
+            "Bot %s releasejob %s: %s%s",
+            botinfo.get("UID"),
+            job_bot.uid,
+            state,
+            f" ({botinfo.get('ERROR')})" if botinfo.get("ERROR") else "",
+        )
+        db.session.commit()
+        return self.response(200, message="ready")
 
     @expose("/sndjob", methods=["POST"])
     @safe

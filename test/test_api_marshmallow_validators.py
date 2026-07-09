@@ -7,6 +7,8 @@ Regression tests for API Marshmallow validators.
 
 import os
 import sys
+from datetime import datetime
+from types import SimpleNamespace
 from unittest import TestCase, main
 
 from marshmallow import ValidationError
@@ -16,8 +18,10 @@ sys.path.insert(0, os.path.join(BASE_DIR, "webapp"))
 
 from app.apis import (
     BotInfoSchema,
+    BotJobReleaseSchema,
     NsesApi,
     PortsApi,
+    _release_interrupted_job,
 )
 
 
@@ -37,6 +41,110 @@ class BotInfoSchemaValidationTest(TestCase):
             BotInfoSchema().load({"JOB_UID": "bad"}, partial=True)
 
         self.assertEqual(context.exception.messages, {"JOB_UID": ["Invalid JOB_UID"]})
+
+
+class BotJobReleaseSchemaValidationTest(TestCase):
+    """Tests for interrupted job release request validation."""
+
+    def test_release_schema_does_not_require_ext_ip(self):
+        """Interrupted job release only needs bot auth and job UID."""
+        self.assertNotIn("EXT_IP", BotJobReleaseSchema().fields)
+
+    def test_invalid_release_job_uid_raises_validation_error(self):
+        """Malformed release JOB_UID must be rejected."""
+        with self.assertRaises(ValidationError) as context:
+            BotJobReleaseSchema().load({"JOB_UID": "bad"}, partial=True)
+
+        self.assertEqual(context.exception.messages, {"JOB_UID": ["Invalid JOB_UID"]})
+
+
+class BotJobReleaseStateTest(TestCase):
+    """Tests for interrupted job state transitions."""
+
+    def test_release_assigned_active_job_requeues_and_clears_bot_id(self):
+        """Active job assigned to requesting bot is returned to waiting queue."""
+        now = datetime(2026, 7, 9, 12, 0, 0)
+        bot = SimpleNamespace(id=3, running=True, last_seen=None)
+        job = SimpleNamespace(
+            active=True,
+            finished=False,
+            bot_id=3,
+            job_start=datetime(2026, 7, 9, 11, 0, 0),
+        )
+
+        released, state = _release_interrupted_job(job, bot, now)
+
+        self.assertTrue(released)
+        self.assertEqual(state, "released")
+        self.assertFalse(job.active)
+        self.assertIsNone(job.bot_id)
+        self.assertIsNone(job.job_start)
+        self.assertFalse(bot.running)
+        self.assertEqual(bot.last_seen, now)
+
+    def test_release_job_assigned_to_other_bot_is_rejected(self):
+        """Active job assigned to another bot must not be mutated."""
+        now = datetime(2026, 7, 9, 12, 0, 0)
+        bot = SimpleNamespace(id=3, running=True, last_seen=None)
+        job_start = datetime(2026, 7, 9, 11, 0, 0)
+        job = SimpleNamespace(
+            active=True,
+            finished=False,
+            bot_id=4,
+            job_start=job_start,
+        )
+
+        released, state = _release_interrupted_job(job, bot, now)
+
+        self.assertFalse(released)
+        self.assertEqual(state, "forbidden")
+        self.assertTrue(job.active)
+        self.assertEqual(job.bot_id, 4)
+        self.assertEqual(job.job_start, job_start)
+        self.assertTrue(bot.running)
+        self.assertIsNone(bot.last_seen)
+
+    def test_release_already_requeued_job_is_idempotent(self):
+        """Already released queued jobs return success without mutation."""
+        now = datetime(2026, 7, 9, 12, 0, 0)
+        bot = SimpleNamespace(id=3, running=True, last_seen=None)
+        job = SimpleNamespace(
+            active=False,
+            finished=False,
+            bot_id=None,
+            job_start=None,
+        )
+
+        released, state = _release_interrupted_job(job, bot, now)
+
+        self.assertTrue(released)
+        self.assertEqual(state, "already released")
+        self.assertFalse(job.active)
+        self.assertIsNone(job.bot_id)
+        self.assertIsNone(job.job_start)
+        self.assertTrue(bot.running)
+        self.assertIsNone(bot.last_seen)
+
+    def test_release_inactive_job_still_assigned_to_bot_clears_assignment(self):
+        """Inactive unfinished job still assigned to the bot is released."""
+        now = datetime(2026, 7, 9, 12, 0, 0)
+        bot = SimpleNamespace(id=3, running=True, last_seen=None)
+        job = SimpleNamespace(
+            active=False,
+            finished=False,
+            bot_id=3,
+            job_start=datetime(2026, 7, 9, 11, 0, 0),
+        )
+
+        released, state = _release_interrupted_job(job, bot, now)
+
+        self.assertTrue(released)
+        self.assertEqual(state, "already released")
+        self.assertFalse(job.active)
+        self.assertIsNone(job.bot_id)
+        self.assertIsNone(job.job_start)
+        self.assertFalse(bot.running)
+        self.assertEqual(bot.last_seen, now)
 
 
 class NsesApiValidationTest(TestCase):
