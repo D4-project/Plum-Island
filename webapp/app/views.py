@@ -2776,7 +2776,8 @@ class BotsView(ModelView):
     """
 
     datamodel = SQLAInterface(Bots)
-    list_columns = ["uid", "agent_version", "ip", "country", "last_seen"]
+    list_columns = ["uid", "agent_version", "ip", "country", "active", "last_seen"]
+    edit_columns = ["active"]
 
 
 class JobsView(ModelView):

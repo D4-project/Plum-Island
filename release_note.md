@@ -16,6 +16,7 @@
 - Webapp fixes and hardening:
   - Add authenticated REST CRUD API for scan port management with OpenAPI documentation, closes #174.
   - Add authenticated REST CRUD API for NSE script management with OpenAPI documentation, closes #172.
+  - Limit bot status editing to the `active` flag so agents can be suspended, closes #124.
   - Write bot job result files before marking jobs finished, closes #162.
   - Harden `/bot_api/sndjob` result parsing failures.
   - Align `webapp/run.py` port with `docker-compose.yml`, closes #164.
