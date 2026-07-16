@@ -37,6 +37,8 @@ The search index supports fields such as:
 - `http_favicon_path`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`
 - `banner`
 - `x509_issuer`, `x509_subject`, `x509_san`, `x509_md5`, `x509_sha1`, `x509_sha256`
+
+`fqdn`, `host`, and `domain` include normalized hostnames found in TLS certificate DNS SAN and subject CN data. Rebuild or reimport the Kvrocks index to apply parser improvements to existing scans.
 - `tag`
 
 Example:
