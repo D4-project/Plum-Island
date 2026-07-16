@@ -25,7 +25,7 @@ class ResultParserMultiPortTest(TestCase):
         """
         document = {
             "id": "multi-banner",
-            "ip": "192.0.2.10",
+            "ip": "93.184.216.34",
             "body": {
                 "endtime": "2026-05-20T00:00:00",
                 "ports": [

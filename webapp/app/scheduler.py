@@ -1305,6 +1305,8 @@ def task_export_to_dbs():
                             parser_config,
                             tag_rules=active_tag_rules,
                         )
+                        if parsed_doc is None:
+                            continue
                         pending_meili.append(object_to_save)
                         pending_kvrocks.append(parsed_doc)
                         pending_job_refs.append(job["id"])

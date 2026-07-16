@@ -18,6 +18,7 @@ For now far from performance issues anyway.
 
 """
 
+import ipaddress
 import re
 from pyfaup import Url  # pylint: disable=no-name-in-module
 
@@ -55,6 +56,17 @@ def normalize_db_conf(db_conf_local):
         }
 
     raise TypeError("parse_json expects a config dict or a TLD list")
+
+
+def is_external_ip(value):
+    """
+    Return True only for routable unicast IPs suitable for indexing.
+    """
+    try:
+        ip_addr = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return False
+    return ip_addr.is_global and not ip_addr.is_multicast
 
 
 # B -> Body.XXXX Subsearch
@@ -646,6 +658,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
     """
     Parse one Nmap-like document into the Kvrocks search fields.
     """
+    if not is_external_ip(doc.get("ip")):
+        return None
 
     db_conf = normalize_db_conf(db_conf_local)
 

@@ -238,6 +238,8 @@ def json_import(json_file, seen_snapshot=None, tag_rules=None):
     with open(json_file, "r", encoding="utf-8") as json_handle:
         doc = json.loads(json_handle.read())
         parsed_doc = parse_json(doc, PARSER_CONF, tag_rules=tag_rules)
+        if parsed_doc is None:
+            return None
         apply_seen_snapshot(parsed_doc, seen_snapshot)
         return parsed_doc
 
@@ -247,6 +249,8 @@ def parse_meili_document(doc, seen_snapshot=None, tag_rules=None):
     Parse one Meilisearch document for Kvrocks indexing.
     """
     parsed_doc = parse_json(dict(doc), PARSER_CONF, tag_rules=tag_rules)
+    if parsed_doc is None:
+        return None
     apply_seen_snapshot(parsed_doc, seen_snapshot)
     return parsed_doc
 
@@ -773,6 +777,8 @@ def index_documents_with_errors(
                 if error:
                     error_count += 1
                     print(error, flush=True)
+                    continue
+                if parsed_doc is None:
                     continue
                 yield parsed_doc
         finally:

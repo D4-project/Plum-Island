@@ -8,14 +8,18 @@
 This module contains all code related to API's.
 """
 
+# pylint: disable=too-many-lines
+
 import base64
+import hashlib
 import os
 import json
 import logging
 import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from flask_appbuilder import ModelRestApi, has_access
+from flask_appbuilder import ModelRestApi
 from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, protect
+from flask_appbuilder.filemanager import FileManager
 from flask import request
 
 from sqlalchemy import func, distinct
@@ -28,6 +32,8 @@ from .models import (
     ApiKeys,
     Jobs,
     Nses,
+    Ports,
+    Protos,
     TargetScanStates,
     assoc_jobs_targets,
 )
@@ -119,6 +125,62 @@ class BotInfoSchema(Schema):
             )
             if check_password_hash(agentkey, value):
                 return True  # If the key is existing
+        except NoResultFound as error:
+            raise ValidationError("Invalid AGENT_KEY") from error
+        raise ValidationError("Invalid AGENT_KEY")
+
+
+class BotJobReleaseSchema(Schema):
+    """
+    Schema for interrupted job release requests.
+    """
+
+    UID = fields.String(required=True, metadata={"description": "Uniq Bot ID"})
+    AGENT_KEY = fields.String(
+        required=True,
+        metadata={"description": "Bot Agent access Key"},
+    )
+    JOB_UID = fields.String(
+        required=True,
+        metadata={"description": "Uid of the scan job to release"},
+    )
+    ERROR = fields.String(
+        required=False,
+        allow_none=True,
+        metadata={"description": "Optional interruption reason"},
+    )
+
+    @validates("UID")
+    def validate_uid(self, value, **_kwargs):
+        """
+        UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid UID")
+
+    @validates("JOB_UID")
+    def validate_job_uid(self, value, **_kwargs):
+        """
+        JOB_UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid JOB_UID")
+
+    @validates("AGENT_KEY")
+    def validate_agent_key(self, value, **_kwargs):
+        """
+        Validate Authorization to interact with Island
+        """
+        if len(value) != 16 + 64:
+            raise ValidationError("Invalid Agent Key")
+
+        keyidx = value[0:16]
+        try:
+            agentkey = (
+                db.session.query(ApiKeys).filter(ApiKeys.keyidx == keyidx).one().key
+            )
+            if check_password_hash(agentkey, value):
+                return True
         except NoResultFound as error:
             raise ValidationError("Invalid AGENT_KEY") from error
         raise ValidationError("Invalid AGENT_KEY")
@@ -236,6 +298,42 @@ def _claim_job_for_bot(job_id, bot_id, now):
             synchronize_session=False,
         )
     )
+
+
+def _release_interrupted_job(job, bot, now):
+    """
+    Release an interrupted job assigned to a bot.
+
+    Mutates only jobs assigned to the requesting bot. Finished jobs and already
+    released queued jobs are treated as idempotent success.
+    """
+    if job.finished:
+        if job.bot_id == bot.id:
+            bot.running = False
+            bot.last_seen = now
+        return True, "already finished"
+
+    if job.bot_id is None:
+        if job.active:
+            return False, "forbidden"
+        return True, "already released"
+
+    if job.bot_id != bot.id:
+        return False, "forbidden"
+
+    if not job.active:
+        job.bot_id = None
+        job.job_start = None
+        bot.running = False
+        bot.last_seen = now
+        return True, "already released"
+
+    job.active = False
+    job.bot_id = None
+    job.job_start = None
+    bot.running = False
+    bot.last_seen = now
+    return True, "released"
 
 
 def _get_available_job_priorities():
@@ -608,6 +706,78 @@ class Api(BaseApi):
 
         return self.response(200, message=ret_msg)
 
+    @expose("/releasejob", methods=["POST"])
+    @safe
+    def releasejobs(self):
+        """
+        Bot to Island connection to release an interrupted job.
+        """
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                data = json.loads(data)
+
+            botinfoschema = BotJobReleaseSchema()
+            botinfo = botinfoschema.load(data)
+
+        except ValidationError as err:
+            return self.response_400(
+                message=f"Invalid input: {flat_marsh_error(err.messages)}"
+            )
+
+        logger.debug(
+            "Agent UID %s releasing interrupted job %s",
+            botinfo.get("UID"),
+            botinfo.get("JOB_UID"),
+        )
+
+        releasing_bot = _get_bot_by_uid(botinfo.get("UID"))
+        if releasing_bot is None:
+            logger.warning(
+                "Unknown or inactive bot %s tried to release job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(403, message="forbidden")
+
+        job_bot = (
+            db.session.query(Jobs)
+            .filter(Jobs.uid == botinfo.get("JOB_UID"))
+            .limit(1)
+            .scalar()
+        )
+        if job_bot is None:
+            logger.warning(
+                "Bot %s tried to release unknown job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(404, message="job not found")
+
+        released, state = _release_interrupted_job(
+            job_bot,
+            releasing_bot,
+            utcnow_naive(),
+        )
+        if not released:
+            logger.warning(
+                "Bot %s tried to release job %s assigned to bot_id %s",
+                botinfo.get("UID"),
+                job_bot.uid,
+                job_bot.bot_id,
+            )
+            return self.response(403, message="forbidden")
+
+        logger.info(
+            "Bot %s releasejob %s: %s%s",
+            botinfo.get("UID"),
+            job_bot.uid,
+            state,
+            f" ({botinfo.get('ERROR')})" if botinfo.get("ERROR") else "",
+        )
+        db.session.commit()
+        return self.response(200, message="ready")
+
     @expose("/sndjob", methods=["POST"])
     @safe
     def sndjobs(self):
@@ -823,6 +993,773 @@ class Api(BaseApi):
         return self.response(200, message="ready")
 
 
+class NsesApi(BaseApi):
+    """
+    REST API for managing NSE (Nmap Script Engine) scripts.
+
+    Provides programmatic equivalents of the /nsesview HTML form. File upload
+    uses multipart/form-data; all other responses are JSON.
+    """
+
+    route_base = "/api/v1/nses"
+    openapi_spec_tag = "NSE Scripts API"
+
+    @staticmethod
+    def _serialize_nse(item):
+        return {"id": item.id, "name": item.name, "hash": item.hash}
+
+    @staticmethod
+    def _normalize_nse_name(value, append_suffix=False):
+        raw_name = (value or "").strip()
+        if not raw_name:
+            raise ValueError("NSE script name cannot be empty")
+
+        name = os.path.basename(raw_name)
+        if not name or name in {".", ".."}:
+            raise ValueError("NSE script name cannot be empty")
+
+        if append_suffix and not name.lower().endswith(".nse"):
+            name = f"{name}.nse"
+
+        if name.lower() == ".nse":
+            raise ValueError("NSE script name cannot be empty")
+
+        if not name.lower().endswith(".nse"):
+            raise ValueError("Only .nse files are allowed")
+
+        return name
+
+    @classmethod
+    def _upload_metadata(cls, upload):
+        if upload is None or not getattr(upload, "filename", ""):
+            raise ValueError("Field 'filebody' with a .nse file is required")
+
+        filename = cls._normalize_nse_name(upload.filename)
+        file_bytes = upload.read()
+        upload.stream.seek(0)
+        return filename, hashlib.sha256(file_bytes).hexdigest()
+
+    @staticmethod
+    def _delete_uploaded_file(file_manager, file_name):
+        if not file_name:
+            return
+        try:
+            file_manager.delete_file(file_name)
+        except OSError:
+            logger.exception("Failed to delete NSE upload file %s", file_name)
+
+    @staticmethod
+    def _save_uploaded_file(file_manager, item, upload):
+        stored_name = file_manager.generate_name(item, upload)
+        return file_manager.save_file(upload, stored_name)
+
+    @staticmethod
+    def _duplicate_value_response():
+        return BaseApi.response(
+            400,
+            message="An NSE script with this name or SHA256 already exists",
+        )
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        ---
+        get:
+          summary: List all NSE scripts.
+          responses:
+            "200":
+              description: Array of NSE script metadata objects.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            name:
+                              type: string
+                            hash:
+                              type: string
+        """
+        nses = db.session.query(Nses).order_by(Nses.name.asc()).all()
+        return self.response(
+            200,
+            result=[self._serialize_nse(item) for item in nses],
+        )
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        ---
+        post:
+          summary: Upload a new NSE script.
+          description: |
+            Accepts a multipart/form-data request with a single field named
+            ``filebody`` containing the .nse file.  The filename must end in
+            ``.nse``; the stored script name is derived from the uploaded
+            filename (not a separate form field).  If an entry with the same
+            name already exists it is updated in-place; duplicate SHA256 hashes
+            are rejected.
+          requestBody:
+            required: true
+            content:
+              multipart/form-data:
+                schema:
+                  type: object
+                  required:
+                    - filebody
+                  properties:
+                    filebody:
+                      type: string
+                      format: binary
+                      description: The .nse script file to upload.
+          responses:
+            "200":
+              description: Existing NSE script updated successfully.
+            "201":
+              description: NSE script created successfully.
+            "400":
+              description: Missing file, wrong extension, or duplicate hash.
+        """
+        upload = request.files.get("filebody")
+        try:
+            filename, sha256sum = self._upload_metadata(upload)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        existing_by_hash = (
+            db.session.query(Nses).filter(Nses.hash == sha256sum).one_or_none()
+        )
+        existing_by_name = (
+            db.session.query(Nses).filter(Nses.name == filename).one_or_none()
+        )
+
+        if existing_by_hash is not None and (
+            existing_by_name is None or existing_by_name.id != existing_by_hash.id
+        ):
+            return self.response_400(
+                message="An NSE script with this file content (SHA256) already exists under a different name"
+            )
+
+        file_manager = FileManager()
+        item = existing_by_name
+        old_filebody = item.filebody if item is not None else None
+        new_filebody = None
+
+        if item is not None:
+            new_filebody = self._save_uploaded_file(file_manager, item, upload)
+            item.filebody = new_filebody
+            item.hash = sha256sum
+            status = 200
+        else:
+            item = Nses()
+            item.name = filename
+            item.hash = sha256sum
+            new_filebody = self._save_uploaded_file(file_manager, item, upload)
+            item.filebody = new_filebody
+            db.session.add(item)
+            status = 201
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            self._delete_uploaded_file(file_manager, new_filebody)
+            return self._duplicate_value_response()
+
+        if old_filebody and old_filebody != new_filebody:
+            self._delete_uploaded_file(file_manager, old_filebody)
+
+        return self.response(
+            status,
+            result=self._serialize_nse(item),
+        )
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        ---
+        get:
+          summary: Get a single NSE script by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+          responses:
+            "200":
+              description: NSE script metadata.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                          name:
+                            type: string
+                          hash:
+                            type: string
+            "404":
+              description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        return self.response(200, result=self._serialize_nse(item))
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        ---
+        put:
+          summary: Update an NSE script by ID.
+          description: |
+            Replace the file content (``filebody``) and/or rename (``name`` form
+            field) an existing NSE script.  At least one must be supplied.
+            Duplicate SHA256 hashes and name collisions with other records are
+            rejected.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+          requestBody:
+            required: true
+            content:
+              multipart/form-data:
+                schema:
+                  type: object
+                  properties:
+                    filebody:
+                      type: string
+                      format: binary
+                      description: New .nse script file.
+                    name:
+                      type: string
+                      description: New script name; .nse suffix is appended if omitted.
+          responses:
+            "200":
+              description: NSE script updated successfully.
+            "400":
+              description: Missing payload, wrong extension, duplicate hash, or name collision.
+            "404":
+              description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        upload = request.files.get("filebody")
+        has_upload_field = upload is not None
+        has_name_field = "name" in request.form
+        new_name = None
+
+        if not has_upload_field and not has_name_field:
+            return self.response_400(
+                message="Provide at least a new 'filebody' or a new 'name'"
+            )
+
+        try:
+            if has_name_field:
+                new_name = self._normalize_nse_name(
+                    request.form.get("name"),
+                    append_suffix=True,
+                )
+
+                collision = (
+                    db.session.query(Nses)
+                    .filter(Nses.name == new_name, Nses.id != pk)
+                    .one_or_none()
+                )
+                if collision is not None:
+                    raise ValueError(f"An NSE script named '{new_name}' already exists")
+
+            if has_upload_field:
+                _, sha256sum = self._upload_metadata(upload)
+
+                collision = (
+                    db.session.query(Nses)
+                    .filter(Nses.hash == sha256sum, Nses.id != pk)
+                    .one_or_none()
+                )
+                if collision is not None:
+                    raise ValueError(
+                        "An NSE script with this file content (SHA256) already exists "
+                        "under a different name"
+                    )
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        file_manager = FileManager()
+        old_filebody = item.filebody
+        new_filebody = None
+
+        if has_upload_field:
+            new_filebody = self._save_uploaded_file(file_manager, item, upload)
+            item.filebody = new_filebody
+            item.hash = sha256sum
+
+        if new_name is not None:
+            item.name = new_name
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            self._delete_uploaded_file(file_manager, new_filebody)
+            return self._duplicate_value_response()
+
+        if old_filebody and new_filebody and old_filebody != new_filebody:
+            self._delete_uploaded_file(file_manager, old_filebody)
+
+        return self.response(200, result=self._serialize_nse(item))
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        ---
+        delete:
+          summary: Delete an NSE script by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the NSE script to delete.
+          responses:
+            "200":
+              description: NSE script deleted successfully.
+            "404":
+              description: NSE script not found.
+        """
+        item = db.session.query(Nses).filter(Nses.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        file_manager = FileManager()
+        old_filebody = item.filebody
+        item_name = item.name
+
+        db.session.delete(item)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self._duplicate_value_response()
+
+        self._delete_uploaded_file(file_manager, old_filebody)
+        return self.response(200, message=f"NSE '{item_name}' deleted")
+
+
+class PortsApi(BaseApi):
+    """
+    REST API for managing scan ports.
+
+    Provides programmatic equivalents of the /portsview HTML form: list, create,
+    read, update, and delete port entries.  All requests and responses are JSON.
+    The ``proto`` field in request bodies is the protocol label (e.g. ``"TCP"``);
+    the API resolves the matching Protos record internally.
+    """
+
+    route_base = "/api/v1/ports"
+    openapi_spec_tag = "Ports API"
+
+    @staticmethod
+    def _serialize(port):
+        return {
+            "id": port.id,
+            "value": port.value,
+            "name": port.name,
+            "proto": str(port.proto),
+        }
+
+    @staticmethod
+    def _normalize_port_value(value):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("'value' must be an integer between 1 and 65535")
+
+        if value < 1 or value > 65535:
+            raise ValueError("'value' must be an integer between 1 and 65535")
+
+        return value
+
+    @staticmethod
+    def _normalize_port_name(value):
+        if not isinstance(value, str):
+            raise ValueError("'name' must be a non-empty string")
+
+        name = value.strip()
+        if not name:
+            raise ValueError("'name' must be a non-empty string")
+
+        return name
+
+    @staticmethod
+    def _normalize_proto_label(value):
+        if not isinstance(value, str):
+            raise ValueError("'proto' must be a non-empty string")
+
+        proto_label = value.strip().upper()
+        if not proto_label:
+            raise ValueError("'proto' must be a non-empty string")
+
+        return proto_label
+
+    @staticmethod
+    def _proto_to_port(port_value, proto_id):
+        return f"{port_value}:{proto_id}"
+
+    @staticmethod
+    def _get_proto(proto_label):
+        return (
+            db.session.query(Protos)
+            .filter(func.upper(Protos.value) == proto_label)
+            .one_or_none()
+        )
+
+    @staticmethod
+    def _port_exists(port_value, proto_id, current_id=None):
+        query = db.session.query(Ports).filter(
+            Ports.value == port_value,
+            Ports.proto_id == proto_id,
+        )
+        if current_id is not None:
+            query = query.filter(Ports.id != current_id)
+        return query.first() is not None
+
+    @staticmethod
+    def _duplicate_message(proto_label, port_value):
+        return f"Port {proto_label}:{port_value} already exists"
+
+    @staticmethod
+    def _require_json_object(data):
+        if not isinstance(data, dict):
+            raise ValueError("JSON body required")
+
+    @staticmethod
+    def _require_create_fields(data):
+        if not all(field in data for field in ("value", "name", "proto")):
+            raise ValueError("Fields 'value', 'name', and 'proto' are required")
+
+    @staticmethod
+    def _require_update_fields(data):
+        if not any(field in data for field in ("value", "name", "proto")):
+            raise ValueError(
+                "JSON body with at least one of 'value', 'name', 'proto' required"
+            )
+
+    def _validated_create_payload(self, data):
+        self._require_json_object(data)
+        self._require_create_fields(data)
+
+        port_value = self._normalize_port_value(data["value"])
+        name = self._normalize_port_name(data["name"])
+        proto_label = self._normalize_proto_label(data["proto"])
+        proto = self._get_proto(proto_label)
+        if proto is None:
+            raise ValueError(f"Unknown protocol '{proto_label}'")
+
+        if self._port_exists(port_value, proto.id):
+            raise ValueError(self._duplicate_message(proto_label, port_value))
+
+        return port_value, name, proto
+
+    def _validated_update_payload(self, item, data, pk):
+        self._require_json_object(data)
+        self._require_update_fields(data)
+
+        port_value = item.value
+        name = item.name
+        proto = item.proto
+
+        if "value" in data:
+            port_value = self._normalize_port_value(data["value"])
+
+        if "name" in data:
+            name = self._normalize_port_name(data["name"])
+
+        if "proto" in data:
+            proto_label = self._normalize_proto_label(data["proto"])
+            proto = self._get_proto(proto_label)
+            if proto is None:
+                raise ValueError(f"Unknown protocol '{proto_label}'")
+
+        proto_label = str(proto.value)
+        if self._port_exists(port_value, proto.id, current_id=pk):
+            raise ValueError(self._duplicate_message(proto_label, port_value))
+
+        return port_value, name, proto
+
+    @expose("/", methods=["GET"])
+    @protect()
+    @safe
+    def list(self):
+        """
+        ---
+        get:
+          summary: List all ports.
+          responses:
+            "200":
+              description: Array of port objects sorted by protocol then port number.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              type: integer
+                            value:
+                              type: integer
+                            name:
+                              type: string
+                            proto:
+                              type: string
+        """
+        ports = (
+            db.session.query(Ports)
+            .join(Protos, Ports.proto_id == Protos.id)
+            .order_by(Protos.value, Ports.value)
+            .all()
+        )
+        return self.response(200, result=[self._serialize(p) for p in ports])
+
+    @expose("/", methods=["POST"])
+    @protect()
+    @safe
+    def create(self):
+        """
+        ---
+        post:
+          summary: Create a new port.
+          description: |
+            Accepts a JSON body with ``value`` (integer 1-65535), ``name``
+            (description string), and ``proto`` (protocol label, e.g. ``"TCP"``).
+            Returns the created port object with status 201.
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required:
+                    - value
+                    - name
+                    - proto
+                  properties:
+                    value:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                      description: TCP/UDP port number.
+                    name:
+                      type: string
+                      description: Port description.
+                    proto:
+                      type: string
+                      description: Protocol label, for example TCP or UDP.
+          responses:
+            "201":
+              description: Port created successfully.
+            "400":
+              description: Missing/invalid fields or duplicate port/protocol combination.
+        """
+        data = request.get_json(silent=True)
+        try:
+            port_value, name, proto = self._validated_create_payload(data)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        item = Ports(
+            value=port_value,
+            name=name,
+            proto_id=proto.id,
+            proto_to_port=self._proto_to_port(port_value, proto.id),
+        )
+        db.session.add(item)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            proto_label = str(proto.value)
+            return self.response_400(
+                message=self._duplicate_message(proto_label, port_value)
+            )
+        return self.response(201, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, pk):
+        """
+        ---
+        get:
+          summary: Get a single port by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the port to retrieve.
+          responses:
+            "200":
+              description: Port object.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          id:
+                            type: integer
+                          value:
+                            type: integer
+                          name:
+                            type: string
+                          proto:
+                            type: string
+            "404":
+              description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["PUT"])
+    @protect()
+    @safe
+    def update(self, pk):
+        """
+        ---
+        put:
+          summary: Update a port by ID.
+          description: |
+            Accepts a JSON body with any subset of ``value``, ``name``, and
+            ``proto``.  At least one field must be present.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the port to update.
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    value:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                      description: TCP/UDP port number.
+                    name:
+                      type: string
+                      description: Port description.
+                    proto:
+                      type: string
+                      description: Protocol label, for example TCP or UDP.
+          responses:
+            "200":
+              description: Updated port object.
+            "400":
+              description: Invalid fields or resulting duplicate combination.
+            "404":
+              description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+
+        data = request.get_json(silent=True)
+        try:
+            port_value, name, proto = self._validated_update_payload(item, data, pk)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        proto_label = str(proto.value)
+        item.value = port_value
+        item.name = name
+        item.proto_id = proto.id
+        item.proto = proto
+        item.proto_to_port = self._proto_to_port(port_value, proto.id)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self.response_400(
+                message=self._duplicate_message(proto_label, port_value)
+            )
+        return self.response(200, result=self._serialize(item))
+
+    @expose("/<int:pk>", methods=["DELETE"])
+    @protect()
+    @safe
+    def delete(self, pk):
+        """
+        ---
+        delete:
+          summary: Delete a port by ID.
+          parameters:
+            - in: path
+              name: pk
+              required: true
+              schema:
+                type: integer
+              description: ID of the port to delete.
+          responses:
+            "200":
+              description: Port deleted.
+            "404":
+              description: Port not found.
+        """
+        item = db.session.query(Ports).filter(Ports.id == pk).one_or_none()
+        if item is None:
+            return self.response_404()
+        label = str(item)
+        db.session.delete(item)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return self.response_400(message=f"Port '{label}' could not be deleted")
+        return self.response(200, message=f"Port '{label}' deleted")
+
+
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
+appbuilder.add_api(NsesApi)
+appbuilder.add_api(PortsApi)
