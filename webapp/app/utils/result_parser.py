@@ -71,6 +71,7 @@ default_parsing = [
     "get_http_title:p.http-title.output",
     "get_ssl_info:p.ssl-cert",
     "get_hosts:p.ssl-cert.issuer.commonName",
+    "get_hosts:p.ssl-cert.subject.commonName",
     "get_hosts:p.ssl-cert.extensions.X509v3_Subject_Alternative_Name",
     "get_hosts:p.banner.output",
     "get_banner:p.banner.output",
@@ -102,6 +103,8 @@ fqdn_regex = re.compile(
     r"""(?:^|[\s(\/<>|@'"=\:])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-_]{2,})+)(?=$|[\?\s#&\/<>'",)])""",
     re.MULTILINE,
 )
+
+cert_dns_name_regex = re.compile(r"(?:^|[,\s])DNS\s*:\s*([^,\s]+)", re.IGNORECASE)
 
 favicon_field_regex = re.compile(
     r"^\s*(?:\|_?\s*)?"
@@ -412,6 +415,40 @@ def _build_hostname_parts(hostname, suffix, domain, subdomain, db_conf):
     }
 
 
+def _normalize_certificate_hostname(value):
+    """
+    Normalize TLS certificate DNS names before hostname parsing.
+    """
+    hostname = str(value or "").strip().lower().rstrip(".,;").rstrip(".")
+    if hostname.startswith("dns:"):
+        hostname = hostname[4:].strip()
+    if hostname.startswith("*."):
+        hostname = hostname[2:]
+    return hostname
+
+
+def _hostname_candidates(body):
+    """
+    Extract plain hostnames and TLS SAN/CN wildcard names from text values.
+    """
+    text = str(body)
+    candidates = []
+
+    for hostname in fqdn_regex.findall(text):
+        candidates.append(hostname)
+
+    normalized_body = _normalize_certificate_hostname(text)
+    if normalized_body != text.lower() and fqdn_regex.fullmatch(normalized_body):
+        candidates.append(normalized_body)
+
+    for hostname in cert_dns_name_regex.findall(text):
+        normalized = _normalize_certificate_hostname(hostname)
+        if normalized and fqdn_regex.fullmatch(normalized):
+            candidates.append(normalized)
+
+    return list(dict.fromkeys(candidates))
+
+
 def get_hosts(data: dict, target: str, db_conf: dict):
     """
     extract fqdn.
@@ -421,7 +458,7 @@ def get_hosts(data: dict, target: str, db_conf: dict):
     hosts, fqdn_hosts, domains, tlds = [], [], [], []
     if body:
         # Extract FQDN using regex if not empty data
-        fqdn_hosts_candidates = fqdn_regex.findall(str(body))
+        fqdn_hosts_candidates = _hostname_candidates(body)
         if fqdn_hosts_candidates:
             for host in fqdn_hosts_candidates:
                 parsed_host = _parse_hostname_parts(host, db_conf)
@@ -605,7 +642,7 @@ def fuse_dicts(d1, d2):
     return fused
 
 
-def parse_json(doc, db_conf_local, tag_rules=None):
+def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-locals
     """
     Parse one Nmap-like document into the Kvrocks search fields.
     """

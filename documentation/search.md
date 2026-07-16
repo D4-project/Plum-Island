@@ -49,11 +49,11 @@ No modifier means exact match. `like` without any scope reducer may slow down th
 | ----- | --------- | ----------- |
 | `ip` | | Host IP address |
 | `net` | | CIDR network. Networks from `/16` to `/24` are indexed directly; other masks are resolved through the closest indexed scope and filtered |
-| `fqdn` | `like`, `begin` | Fully qualified domain name found during enrichment |
+| `fqdn` | `like`, `begin` | Fully qualified domain name found during enrichment, including TLS certificate DNS SAN and subject CN names |
 | `fqdn_requested` | `like`, `begin` | FQDN originally submitted to the scanner |
 | `domain_requested` | `like`, `begin` | Requested domain submitted to the scanner |
 | `host` | `like`, `begin` | Hostname/subdomain part |
-| `domain` | `like`, `begin` | DNS domain |
+| `domain` | `like`, `begin` | DNS domain found during enrichment, including normalized TLS certificate DNS SAN and subject CN names |
 | `tld` | `like`, `begin` | Top-level domain |
 | `tag` | | Computed document tag |
 | `port` | | Open port |
@@ -74,6 +74,8 @@ No modifier means exact match. `like` without any scope reducer may slow down th
 | `x509_sha256` | | TLS certificate SHA-256 hash |
 | `x509_subject` | `like`, `begin` | TLS certificate subject |
 | `x509_san` | `like`, `begin` | TLS certificate subject alternative names |
+
+Certificate-derived `fqdn`, `host`, and `domain` values require rebuilding/reimporting the Kvrocks index for scans collected before the parser change.
 
 ## HTTP header search
 
