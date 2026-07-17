@@ -25,6 +25,7 @@
   - Align `webapp/run.py` port with `docker-compose.yml`, closes #164.
   - Complete template XSS hardening by building dynamic target/search/detail HTML with DOM APIs and escaping dynamic values, closes #151.
   - Index normalized TLS certificate SAN and subject CN hostnames into `fqdn`, `host`, and `domain` search fields, closes #186.
+  - Add Plesk detection from `X-Powered-By: PleskLin`, closes #187.
 - Docker and deployment:
   - Add `plum_net` external Docker network for Plum-Agent connectivity, closes #165.
   - Rename Docker Compose services with the `plum-` prefix, closes #166.
