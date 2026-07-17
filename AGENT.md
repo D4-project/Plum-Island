@@ -69,6 +69,8 @@ When you need to understand actual product behavior, prioritize:
 
 ## Entry Points
 
+- `setup.sh`: first-run installer. Creates `.venv`, installs `requirements.txt`, creates the Flask-AppBuilder admin user, then runs `tools/initial_setup.py`.
+- `tools/initial_setup.py`: initial DB/data bootstrap. Seeds roles, TCP ports, HTTP header collection, bundled YAML tag rules, NSE scripts from `D4-project/Plum-Rules-NSE`, and the default all-target banner scan profile.
 - `webapp/run.py`: local dev launcher, runs Flask on `0.0.0.0:5001` with `debug=True`.
 - `webapp/app/__init__.py`: creates Flask, SQLAlchemy, AppBuilder, loads views/APIs, and starts the scheduler only in the Werkzeug main process.
 - `webapp/app/views.py`: GUI views, search pages, bulk target import, and job result file display.
@@ -107,6 +109,8 @@ If a test cannot run because it needs external services or local data, state tha
 - `Bots`: remote scanner agents beaconing to the server.
 - `ApiKeys`: bot authentication secrets.
 - `ScanProfiles`, `Ports`, `Nses`: scan definition data model. Jobs are dispatched with profile-specific ports and NSE scripts.
+
+Fresh setup creates an all-target `Default banner scan` profile for TCP ports `22`, `80`, and `443` with `banner.nse`. It also seeds all TCP ports, the default HTTP header tagging collection, YAML tag rules, and controller-managed NSE scripts.
 
 ### Effective runtime flow
 
@@ -199,7 +203,7 @@ If these fields are missing in Kvrocks while isolated parsing works, check this 
 Plum exposes two distinct search pages and they do not serve the same purpose:
 
 - `Token Search` uses Meilisearch. This is the broad, free-form, word-based search page. It is useful when the user wants to search scan documents more loosely and inspect matching raw bodies quickly.
-- `Search Scans` uses Kvrocks. This is the structured search page, closer to a Shodan-like experience. It accepts fielded filters such as `ip`, `net`, `port`, `http_server`, `http_title`, `x509_subject`, `banner`, and similar parsed attributes.
+- `Search Scans` uses Kvrocks. This is the structured search page, closer to a Shodan-like experience. It accepts fielded filters such as `ip`, `net`, `port`, `http_server`, `http_header`, `http_headval`, `http_title`, `x509_subject`, `banner`, and similar parsed attributes.
 
 The structured search page is the more operational one:
 
@@ -283,6 +287,18 @@ For the structured search page specifically, keep these moving parts aligned:
 - `search_kvrocks.html` for the help table, default date handling, and adaptive loading behavior
 - `result_parser.py` plus `KVrocksIndexer.add_documents_batch()` for the actual indexed field names
 
+### If you change setup/bootstrap
+
+- `setup.sh`
+- `tools/initial_setup.py`
+- `requirements.txt`
+- `documentation/installation.md`
+- `documentation/tools.md`
+- `readme.md`
+- `release_note.md`
+
+Keep the first-run installer aligned with the documented initial objects: TCP ports, HTTP header collection, tag rules, NSE imports, and default scan profiles.
+
 ## Parsing And Search Contract
 
 The parser in `webapp/app/utils/result_parser.py` expects per-host result objects shaped roughly like:
@@ -304,6 +320,8 @@ It extracts these searchable fields:
 - `tag`
 - `port`
 - `http_title`
+- `http_header`
+- `http_headval`
 - `http_cookiename`
 - `http_etag`
 - `http_server`
@@ -377,6 +395,13 @@ If you add a new parsed field, update all of:
 
 If you skip one of these, the feature will look half-implemented.
 
+### If you change YAML detection rules
+
+- webapp/tags/*.yaml
+- release_note.md
+
+Do not add automated tests for detection-only YAML rule changes. Keep these changes limited to the rule file and release note unless the parser, indexer, or tag engine behavior itself changes.
+
 Also keep the split of responsibilities clear:
 
 - Meilisearch receives the exported JSON-like host documents.
@@ -390,13 +415,15 @@ The README-level search contract currently includes:
 - implicit `AND` inside one query group
 - explicit `OR` between query groups
 
-Keep `AGENT.md`, `README`, parser output, and `KVSearchView.parse_query()` aligned. If one changes without the others, the analyst-facing search model becomes misleading.
+Keep `AGENT.md`, `readme.md`, parser output, and `KVSearchView.parse_query()` aligned. If one changes without the others, the analyst-facing search model becomes misleading.
 
 ## Operational Assumptions
 
 - Flask-AppBuilder is the admin/UI framework.
 - SQLite is the default local relational DB in dev, used for app state and objects rather than scanned result storage.
 - Meilisearch and Kvrocks are expected to be running externally.
+- `setup.sh` must use the local virtualenv Python explicitly for pip, Flask CLI, and bootstrap commands. Do not depend on shell activation to find `flask`.
+- `tools/initial_setup.py` owns first-run seed data: security roles, TCP ports, HTTP header collection, YAML tag rules, NSE imports from `https://github.com/D4-project/Plum-Rules-NSE`, and the `Default banner scan` profile.
 - Scheduler startup has side effects at import time in `webapp/app/scheduler.py`.
 - When `ONLINETLD = True`, app startup performs a live TLD download via `fetch_tlds()`.
 - `webapp/app/jsons/` may contain copied sample scan results useful for development and parser work; do not assume this directory reflects live production data.
