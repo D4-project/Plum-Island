@@ -1,0 +1,6 @@
+description: OpenResty
+query: http_server.bg:openresty
+tags:
+- product:openresty
+- vendor:openresty
+version: 20260717T000000Z
