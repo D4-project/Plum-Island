@@ -29,6 +29,7 @@
   - Add OpenResty Server header detection, closes #185.
   - Add Gitea title detection, closes #184.
   - Add Wyse Management Suite title detection, closes #183.
+  - Add Ivanti favicon detection, closes #181.
 - Docker and deployment:
   - Add `plum_net` external Docker network for Plum-Agent connectivity, closes #165.
   - Rename Docker Compose services with the `plum-` prefix, closes #166.

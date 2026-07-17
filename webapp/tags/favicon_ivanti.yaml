@@ -1,0 +1,7 @@
+description: Ivanti
+query: http_favicon_mmhash:1983356674 OR http_favicon_md5:182336a576ac6ee5aca724e6c718b7d6
+  OR http_favicon_sha256:968ba268be72e7ce0c2797110c346321c16b9862214b23b0e9af37adac8b005f
+tags:
+- product:ivanti
+- vendor:ivanti
+version: 20260717T000000Z
