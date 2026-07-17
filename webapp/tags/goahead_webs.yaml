@@ -1,0 +1,7 @@
+description: GoAhead WebServer
+query: http_server.lk:"goahead-webs"
+tags:
+- vendor:embedthis
+- product:goahead-webs
+- type:web-server
+version: 20260717T000000Z
