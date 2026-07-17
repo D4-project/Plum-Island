@@ -1,0 +1,6 @@
+description: Wyse Management Suite
+query: http_title.bg:"Wyse Management Suite"
+tags:
+- vendor:dell
+- product:wyse-management-suite
+version: 20260717T000000Z
