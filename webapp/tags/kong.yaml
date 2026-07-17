@@ -1,0 +1,7 @@
+description: Kong Gateway
+query: http_header:x-kong-proxy-latency OR http_header:x-kong-upstream-latency OR http_header:x-kong-response-latency OR http_header:x-kong-admin-latency OR http_header:x-kong-upstream-status OR http_header:x-kong-request-id OR http_header:x-kong-total-latency OR http_header:x-kong-third-party-latency OR http_header:x-kong-client-latency
+tags:
+- vendor:kong
+- product:kong-gateway
+- type:api-gateway
+version: 20260717T000000Z

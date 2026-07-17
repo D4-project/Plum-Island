@@ -141,6 +141,7 @@
   - Add Barracuda CloudGen Firewall server header tagging, closes #77
   - Rename FRITZ!Box vendor tag from `fritzbox` to `avm`
   - Add F5 Distributed Cloud load balancer detection from default `volt-adc` Server header, closes #123
+  - Add Kong Gateway detection from `X-Kong-*` response headers, closes #157
   - Store tag rule values as `namespace:value` while keeping `tag:*` search and Kvrocks keys
   - Merge tag import and Kvrocks tag reindex commands into `tools/tag_mgmt.py`; import/delete now require `--all`, `--id`, or `--tags-file`
   - Accumulate repeated per-port parser results so multi-service banners can all receive tag rules
