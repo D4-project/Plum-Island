@@ -219,8 +219,8 @@ def task_master_of_puppets():
     try:
         step_durations = {
             "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
-            "priority_retag": _run_scheduler_step(
-                "priority_retag", task_retag_queued_job_priorities
+            "profile_sync": _run_scheduler_step(
+                "profile_sync", task_sync_queued_profile_jobs
             ),
             "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
             "reports": _run_scheduler_step("reports", task_run_due_reports),
@@ -234,10 +234,10 @@ def task_master_of_puppets():
         }
         total_elapsed = time.perf_counter() - scheduler_started_at
         logger.info(
-            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, priority_retag=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
+            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, profile_sync=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
             step_durations["create_jobs"]["elapsed"],
-            step_durations["priority_retag"]["elapsed"],
+            step_durations["profile_sync"]["elapsed"],
             step_durations["export_to_dbs"]["elapsed"],
             step_durations["reports"]["elapsed"],
             step_durations["cleanup_jobs"]["elapsed"],
@@ -1123,9 +1123,13 @@ def task_create_jobs():
     }
 
 
-def task_retag_queued_job_priorities():
+def task_sync_queued_profile_jobs():
     """
-    Gradually converge queued job priorities to their scan profile priority.
+    Gradually converge queued job snapshots to their scan profile settings.
+
+    Jobs are immutable while running or after completion. Queued jobs are
+    updated in bounded batches so profile edits do not hold the database lock
+    for the whole backlog.
     """
     started_at = time.perf_counter()
     batch_size = _get_scheduler_int_config(
@@ -1139,24 +1143,34 @@ def task_retag_queued_job_priorities():
         .all()
     )
     if not profiles:
-        logger.debug("Priority retag TASK: no pending profile")
-        return {"profiles_pending": 0, "jobs_retagged": 0}
+        logger.debug("Profile sync TASK: no pending profile")
+        return {"profiles_pending": 0, "jobs_synchronized": 0}
 
-    total_retagged = 0
+    total_synchronized = 0
     completed_profiles = 0
     for profile in profiles:
         updated = (
             db.session.execute(
                 text("""
                     UPDATE jobs
-                       SET priority = :priority
+                       SET priority = :priority,
+                           scanprofile_name = :profile_name,
+                           scan_ports = :scan_ports,
+                           scan_nses = :scan_nses,
+                           nmap_additional_params = :nmap_additional_params
                      WHERE id IN (
                             SELECT id
                               FROM jobs
                              WHERE scanprofile_id = :profile_id
                                AND active = 0
                                AND finished = 0
-                               AND priority != :priority
+                               AND (
+                                  priority != :priority
+                               OR COALESCE(scanprofile_name, '') != COALESCE(:profile_name, '')
+                               OR COALESCE(scan_ports, '') != COALESCE(:scan_ports, '')
+                               OR COALESCE(scan_nses, '') != COALESCE(:scan_nses, '')
+                               OR COALESCE(nmap_additional_params, '') != COALESCE(:nmap_additional_params, '')
+                             )
                              ORDER BY job_creation ASC
                              LIMIT :batch_size
                        )
@@ -1165,11 +1179,15 @@ def task_retag_queued_job_priorities():
                     "priority": int(profile.priority or 0),
                     "profile_id": profile.id,
                     "batch_size": batch_size,
+                    "profile_name": profile.name,
+                    "scan_ports": _serialize_profile_ports(profile),
+                    "scan_nses": _serialize_profile_nses(profile),
+                    "nmap_additional_params": profile.nmap_additional_params,
                 },
             ).rowcount
             or 0
         )
-        total_retagged += updated
+        total_synchronized += updated
 
         has_remaining = db.session.execute(
             text("""
@@ -1178,10 +1196,23 @@ def task_retag_queued_job_priorities():
                  WHERE scanprofile_id = :profile_id
                    AND active = 0
                    AND finished = 0
-                   AND priority != :priority
+                   AND (
+                        priority != :priority
+                     OR COALESCE(scanprofile_name, '') != COALESCE(:profile_name, '')
+                     OR COALESCE(scan_ports, '') != COALESCE(:scan_ports, '')
+                     OR COALESCE(scan_nses, '') != COALESCE(:scan_nses, '')
+                     OR COALESCE(nmap_additional_params, '') != COALESCE(:nmap_additional_params, '')
+                   )
                  LIMIT 1
                 """),
-            {"profile_id": profile.id, "priority": int(profile.priority or 0)},
+            {
+                "profile_id": profile.id,
+                "priority": int(profile.priority or 0),
+                "profile_name": profile.name,
+                "scan_ports": _serialize_profile_ports(profile),
+                "scan_nses": _serialize_profile_nses(profile),
+                "nmap_additional_params": profile.nmap_additional_params,
+            },
         ).fetchone()
         if has_remaining is None:
             profile.priority_retag_pending = False
@@ -1189,16 +1220,15 @@ def task_retag_queued_job_priorities():
 
         db.session.commit()
         logger.info(
-            "Priority retag TASK: profile %s retagged %s queued jobs to priority %s; pending=%s",
+            "Profile sync TASK: profile %s synchronized %s queued jobs; pending=%s",
             profile.name,
             updated,
-            profile.priority,
             bool(has_remaining),
         )
 
     logger.info(
-        "Priority retag TASK: retagged %s queued jobs across %s profiles; completed_profiles=%s; batch_size=%s; elapsed=%.2fs",
-        total_retagged,
+        "Profile sync TASK: synchronized %s queued jobs across %s profiles; completed_profiles=%s; batch_size=%s; elapsed=%.2fs",
+        total_synchronized,
         len(profiles),
         completed_profiles,
         batch_size,
@@ -1207,7 +1237,7 @@ def task_retag_queued_job_priorities():
     return {
         "profiles_pending": len(profiles),
         "profiles_completed": completed_profiles,
-        "jobs_retagged": total_retagged,
+        "jobs_synchronized": total_synchronized,
         "batch_size": batch_size,
     }
 

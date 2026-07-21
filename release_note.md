@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Synchronize queued job profile snapshots in bounded scheduler batches after profile edits.
+
 - Add optional scan-profile Nmap parameters, job snapshots, bot API payload support, safe validation, migration, and documentation, closes #188.
 
 - Tooling and target import:
