@@ -10,6 +10,7 @@ This is the module containing all the data models
 
 import html
 import re
+import shlex
 from flask_appbuilder import Model
 from markupsafe import Markup as Esc
 from sqlalchemy import (
@@ -30,6 +31,9 @@ from sqlalchemy.orm import relationship, object_session, validates
 from .utils.mutils import compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
 
+NMAP_ADDITIONAL_PARAMS_MAX_LENGTH = 4096
+NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS = frozenset(";&|$" + chr(96) + "<>")
+
 HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
 
 
@@ -43,6 +47,42 @@ def is_valid_http_header_name(value):
         and len(header_name) <= 128
         and bool(HTTP_HEADER_NAME_RE.fullmatch(header_name))
     )
+
+
+def validate_nmap_additional_params(value):
+    """
+    Validate optional Nmap parameters as shell-free argv input.
+
+    The agent must receive arguments, never a shell command. Shell control
+    characters are rejected here as an early server-side safety check.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Nmap additional params must be a string")
+
+    params = value.strip()
+    if not params:
+        return None
+    if len(params) > NMAP_ADDITIONAL_PARAMS_MAX_LENGTH:
+        raise ValueError("Nmap additional params are too long")
+    if any(char in params for char in NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS):
+        raise ValueError("Nmap additional params contain forbidden shell syntax")
+    if "\n" in params or "\r" in params:
+        raise ValueError("Nmap additional params must be one line")
+
+    try:
+        tokens = shlex.split(params, posix=True)
+    except ValueError as error:
+        raise ValueError("Nmap additional params must be valid argv syntax") from error
+    if not tokens:
+        return None
+    if any(
+        any(char in token for char in NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS)
+        for token in tokens
+    ):
+        raise ValueError("Nmap additional params contain forbidden shell syntax")
+    return params
 
 
 def _html_escape(value, quote=True):
@@ -147,6 +187,7 @@ class Jobs(Model):
     scan_unit_count = Column(BigInteger, default=1, nullable=False)
     scan_ports = Column(Text, nullable=True)
     scan_nses = Column(Text, nullable=True)
+    nmap_additional_params = Column(Text, nullable=True)
     scanprofile = relationship("ScanProfiles", back_populates="jobs")
     scanprofile_cycle = relationship("ScanProfileCycles", back_populates="jobs")
     targets = relationship(
@@ -1014,6 +1055,7 @@ class ScanProfiles(Model):
     priority = Column(Integer, default=0)
     priority_retag_pending = Column(Boolean, default=False, nullable=False)
     scan_cycle_minutes = Column(Integer, default=720)
+    nmap_additional_params = Column(Text, nullable=True)
     current_cycle_id = Column(Integer, default=None)
     last_cycle_finished_at = Column(DateTime, default=None)
     jobs = relationship("Jobs", back_populates="scanprofile")
@@ -1026,6 +1068,11 @@ class ScanProfiles(Model):
     scan_states = relationship(
         "TargetScanStates", back_populates="scanprofile", cascade="all, delete-orphan"
     )
+
+    @validates("nmap_additional_params")
+    def validate_nmap_additional_params_field(self, _key, value):
+        """Keep stored profile parameters safe for shell-free agents."""
+        return validate_nmap_additional_params(value)
 
     @validates("priority")
     def validate_priority(self, key, value):

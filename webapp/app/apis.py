@@ -236,6 +236,11 @@ def _get_bot_by_uid(bot_uid):
     )
 
 
+def _build_job_nmap_additional_params_payload(job):
+    """Return optional profile parameters while tolerating legacy jobs."""
+    return getattr(job, "nmap_additional_params", None)
+
+
 def _build_job_nse_payload(scan_nses, agent_nse_hashes):
     """
     Build the job NSE payload and only include file contents when the agent cache
@@ -697,6 +702,9 @@ class Api(BaseApi):
                 "nse_scripts": nse_scripts,
                 "nmap_ports": (
                     job_todo.scan_ports.split(",") if job_todo.scan_ports else []
+                ),
+                "nmap_additional_params": _build_job_nmap_additional_params_payload(
+                    job_todo
                 ),
             }
         else:

@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add optional scan-profile Nmap parameters, job snapshots, bot API payload support, safe validation, migration, and documentation, closes #188.
+
 - Tooling and target import:
   - Add `tools/import_whois_ranges.py` to download RIR WHOIS sources, extract matching country/word IPv4 ranges, reduce covered CIDRs, and import targets through the Plum API.
   - Add `tools/range_import.yaml.sample` and ignore local WHOIS import config/cache/log files.

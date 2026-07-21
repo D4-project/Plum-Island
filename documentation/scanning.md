@@ -54,6 +54,9 @@ When an agent fetches a job:
 
 - `nmap_ports` comes only from the job/profile
 - `nmap_nse` comes only from the job/profile
+- `nmap_additional_params` is an optional profile snapshot containing shell-free Nmap argv tokens
+- profile parameters are empty by default; older agents ignore this additive payload field
+- agents that support the field may use duplicate options to override their defaults
 - NSE files are synchronized to the agent by filename and SHA-256 hash
 - the file body is transferred only when the agent cache does not already have the expected hash
 

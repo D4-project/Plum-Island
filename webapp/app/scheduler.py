@@ -716,6 +716,7 @@ def _enqueue_profile_job(profile, job_value, scan_ports, scan_nses, chunk, scan_
     new_job.scanprofile_name = profile.name
     new_job.scan_ports = scan_ports
     new_job.scan_nses = scan_nses
+    new_job.nmap_additional_params = profile.nmap_additional_params
     new_job.scan_unit_count = compute_scan_unit_count_list(job_value)
     new_job.priority = profile.priority or 0
     new_job.scanprofile_cycle = scan_cycle

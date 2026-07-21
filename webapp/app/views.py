@@ -3642,6 +3642,7 @@ class ScanprofilesView(ModelView):
         "priority",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
         "current_cycle_summary_html",
     ]
@@ -3657,6 +3658,7 @@ class ScanprofilesView(ModelView):
         "priority",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
     ]
     edit_columns = [
@@ -3665,6 +3667,7 @@ class ScanprofilesView(ModelView):
         "priority",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
     ]
     show_columns = [
@@ -3674,6 +3677,7 @@ class ScanprofilesView(ModelView):
         "priority_retag_pending",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
     ]
     add_form_extra_fields = {
@@ -3712,6 +3716,7 @@ class ScanprofilesView(ModelView):
     }
     label_columns = {
         "nses": "Nse Scripts",
+        "nmap_additional_params": "nmap additional params",
         "apply_to_all": "Apply to all scans",
         "scan_cycle_minutes": "Scan Frequency (min)",
         "priority_retag_pending": "Priority retag pending",
