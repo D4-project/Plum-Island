@@ -17,6 +17,7 @@ The project is designed for repeated monitoring rather than one-shot scans: targ
 ## Main features
 
 - Distributed scan orchestration with agents and server-side job queues.
+- Optional direct-run application logs can be enabled in `webapp/config.py`; logs default to `./log/agent-YYMMDD.log` with configurable rotation and retention.
 - Active unfinished scan jobs are requeued by the scheduler after two hours;
   late agent results are rejected when ownership has changed.
 - Target and scan profile management.
@@ -27,6 +28,22 @@ The project is designed for repeated monitoring rather than one-shot scans: targ
 - Favicon-based tagging using MD5, SHA-256, and mmhash indicators.
 - Scheduled Markdown reports from the same search syntax used by the UI.
 - CSV/JSON export workflows for search results.
+
+### Application logs
+
+Enable persistent direct-run logs in `webapp/config.py`:
+
+```python
+LOG_ENABLED = True
+LOG_LEVEL = "INFO"
+LOG_DIR = "./log"
+LOG_ROTATION_DAYS = 90
+LOG_RETENTION_DAYS = 90
+```
+
+The application creates the directory and writes date-named files such as
+`./log/agent-260722.log`. Generated logs are ignored by Git and removed after
+the configured retention period.
 
 ## Search options
 

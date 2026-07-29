@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add optional configurable date-named application logs with 90-day rotation and retention, closes #192.
+
 - Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
 
 - Synchronize queued job profile snapshots in bounded scheduler batches after profile edits.

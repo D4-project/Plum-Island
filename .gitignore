@@ -9,5 +9,6 @@ tools/meili_dump_port
 tools/config.yaml
 tools/range_import.yaml
 tools/log/
+log/
 tools/tmp/
 external/

@@ -178,6 +178,14 @@ SCAN_DELAY = 12
 # How many time between job scheduling in minutes
 SCHEDULER_DELAY = 10
 
+# Optional persistent application logging. Files use <prefix>-YYMMDD.log.
+LOG_ENABLED = False
+LOG_LEVEL = "DEBUG"
+LOG_DIR = "./log"
+LOG_FILE_PREFIX = "agent"
+LOG_ROTATION_DAYS = 90
+LOG_RETENTION_DAYS = 90
+
 # Active unfinished jobs are returned to the queue after two hours without a
 # result. Late agent submissions are rejected by ownership checks.
 # This timeout is fixed by the scheduler watchdog.
