@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
+
 - Synchronize queued job profile snapshots in bounded scheduler batches after profile edits.
 
 - Add optional scan-profile Nmap parameters, job snapshots, bot API payload support, safe validation, migration, and documentation, closes #188.

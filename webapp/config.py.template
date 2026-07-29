@@ -178,6 +178,10 @@ SCAN_DELAY = 12
 # How many time between job scheduling in minutes
 SCHEDULER_DELAY = 10
 
+# Active unfinished jobs are returned to the queue after two hours without a
+# result. Late agent submissions are rejected by ownership checks.
+# This timeout is fixed by the scheduler watchdog.
+
 # Per-profile waiting queue target. The scheduler tops queues up to this level.
 SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE = 256
 

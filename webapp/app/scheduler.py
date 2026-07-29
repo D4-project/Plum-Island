@@ -59,6 +59,7 @@ DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
+STALLED_JOB_TIMEOUT = timedelta(hours=2)
 UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
@@ -206,6 +207,44 @@ def _format_scheduler_summary(summary):
     return str(summary)
 
 
+def task_release_stalled_jobs(now=None):
+    """
+    Requeue unfinished jobs whose agent claim exceeded the fixed two-hour
+    timeout.
+
+    The conditional update is the ownership guard: a job claimed or finished
+    after the query snapshot is not reset by this watchdog.
+    """
+    now = now or utcnow_naive()
+    cutoff = now - STALLED_JOB_TIMEOUT
+    released_jobs = (
+        db.session.query(Jobs)
+        .filter(
+            Jobs.active == True,
+            Jobs.finished == False,
+            Jobs.job_start.isnot(None),
+            Jobs.job_start <= cutoff,
+        )
+        .update(
+            {
+                Jobs.active: False,
+                Jobs.bot_id: None,
+                Jobs.job_start: None,
+            },
+            synchronize_session=False,
+        )
+        or 0
+    )
+    if released_jobs:
+        db.session.commit()
+        logger.warning(
+            "Scheduler watchdog requeued %s stalled job(s) older than %s",
+            released_jobs,
+            cutoff.isoformat(),
+        )
+    return {"stalled_jobs_released": released_jobs}
+
+
 def task_master_of_puppets():
     """
     Sequentially run Scheduled tasks
@@ -218,6 +257,9 @@ def task_master_of_puppets():
     db.session.remove()
     try:
         step_durations = {
+            "release_stalled_jobs": _run_scheduler_step(
+                "release_stalled_jobs", task_release_stalled_jobs
+            ),
             "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
             "profile_sync": _run_scheduler_step(
                 "profile_sync", task_sync_queued_profile_jobs
@@ -234,8 +276,9 @@ def task_master_of_puppets():
         }
         total_elapsed = time.perf_counter() - scheduler_started_at
         logger.info(
-            "Scheduler TASK: tick complete in %.2fs (create_jobs=%.2fs, profile_sync=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
+            "Scheduler TASK: tick complete in %.2fs (release_stalled_jobs=%.2fs, create_jobs=%.2fs, profile_sync=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
+            step_durations["release_stalled_jobs"]["elapsed"],
             step_durations["create_jobs"]["elapsed"],
             step_durations["profile_sync"]["elapsed"],
             step_durations["export_to_dbs"]["elapsed"],

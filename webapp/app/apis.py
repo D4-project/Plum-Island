@@ -858,7 +858,7 @@ class Api(BaseApi):
 
         if job_bot.bot_id != submitting_bot.id:
             logger.warning(
-                "Bot %s tried to submit job %s assigned to bot_id %s",
+                "Bot %s submitted stale or late result for job %s assigned to bot_id %s",
                 botinfo.get("UID"),
                 job_bot.uid,
                 job_bot.bot_id,

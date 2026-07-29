@@ -17,6 +17,8 @@ The project is designed for repeated monitoring rather than one-shot scans: targ
 ## Main features
 
 - Distributed scan orchestration with agents and server-side job queues.
+- Active unfinished scan jobs are requeued by the scheduler after two hours;
+  late agent results are rejected when ownership has changed.
 - Target and scan profile management.
 - Per-profile scan tracking for each target.
 - Indexed search over IPs, networks, ports, DNS names, HTTP metadata, favicons, TLS certificates, banners, and computed tags.
