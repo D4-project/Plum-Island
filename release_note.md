@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add SonicWall Secure Mobile Access server detection and tagging, closes #191.
+
 - Add optional configurable date-named application logs with 90-day rotation and retention, closes #192.
 
 - Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
