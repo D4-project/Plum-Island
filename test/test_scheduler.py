@@ -89,3 +89,58 @@ class StalledJobWatchdogTest(TestCase):
         sql_clause, params = session.execute.call_args.args
         self.assertIn("t.id <= :max_target_id", str(sql_clause))
         self.assertEqual(params["max_target_id"], 123)
+
+    def test_export_batch_waits_for_meili_before_kvrocks(self):
+        """Kvrocks is written only after Meilisearch confirms success."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.add_documents.return_value = SimpleNamespace(task_uid=42)
+        meili_index.wait_for_task.return_value = SimpleNamespace(
+            status="succeeded",
+            error=None,
+        )
+        calls = []
+        meili_index.wait_for_task.side_effect = lambda *args, **kwargs: (
+            calls.append("meili") or SimpleNamespace(status="succeeded", error=None)
+        )
+        kvrocks_index.add_documents_batch.side_effect = lambda _docs: calls.append(
+            "kvrocks"
+        )
+
+        exported = self.scheduler._export_document_batch(
+            meili_index,
+            kvrocks_index,
+            [{"id": "one"}],
+            [{"uid": "one"}],
+            timeout_ms=1234,
+        )
+
+        self.assertEqual(exported, 1)
+        self.assertEqual(calls, ["meili", "kvrocks"])
+        meili_index.wait_for_task.assert_called_once_with(
+            42,
+            timeout_in_ms=1234,
+        )
+
+    def test_failed_meili_export_never_writes_kvrocks(self):
+        """Rejected Meilisearch tasks leave Kvrocks untouched for retry."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.add_documents.return_value = SimpleNamespace(task_uid=43)
+        meili_index.wait_for_task.return_value = SimpleNamespace(
+            status="failed",
+            error={"message": "bad document"},
+        )
+
+        with self.assertRaisesRegex(
+            self.scheduler.MeiliExportTaskError,
+            "task 43 ended with status failed",
+        ):
+            self.scheduler._export_document_batch(
+                meili_index,
+                kvrocks_index,
+                [{"id": "one"}],
+                [{"uid": "one"}],
+            )
+
+        kvrocks_index.add_documents_batch.assert_not_called()

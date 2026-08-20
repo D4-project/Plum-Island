@@ -102,6 +102,7 @@ See [Reports documentation](documentation/reports.md) for report configuration, 
 - [Reports](documentation/reports.md)
 - [Scan profiles, scheduling, and priority](documentation/scanning.md)
 - [Tools](documentation/tools.md)
+- [Search index recovery](documentation/recovery-tools.md)
 - [Kvrocks objects](documentation/kvrocks_objects.md)
 
 ## Technical requirements

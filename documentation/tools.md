@@ -219,6 +219,12 @@ Use `--progress` when you want percentage output:
 
 This counts importable JSON documents before sending anything to Meilisearch. On large dumps this makes startup slower.
 
+### `reintegrate_missing_meili.py`
+
+Recover Kvrocks-only UIDs into Meilisearch from retained raw job JSON files.
+See [Search Index Recovery](recovery-tools.md) for dry-run, apply, validation,
+failure handling, and complete Kvrocks-from-Meilisearch rebuild procedures.
+
 ### `index_kvrocks.py`
 
 Build or rebuild the Kvrocks search indexes from Meilisearch documents.
@@ -240,7 +246,9 @@ Use a rebuild from a dump when you want to clean stale Kvrocks keys but prefer t
 .venv/bin/python tools/index_kvrocks.py --rebuild --input-dir tools/meili_dump
 ```
 
-This deletes known Plum Kvrocks keys, then imports every JSON document from the dump. Before deleting `doc:*`, it snapshots existing `first_seen` and `last_seen` values in memory and applies them during reimport.
+This deletes known Plum Kvrocks search keys, preserves existing `doc:{uid}`
+timestamp hashes, then imports every JSON document from the dump. Preserved
+timestamps are merged during reimport.
 
 Use a rebuild directly from Meilisearch when you want the cleanest operational path and do not need an intermediate dump directory:
 
@@ -268,7 +276,9 @@ Search time bounds (`from` / `to`) are evaluated from Kvrocks only. They depend 
 
 Without `--rebuild`, existing `doc:{uid}` timestamps are kept for UIDs already present in Kvrocks. New UIDs get timestamps from the parsed scan document.
 
-With `--rebuild` or `--rebuild-from-meili`, the script snapshots existing `doc:{uid}` timestamps before deleting keys. During reimport, it preserves:
+With `--rebuild` or `--rebuild-from-meili`, the script keeps existing
+`doc:{uid}` timestamp hashes in place while deleting and rebuilding search keys.
+During reimport, it preserves:
 
 - earliest known `first_seen`
 - latest known `last_seen`

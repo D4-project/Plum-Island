@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from netaddr import IPNetwork, cidr_merge
 import meilisearch
-from meilisearch.errors import MeilisearchApiError
+from meilisearch.errors import MeilisearchApiError, MeilisearchError
 from nmap2json.smarthash import port_smart_hash
 from requests.exceptions import HTTPError
 from sqlalchemy import text
@@ -62,10 +62,53 @@ DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
 STALLED_JOB_TIMEOUT = timedelta(hours=2)
+DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS = 300_000
 UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
 )
+
+
+class MeiliExportTaskError(RuntimeError):
+    """Raised when Meilisearch rejects an asynchronous export task."""
+
+
+def _export_document_batch(
+    meili_idx,
+    kvrocks_idx,
+    meili_documents,
+    kvrocks_documents,
+    timeout_ms=DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS,
+):
+    """Write one batch to Meilisearch, then Kvrocks after confirmed success."""
+    if not meili_documents:
+        return 0
+    if len(meili_documents) != len(kvrocks_documents):
+        raise ValueError("Meilisearch and Kvrocks export batch sizes differ")
+
+    queued_task = meili_idx.add_documents(meili_documents)
+    task_uid = getattr(queued_task, "task_uid", None)
+    if task_uid is None:
+        task_uid = getattr(queued_task, "uid", None)
+    if task_uid is None:
+        raise MeiliExportTaskError(
+            "Meilisearch add_documents returned no task identifier"
+        )
+
+    completed_task = meili_idx.wait_for_task(
+        task_uid,
+        timeout_in_ms=timeout_ms,
+    )
+    task_status = str(getattr(completed_task, "status", "")).lower()
+    if task_status != "succeeded":
+        task_error = getattr(completed_task, "error", None)
+        raise MeiliExportTaskError(
+            f"Meilisearch task {task_uid} ended with status "
+            f"{task_status or 'unknown'}: {task_error or 'no error details'}"
+        )
+
+    kvrocks_idx.add_documents_batch(kvrocks_documents)
+    return len(meili_documents)
 
 
 def _clean_banner_outputs(port):
@@ -1381,13 +1424,23 @@ def task_export_to_dbs():
         if not pending_meili:
             return
         batch_count += 1
-        meili_idx.add_documents(pending_meili)
-        kvrocks_idx.add_documents_batch(pending_kvrocks)
+        exported_count = _export_document_batch(
+            meili_idx,
+            kvrocks_idx,
+            pending_meili,
+            pending_kvrocks,
+            timeout_ms=int(
+                db.app.config.get(
+                    "MEILI_EXPORT_TASK_TIMEOUT_MS",
+                    DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS,
+                )
+            ),
+        )
         for job_id in pending_job_refs:
             outstanding_docs[job_id] -= 1
             if outstanding_docs[job_id] == 0 and job_id in completed_jobs:
                 ready_jobs.add(job_id)
-        total_documents += len(pending_meili)
+        total_documents += exported_count
         pending_meili.clear()
         pending_kvrocks.clear()
         pending_job_refs.clear()
@@ -1459,9 +1512,9 @@ def task_export_to_dbs():
             "batches": batch_count,
             "jobs_marked_exported": updated_rows,
         }
-    except (MeilisearchApiError, HTTPError):
+    except (MeilisearchError, MeiliExportTaskError, HTTPError) as error:
         db.session.rollback()
-        logger.error("Unable to export to Meili database")
+        logger.error("Unable to export result batch: %s", error)
         return {
             "jobs_scanned": len(job_snapshots),
             "documents_exported": total_documents,

@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Confirm Meilisearch export tasks before writing Kvrocks or marking jobs exported, and add a raw-JSON recovery tool for Kvrocks-only documents.
+
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.
