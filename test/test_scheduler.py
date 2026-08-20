@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Regression tests for scheduler job recovery."""
 
-# pylint: disable=wrong-import-position
+# pylint: disable=wrong-import-position,protected-access,duplicate-code
 
 import importlib
 import os
 import sys
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest import TestCase, mock
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -65,3 +66,26 @@ class StalledJobWatchdogTest(TestCase):
     def test_timeout_is_timedelta(self):
         """Timeout remains a fixed two-hour duration, not scheduler interval."""
         self.assertEqual(self.scheduler.STALLED_JOB_TIMEOUT, timedelta(hours=2))
+
+    def test_due_state_query_applies_cycle_target_boundary(self):
+        """Targets above current cycle high-water mark remain for next cycle."""
+        session = mock.Mock()
+        session.execute.return_value.fetchall.return_value = []
+        profile = SimpleNamespace(
+            id=7,
+            scan_cycle_minutes=60,
+            apply_to_all=True,
+        )
+
+        with mock.patch.object(self.scheduler.db, "session", session):
+            states = self.scheduler._load_due_states_for_profile(
+                profile,
+                datetime(2026, 8, 20, 12, 0, 0),
+                state_limit=256,
+                max_target_id=123,
+            )
+
+        self.assertEqual(states, [])
+        sql_clause, params = session.execute.call_args.args
+        self.assertIn("t.id <= :max_target_id", str(sql_clause))
+        self.assertEqual(params["max_target_id"], 123)

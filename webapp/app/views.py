@@ -516,6 +516,8 @@ def get_scanprofile_cycle_rows(pk):
                 "finished_at": _format_datetime_for_ui(cycle.finished_at),
                 "duration": cycle.duration_html(),
                 "progress": cycle.progress_html(),
+                "max_target_id": cycle.max_target_id,
+                "blockers": cycle.blocker_summary(),
             }
         )
 

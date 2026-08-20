@@ -863,6 +863,7 @@ class ScanProfileCycles(Model):
     completed_target_count = Column(Integer, default=0, nullable=False)
     scan_unit_count = Column(BigInteger, default=0, nullable=False)
     completed_scan_unit_count = Column(BigInteger, default=0, nullable=False)
+    max_target_id = Column(Integer, default=None)
 
     scanprofile = relationship(
         "ScanProfiles",
@@ -914,14 +915,85 @@ class ScanProfileCycles(Model):
         return min(100.0, max(0.0, (completed / total) * 100))
 
     @staticmethod
-    def _progress_title(completed, total, target_completed, target_total):
+    def _format_blockers(target_completed, target_total, queued_jobs, active_jobs):
+        """
+        Render observable reasons why a running cycle cannot finish yet.
+        """
+        incomplete_targets = max(
+            0,
+            int(target_total or 0) - int(target_completed or 0),
+        )
+        blockers = []
+        if incomplete_targets:
+            blockers.append(f"{incomplete_targets:,} incomplete target")
+        if queued_jobs:
+            blockers.append(f"{int(queued_jobs):,} queued job")
+        if active_jobs:
+            blockers.append(f"{int(active_jobs):,} active job")
+        return ", ".join(blockers)
+
+    def _job_blocker_counts(self):
+        """
+        Return queued and active unfinished jobs attached to this cycle.
+        """
+        session = object_session(self)
+        if session is None or self.id is None:
+            return 0, 0
+
+        counts = {False: 0, True: 0}
+        rows = (
+            session.query(Jobs.active, func.count(Jobs.id))
+            .filter(
+                Jobs.scanprofile_cycle_id == self.id,
+                Jobs.finished.is_(False),
+            )
+            .group_by(Jobs.active)
+            .all()
+        )
+        for active, count in rows:
+            counts[bool(active)] = int(count or 0)
+        return counts[False], counts[True]
+
+    @staticmethod
+    def _progress_title(
+        completed,
+        total,
+        target_completed,
+        target_total,
+        job_counts=None,
+    ):
         """
         Render compact cycle tooltip text.
         """
-        return (
+        queued_jobs, active_jobs = job_counts or (0, 0)
+        title = (
             f"{int(completed or 0):,}/{int(total or 0):,} IP scan for "
             f"{int(target_completed or 0):,}/{int(target_total or 0):,} target"
         )
+        blockers = ScanProfileCycles._format_blockers(
+            target_completed,
+            target_total,
+            queued_jobs,
+            active_jobs,
+        )
+        if blockers:
+            title += f"; blockers: {blockers}"
+        return title
+
+    def blocker_summary(self):
+        """
+        Return current completion blockers for list/show views.
+        """
+        if self.status != "running":
+            return ""
+        queued_jobs, active_jobs = self._job_blocker_counts()
+        blockers = self._format_blockers(
+            self.completed_target_count,
+            self.target_count,
+            queued_jobs,
+            active_jobs,
+        )
+        return blockers or "reconciliation pending"
 
     def duration_html(self):
         """
@@ -956,8 +1028,15 @@ class ScanProfileCycles(Model):
         completed = int(self.completed_scan_unit_count or 0)
         target_total = int(self.target_count or 0)
         target_completed = int(self.completed_target_count or 0)
+        queued_jobs, active_jobs = self._job_blocker_counts()
         percent = self._format_percent(completed, total)
-        title = self._progress_title(completed, total, target_completed, target_total)
+        title = self._progress_title(
+            completed,
+            total,
+            target_completed,
+            target_total,
+            (queued_jobs, active_jobs),
+        )
         return Esc(
             '<span class="label label-default" '
             f'title="{_html_escape(title)}">{percent:.1f}%</span>'
@@ -973,8 +1052,15 @@ class ScanProfileCycles(Model):
         completed = int(self.completed_scan_unit_count or 0)
         target_total = int(self.target_count or 0)
         target_completed = int(self.completed_target_count or 0)
+        queued_jobs, active_jobs = self._job_blocker_counts()
         percent = self._format_percent(completed, total)
-        title = self._progress_title(completed, total, target_completed, target_total)
+        title = self._progress_title(
+            completed,
+            total,
+            target_completed,
+            target_total,
+            (queued_jobs, active_jobs),
+        )
         return (
             f'<span class="label {label_class}" title="{_html_escape(title)}">'
             f"{_html_escape(label)} {percent:.1f}%</span>"

@@ -45,6 +45,25 @@ For each `target/profile` pair, Plum tracks:
 - `last_previous_scan`: completion time of the previous finished scan cycle for this target/profile
 - `cycle`: time delta between `last_scan` and `last_previous_scan`
 
+## Scan-profile cycle boundaries
+
+Each scan-profile cycle stores `max_target_id`, the highest `Targets.id`
+visible when the scheduler starts that cycle. The current cycle schedules and
+reconciles only active applicable targets whose ID is at or below this bound.
+
+Targets created later have a higher ID and wait for the next cycle. Continuous
+target imports therefore do not extend a running cycle indefinitely. An older
+target associated with an explicit profile during a cycle may still join the
+current cycle because target ID is the only membership boundary.
+
+The Scan Profiles list tooltip and profile detail page expose incomplete target,
+queued job, and active job counts when a cycle remains running. A stalled active
+job is requeued by the scheduler watchdog after two hours; orphaned working
+states are released by the existing bounded repair sweep.
+
+During migration, existing running cycles receive the current maximum target
+ID. Their queued and active jobs, target state, and progress remain unchanged.
+
 ## Scan execution parameters
 
 Ports and NSE scripts are resolved exclusively from the effective `ScanProfile`.

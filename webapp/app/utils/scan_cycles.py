@@ -10,6 +10,8 @@ This module only derives cycle metadata from that state:
 
 # pylint: disable=no-name-in-module
 
+import logging
+
 from sqlalchemy import and_, exists, func, text
 
 from .. import db
@@ -24,17 +26,41 @@ from ..models import (
 from .timeutils import utcnow_naive
 
 SCANPROFILE_CYCLES_RETAINED = 2
+logger = logging.getLogger("flask_appbuilder")
 
 
-def _active_applicable_state_query(profile):
+def get_current_max_target_id():
+    """
+    Return the target high-water mark used when a new cycle starts.
+    """
+    return int(db.session.query(func.max(Targets.id)).scalar() or 0)
+
+
+def get_running_scanprofile_cycle(scanprofile_id):
+    """
+    Return the newest running cycle for one profile, when present.
+    """
+    return (
+        db.session.query(ScanProfileCycles)
+        .filter(
+            ScanProfileCycles.scanprofile_id == scanprofile_id,
+            ScanProfileCycles.status == "running",
+        )
+        .order_by(ScanProfileCycles.started_at.desc(), ScanProfileCycles.id.desc())
+        .first()
+    )
+
+
+def _active_applicable_state_query(profile, max_target_id=None):
     """
     Return target/profile states that currently belong to `profile`.
 
     `apply_to_all` profiles count every active target. Explicit profiles count
-    only active targets still present in `scanprofiles_targets_assoc`. This is
-    intentional: if a target is removed from a profile mid-cycle it no longer
-    blocks completion; if a target is added mid-cycle it appears here after the
-    normal state sync creates its `target_scan_states` row.
+    only active targets still present in `scanprofiles_targets_assoc`.
+
+    When `max_target_id` is provided, targets created after the cycle started
+    are excluded. Existing targets associated with an explicit profile during
+    the cycle may still join it; target ID is the intentional only boundary.
     """
     query = (
         db.session.query(TargetScanStates)
@@ -44,6 +70,8 @@ def _active_applicable_state_query(profile):
             Targets.active.is_(True),
         )
     )
+    if max_target_id is not None:
+        query = query.filter(Targets.id <= int(max_target_id))
     if profile.apply_to_all:
         return query
 
@@ -164,23 +192,23 @@ def prune_all_scanprofile_cycles(keep=SCANPROFILE_CYCLES_RETAINED):
     )
 
 
-def _unfinished_job_count(scanprofile_id):
+def _unfinished_job_counts(cycle_id):
     """
-    Count unfinished jobs for the profile, regardless of cycle id.
-
-    A cycle cannot be complete while any queued or active job for the same scan
-    profile still exists. Counting all unfinished profile jobs makes migration
-    from old NULL `scanprofile_cycle_id` jobs safe.
+    Count queued and active unfinished jobs attached to one cycle.
     """
-    return (
-        db.session.query(func.count(Jobs.id))
+    rows = (
+        db.session.query(Jobs.active, func.count(Jobs.id))
         .filter(
-            Jobs.scanprofile_id == scanprofile_id,
+            Jobs.scanprofile_cycle_id == cycle_id,
             Jobs.finished.is_(False),
         )
-        .scalar()
-        or 0
+        .group_by(Jobs.active)
+        .all()
     )
+    counts = {False: 0, True: 0}
+    for active, count in rows:
+        counts[bool(active)] = int(count or 0)
+    return counts[False], counts[True]
 
 
 def _finished_job_scan_unit_count(cycle_id):
@@ -205,12 +233,12 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     Recalculate one running scan-profile cycle from persisted runtime state.
 
     Completion rule:
-    - target belongs to cycle if it is active and currently applicable to the
-      profile,
+    - target belongs to cycle if it is active, currently applicable to the
+      profile, and its id is not above the cycle high-water mark,
     - target is complete if its target/profile state has `working = False` and
       `last_scan >= cycle.started_at`,
-    - cycle finishes only when all applicable states are complete and there are
-      no unfinished jobs left for that scan profile.
+    - cycle finishes only when all bounded states are complete and there are no
+      unfinished jobs attached to the cycle.
 
     The function is idempotent and does not commit. Callers own transaction
     boundaries so scheduler ticks, API job completion, and admin deletes can
@@ -218,15 +246,7 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     """
     now = now or utcnow_naive()
     if cycle is None:
-        cycle = (
-            db.session.query(ScanProfileCycles)
-            .filter(
-                ScanProfileCycles.scanprofile_id == scanprofile_id,
-                ScanProfileCycles.status == "running",
-            )
-            .order_by(ScanProfileCycles.started_at.desc(), ScanProfileCycles.id.desc())
-            .first()
-        )
+        cycle = get_running_scanprofile_cycle(scanprofile_id)
     if cycle is None:
         return None
 
@@ -238,7 +258,10 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     if profile is None:
         return None
 
-    state_query = _active_applicable_state_query(profile)
+    if cycle.max_target_id is None:
+        cycle.max_target_id = get_current_max_target_id()
+
+    state_query = _active_applicable_state_query(profile, cycle.max_target_id)
     target_count = state_query.count()
     scan_unit_count = (
         state_query.with_entities(
@@ -269,12 +292,30 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     )
     if scan_unit_count:
         completed_scan_unit_count = min(completed_scan_unit_count, scan_unit_count)
-    unfinished_jobs = _unfinished_job_count(scanprofile_id)
+    queued_jobs, active_jobs = _unfinished_job_counts(cycle.id)
+    unfinished_jobs = queued_jobs + active_jobs
 
     cycle.target_count = target_count
     cycle.completed_target_count = completed_count
     cycle.scan_unit_count = scan_unit_count
     cycle.completed_scan_unit_count = completed_scan_unit_count
+
+    logger.debug(
+        "Scan cycle reconcile: cycle_id=%s profile_id=%s max_target_id=%s "
+        "targets=%s completed_targets=%s scan_units=%s "
+        "completed_scan_units=%s queued_jobs=%s active_jobs=%s "
+        "completion_blocked=%s",
+        cycle.id,
+        scanprofile_id,
+        cycle.max_target_id,
+        target_count,
+        completed_count,
+        scan_unit_count,
+        completed_scan_unit_count,
+        queued_jobs,
+        active_jobs,
+        completed_count < target_count or unfinished_jobs > 0,
+    )
 
     if completed_count >= target_count and unfinished_jobs == 0:
         cycle.status = "finished"
@@ -291,7 +332,7 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     return cycle
 
 
-def get_or_create_running_cycle(scanprofile_id, now=None):
+def get_or_create_running_cycle(scanprofile_id, now=None, max_target_id=None):
     """
     Return current running cycle for a profile, creating one if needed.
 
@@ -301,23 +342,22 @@ def get_or_create_running_cycle(scanprofile_id, now=None):
     `last_scan` values.
     """
     now = now or utcnow_naive()
-    cycle = (
-        db.session.query(ScanProfileCycles)
-        .filter(
-            ScanProfileCycles.scanprofile_id == scanprofile_id,
-            ScanProfileCycles.status == "running",
-        )
-        .order_by(ScanProfileCycles.started_at.desc(), ScanProfileCycles.id.desc())
-        .first()
-    )
+    cycle = get_running_scanprofile_cycle(scanprofile_id)
     if cycle is None:
+        if max_target_id is None:
+            max_target_id = get_current_max_target_id()
         cycle = ScanProfileCycles(
             scanprofile_id=scanprofile_id,
             started_at=now,
             status="running",
+            max_target_id=int(max_target_id),
         )
         db.session.add(cycle)
         db.session.flush()
+    elif cycle.max_target_id is None:
+        cycle.max_target_id = int(
+            get_current_max_target_id() if max_target_id is None else max_target_id
+        )
 
     return reconcile_scanprofile_cycle(scanprofile_id, cycle=cycle, now=now)
 

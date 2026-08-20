@@ -43,7 +43,8 @@ From `v0.2604.0` to current `main`, apply only these SQL update scripts, in orde
 .venv/bin/python webapp/sql_upd/15_migrate_from_173795d186ee69c8abca1ce75d5bb0ff749b55a0.py
 .venv/bin/python webapp/sql_upd/16_migrate_from_28501acb1bc77d15ea1dc5f9c41684d40daecf10.py
 .venv/bin/python webapp/sql_upd/17_migrate_from_d7c3198bc3b3a7d6cf0ae39860fd1cfb58c1a4e3.py
-.venv/bin/python webapp/sql_upd/19_migrate_from_b3b3600.py
+.venv/bin/python webapp/sql_upd/19_migrate_from_b3b36001115d22b839ce630562bbf83ed0f166c0.py
+.venv/bin/python webapp/sql_upd/20_migrate_from_1a77f9638812f6d238b5a7f26aace1f45ae06e2e.py
 ```
 
 What they do:
@@ -53,6 +54,7 @@ What they do:
 - `16`: add scan-unit counters for scan profile progress
 - `17`: add the narrow `Feeder` API role for target import tools
 - `19`: add optional Nmap parameters to scan profiles and queued jobs
+- `20`: bound running scan-profile cycles by target ID without resetting jobs
 
 Do not rerun older migrations unless migrating from a version older than `v0.2604.0`.
 

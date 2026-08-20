@@ -44,7 +44,9 @@ from .utils.reports import (
 from .utils.tagrules import compile_tag_rule_records
 from .utils.timeutils import utcnow_aware, utcnow_naive
 from .utils.scan_cycles import (
+    get_current_max_target_id,
     get_or_create_running_cycle,
+    get_running_scanprofile_cycle,
     prune_all_scanprofile_cycles,
     reconcile_running_scanprofile_cycles,
 )
@@ -556,7 +558,12 @@ def _rotate_profiles_for_tick(profiles):
     return profiles[start_index:] + profiles[:start_index]
 
 
-def _load_due_states_for_profile(profile, now_utc, state_limit):
+def _load_due_states_for_profile(
+    profile,
+    now_utc,
+    state_limit,
+    max_target_id,
+):
     """
     Load due target/profile states for one profile, oldest first.
     """
@@ -568,6 +575,7 @@ def _load_due_states_for_profile(profile, now_utc, state_limit):
             ON t.id = tss.target_id
          WHERE tss.scanprofile_id = :profile_id
            AND t.active = 1
+           AND t.id <= :max_target_id
            AND tss.working = 0
            AND (tss.last_scan IS NULL OR tss.last_scan <= :cutoff)
     """
@@ -591,7 +599,12 @@ def _load_due_states_for_profile(profile, now_utc, state_limit):
         row[0]
         for row in db.session.execute(
             text(due_state_ids_sql),
-            {"profile_id": profile.id, "cutoff": cutoff, "limit": state_limit},
+            {
+                "profile_id": profile.id,
+                "cutoff": cutoff,
+                "limit": state_limit,
+                "max_target_id": int(max_target_id),
+            },
         ).fetchall()
     ]
     if not state_ids:
@@ -1025,8 +1038,23 @@ def task_create_jobs():
         # Example: queue_deficit=3 loads up to 3 * 256 states, not 3.
         # This is what guarantees 256-FQDN packets when enough FQDNs are due.
         state_limit = min(state_batch_size, job_limit * JOB_TARGET_CHUNK_SIZE)
+        # A running cycle keeps its persisted target-ID boundary. For a new
+        # cycle, capture the current high-water mark before loading due states.
+        # Targets inserted after this point wait for the next cycle.
+        scan_cycle = get_running_scanprofile_cycle(profile.id)
+        cycle_max_target_id = (
+            scan_cycle.max_target_id
+            if scan_cycle is not None and scan_cycle.max_target_id is not None
+            else get_current_max_target_id()
+        )
+
         due_started = time.perf_counter()
-        due_states = _load_due_states_for_profile(profile, now, state_limit)
+        due_states = _load_due_states_for_profile(
+            profile,
+            now,
+            state_limit,
+            cycle_max_target_id,
+        )
         due_elapsed = time.perf_counter() - due_started
         if not due_states:
             profiles_without_due_states += 1
@@ -1042,7 +1070,11 @@ def task_create_jobs():
         # Step 10: create/reuse the running cycle for jobs staged now.
         # The cycle timestamp is the lower bound used later to decide whether a
         # target was scanned in this turn. Jobs created below carry its id.
-        scan_cycle = get_or_create_running_cycle(profile.id, now=now)
+        scan_cycle = get_or_create_running_cycle(
+            profile.id,
+            now=now,
+            max_target_id=cycle_max_target_id,
+        )
 
         # Step 11: transform due states into in-memory jobs.
         # `_stage_jobs_for_profile` groups IP/CIDR and FQDN targets into

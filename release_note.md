@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
+
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.
 
 - Add optional configurable date-named application logs with 90-day rotation and retention, closes #192.

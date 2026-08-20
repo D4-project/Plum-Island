@@ -42,6 +42,8 @@
                 <th>Start</th>
                 <th>Stop</th>
                 <th>Duration</th>
+                <th>Max Target ID</th>
+                <th>Blockers</th>
               </tr>
             </thead>
             <tbody>
@@ -52,6 +54,8 @@
                 <td>{{ row.started_at or '-' }}</td>
                 <td>{{ row.finished_at or '-' }}</td>
                 <td>{{ row.duration }}</td>
+                <td>{{ row.max_target_id if row.max_target_id is not none else '-' }}</td>
+                <td>{{ row.blockers or '-' }}</td>
               </tr>
               {% endfor %}
             </tbody>
