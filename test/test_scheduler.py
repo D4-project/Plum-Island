@@ -95,12 +95,8 @@ class StalledJobWatchdogTest(TestCase):
         meili_index = mock.Mock()
         kvrocks_index = mock.Mock()
         meili_index.add_documents.return_value = SimpleNamespace(task_uid=42)
-        meili_index.wait_for_task.return_value = SimpleNamespace(
-            status="succeeded",
-            error=None,
-        )
         calls = []
-        meili_index.wait_for_task.side_effect = lambda *args, **kwargs: (
+        meili_index.get_task.side_effect = lambda *args, **kwargs: (
             calls.append("meili") or SimpleNamespace(status="succeeded", error=None)
         )
         kvrocks_index.add_documents_batch.side_effect = lambda _docs: calls.append(
@@ -117,17 +113,14 @@ class StalledJobWatchdogTest(TestCase):
 
         self.assertEqual(exported, 1)
         self.assertEqual(calls, ["meili", "kvrocks"])
-        meili_index.wait_for_task.assert_called_once_with(
-            42,
-            timeout_in_ms=1234,
-        )
+        meili_index.get_task.assert_called_once_with(42)
 
     def test_failed_meili_export_never_writes_kvrocks(self):
         """Rejected Meilisearch tasks leave Kvrocks untouched for retry."""
         meili_index = mock.Mock()
         kvrocks_index = mock.Mock()
         meili_index.add_documents.return_value = SimpleNamespace(task_uid=43)
-        meili_index.wait_for_task.return_value = SimpleNamespace(
+        meili_index.get_task.return_value = SimpleNamespace(
             status="failed",
             error={"message": "bad document"},
         )

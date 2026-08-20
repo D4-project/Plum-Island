@@ -46,7 +46,9 @@ backends. The Kvrocks rebuild is destructive to known Plum search-index keys.
 7. with `--apply`, adds recoverable documents to Meilisearch in confirmed batches.
 
 It never deletes or rebuilds Kvrocks. Every Meilisearch write task must finish
-with status `succeeded`; failure or timeout aborts the run.
+with status `succeeded`; failure or timeout aborts the run. Apply mode prints the
+task UID immediately, then its `enqueued` or `processing` status every 30 seconds.
+The default per-task timeout is 15 minutes.
 
 ### Configuration
 
@@ -68,12 +70,19 @@ Use another bare-install config or raw JSON directory when required:
 
 The SQLite work DB is temporary by default. Large installations need enough free
 space under the system temporary directory to hold the UID comparison. Put it on
-a larger filesystem when needed; the target path must not already exist:
+a larger filesystem when needed; the target path must not already exist. An
+explicit work DB is recommended for production recovery:
 
 ```bash
 .venv/bin/python tools/reintegrate_missing_meili.py \
+  --apply \
   --work-db /srv/plum-recovery/missing-uids.sqlite
 ```
+
+Each submitted Meilisearch task UID is committed to this work DB before the tool
+waits for completion. On timeout, connection error, or interruption, the work DB
+is preserved. A Meilisearch client timeout does not cancel the server-side task.
+Do not start a fresh recovery while that task remains queued or processing.
 
 ### Dry run
 
@@ -118,6 +127,26 @@ Apply mode only adds or replaces documents identified as missing during that run
 Existing Meilisearch documents are not bulk rewritten. Re-running the tool is
 safe: successfully restored UIDs are present during the next comparison and are
 not selected again.
+
+### Resume an interrupted apply
+
+Use the work DB path printed by the failed or interrupted run:
+
+```bash
+.venv/bin/python tools/reintegrate_missing_meili.py \
+  --apply \
+  --resume-work-db /srv/plum-recovery/missing-uids.sqlite \
+  --report /tmp/missing-meili-applied.csv
+```
+
+Resume skips the Kvrocks/Meilisearch comparison and raw JSON scan. For every
+persisted task UID, it queries the existing Meilisearch task and waits for it;
+it does not submit the same batch again. Confirmed batches remain marked in the
+work DB, then only remaining batches are submitted.
+
+If the server task is blocked behind another operation, such as snapshot
+creation, the output remains `status=enqueued`. Resolve or finish the earlier
+Meilisearch task, then run the same resume command again.
 
 ### Validate recovery
 
@@ -301,4 +330,3 @@ zero.
 7. Rebuild Kvrocks from Meilisearch, normally with `--retag` for clean consistency.
 8. Validate counts, parse errors, timestamp CSV, structured search, and IP pages.
 9. Restart application.
-

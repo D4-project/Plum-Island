@@ -95,7 +95,7 @@ class MissingMeiliRepairTest(TestCase):
     def test_failed_reintegration_task_is_rejected(self):
         """A terminal failed Meilisearch task cannot count as repaired."""
         index = mock.Mock()
-        index.wait_for_task.return_value = SimpleNamespace(
+        index.get_task.return_value = SimpleNamespace(
             status="failed",
             error={"message": "invalid document"},
         )
@@ -107,6 +107,34 @@ class MissingMeiliRepairTest(TestCase):
                 timeout_ms=5000,
             )
 
+    def test_resume_waits_existing_task_without_resubmitting(self):
+        """Resume confirms persisted in-flight task instead of duplicating it."""
+        self.connection.execute(
+            "INSERT INTO candidates(uid, document_json, task_uid) VALUES (?, ?, ?)",
+            ("recoverable", "{}", 48154),
+        )
+        self.connection.commit()
+        index = mock.Mock()
+        index.get_task.return_value = SimpleNamespace(
+            status="succeeded",
+            error=None,
+        )
+
+        confirmed = repair.reinsert_recovered_documents(
+            index,
+            self.connection,
+            batch_size=100,
+            timeout_ms=5000,
+        )
+
+        state = self.connection.execute(
+            "SELECT reintegrated, task_uid FROM candidates WHERE uid = ?",
+            ("recoverable",),
+        ).fetchone()
+        self.assertEqual(confirmed, 1)
+        self.assertEqual(state, (1, None))
+        index.add_documents.assert_not_called()
+
     def test_report_marks_recoverable_and_unrecoverable_uids(self):
         """Dry-run report separates recoverable sources from data loss."""
         self.connection.executemany(
@@ -116,11 +144,7 @@ class MissingMeiliRepairTest(TestCase):
         self.connection.commit()
         report_path = self.temp_path / "report.csv"
 
-        _path, counts = repair.write_report(
-            report_path,
-            self.connection,
-            applied=False,
-        )
+        _path, counts = repair.write_report(report_path, self.connection)
 
         self.assertEqual(
             counts,

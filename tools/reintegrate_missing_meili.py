@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 
 try:
     from .split_meili_dump_by_port import (
@@ -31,11 +32,24 @@ PROJECT_DIR = BASE_DIR.parent
 DEFAULT_CONFIG_FILE = PROJECT_DIR / "webapp" / "config.py"
 DEFAULT_REPORT_FILE = Path("missing_meili_reintegration.csv")
 DEFAULT_BATCH_SIZE = 1000
-DEFAULT_TASK_TIMEOUT_MS = 300_000
+DEFAULT_TASK_TIMEOUT_MS = 900_000
+TASK_STATUS_INTERVAL_SECONDS = 30
+TASK_POLL_INTERVAL_SECONDS = 1
 
 
 class ReintegrationError(RuntimeError):
     """Raised when a Meilisearch reintegration task fails."""
+
+
+class MeiliTaskFailed(ReintegrationError):
+    """Raised when a Meilisearch task reaches a failed terminal state."""
+
+    def __init__(self, task_uid, status, error):
+        self.task_uid = task_uid
+        super().__init__(
+            f"Meilisearch task {task_uid} ended with status "
+            f"{status or 'unknown'}: {error or 'no error details'}"
+        )
 
 
 def parse_args():
@@ -81,10 +95,19 @@ def parse_args():
         default=str(DEFAULT_REPORT_FILE),
         help=f"CSV report path. Default: {DEFAULT_REPORT_FILE}",
     )
-    parser.add_argument(
+    work_database = parser.add_mutually_exclusive_group()
+    work_database.add_argument(
         "--work-db",
         default=None,
-        help="Optional SQLite work DB path. Default: temporary file.",
+        help=(
+            "New SQLite work DB path. It is preserved for resume if the run fails. "
+            "Default: temporary file."
+        ),
+    )
+    work_database.add_argument(
+        "--resume-work-db",
+        default=None,
+        help="Resume reintegration from a work DB preserved by a failed apply run.",
     )
     parser.add_argument(
         "--progress-every",
@@ -141,11 +164,31 @@ def create_work_database(work_db_path=None):
             source_path TEXT,
             source_seen REAL,
             source_mtime REAL,
-            document_json TEXT
+            document_json TEXT,
+            reintegrated INTEGER NOT NULL DEFAULT 0,
+            task_uid INTEGER
         )
         """)
     connection.commit()
     return connection, work_path, temporary
+
+
+def open_work_database(work_db_path):
+    """Open and validate an existing reintegration work database."""
+    work_path = Path(work_db_path).resolve()
+    if not work_path.is_file():
+        raise ReintegrationError(f"Work DB not found: {work_path}")
+    connection = sqlite3.connect(work_path)
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(candidates)").fetchall()
+    }
+    required_columns = {"uid", "document_json", "reintegrated", "task_uid"}
+    if not required_columns.issubset(columns):
+        connection.close()
+        raise ReintegrationError(
+            f"Invalid or incompatible reintegration work DB: {work_path}"
+        )
+    return connection, work_path
 
 
 def chunked(iterable, chunk_size):
@@ -412,40 +455,163 @@ def recover_candidates_from_json(
     }
 
 
-def wait_for_success(index, queued_task, timeout_ms):
-    """Wait for one Meilisearch task and reject non-success terminal states."""
+def get_task_uid(queued_task):
+    """Extract a task UID from Meilisearch SDK response variants."""
     task_uid = getattr(queued_task, "task_uid", None)
     if task_uid is None:
         task_uid = getattr(queued_task, "uid", None)
     if task_uid is None:
         raise ReintegrationError("Meilisearch returned no task identifier")
-    completed_task = index.wait_for_task(task_uid, timeout_in_ms=timeout_ms)
-    status = str(getattr(completed_task, "status", "")).lower()
-    if status != "succeeded":
-        error = getattr(completed_task, "error", None)
-        raise ReintegrationError(
-            f"Meilisearch task {task_uid} ended with status "
-            f"{status or 'unknown'}: {error or 'no error details'}"
+    return int(task_uid)
+
+
+def wait_for_task_uid(index, task_uid, timeout_ms):
+    """Poll one Meilisearch task, print progress, and require success."""
+    started_at = time.monotonic()
+    next_status_at = 0
+    while True:
+        completed_task = index.get_task(task_uid)
+        status = str(getattr(completed_task, "status", "")).lower()
+        elapsed_seconds = time.monotonic() - started_at
+        if status == "succeeded":
+            print(
+                f"Meilisearch task {task_uid}: succeeded after "
+                f"{elapsed_seconds:.1f}s",
+                flush=True,
+            )
+            return task_uid
+        if status not in ("enqueued", "processing"):
+            raise MeiliTaskFailed(
+                task_uid,
+                status,
+                getattr(completed_task, "error", None),
+            )
+        if elapsed_seconds >= next_status_at:
+            print(
+                f"Meilisearch task {task_uid}: status={status}; "
+                f"elapsed={elapsed_seconds:.1f}s; "
+                f"timeout={timeout_ms / 1000:.1f}s",
+                flush=True,
+            )
+            next_status_at = elapsed_seconds + TASK_STATUS_INTERVAL_SECONDS
+        if elapsed_seconds >= timeout_ms / 1000:
+            raise ReintegrationError(
+                f"Meilisearch task {task_uid} still {status} after "
+                f"{elapsed_seconds:.1f}s; work DB preserved for --resume-work-db"
+            )
+        time.sleep(TASK_POLL_INTERVAL_SECONDS)
+
+
+def wait_for_success(index, queued_task, timeout_ms):
+    """Wait for one queued Meilisearch task and require success."""
+    return wait_for_task_uid(index, get_task_uid(queued_task), timeout_ms)
+
+
+def reconcile_submitted_tasks(index, connection, timeout_ms):
+    """Finish tasks submitted before interruption without duplicate insertion."""
+    task_uids = [
+        row[0]
+        for row in connection.execute(
+            "SELECT DISTINCT task_uid FROM candidates "
+            "WHERE task_uid IS NOT NULL AND reintegrated = 0 ORDER BY task_uid"
         )
+    ]
+    confirmed = 0
+    for task_uid in task_uids:
+        affected = connection.execute(
+            "SELECT COUNT(*) FROM candidates "
+            "WHERE task_uid = ? AND reintegrated = 0",
+            (task_uid,),
+        ).fetchone()[0]
+        print(
+            f"Resuming Meilisearch task {task_uid}: documents={affected}",
+            flush=True,
+        )
+        try:
+            wait_for_task_uid(index, task_uid, timeout_ms)
+        except MeiliTaskFailed:
+            connection.execute(
+                "UPDATE candidates SET task_uid = NULL WHERE task_uid = ?",
+                (task_uid,),
+            )
+            connection.commit()
+            raise
+        connection.execute(
+            "UPDATE candidates SET reintegrated = 1, task_uid = NULL "
+            "WHERE task_uid = ?",
+            (task_uid,),
+        )
+        connection.commit()
+        confirmed += affected
+    return confirmed
 
 
 def reinsert_recovered_documents(index, connection, batch_size, timeout_ms):
     """Insert recovered documents in confirmed Meilisearch batches."""
-    rows = connection.execute(
-        "SELECT uid, document_json FROM candidates "
-        "WHERE document_json IS NOT NULL ORDER BY uid"
-    )
-    inserted = 0
-    for row_batch in chunked(rows, batch_size):
+    recovered_total = connection.execute(
+        "SELECT COUNT(*) FROM candidates WHERE document_json IS NOT NULL"
+    ).fetchone()[0]
+    already_confirmed = connection.execute(
+        "SELECT COUNT(*) FROM candidates WHERE reintegrated = 1"
+    ).fetchone()[0]
+    resumed_confirmed = reconcile_submitted_tasks(index, connection, timeout_ms)
+    confirmed = already_confirmed + resumed_confirmed
+    pending_total = recovered_total - confirmed
+    batch_total = (pending_total + batch_size - 1) // batch_size
+    batch_number = 0
+
+    while True:
+        row_batch = connection.execute(
+            "SELECT uid, document_json FROM candidates "
+            "WHERE document_json IS NOT NULL AND reintegrated = 0 "
+            "AND task_uid IS NULL ORDER BY uid LIMIT ?",
+            (batch_size,),
+        ).fetchall()
+        if not row_batch:
+            break
+        batch_number += 1
         documents = [json.loads(row[1]) for row in row_batch]
+        print(
+            f"Submitting Meilisearch batch {batch_number}/{batch_total}: "
+            f"documents={len(documents)}; "
+            f"confirmed={confirmed}/{recovered_total}",
+            flush=True,
+        )
         queued_task = index.add_documents(documents)
-        wait_for_success(index, queued_task, timeout_ms)
-        inserted += len(documents)
-        print(f"Reinserted {inserted} documents", flush=True)
-    return inserted
+        task_uid = get_task_uid(queued_task)
+        connection.executemany(
+            "UPDATE candidates SET task_uid = ? WHERE uid = ?",
+            ((task_uid, row[0]) for row in row_batch),
+        )
+        connection.commit()
+        print(
+            f"Meilisearch batch {batch_number}/{batch_total}: task_uid={task_uid}",
+            flush=True,
+        )
+        try:
+            wait_for_task_uid(index, task_uid, timeout_ms)
+        except MeiliTaskFailed:
+            connection.execute(
+                "UPDATE candidates SET task_uid = NULL WHERE task_uid = ?",
+                (task_uid,),
+            )
+            connection.commit()
+            raise
+        connection.execute(
+            "UPDATE candidates SET reintegrated = 1, task_uid = NULL "
+            "WHERE task_uid = ?",
+            (task_uid,),
+        )
+        connection.commit()
+        confirmed += len(documents)
+        print(
+            f"Reintegration progress: confirmed={confirmed}/{recovered_total}",
+            flush=True,
+        )
+    return confirmed - already_confirmed
 
 
-def write_report(report_path, connection, applied):
+def write_report(report_path, connection):
     """Write one row per missing UID and return status counts."""
     report_path = Path(report_path).resolve()
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -464,21 +630,18 @@ def write_report(report_path, connection, applied):
             ]
         )
         rows = connection.execute("""
-            SELECT uid, ip, first_seen, last_seen, source_seen, source_path,
-                   document_json IS NOT NULL
+            SELECT uid,
+                   CASE
+                       WHEN reintegrated = 1 THEN 'reintegrated'
+                       WHEN document_json IS NULL THEN 'unrecoverable'
+                       ELSE 'recoverable'
+                   END AS status,
+                   ip, first_seen, last_seen, source_seen, source_path
             FROM candidates ORDER BY uid
             """)
-        for uid, ip, first_seen, last_seen, source_seen, source_path, recovered in rows:
-            if not recovered:
-                status = "unrecoverable"
-            elif applied:
-                status = "reintegrated"
-            else:
-                status = "recoverable"
-            counts[status] += 1
-            writer.writerow(
-                [uid, status, ip, first_seen, last_seen, source_seen, source_path]
-            )
+        for row in rows:
+            counts[row[1]] += 1
+            writer.writerow(row)
     return report_path, counts
 
 
@@ -500,6 +663,8 @@ def validate_args(args):
         raise SystemExit("--task-timeout-ms must be >= 1")
     if args.progress_every < 0:
         raise SystemExit("--progress-every must be >= 0")
+    if args.resume_work_db and not args.apply:
+        raise SystemExit("--resume-work-db requires --apply")
 
 
 def build_backend_clients(config, index_name):
@@ -532,7 +697,7 @@ def run_reintegration(args, json_folder, kvrocks, index, connection):
     )
 
     if not missing_count:
-        report_path, _counts = write_report(args.report, connection, args.apply)
+        report_path, _counts = write_report(args.report, connection)
         print(f"Report: {report_path}", flush=True)
         print(
             "Summary: reintegrated=0; recoverable=0; unrecoverable=0; inserted=0",
@@ -565,7 +730,7 @@ def run_reintegration(args, json_folder, kvrocks, index, connection):
             args.task_timeout_ms,
         )
 
-    report_path, counts = write_report(args.report, connection, args.apply)
+    report_path, counts = write_report(args.report, connection)
     print(f"Report: {report_path}", flush=True)
     print(
         "Summary: "
@@ -580,6 +745,41 @@ def run_reintegration(args, json_folder, kvrocks, index, connection):
     return 0
 
 
+def resume_reintegration(args, index, connection):
+    """Resume confirmed-batch insertion without repeating index/raw scans."""
+    candidate_count = connection.execute("SELECT COUNT(*) FROM candidates").fetchone()[
+        0
+    ]
+    recovered_count = connection.execute(
+        "SELECT COUNT(*) FROM candidates WHERE document_json IS NOT NULL"
+    ).fetchone()[0]
+    confirmed_count = connection.execute(
+        "SELECT COUNT(*) FROM candidates WHERE reintegrated = 1"
+    ).fetchone()[0]
+    print(
+        f"Resume state: candidates={candidate_count}; recovered={recovered_count}; "
+        f"already_confirmed={confirmed_count}",
+        flush=True,
+    )
+    inserted = reinsert_recovered_documents(
+        index,
+        connection,
+        args.batch_size,
+        args.task_timeout_ms,
+    )
+    report_path, counts = write_report(args.report, connection)
+    print(f"Report: {report_path}", flush=True)
+    print(
+        "Summary: "
+        f"reintegrated={counts['reintegrated']}; "
+        f"recoverable={counts['recoverable']}; "
+        f"unrecoverable={counts['unrecoverable']}; "
+        f"confirmed_this_run={inserted}",
+        flush=True,
+    )
+    return 2 if counts["unrecoverable"] else 0
+
+
 def main():
     """Configure and run missing-document reintegration."""
     args = parse_args()
@@ -587,11 +787,17 @@ def main():
 
     config = load_runtime_config(args.config)
     json_folder = Path(args.json_folder or config.JSON_FOLDER).resolve()
-    if not json_folder.is_dir():
+    if not args.resume_work_db and not json_folder.is_dir():
         raise SystemExit(f"JSON folder not found: {json_folder}")
 
-    print(f"Mode: {'APPLY' if args.apply else 'DRY-RUN'}", flush=True)
-    print(f"Raw JSON folder: {json_folder}", flush=True)
+    mode = (
+        "RESUME APPLY"
+        if args.resume_work_db
+        else ("APPLY" if args.apply else "DRY-RUN")
+    )
+    print(f"Mode: {mode}", flush=True)
+    if not args.resume_work_db:
+        print(f"Raw JSON folder: {json_folder}", flush=True)
     print(
         f"Meilisearch: {config.MEILI_DATABASE_URI} / index={args.index_name}",
         flush=True,
@@ -600,16 +806,35 @@ def main():
 
     kvrocks, index = build_backend_clients(config, args.index_name)
 
-    connection, work_path, temporary_work_db = create_work_database(args.work_db)
+    if args.resume_work_db:
+        connection, work_path = open_work_database(args.resume_work_db)
+        temporary_work_db = False
+    else:
+        connection, work_path, temporary_work_db = create_work_database(args.work_db)
     print(f"Work DB: {work_path}", flush=True)
+    completed = False
     try:
-        return run_reintegration(args, json_folder, kvrocks, index, connection)
+        if args.resume_work_db:
+            result = resume_reintegration(args, index, connection)
+        else:
+            result = run_reintegration(args, json_folder, kvrocks, index, connection)
+        completed = True
+        return result
     finally:
-        if temporary_work_db:
+        if temporary_work_db and completed:
             remove_work_database(connection, work_path)
         else:
             connection.close()
+            if temporary_work_db:
+                print(
+                    f"Work DB preserved after interruption/error: {work_path}",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except ReintegrationError as error:
+        print(f"[ERROR] {error}", flush=True)
+        raise SystemExit(1) from error

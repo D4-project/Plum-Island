@@ -62,7 +62,9 @@ DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
 STALLED_JOB_TIMEOUT = timedelta(hours=2)
-DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS = 300_000
+DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS = 900_000
+MEILI_EXPORT_STATUS_INTERVAL_SECONDS = 30
+MEILI_EXPORT_POLL_INTERVAL_SECONDS = 1
 UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
@@ -71,6 +73,44 @@ UNKNOWN_FAVICON_MD5_RE = re.compile(
 
 class MeiliExportTaskError(RuntimeError):
     """Raised when Meilisearch rejects an asynchronous export task."""
+
+
+def _wait_for_meili_export_task(meili_idx, task_uid, timeout_ms):
+    """Poll one export task with status logs and require terminal success."""
+    started_at = time.monotonic()
+    next_status_at = 0
+    while True:
+        completed_task = meili_idx.get_task(task_uid)
+        task_status = str(getattr(completed_task, "status", "")).lower()
+        elapsed_seconds = time.monotonic() - started_at
+        if task_status == "succeeded":
+            logger.info(
+                "Meilisearch export task %s succeeded after %.1fs",
+                task_uid,
+                elapsed_seconds,
+            )
+            return
+        if task_status not in ("enqueued", "processing"):
+            task_error = getattr(completed_task, "error", None)
+            raise MeiliExportTaskError(
+                f"Meilisearch task {task_uid} ended with status "
+                f"{task_status or 'unknown'}: {task_error or 'no error details'}"
+            )
+        if elapsed_seconds >= next_status_at:
+            logger.info(
+                "Meilisearch export task %s status=%s elapsed=%.1fs timeout=%.1fs",
+                task_uid,
+                task_status,
+                elapsed_seconds,
+                timeout_ms / 1000,
+            )
+            next_status_at = elapsed_seconds + MEILI_EXPORT_STATUS_INTERVAL_SECONDS
+        if elapsed_seconds >= timeout_ms / 1000:
+            raise MeiliExportTaskError(
+                f"Meilisearch task {task_uid} still {task_status} after "
+                f"{elapsed_seconds:.1f}s"
+            )
+        time.sleep(MEILI_EXPORT_POLL_INTERVAL_SECONDS)
 
 
 def _export_document_batch(
@@ -95,18 +135,7 @@ def _export_document_batch(
             "Meilisearch add_documents returned no task identifier"
         )
 
-    completed_task = meili_idx.wait_for_task(
-        task_uid,
-        timeout_in_ms=timeout_ms,
-    )
-    task_status = str(getattr(completed_task, "status", "")).lower()
-    if task_status != "succeeded":
-        task_error = getattr(completed_task, "error", None)
-        raise MeiliExportTaskError(
-            f"Meilisearch task {task_uid} ended with status "
-            f"{task_status or 'unknown'}: {task_error or 'no error details'}"
-        )
-
+    _wait_for_meili_export_task(meili_idx, task_uid, timeout_ms)
     kvrocks_idx.add_documents_batch(kvrocks_documents)
     return len(meili_documents)
 
