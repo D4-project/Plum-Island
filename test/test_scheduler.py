@@ -4,7 +4,10 @@
 # pylint: disable=wrong-import-position,protected-access,duplicate-code
 
 import importlib
+import importlib.util
 import os
+from pathlib import Path
+import sqlite3
 import sys
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -27,6 +30,17 @@ class StalledJobWatchdogTest(TestCase):
                 []
             )
             cls.scheduler = importlib.import_module("app.scheduler")
+
+    def _export_context(self, meili_index, kvrocks_index):
+        """Build isolated export dependencies for state-machine tests."""
+        return self.scheduler.ExportContext(
+            meili_idx=meili_index,
+            kvrocks_idx=kvrocks_index,
+            input_dir="/tmp",
+            parser_config={},
+            active_tag_rules=[],
+            timeout_ms=300_000,
+        )
 
     def test_timeout_is_exactly_two_hours(self):
         """A job at the two-hour boundary is eligible for release."""
@@ -90,11 +104,90 @@ class StalledJobWatchdogTest(TestCase):
         self.assertIn("t.id <= :max_target_id", str(sql_clause))
         self.assertEqual(params["max_target_id"], 123)
 
-    def test_export_batch_waits_for_meili_before_kvrocks(self):
-        """Kvrocks is written only after Meilisearch confirms success."""
+    def test_persisted_pending_task_never_writes_kvrocks(self):
+        """Queued task remains attached to job without Kvrocks mutation."""
         meili_index = mock.Mock()
         kvrocks_index = mock.Mock()
-        meili_index.add_documents.return_value = SimpleNamespace(task_uid=42)
+        meili_index.get_task.return_value = SimpleNamespace(
+            status="enqueued",
+            error=None,
+        )
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": 42,
+            "submitted": 1,
+            "total": 1,
+        }
+
+        result = self.scheduler._process_persisted_meili_task(
+            self._export_context(meili_index, kvrocks_index),
+            42,
+            [job_state],
+        )
+
+        self.assertEqual(result["status"], "enqueued")
+        self.assertEqual(job_state["task_uid"], 42)
+        self.assertFalse(job_state["exported"])
+        meili_index.add_documents.assert_not_called()
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_new_timed_out_task_is_persisted_without_kvrocks(self):
+        """New task UID is saved before five-minute wait yields control."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.add_documents.return_value = SimpleNamespace(task_uid=45)
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": None,
+            "submitted": 1,
+            "total": 1,
+        }
+        batch_state = {
+            "documents": [{"id": "one"}],
+            "jobs": [job_state],
+            "ready_documents": 0,
+            "ready_jobs": 0,
+        }
+        persisted_task_uids = []
+        events = []
+
+        def persist(states):
+            events.append("persist")
+            persisted_task_uids.append(states[0]["task_uid"])
+
+        def wait_then_defer(*_args):
+            events.append("wait")
+            raise self.scheduler.MeiliExportTaskPending(45, "enqueued")
+
+        with mock.patch.object(
+            self.scheduler,
+            "_persist_meili_export_states",
+            side_effect=persist,
+        ), mock.patch.object(
+            self.scheduler,
+            "_wait_for_meili_export_task",
+            side_effect=wait_then_defer,
+        ):
+            summary = self.scheduler._submit_meili_export_batch(
+                self._export_context(meili_index, kvrocks_index),
+                1,
+                batch_state,
+            )
+
+        self.assertEqual(persisted_task_uids, [45])
+        self.assertEqual(events, ["persist", "wait"])
+        self.assertEqual(job_state["task_uid"], 45)
+        self.assertEqual(summary["meili_tasks_pending"], 1)
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_succeeded_persisted_task_writes_kvrocks_after_status(self):
+        """Confirmed Meili success precedes Kvrocks and job completion."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
         calls = []
         meili_index.get_task.side_effect = lambda *args, **kwargs: (
             calls.append("meili") or SimpleNamespace(status="succeeded", error=None)
@@ -102,38 +195,166 @@ class StalledJobWatchdogTest(TestCase):
         kvrocks_index.add_documents_batch.side_effect = lambda _docs: calls.append(
             "kvrocks"
         )
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": 42,
+            "submitted": 1,
+            "total": 1,
+        }
+        with mock.patch.object(
+            self.scheduler,
+            "_load_job_export_documents",
+            side_effect=lambda *_args: (
+                calls.append("load") or ([{"id": "one"}], [{"uid": "one"}])
+            ),
+        ):
+            result = self.scheduler._process_persisted_meili_task(
+                self._export_context(meili_index, kvrocks_index),
+                42,
+                [job_state],
+            )
 
-        exported = self.scheduler._export_document_batch(
-            meili_index,
-            kvrocks_index,
-            [{"id": "one"}],
-            [{"uid": "one"}],
-            timeout_ms=1234,
-        )
-
-        self.assertEqual(exported, 1)
-        self.assertEqual(calls, ["meili", "kvrocks"])
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["documents_exported"], 1)
+        self.assertEqual(calls, ["meili", "load", "kvrocks"])
+        self.assertTrue(job_state["exported"])
+        self.assertIsNone(job_state["task_uid"])
+        self.assertEqual(job_state["submitted"], 0)
         meili_index.get_task.assert_called_once_with(42)
 
-    def test_failed_meili_export_never_writes_kvrocks(self):
-        """Rejected Meilisearch tasks leave Kvrocks untouched for retry."""
+    def test_partial_job_waits_for_all_meili_batches_before_kvrocks(self):
+        """One successful chunk cannot expose incomplete job in Kvrocks."""
         meili_index = mock.Mock()
         kvrocks_index = mock.Mock()
-        meili_index.add_documents.return_value = SimpleNamespace(task_uid=43)
+        meili_index.get_task.return_value = SimpleNamespace(
+            status="succeeded",
+            error=None,
+        )
+        job_state = {
+            "id": 1,
+            "uid": "large-job",
+            "exported": False,
+            "task_uid": 46,
+            "submitted": 2500,
+            "total": 3000,
+        }
+
+        result = self.scheduler._process_persisted_meili_task(
+            self._export_context(meili_index, kvrocks_index),
+            46,
+            [job_state],
+        )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["documents_exported"], 0)
+        self.assertIsNone(job_state["task_uid"])
+        self.assertEqual(job_state["submitted"], 2500)
+        self.assertFalse(job_state["exported"])
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_failed_meili_export_never_writes_kvrocks(self):
+        """Rejected task resets durable state and leaves Kvrocks untouched."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
         meili_index.get_task.return_value = SimpleNamespace(
             status="failed",
             error={"message": "bad document"},
         )
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": 43,
+            "submitted": 1,
+            "total": 1,
+        }
 
-        with self.assertRaisesRegex(
-            self.scheduler.MeiliExportTaskError,
-            "task 43 ended with status failed",
-        ):
-            self.scheduler._export_document_batch(
+        result = self.scheduler._process_persisted_meili_task(
+            self._export_context(meili_index, kvrocks_index),
+            43,
+            [job_state],
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(job_state["task_uid"])
+        self.assertEqual(job_state["submitted"], 0)
+        self.assertIsNone(job_state["total"])
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_five_minute_wait_defers_running_task(self):
+        """Five-minute timeout yields pending state instead of task failure."""
+        meili_index = mock.Mock()
+        meili_index.get_task.return_value = SimpleNamespace(
+            status="processing",
+            error=None,
+        )
+        with mock.patch.object(
+            self.scheduler.time,
+            "monotonic",
+            side_effect=[0, 300],
+        ), self.assertRaises(self.scheduler.MeiliExportTaskPending) as raised:
+            self.scheduler._wait_for_meili_export_task(
                 meili_index,
-                kvrocks_index,
-                [{"id": "one"}],
-                [{"uid": "one"}],
+                44,
+                300_000,
             )
 
-        kvrocks_index.add_documents_batch.assert_not_called()
+        self.assertEqual(raised.exception.task_uid, 44)
+        self.assertEqual(raised.exception.status, "processing")
+
+
+class MeiliExportStateMigrationTest(TestCase):
+    """Validate durable scheduler state migration for existing jobs."""
+
+    @classmethod
+    def setUpClass(cls):
+        migration_path = (
+            Path(__file__).resolve().parents[1]
+            / "webapp"
+            / "sql_upd"
+            / "21_migrate_from_c1ef29af4ac597787b67d99982f9baade1817222.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "meili_export_state_migration",
+            migration_path,
+        )
+        cls.migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.migration)
+
+    def setUp(self):
+        self.connection = sqlite3.connect(":memory:")
+        self.cursor = self.connection.cursor()
+        self.cursor.executescript("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                uid VARCHAR(36) NOT NULL,
+                exported BOOLEAN NOT NULL DEFAULT 0
+            );
+            INSERT INTO jobs (id, uid, exported) VALUES (1, 'job-one', 0);
+            """)
+
+    def tearDown(self):
+        self.connection.close()
+
+    def test_migration_adds_idempotent_pending_task_state(self):
+        """Existing jobs start with no task and zero submitted documents."""
+        self.migration.migrate(self.cursor)
+        self.migration.migrate(self.cursor)
+
+        columns = {
+            row[1] for row in self.cursor.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        state = self.cursor.execute(
+            "SELECT meili_task_uid, meili_documents_submitted, "
+            "meili_documents_total FROM jobs WHERE id = 1"
+        ).fetchone()
+        self.assertTrue(
+            {
+                "meili_task_uid",
+                "meili_documents_submitted",
+                "meili_documents_total",
+            }.issubset(columns)
+        )
+        self.assertEqual(state, (None, 0, None))

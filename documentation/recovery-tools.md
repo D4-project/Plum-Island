@@ -48,7 +48,9 @@ backends. The Kvrocks rebuild is destructive to known Plum search-index keys.
 It never deletes or rebuilds Kvrocks. Every Meilisearch write task must finish
 with status `succeeded`; failure or timeout aborts the run. Apply mode prints the
 task UID immediately, then its `enqueued` or `processing` status every 30 seconds.
-The default per-task timeout is 15 minutes.
+The default write/read batch size is 250 documents and the default per-task
+timeout is 15 minutes. Batches are strictly sequential: the next batch is not
+submitted until the previous Meilisearch task reports `succeeded`.
 
 ### Configuration
 
@@ -118,7 +120,7 @@ Tune batch size and task timeout for a busy or large Meilisearch instance:
 ```bash
 .venv/bin/python tools/reintegrate_missing_meili.py \
   --apply \
-  --batch-size 500 \
+  --batch-size 250 \
   --task-timeout-ms 600000 \
   --report /tmp/missing-meili-applied.csv
 ```

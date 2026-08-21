@@ -64,6 +64,23 @@ states are released by the existing bounded repair sweep.
 During migration, existing running cycles receive the current maximum target
 ID. Their queued and active jobs, target state, and progress remain unchanged.
 
+## Search export ordering
+
+Finished scan results are always exported to Meilisearch before Kvrocks. The
+scheduler submits at most one 2,500-document Meilisearch batch, stores its task
+UID and per-job document position in SQLite, then waits up to five minutes.
+
+If the task remains `enqueued` or `processing`, the scheduler does not write
+Kvrocks and does not mark jobs exported. On later ticks it checks the same task
+UID once without resubmitting the batch. Only `succeeded` permits the matching
+Kvrocks documents to be written. A multi-batch job is written to Kvrocks only
+after every Meilisearch batch for that job has succeeded.
+
+A failed or canceled Meilisearch task clears the saved submission position. The
+job remains unexported and is safely upserted again on a later scheduler tick.
+The wait window is configurable with `MEILI_EXPORT_TASK_TIMEOUT_MS`; default is
+`300000` milliseconds.
+
 ## Scan execution parameters
 
 Ports and NSE scripts are resolved exclusively from the effective `ScanProfile`.

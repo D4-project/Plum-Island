@@ -135,6 +135,56 @@ class MissingMeiliRepairTest(TestCase):
         self.assertEqual(state, (1, None))
         index.add_documents.assert_not_called()
 
+    def test_reintegration_waits_each_250_document_batch_in_order(self):
+        """Next batch is submitted only after prior task succeeds."""
+        self.connection.executemany(
+            "INSERT INTO candidates(uid, document_json) VALUES (?, ?)",
+            [
+                ("document-a", '{"id": "document-a"}'),
+                ("document-b", '{"id": "document-b"}'),
+                ("document-c", '{"id": "document-c"}'),
+            ],
+        )
+        self.connection.commit()
+        index = mock.Mock()
+        events = []
+        task_uids = iter((101, 102))
+
+        def submit(documents):
+            task_uid = next(task_uids)
+            events.append(("submit", task_uid, len(documents)))
+            return SimpleNamespace(task_uid=task_uid)
+
+        def complete(task_uid):
+            persisted = self.connection.execute(
+                "SELECT COUNT(*) FROM candidates WHERE task_uid = ?",
+                (task_uid,),
+            ).fetchone()[0]
+            events.append(("wait", task_uid, persisted))
+            return SimpleNamespace(status="succeeded", error=None)
+
+        index.add_documents.side_effect = submit
+        index.get_task.side_effect = complete
+
+        confirmed = repair.reinsert_recovered_documents(
+            index,
+            self.connection,
+            batch_size=2,
+            timeout_ms=5000,
+        )
+
+        self.assertEqual(repair.DEFAULT_BATCH_SIZE, 250)
+        self.assertEqual(confirmed, 3)
+        self.assertEqual(
+            events,
+            [
+                ("submit", 101, 2),
+                ("wait", 101, 2),
+                ("submit", 102, 1),
+                ("wait", 102, 1),
+            ],
+        )
+
     def test_report_marks_recoverable_and_unrecoverable_uids(self):
         """Dry-run report separates recoverable sources from data loss."""
         self.connection.executemany(

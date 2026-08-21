@@ -11,6 +11,7 @@ import time
 import copy
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from netaddr import IPNetwork, cidr_merge
@@ -62,9 +63,10 @@ DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
 STALLED_JOB_TIMEOUT = timedelta(hours=2)
-DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS = 900_000
+DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS = 300_000
 MEILI_EXPORT_STATUS_INTERVAL_SECONDS = 30
 MEILI_EXPORT_POLL_INTERVAL_SECONDS = 1
+MEILI_EXPORT_BATCH_SIZE = 2500
 UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
@@ -73,6 +75,39 @@ UNKNOWN_FAVICON_MD5_RE = re.compile(
 
 class MeiliExportTaskError(RuntimeError):
     """Raised when Meilisearch rejects an asynchronous export task."""
+
+
+class MeiliExportTaskPending(RuntimeError):
+    """Raised when an export task is still queued/running after one wait window."""
+
+    def __init__(self, task_uid, status):
+        self.task_uid = int(task_uid)
+        self.status = status
+        super().__init__(f"Meilisearch task {task_uid} remains {status}")
+
+
+@dataclass(frozen=True)
+class ExportContext:
+    """Immutable dependencies used during one scheduler export transition."""
+
+    meili_idx: object
+    kvrocks_idx: object
+    input_dir: str
+    parser_config: dict
+    active_tag_rules: list
+    timeout_ms: int
+
+
+def _get_meili_task_uid(queued_task):
+    """Extract a task UID from supported Meilisearch SDK response variants."""
+    task_uid = getattr(queued_task, "task_uid", None)
+    if task_uid is None:
+        task_uid = getattr(queued_task, "uid", None)
+    if task_uid is None:
+        raise MeiliExportTaskError(
+            "Meilisearch add_documents returned no task identifier"
+        )
+    return int(task_uid)
 
 
 def _wait_for_meili_export_task(meili_idx, task_uid, timeout_ms):
@@ -106,38 +141,8 @@ def _wait_for_meili_export_task(meili_idx, task_uid, timeout_ms):
             )
             next_status_at = elapsed_seconds + MEILI_EXPORT_STATUS_INTERVAL_SECONDS
         if elapsed_seconds >= timeout_ms / 1000:
-            raise MeiliExportTaskError(
-                f"Meilisearch task {task_uid} still {task_status} after "
-                f"{elapsed_seconds:.1f}s"
-            )
+            raise MeiliExportTaskPending(task_uid, task_status)
         time.sleep(MEILI_EXPORT_POLL_INTERVAL_SECONDS)
-
-
-def _export_document_batch(
-    meili_idx,
-    kvrocks_idx,
-    meili_documents,
-    kvrocks_documents,
-    timeout_ms=DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS,
-):
-    """Write one batch to Meilisearch, then Kvrocks after confirmed success."""
-    if not meili_documents:
-        return 0
-    if len(meili_documents) != len(kvrocks_documents):
-        raise ValueError("Meilisearch and Kvrocks export batch sizes differ")
-
-    queued_task = meili_idx.add_documents(meili_documents)
-    task_uid = getattr(queued_task, "task_uid", None)
-    if task_uid is None:
-        task_uid = getattr(queued_task, "uid", None)
-    if task_uid is None:
-        raise MeiliExportTaskError(
-            "Meilisearch add_documents returned no task identifier"
-        )
-
-    _wait_for_meili_export_task(meili_idx, task_uid, timeout_ms)
-    kvrocks_idx.add_documents_batch(kvrocks_documents)
-    return len(meili_documents)
 
 
 def _clean_banner_outputs(port):
@@ -1389,17 +1394,186 @@ def task_sync_queued_profile_jobs():
     }
 
 
-def task_export_to_dbs():
-    """
-    Export Local Json to external DB
-    """
-    # Reuse the connections.
+def _export_job_state(job_data):
+    """Copy persisted job export fields into a transaction-free dictionary."""
+    return {
+        "id": job_data.id,
+        "uid": job_data.uid,
+        "exported": bool(job_data.exported),
+        "task_uid": job_data.meili_task_uid,
+        "submitted": int(job_data.meili_documents_submitted or 0),
+        "total": job_data.meili_documents_total,
+    }
+
+
+def _load_job_export_documents(export_context, job_uid):
+    """Load one immutable job result and build matching Meili/Kvrocks docs."""
+    filepath = os.path.join(
+        export_context.input_dir,
+        job_uid[0],
+        f"{job_uid}.json",
+    )
+    with open(filepath, "r", encoding="utf-8") as json_handle:
+        data = json.load(json_handle)
+    if isinstance(data, dict):
+        scan_results = [data]
+    elif isinstance(data, list):
+        scan_results = data
+    else:
+        scan_results = []
+
+    meili_documents = []
+    kvrocks_documents = []
+    for item in scan_results:
+        for object_to_save in _split_scan_result_by_port(item):
+            parsed_doc = parse_json(
+                object_to_save,
+                export_context.parser_config,
+                tag_rules=export_context.active_tag_rules,
+            )
+            if parsed_doc is None:
+                continue
+            meili_documents.append(object_to_save)
+            kvrocks_documents.append(parsed_doc)
+    return meili_documents, kvrocks_documents
+
+
+def _reset_meili_export_state(job_state):
+    """Forget failed submission state so entire job can be safely upserted again."""
+    job_state["task_uid"] = None
+    job_state["submitted"] = 0
+    job_state["total"] = None
+
+
+def _persist_meili_export_states(job_states):
+    """Persist external Meilisearch state before scheduler yields control."""
+    for job_state in job_states:
+        db.session.query(Jobs).filter(Jobs.id == job_state["id"]).update(
+            {
+                Jobs.exported: job_state["exported"],
+                Jobs.meili_task_uid: job_state["task_uid"],
+                Jobs.meili_documents_submitted: job_state["submitted"],
+                Jobs.meili_documents_total: job_state["total"],
+            },
+            synchronize_session=False,
+        )
+    db.session.commit()
+
+
+def _finalize_ready_export_jobs(job_states, export_context):
+    """Write Kvrocks only for jobs whose complete Meili input has succeeded."""
+    documents_exported = 0
+    jobs_exported = 0
+    for job_state in job_states:
+        job_state["task_uid"] = None
+        total = job_state["total"]
+        if total is None or job_state["submitted"] < total:
+            continue
+
+        meili_documents, kvrocks_documents = _load_job_export_documents(
+            export_context,
+            job_state["uid"],
+        )
+        if len(meili_documents) != total:
+            raise MeiliExportTaskError(
+                f"Job {job_state['uid']} document count changed after Meilisearch "
+                f"submission: expected {total}, found {len(meili_documents)}"
+            )
+        for offset in range(0, len(kvrocks_documents), MEILI_EXPORT_BATCH_SIZE):
+            export_context.kvrocks_idx.add_documents_batch(
+                kvrocks_documents[offset : offset + MEILI_EXPORT_BATCH_SIZE]
+            )
+        documents_exported += len(kvrocks_documents)
+        jobs_exported += 1
+        job_state["exported"] = True
+        _reset_meili_export_state(job_state)
+    return documents_exported, jobs_exported
+
+
+def _process_persisted_meili_task(
+    export_context,
+    task_uid,
+    job_states,
+):
+    """Check one task once; never resubmit or write Kvrocks while pending."""
+    completed_task = export_context.meili_idx.get_task(task_uid)
+    task_status = str(getattr(completed_task, "status", "")).lower()
+    if task_status in ("enqueued", "processing"):
+        return {
+            "status": task_status,
+            "documents_exported": 0,
+            "jobs_exported": 0,
+        }
+    if task_status != "succeeded":
+        for job_state in job_states:
+            _reset_meili_export_state(job_state)
+        return {
+            "status": task_status or "unknown",
+            "error": getattr(completed_task, "error", None),
+            "documents_exported": 0,
+            "jobs_exported": 0,
+        }
+
+    documents_exported, jobs_exported = _finalize_ready_export_jobs(
+        job_states,
+        export_context,
+    )
+    return {
+        "status": "succeeded",
+        "documents_exported": documents_exported,
+        "jobs_exported": jobs_exported,
+    }
+
+
+def _load_export_job_states(task_uid=None):
+    """Load eligible job state, optionally restricted to one Meili task."""
+    query = db.session.query(
+        Jobs.id,
+        Jobs.uid,
+        Jobs.exported,
+        Jobs.meili_task_uid,
+        Jobs.meili_documents_submitted,
+        Jobs.meili_documents_total,
+    ).filter(
+        Jobs.active == False,
+        Jobs.exported == False,
+        Jobs.finished == True,
+    )
+    if task_uid is None:
+        query = query.filter(Jobs.meili_task_uid == None).order_by(Jobs.id)
+    else:
+        query = query.filter(Jobs.meili_task_uid == task_uid).order_by(Jobs.id)
+    states = [_export_job_state(row) for row in query.yield_per(100)]
+    db.session.commit()
+    db.session.remove()
+    return states
+
+
+def _export_summary(
+    jobs_scanned,
+    documents_exported=0,
+    batches=0,
+    jobs_exported=0,
+    **flags,
+):
+    """Return consistent scheduler metrics for every export state transition."""
+    summary = {
+        "jobs_scanned": jobs_scanned,
+        "documents_exported": documents_exported,
+        "batches": batches,
+        "jobs_marked_exported": jobs_exported,
+    }
+    if flags.get("pending_tasks"):
+        summary["meili_tasks_pending"] = flags["pending_tasks"]
+    if flags.get("errors"):
+        summary["errors"] = flags["errors"]
+    return summary
+
+
+def _build_export_context():
+    """Load immutable config and parser state for one export transition."""
     meili_idx = db.app.config.get("MEILI_IDX")
     kvrocks_idx = db.app.config.get("KVROCKS_IDX")
-
-    input_dir = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
-
-    job_snapshots = []
     active_tag_rules = compile_tag_rule_records(
         db.session.query(TagRules).filter(TagRules.active == True).all()
     )
@@ -1410,147 +1584,225 @@ def task_export_to_dbs():
         for row in db.session.query(CollectedHeaders).all()
         if str(row.header_name or "").strip()
     }
-    # Select "All" Json
-    for job_data in (
-        db.session.query(Jobs.id, Jobs.uid)
+    return ExportContext(
+        meili_idx=meili_idx,
+        kvrocks_idx=kvrocks_idx,
+        input_dir=os.path.expanduser(db.app.config.get("JSON_FOLDER")),
+        parser_config=parser_config,
+        active_tag_rules=active_tag_rules,
+        timeout_ms=int(
+            db.app.config.get(
+                "MEILI_EXPORT_TASK_TIMEOUT_MS",
+                DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS,
+            )
+        ),
+    )
+
+
+def _load_pending_meili_task_uids():
+    """Return durable unfinished task UIDs and release SQLite read state."""
+    task_uids = [
+        row[0]
+        for row in db.session.query(Jobs.meili_task_uid)
         .filter(
+            Jobs.meili_task_uid != None,
             Jobs.active == False,
-            Jobs.exported == False,
             Jobs.finished == True,
+            Jobs.exported == False,
         )
-        .yield_per(100)
-    ):
-        job_snapshots.append({"id": job_data.id, "uid": job_data.uid})
-
-    if not job_snapshots:
-        db.session.remove()
-        return {
-            "jobs_scanned": 0,
-            "documents_exported": 0,
-            "batches": 0,
-            "jobs_marked_exported": 0,
-        }
-
-    # Release the read transaction before spending time on IO/exports to avoid long locks.
+        .distinct()
+        .order_by(Jobs.meili_task_uid)
+    ]
     db.session.commit()
     db.session.remove()
+    return task_uids
 
-    batch_size = 2500  # How many Document we flush at once to backend.
-    pending_meili = []
-    pending_kvrocks = []
-    pending_job_refs = []
-    outstanding_docs = defaultdict(int)
-    completed_jobs = set()
-    ready_jobs = set()
-    total_documents = 0
-    batch_count = 0
 
-    def flush_batch():
-        """
-        This subprocedure flush reports (per IP)
-        """
-        nonlocal batch_count, total_documents
-        if not pending_meili:
-            return
-        batch_count += 1
-        exported_count = _export_document_batch(
-            meili_idx,
-            kvrocks_idx,
-            pending_meili,
-            pending_kvrocks,
-            timeout_ms=int(
-                db.app.config.get(
-                    "MEILI_EXPORT_TASK_TIMEOUT_MS",
-                    DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS,
-                )
-            ),
+def _resume_persisted_export(export_context, pending_task_uids):
+    """Advance oldest persisted task once without resubmitting its documents."""
+    if len(pending_task_uids) > 1:
+        logger.warning(
+            "Multiple persisted Meilisearch export tasks found: %s",
+            pending_task_uids,
         )
-        for job_id in pending_job_refs:
-            outstanding_docs[job_id] -= 1
-            if outstanding_docs[job_id] == 0 and job_id in completed_jobs:
-                ready_jobs.add(job_id)
-        total_documents += exported_count
-        pending_meili.clear()
-        pending_kvrocks.clear()
-        pending_job_refs.clear()
+    task_uid = pending_task_uids[0]
+    job_states = _load_export_job_states(task_uid)
+    result = _process_persisted_meili_task(
+        export_context,
+        task_uid,
+        job_states,
+    )
+    if result["status"] in ("enqueued", "processing"):
+        logger.info(
+            "Meilisearch export task %s remains %s; deferring Kvrocks "
+            "and job completion to next scheduler tick",
+            task_uid,
+            result["status"],
+        )
+        return _export_summary(len(job_states), pending_tasks=1)
+
+    _persist_meili_export_states(job_states)
+    if result["status"] != "succeeded":
+        logger.error(
+            "Meilisearch export task %s ended with status %s: %s",
+            task_uid,
+            result["status"],
+            result.get("error") or "no error details",
+        )
+        return _export_summary(len(job_states), errors=1)
+    return _export_summary(
+        len(job_states),
+        documents_exported=result["documents_exported"],
+        jobs_exported=result["jobs_exported"],
+    )
+
+
+def _prepare_meili_export_batch(export_context, job_states):
+    """Build next bounded batch while finalizing already-confirmed jobs."""
+    batch_state = {
+        "documents": [],
+        "jobs": [],
+        "ready_documents": 0,
+        "ready_jobs": 0,
+    }
+    ready_states = []
+    for job_state in job_states:
+        meili_documents, _kvrocks_documents = _load_job_export_documents(
+            export_context,
+            job_state["uid"],
+        )
+        document_total = len(meili_documents)
+        if job_state["total"] is not None and job_state["total"] != document_total:
+            logger.warning(
+                "Job %s document count changed from %s to %s; restarting "
+                "Meilisearch submission",
+                job_state["uid"],
+                job_state["total"],
+                document_total,
+            )
+            job_state["submitted"] = 0
+        job_state["total"] = document_total
+        job_state["submitted"] = min(job_state["submitted"], document_total)
+
+        if job_state["submitted"] >= document_total:
+            ready_states.append(job_state)
+            continue
+
+        capacity = MEILI_EXPORT_BATCH_SIZE - len(batch_state["documents"])
+        contribution = min(capacity, document_total - job_state["submitted"])
+        start = job_state["submitted"]
+        batch_state["documents"].extend(meili_documents[start : start + contribution])
+        job_state["submitted"] += contribution
+        batch_state["jobs"].append(job_state)
+        if len(batch_state["documents"]) >= MEILI_EXPORT_BATCH_SIZE:
+            break
+
+    if ready_states:
+        ready_counts = _finalize_ready_export_jobs(ready_states, export_context)
+        _persist_meili_export_states(ready_states)
+        batch_state["ready_documents"], batch_state["ready_jobs"] = ready_counts
+    return batch_state
+
+
+def _submit_meili_export_batch(export_context, jobs_scanned, batch_state):
+    """Submit/persist one batch, then wait once before possibly writing Kvrocks."""
+    task_uid = _get_meili_task_uid(
+        export_context.meili_idx.add_documents(batch_state["documents"])
+    )
+    for job_state in batch_state["jobs"]:
+        job_state["task_uid"] = task_uid
+    _persist_meili_export_states(batch_state["jobs"])
+    logger.info(
+        "Meilisearch export task %s submitted: documents=%s jobs=%s",
+        task_uid,
+        len(batch_state["documents"]),
+        len(batch_state["jobs"]),
+    )
 
     try:
-        for job in job_snapshots:
-            filepath = os.path.join(input_dir, job["uid"][0], job["uid"] + ".json")
-
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    scan_results = [data]
-                elif isinstance(data, list):
-                    scan_results = data
-                else:
-                    scan_results = []
-                for item in scan_results:
-                    for object_to_save in _split_scan_result_by_port(item):
-                        parsed_doc = parse_json(
-                            object_to_save,
-                            parser_config,
-                            tag_rules=active_tag_rules,
-                        )
-                        if parsed_doc is None:
-                            continue
-                        pending_meili.append(object_to_save)
-                        pending_kvrocks.append(parsed_doc)
-                        pending_job_refs.append(job["id"])
-                        outstanding_docs[job["id"]] += 1
-
-                        if len(pending_meili) >= batch_size:
-                            flush_batch()
-
-            completed_jobs.add(job["id"])
-            if outstanding_docs[job["id"]] == 0:
-                ready_jobs.add(job["id"])
-
-        flush_batch()
-        updated_rows = 0
-
-        if ready_jobs:
-            updated_rows = (
-                db.session.query(Jobs)
-                .filter(
-                    Jobs.id.in_(ready_jobs),
-                    Jobs.active == False,
-                    Jobs.finished == True,
-                    Jobs.exported == False,
-                )
-                .update({Jobs.exported: True}, synchronize_session=False)
-            )
-            if updated_rows != len(ready_jobs):
-                logger.warning(
-                    "Exported job mismatch, expected %s updated %s",
-                    len(ready_jobs),
-                    updated_rows,
-                )
-            db.session.commit()
-        logger.info(
-            "Export TASK: %s jobs scanned, %s documents exported in %s batches, %s jobs marked exported",
-            len(job_snapshots),
-            total_documents,
-            batch_count,
-            updated_rows,
+        _wait_for_meili_export_task(
+            export_context.meili_idx,
+            task_uid,
+            export_context.timeout_ms,
         )
-        return {
-            "jobs_scanned": len(job_snapshots),
-            "documents_exported": total_documents,
-            "batches": batch_count,
-            "jobs_marked_exported": updated_rows,
-        }
+    except MeiliExportTaskPending as pending:
+        logger.info(
+            "Meilisearch export task %s remains %s after wait window; "
+            "state persisted, Kvrocks deferred",
+            pending.task_uid,
+            pending.status,
+        )
+        return _export_summary(
+            jobs_scanned,
+            documents_exported=batch_state["ready_documents"],
+            batches=1,
+            jobs_exported=batch_state["ready_jobs"],
+            pending_tasks=1,
+        )
+    except MeiliExportTaskError:
+        for job_state in batch_state["jobs"]:
+            _reset_meili_export_state(job_state)
+        _persist_meili_export_states(batch_state["jobs"])
+        raise
+
+    result = _process_persisted_meili_task(
+        export_context,
+        task_uid,
+        batch_state["jobs"],
+    )
+    _persist_meili_export_states(batch_state["jobs"])
+    if result["status"] in ("enqueued", "processing"):
+        return _export_summary(jobs_scanned, batches=1, pending_tasks=1)
+    if result["status"] != "succeeded":
+        logger.error(
+            "Meilisearch export task %s ended with status %s: %s",
+            task_uid,
+            result["status"],
+            result.get("error") or "no error details",
+        )
+        return _export_summary(jobs_scanned, batches=1, errors=1)
+    return _export_summary(
+        jobs_scanned,
+        documents_exported=(
+            batch_state["ready_documents"] + result["documents_exported"]
+        ),
+        batches=1,
+        jobs_exported=batch_state["ready_jobs"] + result["jobs_exported"],
+    )
+
+
+def _advance_new_meili_export(export_context):
+    """Prepare and submit one new batch when no server task is outstanding."""
+    job_states = _load_export_job_states()
+    if not job_states:
+        return _export_summary(0)
+    batch_state = _prepare_meili_export_batch(export_context, job_states)
+    if not batch_state["documents"]:
+        return _export_summary(
+            len(job_states),
+            documents_exported=batch_state["ready_documents"],
+            jobs_exported=batch_state["ready_jobs"],
+        )
+    return _submit_meili_export_batch(
+        export_context,
+        len(job_states),
+        batch_state,
+    )
+
+
+def task_export_to_dbs():
+    """Advance durable Meilisearch-first export state by at most one batch."""
+    export_context = _build_export_context()
+    pending_task_uids = _load_pending_meili_task_uids()
+
+    try:
+        if pending_task_uids:
+            return _resume_persisted_export(export_context, pending_task_uids)
+        return _advance_new_meili_export(export_context)
     except (MeilisearchError, MeiliExportTaskError, HTTPError) as error:
         db.session.rollback()
-        logger.error("Unable to export result batch: %s", error)
-        return {
-            "jobs_scanned": len(job_snapshots),
-            "documents_exported": total_documents,
-            "batches": batch_count,
-            "jobs_marked_exported": 0,
-            "errors": 1,
-        }
+        logger.error("Unable to advance export state: %s", error)
+        return _export_summary(0, errors=1)
     finally:
         db.session.remove()
 

@@ -175,6 +175,9 @@ class Jobs(Model):
     active = Column(Boolean, default=False)  # Job is running
     finished = Column(Boolean, default=False)  # True if Job was successfull
     exported = Column(Boolean, default=False)  # True if result was exported
+    meili_task_uid = Column(Integer, nullable=True)
+    meili_documents_submitted = Column(Integer, default=0, nullable=False)
+    meili_documents_total = Column(Integer, nullable=True)
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
     job_creation = Column(DateTime, default=utcnow_naive)  # Timestamp of job creation
