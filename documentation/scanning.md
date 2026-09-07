@@ -68,7 +68,12 @@ ID. Their queued and active jobs, target state, and progress remain unchanged.
 
 Finished scan results are always exported to Meilisearch before Kvrocks. The
 scheduler submits at most one 2,500-document Meilisearch batch, stores its task
-UID and per-job document position in SQLite, then waits up to five minutes.
+UID and per-job document position in SQLite, then immediately yields so scan job
+generation cannot be delayed by Meilisearch indexing.
+
+Scan orchestration and search-backend maintenance use independent scheduled
+jobs. A slow export or report tick therefore cannot consume the
+`scan_orchestration` job's single running-instance slot.
 
 If the task remains `enqueued` or `processing`, the scheduler does not write
 Kvrocks and does not mark jobs exported. On later ticks it checks the same task
@@ -78,8 +83,9 @@ after every Meilisearch batch for that job has succeeded.
 
 A failed or canceled Meilisearch task clears the saved submission position. The
 job remains unexported and is safely upserted again on a later scheduler tick.
-The wait window is configurable with `MEILI_EXPORT_TASK_TIMEOUT_MS`; default is
-`300000` milliseconds.
+Individual Meilisearch HTTP requests are bounded by
+`MEILI_HTTP_TIMEOUT_SECONDS`, and Kvrocks socket operations by
+`KVROCKS_SOCKET_TIMEOUT_SECONDS`; both default to 10 seconds.
 
 ## Scan execution parameters
 

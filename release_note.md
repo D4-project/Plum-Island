@@ -2,7 +2,7 @@
 
 ## Since Last release Changes.
 
-- Persist asynchronous Meilisearch export tasks across scheduler ticks, enforce Meilisearch-before-Kvrocks ordering, and add a resumable raw-JSON recovery tool with task progress for Kvrocks-only documents.
+- Persist asynchronous Meilisearch export tasks across scheduler ticks, isolate backend maintenance from scan orchestration, yield immediately after submission so indexing cannot block scan-job generation, enforce Meilisearch-before-Kvrocks ordering, and add a resumable raw-JSON recovery tool with task progress for Kvrocks-only documents.
 
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 

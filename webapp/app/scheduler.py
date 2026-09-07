@@ -22,7 +22,7 @@ from requests.exceptions import HTTPError
 from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 from . import db
-from .models import Targets, Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
+from .models import Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
 from .models import Reports
 from .models import CollectedHeaders, ensure_default_collected_headers
 from .models import TagRules
@@ -63,9 +63,8 @@ DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
 STALLED_JOB_TIMEOUT = timedelta(hours=2)
-DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS = 300_000
-MEILI_EXPORT_STATUS_INTERVAL_SECONDS = 30
-MEILI_EXPORT_POLL_INTERVAL_SECONDS = 1
+DEFAULT_MEILI_HTTP_TIMEOUT_SECONDS = 10
+DEFAULT_KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
 MEILI_EXPORT_BATCH_SIZE = 2500
 UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
@@ -77,15 +76,6 @@ class MeiliExportTaskError(RuntimeError):
     """Raised when Meilisearch rejects an asynchronous export task."""
 
 
-class MeiliExportTaskPending(RuntimeError):
-    """Raised when an export task is still queued/running after one wait window."""
-
-    def __init__(self, task_uid, status):
-        self.task_uid = int(task_uid)
-        self.status = status
-        super().__init__(f"Meilisearch task {task_uid} remains {status}")
-
-
 @dataclass(frozen=True)
 class ExportContext:
     """Immutable dependencies used during one scheduler export transition."""
@@ -95,7 +85,6 @@ class ExportContext:
     input_dir: str
     parser_config: dict
     active_tag_rules: list
-    timeout_ms: int
 
 
 def _get_meili_task_uid(queued_task):
@@ -108,41 +97,6 @@ def _get_meili_task_uid(queued_task):
             "Meilisearch add_documents returned no task identifier"
         )
     return int(task_uid)
-
-
-def _wait_for_meili_export_task(meili_idx, task_uid, timeout_ms):
-    """Poll one export task with status logs and require terminal success."""
-    started_at = time.monotonic()
-    next_status_at = 0
-    while True:
-        completed_task = meili_idx.get_task(task_uid)
-        task_status = str(getattr(completed_task, "status", "")).lower()
-        elapsed_seconds = time.monotonic() - started_at
-        if task_status == "succeeded":
-            logger.info(
-                "Meilisearch export task %s succeeded after %.1fs",
-                task_uid,
-                elapsed_seconds,
-            )
-            return
-        if task_status not in ("enqueued", "processing"):
-            task_error = getattr(completed_task, "error", None)
-            raise MeiliExportTaskError(
-                f"Meilisearch task {task_uid} ended with status "
-                f"{task_status or 'unknown'}: {task_error or 'no error details'}"
-            )
-        if elapsed_seconds >= next_status_at:
-            logger.info(
-                "Meilisearch export task %s status=%s elapsed=%.1fs timeout=%.1fs",
-                task_uid,
-                task_status,
-                elapsed_seconds,
-                timeout_ms / 1000,
-            )
-            next_status_at = elapsed_seconds + MEILI_EXPORT_STATUS_INTERVAL_SECONDS
-        if elapsed_seconds >= timeout_ms / 1000:
-            raise MeiliExportTaskPending(task_uid, task_status)
-        time.sleep(MEILI_EXPORT_POLL_INTERVAL_SECONDS)
 
 
 def _clean_banner_outputs(port):
@@ -326,7 +280,7 @@ def task_release_stalled_jobs(now=None):
 
 def task_master_of_puppets():
     """
-    Sequentially run Scheduled tasks
+    Run scan orchestration independently from external-backend maintenance.
     """
     # External migration scripts and manual SQL maintenance can modify the
     # sqlite database outside this process. Start each tick from a fresh ORM
@@ -343,6 +297,27 @@ def task_master_of_puppets():
             "profile_sync": _run_scheduler_step(
                 "profile_sync", task_sync_queued_profile_jobs
             ),
+        }
+        total_elapsed = time.perf_counter() - scheduler_started_at
+        logger.info(
+            "Scheduler TASK: tick complete in %.2fs "
+            "(release_stalled_jobs=%.2fs, create_jobs=%.2fs, profile_sync=%.2fs)",
+            total_elapsed,
+            step_durations["release_stalled_jobs"]["elapsed"],
+            step_durations["create_jobs"]["elapsed"],
+            step_durations["profile_sync"]["elapsed"],
+        )
+    finally:
+        db.session.remove()
+
+
+def task_scheduler_maintenance():
+    """Run result export and housekeeping without blocking scan orchestration."""
+    maintenance_started_at = time.perf_counter()
+    logger.info("Scheduler MAINTENANCE: tick start")
+    db.session.remove()
+    try:
+        step_durations = {
             "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
             "reports": _run_scheduler_step("reports", task_run_due_reports),
             "cleanup_jobs": _run_scheduler_step("cleanup_jobs", task_cleanup_jobs),
@@ -353,13 +328,12 @@ def task_master_of_puppets():
                 "cleanup_export_jobs", task_cleanup_export_jobs
             ),
         }
-        total_elapsed = time.perf_counter() - scheduler_started_at
+        total_elapsed = time.perf_counter() - maintenance_started_at
         logger.info(
-            "Scheduler TASK: tick complete in %.2fs (release_stalled_jobs=%.2fs, create_jobs=%.2fs, profile_sync=%.2fs, export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
+            "Scheduler MAINTENANCE: tick complete in %.2fs "
+            "(export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, "
+            "cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
-            step_durations["release_stalled_jobs"]["elapsed"],
-            step_durations["create_jobs"]["elapsed"],
-            step_durations["profile_sync"]["elapsed"],
             step_durations["export_to_dbs"]["elapsed"],
             step_durations["reports"]["elapsed"],
             step_durations["cleanup_jobs"]["elapsed"],
@@ -1379,7 +1353,8 @@ def task_sync_queued_profile_jobs():
         )
 
     logger.info(
-        "Profile sync TASK: synchronized %s queued jobs across %s profiles; completed_profiles=%s; batch_size=%s; elapsed=%.2fs",
+        "Profile sync TASK: synchronized %s queued jobs across %s profiles; "
+        "completed_profiles=%s; batch_size=%s; elapsed=%.2fs",
         total_synchronized,
         len(profiles),
         completed_profiles,
@@ -1590,12 +1565,6 @@ def _build_export_context():
         input_dir=os.path.expanduser(db.app.config.get("JSON_FOLDER")),
         parser_config=parser_config,
         active_tag_rules=active_tag_rules,
-        timeout_ms=int(
-            db.app.config.get(
-                "MEILI_EXPORT_TASK_TIMEOUT_MS",
-                DEFAULT_MEILI_EXPORT_TASK_TIMEOUT_MS,
-            )
-        ),
     )
 
 
@@ -1705,7 +1674,7 @@ def _prepare_meili_export_batch(export_context, job_states):
 
 
 def _submit_meili_export_batch(export_context, jobs_scanned, batch_state):
-    """Submit/persist one batch, then wait once before possibly writing Kvrocks."""
+    """Submit and persist one batch, then yield until the next scheduler tick."""
     task_uid = _get_meili_task_uid(
         export_context.meili_idx.add_documents(batch_state["documents"])
     )
@@ -1718,56 +1687,12 @@ def _submit_meili_export_batch(export_context, jobs_scanned, batch_state):
         len(batch_state["documents"]),
         len(batch_state["jobs"]),
     )
-
-    try:
-        _wait_for_meili_export_task(
-            export_context.meili_idx,
-            task_uid,
-            export_context.timeout_ms,
-        )
-    except MeiliExportTaskPending as pending:
-        logger.info(
-            "Meilisearch export task %s remains %s after wait window; "
-            "state persisted, Kvrocks deferred",
-            pending.task_uid,
-            pending.status,
-        )
-        return _export_summary(
-            jobs_scanned,
-            documents_exported=batch_state["ready_documents"],
-            batches=1,
-            jobs_exported=batch_state["ready_jobs"],
-            pending_tasks=1,
-        )
-    except MeiliExportTaskError:
-        for job_state in batch_state["jobs"]:
-            _reset_meili_export_state(job_state)
-        _persist_meili_export_states(batch_state["jobs"])
-        raise
-
-    result = _process_persisted_meili_task(
-        export_context,
-        task_uid,
-        batch_state["jobs"],
-    )
-    _persist_meili_export_states(batch_state["jobs"])
-    if result["status"] in ("enqueued", "processing"):
-        return _export_summary(jobs_scanned, batches=1, pending_tasks=1)
-    if result["status"] != "succeeded":
-        logger.error(
-            "Meilisearch export task %s ended with status %s: %s",
-            task_uid,
-            result["status"],
-            result.get("error") or "no error details",
-        )
-        return _export_summary(jobs_scanned, batches=1, errors=1)
     return _export_summary(
         jobs_scanned,
-        documents_exported=(
-            batch_state["ready_documents"] + result["documents_exported"]
-        ),
+        documents_exported=batch_state["ready_documents"],
         batches=1,
-        jobs_exported=batch_state["ready_jobs"] + result["jobs_exported"],
+        jobs_exported=batch_state["ready_jobs"],
+        pending_tasks=1,
     )
 
 
@@ -2052,12 +1977,20 @@ check_json_storage(db.app.config.get("JSON_FOLDER"))
 db.app.config["KVROCKS_IDX"] = KVrocksIndexer(
     host=db.app.config.get("KVROCKS_HOST", "localhost"),
     port=db.app.config.get("KVROCKS_PORT", 6666),
+    socket_timeout=_get_scheduler_int_config(
+        "KVROCKS_SOCKET_TIMEOUT_SECONDS",
+        DEFAULT_KVROCKS_SOCKET_TIMEOUT_SECONDS,
+    ),
 )
 
 # Connect to the Mieili DB ( if the index is not present create IT)
 client = meilisearch.Client(
     db.app.config.get("MEILI_DATABASE_URI"),
     db.app.config.get("MEILI_KEY"),
+    timeout=_get_scheduler_int_config(
+        "MEILI_HTTP_TIMEOUT_SECONDS",
+        DEFAULT_MEILI_HTTP_TIMEOUT_SECONDS,
+    ),
 )
 
 # If the method is online fetch the TLDs.
@@ -2090,6 +2023,14 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(
     func=task_master_of_puppets,
     trigger="interval",
+    id="scan_orchestration",
+    max_instances=1,
+    minutes=db.app.config.get("SCHEDULER_DELAY"),
+)
+scheduler.add_job(
+    func=task_scheduler_maintenance,
+    trigger="interval",
+    id="scheduler_maintenance",
     max_instances=1,
     minutes=db.app.config.get("SCHEDULER_DELAY"),
 )

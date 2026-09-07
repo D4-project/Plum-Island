@@ -26,8 +26,15 @@ class KVrocksIndexer:
 
     """
 
-    def __init__(self, host="localhost", port=6666):
-        self.r = redis.Redis(host=host, port=port, decode_responses=True, db=0)
+    def __init__(self, host="localhost", port=6666, socket_timeout=None):
+        self.r = redis.Redis(
+            host=host,
+            port=port,
+            decode_responses=True,
+            db=0,
+            socket_connect_timeout=socket_timeout,
+            socket_timeout=socket_timeout,
+        )
 
     @staticmethod
     def now_rfc():

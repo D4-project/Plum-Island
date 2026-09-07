@@ -25,11 +25,13 @@ class StalledJobWatchdogTest(TestCase):
         """Import scheduler with external services mocked."""
         with mock.patch("meilisearch.Client") as client, mock.patch(
             "app.utils.kvrocks.KVrocksIndexer"
-        ):
+        ) as kvrocks_indexer:
             client.return_value.index.return_value.get_searchable_attributes.return_value = (
                 []
             )
             cls.scheduler = importlib.import_module("app.scheduler")
+            cls.meili_client_constructor = client
+            cls.kvrocks_indexer_constructor = kvrocks_indexer
 
     def _export_context(self, meili_index, kvrocks_index):
         """Build isolated export dependencies for state-machine tests."""
@@ -39,7 +41,6 @@ class StalledJobWatchdogTest(TestCase):
             input_dir="/tmp",
             parser_config={},
             active_tag_rules=[],
-            timeout_ms=300_000,
         )
 
     def test_timeout_is_exactly_two_hours(self):
@@ -80,6 +81,57 @@ class StalledJobWatchdogTest(TestCase):
     def test_timeout_is_timedelta(self):
         """Timeout remains a fixed two-hour duration, not scheduler interval."""
         self.assertEqual(self.scheduler.STALLED_JOB_TIMEOUT, timedelta(hours=2))
+
+    def test_backend_clients_have_finite_request_timeouts(self):
+        """An unavailable search backend cannot occupy the scheduler forever."""
+        self.assertEqual(
+            self.meili_client_constructor.call_args.kwargs["timeout"],
+            10,
+        )
+        self.assertEqual(
+            self.kvrocks_indexer_constructor.call_args.kwargs["socket_timeout"],
+            10,
+        )
+
+    def test_backend_maintenance_has_an_independent_scheduler_slot(self):
+        """A stuck maintenance run cannot suppress scan orchestration ticks."""
+        jobs = {job.id: job for job in self.scheduler.scheduler.get_jobs()}
+
+        self.assertIn("scan_orchestration", jobs)
+        self.assertIn("scheduler_maintenance", jobs)
+        self.assertIs(
+            jobs["scan_orchestration"].func,
+            self.scheduler.task_master_of_puppets,
+        )
+        self.assertIs(
+            jobs["scheduler_maintenance"].func,
+            self.scheduler.task_scheduler_maintenance,
+        )
+
+    def test_scan_tick_generates_jobs_without_entering_backend_maintenance(self):
+        """The scan tick cannot call a slow export path before creating jobs."""
+        call_order = []
+
+        with mock.patch.object(
+            self.scheduler,
+            "task_release_stalled_jobs",
+            side_effect=lambda: call_order.append("watchdog") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_create_jobs",
+            side_effect=lambda: call_order.append("create_jobs") or {"jobs_created": 1},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_sync_queued_profile_jobs",
+            side_effect=lambda: call_order.append("profile_sync") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_export_to_dbs",
+            side_effect=AssertionError("scan tick entered backend export"),
+        ):
+            self.scheduler.task_master_of_puppets()
+
+        self.assertEqual(call_order, ["watchdog", "create_jobs", "profile_sync"])
 
     def test_due_state_query_applies_cycle_target_boundary(self):
         """Targets above current cycle high-water mark remain for next cycle."""
@@ -133,8 +185,8 @@ class StalledJobWatchdogTest(TestCase):
         meili_index.add_documents.assert_not_called()
         kvrocks_index.add_documents_batch.assert_not_called()
 
-    def test_new_timed_out_task_is_persisted_without_kvrocks(self):
-        """New task UID is saved before five-minute wait yields control."""
+    def test_new_task_is_persisted_without_polling_or_kvrocks(self):
+        """Submission yields immediately so export cannot occupy the scheduler."""
         meili_index = mock.Mock()
         kvrocks_index = mock.Mock()
         meili_index.add_documents.return_value = SimpleNamespace(task_uid=45)
@@ -153,24 +205,14 @@ class StalledJobWatchdogTest(TestCase):
             "ready_jobs": 0,
         }
         persisted_task_uids = []
-        events = []
 
         def persist(states):
-            events.append("persist")
             persisted_task_uids.append(states[0]["task_uid"])
-
-        def wait_then_defer(*_args):
-            events.append("wait")
-            raise self.scheduler.MeiliExportTaskPending(45, "enqueued")
 
         with mock.patch.object(
             self.scheduler,
             "_persist_meili_export_states",
             side_effect=persist,
-        ), mock.patch.object(
-            self.scheduler,
-            "_wait_for_meili_export_task",
-            side_effect=wait_then_defer,
         ):
             summary = self.scheduler._submit_meili_export_batch(
                 self._export_context(meili_index, kvrocks_index),
@@ -179,9 +221,9 @@ class StalledJobWatchdogTest(TestCase):
             )
 
         self.assertEqual(persisted_task_uids, [45])
-        self.assertEqual(events, ["persist", "wait"])
         self.assertEqual(job_state["task_uid"], 45)
         self.assertEqual(summary["meili_tasks_pending"], 1)
+        meili_index.get_task.assert_not_called()
         kvrocks_index.add_documents_batch.assert_not_called()
 
     def test_succeeded_persisted_task_writes_kvrocks_after_status(self):
@@ -282,27 +324,6 @@ class StalledJobWatchdogTest(TestCase):
         self.assertEqual(job_state["submitted"], 0)
         self.assertIsNone(job_state["total"])
         kvrocks_index.add_documents_batch.assert_not_called()
-
-    def test_five_minute_wait_defers_running_task(self):
-        """Five-minute timeout yields pending state instead of task failure."""
-        meili_index = mock.Mock()
-        meili_index.get_task.return_value = SimpleNamespace(
-            status="processing",
-            error=None,
-        )
-        with mock.patch.object(
-            self.scheduler.time,
-            "monotonic",
-            side_effect=[0, 300],
-        ), self.assertRaises(self.scheduler.MeiliExportTaskPending) as raised:
-            self.scheduler._wait_for_meili_export_task(
-                meili_index,
-                44,
-                300_000,
-            )
-
-        self.assertEqual(raised.exception.task_uid, 44)
-        self.assertEqual(raised.exception.status, "processing")
 
 
 class MeiliExportStateMigrationTest(TestCase):

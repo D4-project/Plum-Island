@@ -27,10 +27,12 @@ MEILI_KEY = "YouNeedToChangeMeInProduction"
 
 # The Meili database connections settings
 MEILI_DATABASE_URI = "http://localhost:7700"
+MEILI_HTTP_TIMEOUT_SECONDS = 10
 
 # Your App secret key
 KVROCKS_HOST = "localhost"
 KVROCKS_PORT = 6666
+KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
 PASSIVE_USER = ""
 PASSIVE_PWD = ""
 
