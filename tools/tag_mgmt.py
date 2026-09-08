@@ -9,6 +9,9 @@ this help and exits.
 import argparse
 from contextlib import contextmanager
 import fcntl
+import json
+import os
+import re
 import logging
 import sys
 import warnings
@@ -25,6 +28,22 @@ MISSING_VERSION_TIME = datetime(1970, 1, 1)
 TAG_FLUSH_BATCH_SIZE = 1000
 MAX_BATCH_SIZE = 1000
 REINDEX_LOCK_FILE = Path(__import__("os").environ.get("PLUM_REINDEX_LOCK_FILE", "/tmp/plum-island-tag-reindex.lock"))
+REINDEX_STATUS_FILE = Path(os.environ.get("PLUM_REINDEX_STATUS_FILE", "/tmp/plum-island-tag-reindex.status.json"))
+
+
+def read_reindex_status():
+    try:
+        return json.loads(REINDEX_STATUS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+
+
+def _write_reindex_status(**updates):
+    current = read_reindex_status() or {}
+    current.update(updates)
+    temporary = REINDEX_STATUS_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(current), encoding="utf-8")
+    temporary.replace(REINDEX_STATUS_FILE)
 
 
 class ReindexBusyError(RuntimeError):
@@ -942,6 +961,16 @@ def _reindex_tags_unlocked(args, progress_callback=None):
 
         meili_client = meilisearch.Client(meili_url, meili_api_key)
         meili_index = meili_client.index(index_name)
+        total_docs = None
+        try:
+            stats = meili_index.get_stats()
+            if isinstance(stats, dict):
+                total_docs = stats.get("numberOfDocuments")
+            else:
+                total_docs = getattr(stats, "number_of_documents", None)
+            total_docs = int(total_docs) if total_docs is not None else None
+        except Exception:
+            total_docs = None
         indexer = KVrocksIndexer(kvrocks_host, kvrocks_port)
 
         if args.allrules:
@@ -999,7 +1028,8 @@ def _reindex_tags_unlocked(args, progress_callback=None):
                 )
                 if progress_callback:
                     progress_callback(
-                        f"Progress: processed={processed_docs}; updated={updated_docs}; errors={error_docs}"
+                        f"Progress: processed={processed_docs}; total={total_docs or 0}; "
+                        f"updated={updated_docs}; errors={error_docs}"
                     )
 
         updated_docs += flush_tag_batch(indexer, pending_docs)
@@ -1008,12 +1038,31 @@ def _reindex_tags_unlocked(args, progress_callback=None):
             f"processed={processed_docs}; updated={updated_docs}; errors={error_docs}",
             flush=True,
         )
+        if progress_callback:
+            progress_callback(
+                f"Done. processed={processed_docs}; total={total_docs or processed_docs}; "
+                f"updated={updated_docs}; errors={error_docs}"
+            )
 
 
 def reindex_tags(args, progress_callback=None):
     """Run a serialized tag reindex, shared by CLI and web UI."""
     with reindex_execution_lock():
-        return _reindex_tags_unlocked(args, progress_callback=progress_callback)
+        _write_reindex_status(status="running", message="Reindex started", processed=0, total=0)
+        def callback(message):
+            text = str(message)
+            updates = {"message": text}
+            match = re.search(r"processed=(\d+);(?: total=(\d+);)? updated=(\d+); errors=(\d+)", text)
+            if match:
+                updates.update(processed=int(match.group(1)), updated=int(match.group(3)), errors=int(match.group(4)))
+                if match.group(2):
+                    updates["total"] = int(match.group(2))
+            _write_reindex_status(**updates)
+            if progress_callback:
+                progress_callback(message)
+        result = _reindex_tags_unlocked(args, progress_callback=callback)
+        _write_reindex_status(status="done", message="Reindex completed")
+        return result
 
 
 def list_tags(args):

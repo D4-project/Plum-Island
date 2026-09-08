@@ -3232,7 +3232,7 @@ class TagRulesView(ModelView):
 
             def progress(message):
                 self._tag_reindex_state(job_id, message=str(message))
-                match = re.search(r"processed=(\d+); updated=(\d+); errors=(\d+)", str(message))
+                match = re.search(r"processed=(\d+);(?: total=\d+;)? updated=(\d+); errors=(\d+)", str(message))
                 if match:
                     self._tag_reindex_state(
                         job_id,
@@ -3240,6 +3240,9 @@ class TagRulesView(ModelView):
                         updated=int(match.group(2)),
                         errors=int(match.group(3)),
                     )
+                total_match = re.search(r"processed=(\d+); total=(\d+);", str(message))
+                if total_match:
+                    self._tag_reindex_state(job_id, total=int(total_match.group(2)))
 
             args = SimpleNamespace(
                 allrules=rule_id is None,
@@ -3295,6 +3298,15 @@ class TagRulesView(ModelView):
     def reindex_status(self, job_id):
         with TAG_REINDEX_STATES_LOCK:
             state = TAG_REINDEX_STATES.get(job_id)
+        if state is None and job_id == "shared":
+            try:
+                tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+                if tools_dir not in sys.path:
+                    sys.path.insert(0, tools_dir)
+                import tag_mgmt
+                state = tag_mgmt.read_reindex_status()
+            except ImportError:
+                state = None
         if state is None:
             return jsonify(error="Unknown reindex job"), 404
         return jsonify(state)
@@ -3312,6 +3324,16 @@ class TagRulesView(ModelView):
             if active:
                 job_id, state = active[-1]
                 return jsonify(job_id=job_id, **state)
+        try:
+            tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+            if tools_dir not in sys.path:
+                sys.path.insert(0, tools_dir)
+            import tag_mgmt
+            shared = tag_mgmt.read_reindex_status()
+            if shared and shared.get("status") == "running":
+                return jsonify(job_id="shared", **shared)
+        except ImportError:
+            pass
         return jsonify(job_id=None, status="idle")
 
     @action(

@@ -33,6 +33,9 @@
             <i class="fa fa-refresh"></i> Reindex all active rules
         </button>
         <span id="tagrule-reindex-status" class="text-muted" style="margin-left:1em"></span>
+        <div class="progress" style="display:inline-block;width:20rem;margin:0 0 0 1em;vertical-align:middle">
+            <div id="tagrule-reindex-progress" class="progress-bar progress-bar-warning" role="progressbar" style="width:0%">0%</div>
+        </div>
     </div>
     {{ super() }}
 {% endblock %}
@@ -44,6 +47,7 @@
     const startUrl = "{{ url_for('TagRulesView.reindex_start') }}";
     const statusUrl = "{{ url_for('TagRulesView.reindex_status', job_id='JOB_ID') }}";
     const status = document.getElementById('tagrule-reindex-status');
+    const progress = document.getElementById('tagrule-reindex-progress');
     let active = false;
     function setButtons(disabled) {
         document.querySelectorAll('.tagrule-reindex, #tagrule-reindex-all').forEach(b => b.disabled = disabled);
@@ -52,6 +56,9 @@
         fetch(statusUrl.replace('JOB_ID', jobId)).then(r => r.json()).then(data => {
             status.textContent = data.message || data.status;
             if (data.processed !== undefined) status.textContent += ' — processed ' + data.processed + ', updated ' + data.updated + ', errors ' + data.errors;
+            if (data.total > 0 && data.processed !== undefined) { const pct = Math.min(100, Math.round(data.processed * 100 / data.total)); progress.style.width = pct + '%'; progress.textContent = pct + '%'; }
+            else if (data.status === 'running') { progress.style.width = '100%'; progress.classList.add('progress-bar-striped', 'active'); progress.textContent = '…'; }
+            if (data.status === 'done') { progress.style.width = '100%'; progress.classList.remove('progress-bar-striped', 'active'); progress.textContent = '100%'; }
             if (data.status === 'queued' || data.status === 'running') return setTimeout(() => poll(jobId), 1500);
             active = false; setButtons(false);
         }).catch(() => { status.textContent = 'Unable to read reindex status'; active = false; setButtons(false); });
