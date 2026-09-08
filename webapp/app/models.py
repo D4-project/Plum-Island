@@ -629,24 +629,54 @@ TAG_RULE_HEADER_RE = re.compile(
 
 def headers_required_by_tag_rules(rules):
     """Return collected header names and value flags required by tag rules."""
+    from .utils.tagrules import analyze_header_dependencies
+
     required = {}
     for rule in rules or []:
-        query = str(getattr(rule, "query", "") or "")
-        for field, header_name in TAG_RULE_HEADER_RE.findall(query):
-            header_name = header_name.strip().lower()
-            if not is_valid_http_header_name(header_name):
-                continue
-            requires_value = field.lower() == "http_headval"
-            required[header_name] = required.get(header_name, False) or requires_value
+        if isinstance(rule, dict):
+            criteria_groups = rule.get("criteria_groups")
+            query = str(rule.get("query", "") or "")
+        else:
+            criteria_groups = getattr(rule, "criteria_groups", None)
+            query = str(getattr(rule, "query", "") or "")
+        if criteria_groups is None:
+            for field, header_name in TAG_RULE_HEADER_RE.findall(query):
+                header_name = header_name.strip().lower()
+                if is_valid_http_header_name(header_name):
+                    required[header_name] = required.get(header_name, False) or field.lower() == "http_headval"
+            continue
+        for header_name, collect_value in analyze_header_dependencies(
+            criteria_groups
+        )["exact"].items():
+            required[header_name] = required.get(header_name, False) or collect_value
     return required
 
 
-def ensure_rule_required_headers(session):
+def ensure_rule_required_headers(session, compiled_rules=None, commit=True):
     """Ensure headers referenced by active tag rules are indexed."""
     active_rules = session.query(TagRules).filter(TagRules.active == True).all()
-    required = headers_required_by_tag_rules(active_rules)
+    if compiled_rules is None:
+        from .utils.tagrules import compile_tag_rule_records
+
+        compiled_rules = compile_tag_rule_records(active_rules)
+    required = headers_required_by_tag_rules(compiled_rules)
+    summary = {
+        "enabled_presence": [],
+        "enabled_values": [],
+        "cleanup_candidates": [],
+        "ambiguous": [],
+    }
+    from .utils.tagrules import analyze_header_dependencies
+
+    for rule in compiled_rules:
+        summary["ambiguous"].extend(
+            analyze_header_dependencies(rule.get("criteria_groups", [])).get(
+                "ambiguous", []
+            )
+        )
+    summary["ambiguous"] = sorted(set(summary["ambiguous"]))
     if not required:
-        return
+        return summary
 
     existing = {
         row.header_name: row
@@ -665,11 +695,22 @@ def ensure_rule_required_headers(session):
                 )
             )
             changed = True
+            summary["enabled_presence"].append(header_name)
+            if collect_value:
+                summary["enabled_values"].append(header_name)
         elif collect_value and not row.collect_value:
             row.collect_value = True
             changed = True
-    if changed:
+            summary["enabled_values"].append(header_name)
+    defaults = set(DEFAULT_COLLECTED_HEADERS)
+    summary["cleanup_candidates"] = sorted(
+        row.header_name
+        for row in session.query(CollectedHeaders).all()
+        if row.header_name not in required and row.header_name not in defaults
+    )
+    if changed and commit:
         session.commit()
+    return summary
 
 
 class TagRules(Model):

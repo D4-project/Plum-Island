@@ -99,6 +99,27 @@ List complete tags currently present in Kvrocks:
 .venv/bin/python tools/tag_mgmt.py list-tags
 ```
 
+## Header dependencies
+
+Active YAML rules automatically enable the HTTP headers they reference. Exact
+`http_header:<name>` terms collect presence only; `http_headval:<name>:<value>`
+terms also enable value collection. Shared dependencies are preserved when a
+rule is edited, disabled, or deleted. Non-exact `http_header.lk`/`.like`/`.bg`/
+`.begin` terms are reported for human validation and never guessed.
+
+Unused custom headers are reported as cleanup candidates but are never removed
+automatically, because the database does not record whether an entry was added
+manually. After enabling a rule, rebuild or reimport existing scans before
+expecting historical documents to match:
+
+```bash
+.venv/bin/python tools/tag_mgmt.py reindex --allrules
+```
+
+To roll back a rule, restore its previous YAML and reimport it, then reindex the
+active rules. Header rows are retained conservatively; remove a no-longer-used
+custom header manually from the Header Collection view only after validation.
+
 The command prints stored tag values such as:
 
 ```text

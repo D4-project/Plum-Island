@@ -609,8 +609,16 @@ def import_rules(args):
         if args.dry_run:
             db.session.rollback()
         else:
+            reconciliation = ensure_rule_required_headers(
+                db.session, commit=False
+            )
             db.session.commit()
-            ensure_rule_required_headers(db.session)
+            if reconciliation.get("ambiguous"):
+                print(
+                    "WARNING: human validation required for non-exact headers: "
+                    + ", ".join(reconciliation["ambiguous"]),
+                    file=sys.stderr,
+                )
 
     return summary
 
@@ -1033,7 +1041,10 @@ def delete_rules(args):
     logging.disable(logging.CRITICAL)
 
     from app import app, db  # pylint: disable=import-outside-toplevel
-    from app.models import TagRules  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        TagRules,
+        ensure_rule_required_headers,
+    )
 
     summary = {
         "deleted": 0,
@@ -1051,6 +1062,13 @@ def delete_rules(args):
             if not args.dry_run:
                 db.session.query(TagRules).delete(synchronize_session=False)
                 db.session.commit()
+                reconciliation = ensure_rule_required_headers(db.session)
+                if reconciliation.get("cleanup_candidates"):
+                    print(
+                        "WARNING: review unused rule header collection candidates: "
+                        + ", ".join(reconciliation["cleanup_candidates"]),
+                        file=sys.stderr,
+                    )
             else:
                 db.session.rollback()
             return summary
@@ -1081,6 +1099,19 @@ def delete_rules(args):
         if not args.dry_run:
             db.session.delete(rule)
             db.session.commit()
+            reconciliation = ensure_rule_required_headers(db.session)
+            if reconciliation.get("cleanup_candidates"):
+                print(
+                    "WARNING: review unused rule header collection candidates: "
+                    + ", ".join(reconciliation["cleanup_candidates"]),
+                    file=sys.stderr,
+                )
+            if reconciliation.get("ambiguous"):
+                print(
+                    "WARNING: human validation required for non-exact headers: "
+                    + ", ".join(reconciliation["ambiguous"]),
+                    file=sys.stderr,
+                )
         else:
             db.session.rollback()
     return summary

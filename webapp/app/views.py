@@ -3172,11 +3172,43 @@ class TagRulesView(ModelView):
 
     def post_add(self, item):
         _ = item
-        ensure_rule_required_headers(db.session)
+        reconciliation = ensure_rule_required_headers(db.session)
+        self._flash_header_reconciliation(reconciliation)
 
     def post_update(self, item):
         _ = item
-        ensure_rule_required_headers(db.session)
+        reconciliation = ensure_rule_required_headers(db.session)
+        self._flash_header_reconciliation(reconciliation)
+
+    def post_delete(self, item):
+        _ = item
+        self._flash_header_reconciliation(
+            ensure_rule_required_headers(db.session)
+        )
+
+    @staticmethod
+    def _flash_header_reconciliation(summary):
+        """Explain dynamic header collection changes and conservative cleanup."""
+        enabled = summary.get("enabled_presence", []) + summary.get("enabled_values", [])
+        if enabled:
+            flash(
+                "Enabled header collection for active tag rules: "
+                + ", ".join(sorted(set(enabled)))
+                + ". Existing documents require rebuild/reimport.",
+                "warning",
+            )
+        if summary.get("ambiguous"):
+            flash(
+                "Human validation required for non-exact header references: "
+                + ", ".join(summary["ambiguous"]),
+                "warning",
+            )
+        if summary.get("cleanup_candidates"):
+            flash(
+                "Unused header collection candidates (not removed automatically): "
+                + ", ".join(summary["cleanup_candidates"]),
+                "warning",
+            )
 
     @action(
         "muldelete",
@@ -3190,6 +3222,7 @@ class TagRulesView(ModelView):
         Delete selected tag rules from the list checkbox action.
         """
         self.datamodel.delete_all(items)
+        self._flash_header_reconciliation(ensure_rule_required_headers(db.session))
         self.update_redirect()
         return redirect(self.get_redirect())
 

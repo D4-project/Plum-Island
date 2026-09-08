@@ -18,6 +18,28 @@ logger = logging.getLogger("flask_appbuilder")
 TAG_SPLIT_RE = re.compile(r"[\n,]+")
 
 
+def analyze_header_dependencies(criteria_groups):
+    """Analyze compiled criteria for exact and ambiguous HTTP header needs."""
+    exact = {}
+    ambiguous = []
+    for criteria in criteria_groups or []:
+        for field, values in (criteria or {}).items():
+            base, _, modifier = str(field).lower().partition(".")
+            if base not in ("http_header", "http_headval"):
+                continue
+            values = values if isinstance(values, list) else [values]
+            if base == "http_header" and modifier:
+                ambiguous.extend(str(value).strip().lower() for value in values)
+                continue
+            for value in values:
+                candidate = str(value or "").strip().lower()
+                if base == "http_headval":
+                    candidate = candidate.split(":", 1)[0].strip()
+                if candidate and re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9a-z]+", candidate):
+                    exact[candidate] = exact.get(candidate, False) or base == "http_headval"
+    return {"exact": exact, "ambiguous": sorted(set(ambiguous))}
+
+
 def normalize_tags(tags):
     """
     Normalize tag values to unique lowercase strings.

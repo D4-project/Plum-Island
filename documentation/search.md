@@ -79,7 +79,11 @@ Certificate-derived `fqdn`, `host`, and `domain` values require rebuilding/reimp
 
 ## HTTP header search
 
-Only headers configured in `Config > Header Collection` are indexed. Header names and values are lowercased before writing to Kvrocks. The `http_headval` autocomplete only suggests headers with `Collect Value` enabled.
+Only headers configured in `Config > Header Collection` are indexed. Active YAML
+tag rules automatically add exact headers they reference to that collection;
+manual entries remain supported. Header names and values are lowercased before
+writing to Kvrocks. The `http_headval` autocomplete only suggests headers with
+`Collect Value` enabled.
 
 Header presence uses the normal field syntax:
 

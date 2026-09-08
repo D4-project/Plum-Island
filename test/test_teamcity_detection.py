@@ -12,7 +12,10 @@ sys.path.insert(0, str(ROOT_DIR / "webapp" / "app" / "utils"))
 sys.path.insert(0, str(ROOT_DIR / "webapp"))
 
 from result_parser import parse_json  # pylint: disable=wrong-import-position
-from tagrules import document_matches_criteria_groups  # pylint: disable=wrong-import-position
+from tagrules import (  # pylint: disable=wrong-import-position
+    analyze_header_dependencies,
+    document_matches_criteria_groups,
+)
 from app.models import (  # pylint: disable=wrong-import-position
     DEFAULT_COLLECTED_HEADERS,
     headers_required_by_tag_rules,
@@ -100,6 +103,17 @@ class TeamCityDetectionTest(TestCase):
             headers_required_by_tag_rules([Rule()]),
             {"teamcity-node-id": False, "x-custom-trace": True},
         )
+
+    def test_compiled_dependencies_keep_shared_value_requirement(self):
+        result = analyze_header_dependencies(
+            [
+                {"http_header": ["x-shared"]},
+                {"http_headval.lk": ["x-shared:proxy"]},
+                {"http_header.bg": ["x-"]},
+            ]
+        )
+        self.assertEqual(result["exact"], {"x-shared": True})
+        self.assertEqual(result["ambiguous"], ["x-"])
 
 
 if __name__ == "__main__":
