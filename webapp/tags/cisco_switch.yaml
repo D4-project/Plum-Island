@@ -1,0 +1,7 @@
+description: Cisco Switch
+query: http_favicon_mmhash:-627596452 OR http_favicon_md5:c859808fad284ad07d0c7c6836d18b8e
+tags:
+- vendor:cisco
+- product:cisco-switch
+- type:switch
+version: 20260908T000000Z

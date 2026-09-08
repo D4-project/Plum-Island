@@ -14,6 +14,10 @@
 
 - Extend TeamCity detection with the `TeamCity-Node-Id` header and an additional favicon MD5 fingerprint, closes #194. Header collection is now derived from fields referenced by active YAML tag rules; existing indexed documents require a Kvrocks rebuild with retagging after enabling the rule. To roll back, restore the previous TeamCity YAML rule and rebuild tag indexes; unrelated indexed fields are unchanged.
 
+- Add Cisco Switch detection from the reported MMH3 and favicon MD5 fingerprints, closes #159.
+
+- Add ScreenConnect detection from the `ScreenConnect/` HTTP server banner, closes #193.
+
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.
