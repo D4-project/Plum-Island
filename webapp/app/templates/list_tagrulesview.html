@@ -29,6 +29,43 @@
         <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
             <i class="fa fa-download"></i> Download ZIP
         </a>
+        <button type="button" id="tagrule-reindex-all" class="btn btn-sm btn-warning">
+            <i class="fa fa-refresh"></i> Reindex all active rules
+        </button>
+        <span id="tagrule-reindex-status" class="text-muted" style="margin-left:1em"></span>
     </div>
     {{ super() }}
+{% endblock %}
+
+{% block tail_js %}
+{{ super() }}
+<script>
+(function () {
+    const startUrl = "{{ url_for('TagRulesView.reindex_start') }}";
+    const statusUrl = "{{ url_for('TagRulesView.reindex_status', job_id='JOB_ID') }}";
+    const status = document.getElementById('tagrule-reindex-status');
+    let active = false;
+    function setButtons(disabled) {
+        document.querySelectorAll('.tagrule-reindex, #tagrule-reindex-all').forEach(b => b.disabled = disabled);
+    }
+    function poll(jobId) {
+        fetch(statusUrl.replace('JOB_ID', jobId)).then(r => r.json()).then(data => {
+            status.textContent = data.message || data.status;
+            if (data.processed !== undefined) status.textContent += ' — processed ' + data.processed + ', updated ' + data.updated + ', errors ' + data.errors;
+            if (data.status === 'queued' || data.status === 'running') return setTimeout(() => poll(jobId), 1500);
+            active = false; setButtons(false);
+        }).catch(() => { status.textContent = 'Unable to read reindex status'; active = false; setButtons(false); });
+    }
+    function start(ruleId) {
+        if (active) return;
+        active = true; setButtons(true); status.textContent = 'Starting reindex…';
+        const body = ruleId ? {rule_id: ruleId} : {};
+        fetch(startUrl, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
+            .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Unable to start reindex'); return data; })
+            .then(data => poll(data.job_id)).catch(error => { status.textContent = error.message; active = false; setButtons(false); });
+    }
+    document.getElementById('tagrule-reindex-all').addEventListener('click', () => start(null));
+    document.addEventListener('click', e => { const button = e.target.closest('.tagrule-reindex'); if (button) start(button.dataset.ruleId); });
+})();
+</script>
 {% endblock %}

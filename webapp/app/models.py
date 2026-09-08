@@ -792,6 +792,13 @@ class TagRules(Model):
             return Esc('<i class="fa fa-check text-success" title="Active"></i>')
         return Esc('<i class="fa fa-times text-muted" title="Inactive"></i>')
 
+    def reindex_html(self):
+        """Render a per-rule reindex action for the rules list."""
+        return Esc(
+            f'<button type="button" class="btn btn-xs btn-default tagrule-reindex" '
+            f'data-rule-id="{int(self.id)}"><i class="fa fa-refresh"></i> Reindex</button>'
+        )
+
     @staticmethod
     def _datetime_html(value):
         """

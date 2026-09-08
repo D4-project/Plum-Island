@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import shlex
+import sys
 import threading
 import time
 import uuid
@@ -115,6 +116,8 @@ SEARCH_SESSION_STATES_LOCK = threading.Lock()
 REPORT_PREVIEW_STATES = {}
 REPORT_PREVIEW_STATES_LOCK = threading.Lock()
 REPORT_PREVIEW_RETENTION_SECONDS = 1800
+TAG_REINDEX_STATES = {}
+TAG_REINDEX_STATES_LOCK = threading.Lock()
 
 
 def cleanup_report_preview_states():
@@ -3113,6 +3116,7 @@ class TagRulesView(ModelView):
         "tags_html",
         "name_html",
         "updated_at_html",
+        "reindex_html",
     ]
     show_columns = [
         "active",
@@ -3142,6 +3146,7 @@ class TagRulesView(ModelView):
         "created_at_html": "Created",
         "updated_at": "Updated",
         "updated_at_html": "Updated",
+        "reindex_html": "Reindex",
     }
 
     def _normalize_tag_rule_item(self, item):
@@ -3209,6 +3214,90 @@ class TagRulesView(ModelView):
                 + ", ".join(summary["cleanup_candidates"]),
                 "warning",
             )
+
+    @staticmethod
+    def _tag_reindex_state(job_id, **updates):
+        with TAG_REINDEX_STATES_LOCK:
+            state = TAG_REINDEX_STATES.setdefault(job_id, {})
+            state.update(updates)
+            return dict(state)
+
+    def _run_tag_reindex(self, job_id, rule_id):
+        try:
+            tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+            if tools_dir not in sys.path:
+                sys.path.insert(0, tools_dir)
+            import tag_mgmt
+            from types import SimpleNamespace
+
+            def progress(message):
+                self._tag_reindex_state(job_id, message=str(message))
+                match = re.search(r"processed=(\d+); updated=(\d+); errors=(\d+)", str(message))
+                if match:
+                    self._tag_reindex_state(
+                        job_id,
+                        processed=int(match.group(1)),
+                        updated=int(match.group(2)),
+                        errors=int(match.group(3)),
+                    )
+
+            args = SimpleNamespace(
+                allrules=rule_id is None,
+                rule_id=rule_id,
+                batch_size=tag_mgmt.MAX_BATCH_SIZE,
+                flush=False,
+            )
+            tag_mgmt.reindex_tags(args, progress_callback=progress)
+            self._tag_reindex_state(job_id, status="done", message="Reindex completed")
+        except Exception as error:  # background task must publish failure
+            logger.exception("Tag reindex failed")
+            self._tag_reindex_state(job_id, status="error", message=str(error))
+
+    @expose("/reindex_start", methods=["POST"])
+    @has_access
+    def reindex_start(self):
+        """Start one background reindex for all rules or one selected rule."""
+        try:
+            tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+            if tools_dir not in sys.path:
+                sys.path.insert(0, tools_dir)
+            import tag_mgmt
+            if tag_mgmt.reindex_lock_is_held():
+                return jsonify(error="A tag reindex is already running (CLI or web)"), 409
+        except ImportError as error:
+            logger.exception("Unable to load tag reindex tooling")
+            return jsonify(error=str(error)), 500
+        rule_id = request.get_json(silent=True) or {}
+        rule_id = rule_id.get("rule_id") or request.form.get("rule_id")
+        if rule_id not in (None, ""):
+            try:
+                rule_id = int(rule_id)
+            except (TypeError, ValueError):
+                return jsonify(error="Invalid rule id"), 400
+            if db.session.query(TagRules).filter(TagRules.id == rule_id).one_or_none() is None:
+                return jsonify(error="Tag rule not found"), 404
+        else:
+            rule_id = None
+        with TAG_REINDEX_STATES_LOCK:
+            if any(state.get("status") in ("queued", "running") for state in TAG_REINDEX_STATES.values()):
+                return jsonify(error="A tag reindex is already running"), 409
+            job_id = uuid.uuid4().hex
+            TAG_REINDEX_STATES[job_id] = {
+                "status": "queued", "rule_id": rule_id, "processed": 0,
+                "updated": 0, "errors": 0, "message": "Queued",
+            }
+        self._tag_reindex_state(job_id, status="running", message="Reindex started")
+        threading.Thread(target=self._run_tag_reindex, args=(job_id, rule_id), daemon=True).start()
+        return jsonify(job_id=job_id, status="running")
+
+    @expose("/reindex_status/<job_id>")
+    @has_access
+    def reindex_status(self, job_id):
+        with TAG_REINDEX_STATES_LOCK:
+            state = TAG_REINDEX_STATES.get(job_id)
+        if state is None:
+            return jsonify(error="Unknown reindex job"), 404
+        return jsonify(state)
 
     @action(
         "muldelete",

@@ -7,6 +7,8 @@ this help and exits.
 """
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import logging
 import sys
 import warnings
@@ -22,6 +24,37 @@ TOOLS_CONFIG = BASE_DIR / "tools" / "config.yaml"
 MISSING_VERSION_TIME = datetime(1970, 1, 1)
 TAG_FLUSH_BATCH_SIZE = 1000
 MAX_BATCH_SIZE = 1000
+REINDEX_LOCK_FILE = Path(__import__("os").environ.get("PLUM_REINDEX_LOCK_FILE", "/tmp/plum-island-tag-reindex.lock"))
+
+
+class ReindexBusyError(RuntimeError):
+    """Another CLI or web reindex is already running."""
+
+
+@contextmanager
+def reindex_execution_lock(lock_path=None):
+    """Serialize reindex operations across CLI and web processes."""
+    path = Path(lock_path or REINDEX_LOCK_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ReindexBusyError("A tag reindex is already running") from error
+        yield handle
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def reindex_lock_is_held(lock_path=None):
+    """Return whether another process currently owns the reindex lock."""
+    try:
+        with reindex_execution_lock(lock_path):
+            return False
+    except ReindexBusyError:
+        return True
 
 
 def build_parser():
@@ -850,7 +883,7 @@ def load_kvrocks_endpoint(tools_config):
     return kvrocks_host, kvrocks_port
 
 
-def reindex_tags(args):
+def _reindex_tags_unlocked(args, progress_callback=None):
     """
     Recompute Kvrocks tags from Meilisearch documents.
     """
@@ -964,6 +997,10 @@ def reindex_tags(args):
                     f"errors={error_docs}",
                     flush=True,
                 )
+                if progress_callback:
+                    progress_callback(
+                        f"Progress: processed={processed_docs}; updated={updated_docs}; errors={error_docs}"
+                    )
 
         updated_docs += flush_tag_batch(indexer, pending_docs)
         print(
@@ -971,6 +1008,12 @@ def reindex_tags(args):
             f"processed={processed_docs}; updated={updated_docs}; errors={error_docs}",
             flush=True,
         )
+
+
+def reindex_tags(args, progress_callback=None):
+    """Run a serialized tag reindex, shared by CLI and web UI."""
+    with reindex_execution_lock():
+        return _reindex_tags_unlocked(args, progress_callback=progress_callback)
 
 
 def list_tags(args):
@@ -1146,7 +1189,10 @@ def run_legacy_reindex(argv=None):
     args = legacy_reindex_args(argv)
     if args.list_tags:
         return list_tags(args)
-    return reindex_tags(args)
+    try:
+        return reindex_tags(args)
+    except ReindexBusyError as error:
+        raise SystemExit(str(error)) from error
 
 
 def main(argv=None):
@@ -1186,7 +1232,10 @@ def main(argv=None):
         args.flush_tag = args.tag
         return run_import(args)
     if args.command == "reindex":
-        return reindex_tags(args)
+        try:
+            return reindex_tags(args)
+        except ReindexBusyError as error:
+            raise SystemExit(str(error)) from error
     if args.command == "list-tags":
         return list_tags(args)
 
