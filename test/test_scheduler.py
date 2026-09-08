@@ -357,7 +357,7 @@ class StalledJobWatchdogTest(TestCase):
                 self.scheduler, "get_running_scanprofile_cycle", return_value=cycle
             ), mock.patch.object(
                 self.scheduler, "reconcile_scanprofile_cycle", return_value=cycle
-            ), mock.patch.object(
+            ) as reconcile_cycle, mock.patch.object(
                 self.scheduler,
                 "_load_due_states_for_profile",
                 return_value=[SimpleNamespace(id=1)],
@@ -385,6 +385,7 @@ class StalledJobWatchdogTest(TestCase):
         self.assertEqual(summary["jobs_created"], 1)
         self.assertTrue(summary["time_budget_exhausted"])
         stage_jobs.assert_called_once()
+        self.assertFalse(reconcile_cycle.call_args.kwargs["prune_history"])
         self.assertEqual(session.commit.call_count, 2)
 
     def test_queue_generation_commits_every_256_state_batch(self):

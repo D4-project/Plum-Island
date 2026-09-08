@@ -1149,6 +1149,7 @@ def task_create_jobs():
                     profile.id,
                     cycle=scan_cycle,
                     now=now,
+                    prune_history=False,
                 )
             cycles_checked += 1
             cycle_is_running = scan_cycle is not None and scan_cycle.status == "running"

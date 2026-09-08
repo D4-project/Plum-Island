@@ -228,7 +228,12 @@ def _finished_job_scan_unit_count(cycle_id):
     )
 
 
-def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
+def reconcile_scanprofile_cycle(
+    scanprofile_id,
+    cycle=None,
+    now=None,
+    prune_history=True,
+):
     """
     Recalculate one running scan-profile cycle from persisted runtime state.
 
@@ -242,7 +247,9 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
 
     The function is idempotent and does not commit. Callers own transaction
     boundaries so scheduler ticks, API job completion, and admin deletes can
-    keep their existing commit behavior.
+    keep their existing commit behavior. Latency-sensitive callers pass
+    ``prune_history=False`` because unlinking jobs from obsolete cycles can be
+    a large write and is not required to reconcile the current cycle.
     """
     now = now or utcnow_naive()
     if cycle is None:
@@ -328,7 +335,8 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
         cycle.finished_at = None
         profile.current_cycle_id = cycle.id
 
-    prune_scanprofile_cycles(scanprofile_id)
+    if prune_history:
+        prune_scanprofile_cycles(scanprofile_id)
     return cycle
 
 

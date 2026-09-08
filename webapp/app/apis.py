@@ -989,7 +989,13 @@ class Api(BaseApi):
             time.perf_counter() - sync_started,
         )
         if job_bot.scanprofile_id is not None:
-            reconcile_scanprofile_cycle(job_bot.scanprofile_id)
+            # Historical-cycle pruning may unlink many retained jobs. It is
+            # unrelated to accepting this result and must not extend this
+            # latency-sensitive SQLite writer transaction.
+            reconcile_scanprofile_cycle(
+                job_bot.scanprofile_id,
+                prune_history=False,
+            )
         commit_started = time.perf_counter()
         db.session.commit()
         logger.debug(
