@@ -12,6 +12,8 @@
 
 - Add an independent five-minute queue-generation watchdog that reports the exact active stage when orchestration is stuck and summarizes repeated completed ticks with zero output.
 
+- Extend TeamCity detection with the `TeamCity-Node-Id` header and an additional favicon MD5 fingerprint, closes #194. Header collection is now derived from fields referenced by active YAML tag rules; existing indexed documents require a Kvrocks rebuild with retagging after enabling the rule. To roll back, restore the previous TeamCity YAML rule and rebuild tag indexes; unrelated indexed fields are unchanged.
+
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.

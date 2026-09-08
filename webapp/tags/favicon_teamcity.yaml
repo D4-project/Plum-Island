@@ -1,6 +1,6 @@
 description: TeamCity
-query: http_favicon_mmhash:-1944119648
+query: http_favicon_mmhash:-1944119648 OR http_header:teamcity-node-id OR http_favicon_md5:cee18e28257988b40028043e65a6c2a3
 tags:
 - product:teamcity
 - vendor:teamcity
-version: 20260520T133458Z
+version: 20260908T000000Z

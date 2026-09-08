@@ -25,7 +25,11 @@ from sqlalchemy.orm import joinedload
 from . import db
 from .models import Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
 from .models import Reports
-from .models import CollectedHeaders, ensure_default_collected_headers
+from .models import (
+    CollectedHeaders,
+    ensure_default_collected_headers,
+    ensure_rule_required_headers,
+)
 from .models import TagRules
 from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
@@ -2037,6 +2041,7 @@ def _build_export_context():
     )
     parser_config = dict(db.app.config)
     ensure_default_collected_headers(db.session)
+    ensure_rule_required_headers(db.session)
     parser_config["HTTP_HEADER_COLLECTION"] = {
         str(row.header_name or "").strip().lower(): bool(row.collect_value)
         for row in db.session.query(CollectedHeaders).all()

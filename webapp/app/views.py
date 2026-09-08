@@ -70,6 +70,7 @@ from .models import (
     TargetScanStates,
     ScanProfileCycles,
     ensure_default_collected_headers,
+    ensure_rule_required_headers,
     is_valid_http_header_name,
 )
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
@@ -3169,6 +3170,14 @@ class TagRulesView(ModelView):
     def pre_update(self, item):
         return self._normalize_tag_rule_item(item)
 
+    def post_add(self, item):
+        _ = item
+        ensure_rule_required_headers(db.session)
+
+    def post_update(self, item):
+        _ = item
+        ensure_rule_required_headers(db.session)
+
     @action(
         "muldelete",
         "Delete Tag Rules",
@@ -4117,3 +4126,4 @@ appbuilder.add_view(
 )
 db.create_all()
 ensure_default_collected_headers(db.session)
+ensure_rule_required_headers(db.session)

@@ -466,7 +466,10 @@ def import_rules(args):
     logging.disable(logging.CRITICAL)
 
     from app import app, db  # pylint: disable=import-outside-toplevel
-    from app.models import TagRules  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        TagRules,
+        ensure_rule_required_headers,
+    )
 
     # pylint: disable-next=import-outside-toplevel
     from app.utils.kvrocks import KVrocksIndexer
@@ -607,6 +610,7 @@ def import_rules(args):
             db.session.rollback()
         else:
             db.session.commit()
+            ensure_rule_required_headers(db.session)
 
     return summary
 

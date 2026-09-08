@@ -620,6 +620,58 @@ def ensure_default_collected_headers(session):
         session.commit()
 
 
+TAG_RULE_HEADER_RE = re.compile(
+    r"\b(http_header|http_headval)(?:\.[a-z]+)?\s*:\s*"
+    r"([!#$%&'*+\-.^_`|~0-9a-z]+)",
+    re.IGNORECASE,
+)
+
+
+def headers_required_by_tag_rules(rules):
+    """Return collected header names and value flags required by tag rules."""
+    required = {}
+    for rule in rules or []:
+        query = str(getattr(rule, "query", "") or "")
+        for field, header_name in TAG_RULE_HEADER_RE.findall(query):
+            header_name = header_name.strip().lower()
+            if not is_valid_http_header_name(header_name):
+                continue
+            requires_value = field.lower() == "http_headval"
+            required[header_name] = required.get(header_name, False) or requires_value
+    return required
+
+
+def ensure_rule_required_headers(session):
+    """Ensure headers referenced by active tag rules are indexed."""
+    active_rules = session.query(TagRules).filter(TagRules.active == True).all()
+    required = headers_required_by_tag_rules(active_rules)
+    if not required:
+        return
+
+    existing = {
+        row.header_name: row
+        for row in session.query(CollectedHeaders)
+        .filter(CollectedHeaders.header_name.in_(required))
+        .all()
+    }
+    changed = False
+    for header_name, collect_value in required.items():
+        row = existing.get(header_name)
+        if row is None:
+            session.add(
+                CollectedHeaders(
+                    header_name=header_name,
+                    collect_value=collect_value,
+                )
+            )
+            changed = True
+        elif collect_value and not row.collect_value:
+            row.collect_value = True
+            changed = True
+    if changed:
+        session.commit()
+
+
 class TagRules(Model):
     """
     Search-backed tagging rules applied on parsed search documents.
