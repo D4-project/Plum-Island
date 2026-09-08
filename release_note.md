@@ -4,6 +4,8 @@
 
 - Persist asynchronous Meilisearch export tasks across scheduler ticks, isolate backend maintenance from scan orchestration, yield immediately after submission so indexing cannot block scan-job generation, enforce Meilisearch-before-Kvrocks ordering, and add a resumable raw-JSON recovery tool with task progress for Kvrocks-only documents.
 
+- Bound queue generation to short 256-state commits so scan-result reception can interleave, reconcile cycles per profile instead of globally, search for missing runtime states without holding SQLite's writer lock, and split /16 targets directly into /24 jobs without per-address expansion.
+
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.

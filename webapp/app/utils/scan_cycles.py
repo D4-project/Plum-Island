@@ -332,7 +332,12 @@ def reconcile_scanprofile_cycle(scanprofile_id, cycle=None, now=None):
     return cycle
 
 
-def get_or_create_running_cycle(scanprofile_id, now=None, max_target_id=None):
+def get_or_create_running_cycle(
+    scanprofile_id,
+    now=None,
+    max_target_id=None,
+    reconcile=True,
+):
     """
     Return current running cycle for a profile, creating one if needed.
 
@@ -340,6 +345,12 @@ def get_or_create_running_cycle(scanprofile_id, now=None, max_target_id=None):
     Starting the cycle before jobs are inserted gives every new job the same
     `started_at` boundary and lets completion be derived from later
     `last_scan` values.
+
+    Callers that pass ``reconcile=False`` must establish the profile's current
+    cycle reference and commit immediately. This lets queue generation persist
+    a new cycle before CPU-side job preparation, without retaining SQLite's
+    writer lock during that work. Existing callers keep the historical
+    reconcile-on-return behavior by default.
     """
     now = now or utcnow_naive()
     cycle = get_running_scanprofile_cycle(scanprofile_id)
@@ -359,6 +370,8 @@ def get_or_create_running_cycle(scanprofile_id, now=None, max_target_id=None):
             get_current_max_target_id() if max_target_id is None else max_target_id
         )
 
+    if not reconcile:
+        return cycle
     return reconcile_scanprofile_cycle(scanprofile_id, cycle=cycle, now=now)
 
 

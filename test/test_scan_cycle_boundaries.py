@@ -68,6 +68,29 @@ class ScanCycleBoundaryTest(unittest.TestCase):
         self.assertIs(result, cycle)
         self.assertEqual(cycle.max_target_id, 123)
 
+    def test_new_cycle_can_be_committed_before_expensive_reconciliation(self):
+        """Queue generation may release SQLite's writer before job staging."""
+        session = mock.Mock()
+        with mock.patch.object(
+            scan_cycles,
+            "get_running_scanprofile_cycle",
+            return_value=None,
+        ), mock.patch.object(
+            scan_cycles,
+            "reconcile_scanprofile_cycle",
+        ) as reconcile, mock.patch.object(
+            scan_cycles.db, "session", session
+        ):
+            cycle = scan_cycles.get_or_create_running_cycle(
+                7,
+                max_target_id=123,
+                reconcile=False,
+            )
+
+        self.assertEqual(cycle.max_target_id, 123)
+        session.flush.assert_called_once_with()
+        reconcile.assert_not_called()
+
     def test_progress_title_exposes_completion_blockers(self):
         """Running-at-100-percent display explains remaining blockers."""
         title = ScanProfileCycles._progress_title(

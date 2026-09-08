@@ -48,8 +48,7 @@ from .utils.scan_cycles import (
     get_current_max_target_id,
     get_or_create_running_cycle,
     get_running_scanprofile_cycle,
-    prune_all_scanprofile_cycles,
-    reconcile_running_scanprofile_cycles,
+    reconcile_scanprofile_cycle,
 )
 
 logger = logging.getLogger("flask_appbuilder")
@@ -59,6 +58,7 @@ DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE = 256
 DEFAULT_QUEUE_STATE_BATCH_SIZE = JOB_TARGET_CHUNK_SIZE
 DEFAULT_STATE_SYNC_BATCH_SIZE = 2048
 DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
+DEFAULT_QUEUE_TIME_BUDGET_SECONDS = 45
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
@@ -389,6 +389,20 @@ def _get_scheduler_int_config(name, default_value, minimum=1):
     return max(value, minimum)
 
 
+def _queue_time_budget_reached(deadline, completed_work_units):
+    """
+    Stop between state batches after at least one bounded unit was attempted.
+
+    The first queue load is always allowed, even when maintenance consumed the
+    nominal budget, so a tick still has an opportunity to create useful work.
+
+    A single target is deliberately atomic. In particular, a /16 may consume
+    slightly more than the configured time or job budget so all of its /24
+    jobs are queued together and the target is never only partially covered.
+    """
+    return completed_work_units > 0 and time.perf_counter() >= deadline
+
+
 def _release_orphaned_working_states():
     """
     Release a bounded batch of target/profile states stuck in working mode
@@ -493,9 +507,16 @@ def _should_run_orphan_state_release():
     return True
 
 
-def _sync_missing_scan_states():
+def _sync_missing_scan_states(deadline=None):
     """
-    Seed missing target/profile runtime rows in bounded batches.
+    Seed missing target/profile runtime rows without holding a writer lock
+    while searching the target set.
+
+    Missing pairs are discovered with read-only SELECT statements. Only the
+    bounded rows actually found are then inserted and committed. This matters
+    on SQLite: an INSERT ... SELECT can reserve the single writer while its
+    SELECT side scans every target, blocking scan-result reception even when
+    it ultimately inserts zero rows.
     """
     batch_limit = _get_scheduler_int_config(
         "SCHEDULER_STATE_SYNC_BATCH_SIZE",
@@ -503,11 +524,9 @@ def _sync_missing_scan_states():
     )
     inserted_states = 0
 
-    explicit_inserted = (
-        db.session.execute(
-            text("""
-                INSERT OR IGNORE INTO target_scan_states (target_id, scanprofile_id, working)
-                SELECT spta.target_id, spta.scanprofile_id, 0
+    explicit_rows = db.session.execute(
+        text("""
+                SELECT spta.target_id, spta.scanprofile_id
                   FROM scanprofiles_targets_assoc AS spta
                   JOIN targets AS t
                     ON t.id = spta.target_id
@@ -521,10 +540,28 @@ def _sync_missing_scan_states():
                  ORDER BY spta.scanprofile_id ASC, spta.target_id ASC
                  LIMIT :limit
                 """),
-            {"limit": batch_limit},
-        ).rowcount
-        or 0
-    )
+        {"limit": batch_limit},
+    ).fetchall()
+    # End the potentially long read before attempting any write. INSERT OR
+    # IGNORE below makes a concurrent state creation harmless.
+    db.session.commit()
+    explicit_inserted = 0
+    if explicit_rows:
+        explicit_inserted = (
+            db.session.execute(
+                text("""
+                    INSERT OR IGNORE INTO target_scan_states
+                        (target_id, scanprofile_id, working)
+                    VALUES (:target_id, :scanprofile_id, 0)
+                    """),
+                [
+                    {"target_id": row[0], "scanprofile_id": row[1]}
+                    for row in explicit_rows
+                ],
+            ).rowcount
+            or 0
+        )
+        db.session.commit()
     inserted_states += explicit_inserted
     remaining = batch_limit - explicit_inserted
 
@@ -535,15 +572,16 @@ def _sync_missing_scan_states():
             .order_by(ScanProfiles.priority.desc(), ScanProfiles.id.asc())
             .all()
         )
+        db.session.commit()
         for row in apply_all_profiles:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
             profile_id = row[0]
             if remaining <= 0:
                 break
-            created_for_profile = (
-                db.session.execute(
-                    text("""
-                        INSERT OR IGNORE INTO target_scan_states (target_id, scanprofile_id, working)
-                        SELECT t.id, :profile_id, 0
+            missing_rows = db.session.execute(
+                text("""
+                        SELECT t.id
                           FROM targets AS t
                          WHERE t.active = 1
                            AND NOT EXISTS (
@@ -555,15 +593,29 @@ def _sync_missing_scan_states():
                          ORDER BY t.id ASC
                          LIMIT :limit
                         """),
-                    {"profile_id": profile_id, "limit": remaining},
-                ).rowcount
-                or 0
-            )
+                {"profile_id": profile_id, "limit": remaining},
+            ).fetchall()
+            db.session.commit()
+            created_for_profile = 0
+            if missing_rows:
+                created_for_profile = (
+                    db.session.execute(
+                        text("""
+                            INSERT OR IGNORE INTO target_scan_states
+                                (target_id, scanprofile_id, working)
+                            VALUES (:target_id, :profile_id, 0)
+                            """),
+                        [
+                            {"target_id": missing_row[0], "profile_id": profile_id}
+                            for missing_row in missing_rows
+                        ],
+                    ).rowcount
+                    or 0
+                )
+                db.session.commit()
             inserted_states += created_for_profile
             remaining -= created_for_profile
 
-    if inserted_states:
-        db.session.commit()
     return inserted_states
 
 
@@ -598,11 +650,9 @@ def _rotate_profiles_for_tick(profiles):
 
     if cursor_profile_id:
         for index, profile in enumerate(profiles):
-            if profile.id > cursor_profile_id:
-                start_index = index
+            if profile.id == cursor_profile_id:
+                start_index = (index + 1) % len(profiles)
                 break
-        else:
-            start_index = 0
 
     if start_index == 0:
         return profiles
@@ -675,24 +725,18 @@ def _load_due_states_for_profile(
 
 def _append_large_network_chunks(target, state, range_chunks):
     """
-    Split large networks into /24-sized job chunks without materializing the whole network.
+    Split a large network directly into 256-address CIDR jobs.
+
+    The previous implementation iterated over every address and repeatedly
+    merged blocks of IP objects. At the supported /16 maximum that meant
+    constructing 65,536 address objects before the transaction could commit.
     """
-    current_block = []
-    for ip in IPNetwork(target.value):
-        current_block.append(ip)
-        if len(current_block) == JOB_TARGET_CHUNK_SIZE:
-            range_chunks.append(
-                {
-                    "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
-                    "targets": [target],
-                    "states": [state],
-                }
-            )
-            current_block = []
-    if current_block:
+    network = IPNetwork(target.value)
+    chunk_prefix = 24 if network.version == 4 else 120
+    for subnet in network.subnet(chunk_prefix):
         range_chunks.append(
             {
-                "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
+                "cidrs": [str(subnet)],
                 "targets": [target],
                 "states": [state],
             }
@@ -927,8 +971,9 @@ def task_create_jobs():
       `working` mode while no unfinished job references them anymore.
     - Creates missing target/profile runtime rows so each active target has one
       state row per applicable scan profile.
-    - Reconciles running scan-profile cycles from durable state so current and
-      previous cycle timestamps survive restarts and admin job deletion.
+    - Reconciles each running scan-profile cycle only when its queue needs work,
+      committing immediately so other profiles are never scanned under the
+      same SQLite writer transaction.
     - Loads scan profiles by priority, then resumes after the last profile
       processed by the previous tick so the same profiles are not always first.
     - For each eligible profile, computes the waiting-job deficit:
@@ -939,16 +984,24 @@ def task_create_jobs():
     - Stages jobs through `_stage_jobs_for_profile()`: IP/CIDR and FQDN targets
       are grouped into 256-item chunks, jobs are added to the session, then only
       actually scheduled targets/states are marked `working=True`.
-    - Commits after each profile to keep transactions short and limit SQLite
-      lock duration.
+    - Prepares each batch under `no_autoflush`, then commits at most 256 states
+      at a time. CPU-side chunking therefore never owns SQLite's writer lock,
+      and scan-result reception can interleave between queue batches.
+    - Stops between committed state batches when the queue-generation time
+      budget is reached. A single CIDR remains atomic, so a /16 can exceed the
+      soft budget slightly while its 256 /24 jobs are completed.
     - Stops once the global `SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK` budget is
       exhausted.
     """
     started_at = time.perf_counter()
+    time_budget_seconds = _get_scheduler_int_config(
+        "SCHEDULER_QUEUE_TIME_BUDGET_SECONDS",
+        DEFAULT_QUEUE_TIME_BUDGET_SECONDS,
+    )
+    generation_deadline = started_at + time_budget_seconds
     orphan_release = {"released_states": 0, "checked_states": 0}
     seeded_states = 0
     cycles_checked = 0
-    cycles_pruned = 0
 
     # Step 1: release states stuck in working mode without an active job.
     # The called helper stays deliberately batched to protect SQLite.
@@ -969,46 +1022,45 @@ def task_create_jobs():
     # Step 2: create missing target/profile runtime rows.
     # Without those rows, an active target cannot enter the scheduler.
     sync_started = time.perf_counter()
-    seeded_states = _sync_missing_scan_states()
+    seeded_states = _sync_missing_scan_states(deadline=generation_deadline)
     logger.debug(
         "Create Job TASK debug: state sync completed in %.2fs (seeded_states=%s)",
         time.perf_counter() - sync_started,
         seeded_states,
     )
 
-    # Step 3: refresh running cycle metadata from durable target/profile state.
-    # This catches app restarts, target/profile edits, and completed jobs before
-    # the scheduler decides whether more jobs are needed.
-    cycle_started = time.perf_counter()
-    cycles_checked = reconcile_running_scanprofile_cycles(now=utcnow_naive())
-    cycles_pruned = prune_all_scanprofile_cycles()
-    if cycles_checked or cycles_pruned:
-        db.session.commit()
-    logger.debug(
-        "Create Job TASK debug: cycle reconciliation completed in %.2fs (cycles_checked=%s, cycles_pruned=%s)",
-        time.perf_counter() - cycle_started,
-        cycles_checked,
-        cycles_pruned,
-    )
-
-    # Step 4: read queue-fill limits.
+    # Step 3: read queue-fill limits.
     # queue_target and max_new_jobs_per_tick are job-count limits.
     # state_batch_size is a target/profile-state read limit.
     queue_target = _get_scheduler_int_config(
         "SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE",
         DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE,
     )
-    state_batch_size = _get_scheduler_int_config(
+    configured_state_batch_size = _get_scheduler_int_config(
         "SCHEDULER_QUEUE_STATE_BATCH_SIZE",
         DEFAULT_QUEUE_STATE_BATCH_SIZE,
-        minimum=JOB_TARGET_CHUNK_SIZE,
+    )
+    # This is a transaction-size safety boundary, not a throughput limit.
+    # Older production configs may still contain 4096 from the previous
+    # implementation; cap them so result reception is never placed behind a
+    # multi-thousand-state scheduler transaction.
+    state_batch_size = min(
+        configured_state_batch_size,
+        JOB_TARGET_CHUNK_SIZE,
     )
     max_new_jobs_per_tick = _get_scheduler_int_config(
         "SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK",
         DEFAULT_MAX_NEW_JOBS_PER_TICK,
     )
+    if configured_state_batch_size > state_batch_size:
+        logger.warning(
+            "Create Job TASK: capped SCHEDULER_QUEUE_STATE_BATCH_SIZE from %s to %s "
+            "to protect scan-result writes",
+            configured_state_batch_size,
+            state_batch_size,
+        )
 
-    # Step 5: load queue metadata once for this tick.
+    # Step 4: load queue metadata once for this tick.
     # waiting_counts avoids recounting the DB after each profile.
     metadata_started = time.perf_counter()
     profiles = (
@@ -1039,14 +1091,24 @@ def task_create_jobs():
     profiles_already_full = 0
     profiles_without_due_states = 0
     budget_exhausted = False
+    time_budget_exhausted = False
     profile_summaries = []
     last_processed_profile_id = 0
+    stop_queue_fill = False
+    queue_batches_attempted = 0
 
     fill_started = time.perf_counter()
     for profile in profiles:
+        jobs_created_so_far = totals["range_jobs"] + totals["host_jobs"]
+        if _queue_time_budget_reached(
+            generation_deadline,
+            max(jobs_created_so_far, queue_batches_attempted),
+        ):
+            time_budget_exhausted = True
+            break
         last_processed_profile_id = profile.id
 
-        # Step 6: skip profiles that cannot produce executable Nmap jobs.
+        # Step 5: skip profiles that cannot produce executable Nmap jobs.
         # A job without ports or scan frequency is not actionable.
         scan_ports = _serialize_profile_ports(profile)
         if not scan_ports:
@@ -1066,7 +1128,7 @@ def task_create_jobs():
             )
             continue
 
-        # Step 7: check whether this profile queue needs more jobs.
+        # Step 6: check whether this profile queue needs more jobs.
         # queue_deficit is a missing-job count, not a target count.
         waiting_before = waiting_counts.get(profile.id, 0)
         queue_deficit = queue_target - waiting_before
@@ -1074,118 +1136,183 @@ def task_create_jobs():
             profiles_already_full += 1
             continue
 
-        # Step 8: apply the global per-tick job creation budget.
-        # This prevents one tick from creating too many jobs across due profiles.
-        jobs_available = max_new_jobs_per_tick - (
-            totals["range_jobs"] + totals["host_jobs"]
-        )
-        if jobs_available <= 0:
-            budget_exhausted = True
-            break
+        # Step 7: reconcile only the profile that is about to generate work.
+        # Commit immediately so aggregate scans for different profiles never
+        # share one long-lived SQLite writer transaction.
+        scan_cycle = get_running_scanprofile_cycle(profile.id)
+        if scan_cycle is not None:
+            cycle_started = time.perf_counter()
+            # Cycle aggregation is query-heavy. Prevent cycle attribute changes
+            # from autoflushing and reserving SQLite's writer during those reads.
+            with db.session.no_autoflush:
+                scan_cycle = reconcile_scanprofile_cycle(
+                    profile.id,
+                    cycle=scan_cycle,
+                    now=now,
+                )
+            cycles_checked += 1
+            cycle_is_running = scan_cycle is not None and scan_cycle.status == "running"
+            db.session.commit()
+            logger.debug(
+                "Create Job TASK debug: profile %s cycle reconciled in %.2fs",
+                profile.name,
+                time.perf_counter() - cycle_started,
+            )
+            if not cycle_is_running:
+                scan_cycle = None
 
-        job_limit = min(queue_deficit, jobs_available)
-
-        # Step 9: convert the job budget into an item budget.
-        # Example: queue_deficit=3 loads up to 3 * 256 states, not 3.
-        # This is what guarantees 256-FQDN packets when enough FQDNs are due.
-        state_limit = min(state_batch_size, job_limit * JOB_TARGET_CHUNK_SIZE)
         # A running cycle keeps its persisted target-ID boundary. For a new
         # cycle, capture the current high-water mark before loading due states.
         # Targets inserted after this point wait for the next cycle.
-        scan_cycle = get_running_scanprofile_cycle(profile.id)
         cycle_max_target_id = (
             scan_cycle.max_target_id
             if scan_cycle is not None and scan_cycle.max_target_id is not None
             else get_current_max_target_id()
         )
+        scan_nses = _serialize_profile_nses(profile)
+        profile_counts = {
+            "scheduled_states": 0,
+            "range_jobs": 0,
+            "host_jobs": 0,
+        }
+        batch_number = 0
 
-        due_started = time.perf_counter()
-        due_states = _load_due_states_for_profile(
-            profile,
-            now,
-            state_limit,
-            cycle_max_target_id,
-        )
-        due_elapsed = time.perf_counter() - due_started
-        if not due_states:
-            profiles_without_due_states += 1
-            logger.debug(
-                "Create Job TASK debug: profile %s has no due states (waiting=%s, deficit=%s, load=%.2fs)",
-                profile.name,
-                waiting_before,
-                queue_deficit,
-                due_elapsed,
+        # Step 8: fill the profile queue through independent 256-state
+        # transactions. The time and job limits are checked after every commit.
+        while queue_deficit > 0:
+            jobs_created_so_far = totals["range_jobs"] + totals["host_jobs"]
+            if _queue_time_budget_reached(
+                generation_deadline,
+                max(jobs_created_so_far, queue_batches_attempted),
+            ):
+                time_budget_exhausted = True
+                stop_queue_fill = True
+                break
+
+            jobs_available = max_new_jobs_per_tick - jobs_created_so_far
+            if jobs_available <= 0:
+                budget_exhausted = True
+                stop_queue_fill = True
+                break
+
+            job_limit = min(queue_deficit, jobs_available)
+            # A state batch may create several jobs for CIDRs, but never stages
+            # more than 256 target/profile rows in one transaction.
+            state_limit = min(
+                state_batch_size,
+                job_limit * JOB_TARGET_CHUNK_SIZE,
             )
-            continue
+            due_started = time.perf_counter()
+            due_states = _load_due_states_for_profile(
+                profile,
+                now,
+                state_limit,
+                cycle_max_target_id,
+            )
+            queue_batches_attempted += 1
+            due_elapsed = time.perf_counter() - due_started
+            if not due_states:
+                if profile_counts["range_jobs"] + profile_counts["host_jobs"] == 0:
+                    profiles_without_due_states += 1
+                logger.debug(
+                    "Create Job TASK debug: profile %s has no due states "
+                    "(waiting=%s, deficit=%s, load=%.2fs)",
+                    profile.name,
+                    waiting_before,
+                    queue_deficit,
+                    due_elapsed,
+                )
+                break
 
-        # Step 10: create/reuse the running cycle for jobs staged now.
-        # The cycle timestamp is the lower bound used later to decide whether a
-        # target was scanned in this turn. Jobs created below carry its id.
-        scan_cycle = get_or_create_running_cycle(
-            profile.id,
-            now=now,
-            max_target_id=cycle_max_target_id,
-        )
+            # A new cycle is committed before CPU-side job preparation. This
+            # avoids retaining the writer lock acquired by its required flush.
+            if scan_cycle is None:
+                scan_cycle = get_or_create_running_cycle(
+                    profile.id,
+                    now=now,
+                    max_target_id=cycle_max_target_id,
+                    reconcile=False,
+                )
+                profile.current_cycle_id = scan_cycle.id
+                db.session.commit()
 
-        # Step 11: transform due states into in-memory jobs.
-        # `_stage_jobs_for_profile` groups IP/CIDR and FQDN targets into
-        # 256-item chunks, adds Jobs to the session, and marks working=True only
-        # for targets/states actually included in those jobs.
-        stage_started = time.perf_counter()
-        job_counts = _stage_jobs_for_profile(
-            profile,
-            due_states,
-            scan_ports,
-            _serialize_profile_nses(profile),
-            scan_cycle,
-            max_jobs=job_limit,
-        )
-        stage_elapsed = time.perf_counter() - stage_started
+            # Transform the batch without autoflush. The only write window is
+            # the explicit commit immediately following this block.
+            stage_started = time.perf_counter()
+            with db.session.no_autoflush:
+                job_counts = _stage_jobs_for_profile(
+                    profile,
+                    due_states,
+                    scan_ports,
+                    scan_nses,
+                    scan_cycle,
+                    max_jobs=job_limit,
+                )
+            stage_elapsed = time.perf_counter() - stage_started
 
-        # Step 12: commit per profile.
-        # Short transactions reduce long SQLite lock risk.
-        commit_started = time.perf_counter()
-        db.session.commit()
-        commit_elapsed = time.perf_counter() - commit_started
+            commit_started = time.perf_counter()
+            db.session.commit()
+            commit_elapsed = time.perf_counter() - commit_started
+            batch_number += 1
 
-        # Step 13: update local counters.
-        # Since this profile was just committed, waiting_counts mirrors DB state
-        # for the next profiles without rerunning the global count query.
-        new_jobs = job_counts["range_jobs"] + job_counts["host_jobs"]
-        waiting_counts[profile.id] = waiting_before + new_jobs
-        totals["scheduled_states"] += job_counts["scheduled_states"]
-        totals["range_jobs"] += job_counts["range_jobs"]
-        totals["host_jobs"] += job_counts["host_jobs"]
+            new_jobs = job_counts["range_jobs"] + job_counts["host_jobs"]
+            waiting_after = waiting_before + new_jobs
+            waiting_counts[profile.id] = waiting_after
+            for counter_name in totals:
+                totals[counter_name] += job_counts[counter_name]
+                profile_counts[counter_name] += job_counts[counter_name]
 
-        if new_jobs > 0:
+            logger.debug(
+                "Create Job TASK debug: profile %s batch %s committed in %.2fs "
+                "(due_load=%.2fs, stage=%.2fs, commit=%.2fs, states=%s, "
+                "new_jobs=%s, waiting_before=%s, waiting_after=%s)",
+                profile.name,
+                batch_number,
+                due_elapsed + stage_elapsed + commit_elapsed,
+                due_elapsed,
+                stage_elapsed,
+                commit_elapsed,
+                job_counts["scheduled_states"],
+                new_jobs,
+                waiting_before,
+                waiting_after,
+            )
+
+            if new_jobs <= 0:
+                break
+
+            waiting_before = waiting_after
+            queue_deficit = queue_target - waiting_after
+
+            jobs_created_so_far = totals["range_jobs"] + totals["host_jobs"]
+            if jobs_created_so_far >= max_new_jobs_per_tick:
+                budget_exhausted = True
+                stop_queue_fill = True
+                break
+            if _queue_time_budget_reached(generation_deadline, jobs_created_so_far):
+                time_budget_exhausted = True
+                stop_queue_fill = True
+                break
+
+        profile_job_count = profile_counts["range_jobs"] + profile_counts["host_jobs"]
+        if profile_job_count > 0:
             profiles_with_jobs += 1
             profile_summaries.append(
-                f"{profile.name}={new_jobs}"
-                f"(range:{job_counts['range_jobs']},"
-                f"host:{job_counts['host_jobs']},"
-                f"states:{job_counts['scheduled_states']},"
+                f"{profile.name}={profile_job_count}"
+                f"(range:{profile_counts['range_jobs']},"
+                f"host:{profile_counts['host_jobs']},"
+                f"states:{profile_counts['scheduled_states']},"
                 f"queued:{waiting_counts[profile.id]})"
             )
 
-        logger.debug(
-            "Create Job TASK debug: profile %s filled in %.2fs "
-            "(due_load=%.2fs, stage=%.2fs, commit=%.2fs, states=%s, "
-            "new_jobs=%s, waiting_before=%s, waiting_after=%s)",
-            profile.name,
-            due_elapsed + stage_elapsed + commit_elapsed,
-            due_elapsed,
-            stage_elapsed,
-            commit_elapsed,
-            job_counts["scheduled_states"],
-            new_jobs,
-            waiting_before,
-            waiting_counts[profile.id],
-        )
-
-        # Step 14: stop when this tick has consumed its creation budget.
-        if totals["range_jobs"] + totals["host_jobs"] >= max_new_jobs_per_tick:
-            budget_exhausted = True
+        if stop_queue_fill:
             break
+
+    if not time_budget_exhausted and _queue_time_budget_reached(
+        generation_deadline,
+        max(totals["range_jobs"] + totals["host_jobs"], queue_batches_attempted),
+    ):
+        time_budget_exhausted = True
 
     logger.debug(
         "Create Job TASK debug: queue fill completed in %.2fs",
@@ -1200,10 +1327,11 @@ def task_create_jobs():
     summary_log = (
         "Create Job TASK: %s jobs created across %s profiles (%s range, %s host); "
         "%s target/profile states scheduled; queue_target=%s; state_batch=%s; "
+        "time_budget=%ss; "
         "%s state rows seeded; %s orphan states released; %s profiles already full; "
         "%s profiles had no due states; %s profiles skipped without ports; "
-        "%s profiles skipped without scan frequency; %s cycles checked; %s cycles pruned; "
-        "budget_exhausted=%s"
+        "%s profiles skipped without scan frequency; %s cycles checked; "
+        "budget_exhausted=%s; time_budget_exhausted=%s"
     )
     summary_args = (
         total_jobs_created,
@@ -1213,6 +1341,7 @@ def task_create_jobs():
         totals["scheduled_states"],
         queue_target,
         state_batch_size,
+        time_budget_seconds,
         seeded_states,
         orphan_release["released_states"],
         profiles_already_full,
@@ -1220,8 +1349,8 @@ def task_create_jobs():
         profiles_without_ports,
         profiles_without_cycle,
         cycles_checked,
-        cycles_pruned,
         budget_exhausted,
+        time_budget_exhausted,
     )
     if total_jobs_created == 0:
         logger.warning(summary_log, *summary_args)
@@ -1243,9 +1372,10 @@ def task_create_jobs():
         "profiles_full": profiles_already_full,
         "seeded_states": seeded_states,
         "cycles_checked": cycles_checked,
-        "cycles_pruned": cycles_pruned,
         "orphan_states_checked": orphan_release["checked_states"],
         "orphan_states_released": orphan_release["released_states"],
+        "time_budget_seconds": time_budget_seconds,
+        "time_budget_exhausted": time_budget_exhausted,
     }
 
 
