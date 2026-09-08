@@ -64,6 +64,11 @@
             .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Unable to start reindex'); return data; })
             .then(data => poll(data.job_id)).catch(error => { status.textContent = error.message; active = false; setButtons(false); });
     }
+    fetch("{{ url_for('TagRulesView.reindex_current') }}").then(r => r.json()).then(data => {
+        if (data.job_id && (data.status === 'queued' || data.status === 'running')) {
+            active = true; setButtons(true); poll(data.job_id);
+        }
+    }).catch(() => {});
     document.getElementById('tagrule-reindex-all').addEventListener('click', () => start(null));
     document.addEventListener('click', e => { const button = e.target.closest('.tagrule-reindex'); if (button) start(button.dataset.ruleId); });
 })();

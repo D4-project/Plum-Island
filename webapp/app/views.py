@@ -3299,6 +3299,21 @@ class TagRulesView(ModelView):
             return jsonify(error="Unknown reindex job"), 404
         return jsonify(state)
 
+    @expose("/reindex_current")
+    @has_access
+    def reindex_current(self):
+        """Return the most recent queued/running reindex for page reloads."""
+        with TAG_REINDEX_STATES_LOCK:
+            active = [
+                (job_id, state)
+                for job_id, state in TAG_REINDEX_STATES.items()
+                if state.get("status") in ("queued", "running")
+            ]
+            if active:
+                job_id, state = active[-1]
+                return jsonify(job_id=job_id, **state)
+        return jsonify(job_id=None, status="idle")
+
     @action(
         "muldelete",
         "Delete Tag Rules",
