@@ -185,7 +185,9 @@ LOG_ENABLED = False
 LOG_LEVEL = "DEBUG"
 LOG_DIR = "./log"
 LOG_FILE_PREFIX = "island"
-LOG_ROTATION_DAYS = 90
+# Date-named logs always rotate daily at local midnight. This legacy setting
+# remains for compatibility with existing configuration files.
+LOG_ROTATION_DAYS = 1
 LOG_RETENTION_DAYS = 90
 
 # Active unfinished jobs are returned to the queue after two hours without a

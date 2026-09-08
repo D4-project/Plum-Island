@@ -21,51 +21,42 @@ class DateFileHandler(logging.Handler):
         super().__init__()
         self.log_dir = Path(log_dir)
         self.prefix = prefix
+        # Kept in the constructor for compatibility with existing config.py
+        # files. Date-named application logs always rotate at local midnight.
         self.rotation_days = rotation_days
         self.retention_days = retention_days
         self._stream = None
         self._path = None
-        self._opened_at = None
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def _file_path(self, now):
         return self.log_dir / f"{self.prefix}-{now:%y%m%d}.log"
 
     def _needs_rotation(self, now):
-        if self._stream is None or self._opened_at is None:
-            return True
-        return now - self._opened_at >= timedelta(days=self.rotation_days)
+        return self._stream is None or self._path != self._file_path(now)
 
     def _open_stream(self, now):
         if self._needs_rotation(now):
             if self._stream is not None:
                 self._stream.close()
-            if self._stream is None:
-                existing = sorted(
-                    self.log_dir.glob(f"{self.prefix}-*.log"),
-                    key=lambda path: path.stat().st_mtime,
-                    reverse=True,
-                )
-                if existing and now - datetime.fromtimestamp(
-                    existing[0].stat().st_mtime
-                ) < timedelta(days=self.rotation_days):
-                    self._path = existing[0]
-                else:
-                    self._path = self._file_path(now)
-            else:
-                self._path = self._file_path(now)
+            self._path = self._file_path(now)
             self._stream = self._path.open("a", encoding="utf-8")
-            self._opened_at = datetime.fromtimestamp(self._path.stat().st_mtime)
         return self._stream
 
     def _prune_old_files(self, now):
-        cutoff = now - timedelta(days=self.retention_days)
+        cutoff_date = (now - timedelta(days=self.retention_days)).date()
         for path in self.log_dir.glob(f"{self.prefix}-*.log"):
             if path == self._path or not path.is_file():
                 continue
             try:
-                if datetime.fromtimestamp(path.stat().st_mtime) < cutoff:
+                match = LOG_FILE_RE.match(path.name)
+                if not match or match.group("prefix") != self.prefix:
+                    continue
+                file_date = datetime.strptime(match.group("date"), "%y%m%d").date()
+                if file_date < cutoff_date:
                     path.unlink()
+            except ValueError:
+                continue
             except OSError:
                 self.handleError(None)
 
