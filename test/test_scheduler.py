@@ -452,13 +452,20 @@ class StalledJobWatchdogTest(TestCase):
                 "_queue_time_budget_reached",
                 return_value=False,
             ):
-                summary = self.scheduler.task_create_jobs()
+                with self.assertLogs("flask_appbuilder", level="INFO") as logs:
+                    summary = self.scheduler.task_create_jobs()
         finally:
             self.scheduler.db.app.config["scheduler_profile_cursor_id"] = (
                 previous_cursor
             )
 
         self.assertEqual(summary["jobs_created"], 2)
+        generation_logs = "\n".join(logs.output)
+        self.assertIn(
+            "jobs_generated=1 range_jobs=0 host_jobs=1",
+            generation_logs,
+        )
+        self.assertIn("queue=2/2 tick_jobs=2/10", generation_logs)
         self.assertEqual(stage_jobs.call_count, 2)
         self.assertEqual(session.commit.call_count, 3)
         self.assertEqual(

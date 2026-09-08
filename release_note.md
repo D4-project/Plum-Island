@@ -6,6 +6,8 @@
 
 - Bound queue generation to short 256-state commits so scan-result reception can interleave, reconcile cycles per profile instead of globally, defer expensive cycle-history pruning outside queue generation and result reception, search for missing runtime states without holding SQLite's writer lock, and split /16 targets directly into /24 jobs without per-address expansion.
 
+- Log queue-generation progress per profile and committed batch, including CIDR/FQDN job counts, scheduled states, queue fill, cycle boundaries, and tick totals.
+
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.

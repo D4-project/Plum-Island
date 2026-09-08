@@ -1098,7 +1098,7 @@ def task_create_jobs():
     queue_batches_attempted = 0
 
     fill_started = time.perf_counter()
-    for profile in profiles:
+    for profile_index, profile in enumerate(profiles, start=1):
         jobs_created_so_far = totals["range_jobs"] + totals["host_jobs"]
         if _queue_time_budget_reached(
             generation_deadline,
@@ -1136,6 +1136,17 @@ def task_create_jobs():
             profiles_already_full += 1
             continue
 
+        logger.info(
+            "Create Job TASK progress: profile=%s profile_index=%s/%s "
+            "queue=%s/%s deficit=%s; reconciling cycle",
+            profile.name,
+            profile_index,
+            len(profiles),
+            waiting_before,
+            queue_target,
+            queue_deficit,
+        )
+
         # Step 7: reconcile only the profile that is about to generate work.
         # Commit immediately so aggregate scans for different profiles never
         # share one long-lived SQLite writer transaction.
@@ -1169,6 +1180,19 @@ def task_create_jobs():
             scan_cycle.max_target_id
             if scan_cycle is not None and scan_cycle.max_target_id is not None
             else get_current_max_target_id()
+        )
+        logger.info(
+            "Create Job TASK progress: profile=%s cycle_id=%s max_target_id=%s "
+            "cycle_targets=%s/%s cycle_scan_units=%s/%s queue=%s/%s",
+            profile.name,
+            getattr(scan_cycle, "id", None),
+            cycle_max_target_id,
+            getattr(scan_cycle, "completed_target_count", 0),
+            getattr(scan_cycle, "target_count", 0),
+            getattr(scan_cycle, "completed_scan_unit_count", 0),
+            getattr(scan_cycle, "scan_unit_count", 0),
+            waiting_before,
+            queue_target,
         )
         scan_nses = _serialize_profile_nses(profile)
         profile_counts = {
@@ -1237,6 +1261,17 @@ def task_create_jobs():
                 profile.current_cycle_id = scan_cycle.id
                 db.session.commit()
 
+            logger.info(
+                "Create Job TASK progress: profile=%s batch=%s cycle_id=%s "
+                "due_states=%s queue=%s/%s; staging jobs",
+                profile.name,
+                batch_number + 1,
+                getattr(scan_cycle, "id", None),
+                len(due_states),
+                waiting_before,
+                queue_target,
+            )
+
             # Transform the batch without autoflush. The only write window is
             # the explicit commit immediately following this block.
             stage_started = time.perf_counter()
@@ -1263,20 +1298,27 @@ def task_create_jobs():
                 totals[counter_name] += job_counts[counter_name]
                 profile_counts[counter_name] += job_counts[counter_name]
 
-            logger.debug(
-                "Create Job TASK debug: profile %s batch %s committed in %.2fs "
-                "(due_load=%.2fs, stage=%.2fs, commit=%.2fs, states=%s, "
-                "new_jobs=%s, waiting_before=%s, waiting_after=%s)",
+            jobs_created_this_tick = totals["range_jobs"] + totals["host_jobs"]
+            logger.info(
+                "Create Job TASK generated: profile=%s batch=%s cycle_id=%s "
+                "jobs_generated=%s range_jobs=%s host_jobs=%s "
+                "states_scheduled=%s queue=%s/%s tick_jobs=%s/%s "
+                "elapsed=%.2fs (load=%.2fs stage=%.2fs commit=%.2fs)",
                 profile.name,
                 batch_number,
+                getattr(scan_cycle, "id", None),
+                new_jobs,
+                job_counts["range_jobs"],
+                job_counts["host_jobs"],
+                job_counts["scheduled_states"],
+                waiting_after,
+                queue_target,
+                jobs_created_this_tick,
+                max_new_jobs_per_tick,
                 due_elapsed + stage_elapsed + commit_elapsed,
                 due_elapsed,
                 stage_elapsed,
                 commit_elapsed,
-                job_counts["scheduled_states"],
-                new_jobs,
-                waiting_before,
-                waiting_after,
             )
 
             if new_jobs <= 0:
