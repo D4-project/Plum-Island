@@ -3,6 +3,7 @@ This module manage asynchrone tasks
 """
 
 import os
+import atexit
 import logging
 import shutil
 import uuid
@@ -15,6 +16,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.base import SchedulerNotRunningError
 from netaddr import IPNetwork, cidr_merge
 import meilisearch
 from meilisearch.errors import MeilisearchApiError, MeilisearchError
@@ -2523,3 +2525,17 @@ scheduler.add_job(
     minutes=db.app.config.get("SCHEDULER_DELAY"),
 )
 scheduler.start()
+
+
+def _shutdown_scheduler():
+    """Stop APScheduler before Python tears down its thread pool."""
+    if scheduler.running:
+        try:
+            scheduler.shutdown(wait=False)
+            logging.getLogger(__name__).info("Scheduler shut down cleanly")
+        except (RuntimeError, SchedulerNotRunningError):
+            # Shutdown can race with the process manager during termination.
+            pass
+
+
+atexit.register(_shutdown_scheduler)
