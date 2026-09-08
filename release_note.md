@@ -8,6 +8,10 @@
 
 - Log queue-generation progress per profile and committed batch, including CIDR/FQDN job counts, scheduled states, queue fill, cycle boundaries, and tick totals.
 
+- Avoid full due-state sorts during queue generation by selecting never-scanned and expired states through separate index-ordered queries.
+
+- Add an independent five-minute queue-generation watchdog that reports the exact active stage when orchestration is stuck and summarizes repeated completed ticks with zero output.
+
 - Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.

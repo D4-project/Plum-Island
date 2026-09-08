@@ -10,6 +10,7 @@ import json
 import time
 import copy
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -59,6 +60,8 @@ DEFAULT_QUEUE_STATE_BATCH_SIZE = JOB_TARGET_CHUNK_SIZE
 DEFAULT_STATE_SYNC_BATCH_SIZE = 2048
 DEFAULT_MAX_NEW_JOBS_PER_TICK = 1024
 DEFAULT_QUEUE_TIME_BUDGET_SECONDS = 45
+QUEUE_GENERATION_STALL_SECONDS = 300
+QUEUE_GENERATION_ZERO_LOG_INTERVAL_SECONDS = 300
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
@@ -70,6 +73,19 @@ UNKNOWN_FAVICON_MD5_RE = re.compile(
     r"\bUnknown\s+favicon\s+MD5\s*:\s*([0-9a-fA-F]{32})\b",
     re.IGNORECASE,
 )
+
+_queue_generation_lock = threading.Lock()
+_queue_generation_progress = {
+    "active": False,
+    "stage": "idle",
+    "tick_started_at": None,
+    "stage_started_at": None,
+    "last_job_commit_at": None,
+    "zero_generation_since": None,
+    "zero_generation_ticks": 0,
+    "last_zero_alert_at": None,
+    "last_summary": {},
+}
 
 
 class MeiliExportTaskError(RuntimeError):
@@ -206,6 +222,168 @@ def _split_scan_result_by_port(scan_result):
     return port_documents
 
 
+def _begin_queue_generation():
+    """Publish the start of a queue-generation tick for the watchdog."""
+    now = time.perf_counter()
+    with _queue_generation_lock:
+        _queue_generation_progress.update(
+            {
+                "active": True,
+                "stage": "starting",
+                "tick_started_at": now,
+                "stage_started_at": now,
+                "last_job_commit_at": now,
+                "profile": None,
+                "profile_index": None,
+                "profile_total": None,
+                "cycle_id": None,
+                "max_target_id": None,
+                "batch": None,
+                "phase": None,
+                "limit": None,
+                "due_states": None,
+                "queue_waiting": None,
+                "queue_target": None,
+                "jobs_created_tick": 0,
+            }
+        )
+
+
+def _mark_queue_generation_stage(stage, **details):
+    """Update in-memory queue progress without touching the application DB."""
+    now = time.perf_counter()
+    with _queue_generation_lock:
+        if not _queue_generation_progress["active"]:
+            return
+        _queue_generation_progress["stage"] = stage
+        _queue_generation_progress["stage_started_at"] = now
+        _queue_generation_progress.update(details)
+
+
+def _record_queue_generation_commit(jobs_created, **details):
+    """Record a committed batch so watchdog alerts measure real output."""
+    now = time.perf_counter()
+    with _queue_generation_lock:
+        if not _queue_generation_progress["active"]:
+            return
+        _queue_generation_progress["stage"] = "batch_committed"
+        _queue_generation_progress["stage_started_at"] = now
+        _queue_generation_progress.update(details)
+        _queue_generation_progress["jobs_created_tick"] = int(
+            _queue_generation_progress.get("jobs_created_tick") or 0
+        ) + int(jobs_created or 0)
+        if jobs_created:
+            _queue_generation_progress["last_job_commit_at"] = now
+
+
+def _finish_queue_generation(summary=None, error=None):
+    """Close watchdog telemetry and track consecutive zero-output ticks."""
+    now = time.perf_counter()
+    summary = summary if isinstance(summary, dict) else {}
+    jobs_created = int(summary.get("jobs_created", 0) or 0)
+    with _queue_generation_lock:
+        _queue_generation_progress["active"] = False
+        _queue_generation_progress["stage"] = "failed" if error else "finished"
+        _queue_generation_progress["stage_started_at"] = now
+        _queue_generation_progress["last_finished_at"] = now
+        _queue_generation_progress["last_error"] = error
+        _queue_generation_progress["last_summary"] = dict(summary)
+        if jobs_created > 0:
+            _queue_generation_progress["zero_generation_since"] = None
+            _queue_generation_progress["zero_generation_ticks"] = 0
+            _queue_generation_progress["last_zero_alert_at"] = None
+        else:
+            if _queue_generation_progress["zero_generation_since"] is None:
+                _queue_generation_progress["zero_generation_since"] = now
+                _queue_generation_progress["last_zero_alert_at"] = None
+            _queue_generation_progress["zero_generation_ticks"] += 1
+
+
+def _run_queue_generation_step():
+    """Run job creation while guaranteeing watchdog state is finalized."""
+    _begin_queue_generation()
+    try:
+        summary = task_create_jobs()
+    except Exception as exc:
+        _finish_queue_generation(error=f"{type(exc).__name__}: {exc}")
+        raise
+    _finish_queue_generation(summary=summary)
+    return summary
+
+
+def _log_queue_generation_watchdog(now=None):
+    """Report a running stall or five minutes of completed zero-output ticks."""
+    now = time.perf_counter() if now is None else now
+    with _queue_generation_lock:
+        progress = dict(_queue_generation_progress)
+
+        if progress["active"]:
+            tick_age = now - progress["tick_started_at"]
+            stage_age = now - progress["stage_started_at"]
+            no_commit_age = now - progress["last_job_commit_at"]
+            stalled = no_commit_age >= QUEUE_GENERATION_STALL_SECONDS
+        else:
+            zero_since = progress.get("zero_generation_since")
+            zero_age = now - zero_since if zero_since is not None else 0
+            last_zero_alert = progress.get("last_zero_alert_at")
+            zero_alert = (
+                zero_since is not None and zero_age >= QUEUE_GENERATION_STALL_SECONDS
+            )
+            should_zero_alert = zero_alert and (
+                last_zero_alert is None
+                or now - last_zero_alert >= QUEUE_GENERATION_ZERO_LOG_INTERVAL_SECONDS
+            )
+            if should_zero_alert:
+                _queue_generation_progress["last_zero_alert_at"] = now
+
+    if progress["active"]:
+        log_method = logger.error if stalled else logger.info
+        log_method(
+            "QUEUE GENERATION WATCHDOG: active=true stalled=%s tick_age=%.0fs "
+            "no_job_commit=%.0fs stage=%s stage_age=%.0fs profile=%s "
+            "profile_index=%s/%s cycle_id=%s max_target_id=%s batch=%s "
+            "phase=%s limit=%s due_states=%s queue=%s/%s tick_jobs=%s",
+            stalled,
+            tick_age,
+            no_commit_age,
+            progress.get("stage"),
+            stage_age,
+            progress.get("profile"),
+            progress.get("profile_index"),
+            progress.get("profile_total"),
+            progress.get("cycle_id"),
+            progress.get("max_target_id"),
+            progress.get("batch"),
+            progress.get("phase"),
+            progress.get("limit"),
+            progress.get("due_states"),
+            progress.get("queue_waiting"),
+            progress.get("queue_target"),
+            progress.get("jobs_created_tick"),
+        )
+        return {
+            "active": True,
+            "stalled": stalled,
+            "stage": progress.get("stage"),
+            "no_job_commit_seconds": int(no_commit_age),
+        }
+
+    if should_zero_alert:
+        logger.warning(
+            "QUEUE GENERATION WATCHDOG: no jobs generated for %.0fs across %s "
+            "completed scheduler ticks; last_summary=(%s); last_error=%s",
+            zero_age,
+            progress.get("zero_generation_ticks"),
+            _format_scheduler_summary(progress.get("last_summary")),
+            progress.get("last_error"),
+        )
+    return {
+        "active": False,
+        "zero_output_seconds": int(zero_age),
+        "zero_output_ticks": progress.get("zero_generation_ticks", 0),
+    }
+
+
 def _run_scheduler_step(step_label, step_func):
     """
     Log start/end timing for one scheduler step.
@@ -293,7 +471,9 @@ def task_master_of_puppets():
             "release_stalled_jobs": _run_scheduler_step(
                 "release_stalled_jobs", task_release_stalled_jobs
             ),
-            "create_jobs": _run_scheduler_step("create_jobs", task_create_jobs),
+            "create_jobs": _run_scheduler_step(
+                "create_jobs", _run_queue_generation_step
+            ),
             "profile_sync": _run_scheduler_step(
                 "profile_sync", task_sync_queued_profile_jobs
             ),
@@ -315,6 +495,7 @@ def task_scheduler_maintenance():
     """Run result export and housekeeping without blocking scan orchestration."""
     maintenance_started_at = time.perf_counter()
     logger.info("Scheduler MAINTENANCE: tick start")
+    _log_queue_generation_watchdog()
     db.session.remove()
     try:
         step_durations = {
@@ -667,50 +848,106 @@ def _load_due_states_for_profile(
 ):
     """
     Load due target/profile states for one profile, oldest first.
+
+    Keep never-scanned and expired states in separate index-ordered reads.
+    Combining both cases with ``OR`` and ordering through ``CASE`` forces
+    SQLite to sort every eligible profile state before applying the small
+    queue batch limit. On production-sized target sets that can occupy the
+    scheduler for minutes without creating a job.
     """
     cutoff = now_utc - timedelta(minutes=profile.scan_cycle_minutes)
-    due_state_ids_sql = """
-        SELECT tss.id
-          FROM target_scan_states AS tss
-          JOIN targets AS t
-            ON t.id = tss.target_id
-         WHERE tss.scanprofile_id = :profile_id
-           AND t.active = 1
-           AND t.id <= :max_target_id
-           AND tss.working = 0
-           AND (tss.last_scan IS NULL OR tss.last_scan <= :cutoff)
-    """
+    profile_log_name = getattr(profile, "name", profile.id)
+    applicability_sql = ""
     if not profile.apply_to_all:
-        due_state_ids_sql += """
-           AND EXISTS (
-                SELECT 1
-                  FROM scanprofiles_targets_assoc AS spta
-                 WHERE spta.scanprofile_id = tss.scanprofile_id
-                   AND spta.target_id = tss.target_id
-           )
+        applicability_sql = """
+            AND EXISTS (
+                 SELECT 1
+                   FROM scanprofiles_targets_assoc AS spta
+                  WHERE spta.scanprofile_id = tss.scanprofile_id
+                    AND spta.target_id = tss.target_id
+            )
         """
-    due_state_ids_sql += """
-         ORDER BY CASE WHEN tss.last_scan IS NULL THEN 0 ELSE 1 END ASC,
-                  tss.last_scan ASC,
-                  tss.target_id ASC
-         LIMIT :limit
-    """
 
-    state_ids = [
-        row[0]
-        for row in db.session.execute(
+    def select_state_ids(last_scan_filter, order_by, limit, phase):
+        if limit <= 0:
+            return []
+        selection_started = time.perf_counter()
+        _mark_queue_generation_stage(
+            "due_state_selection",
+            profile=profile_log_name,
+            max_target_id=max_target_id,
+            phase=phase,
+            limit=limit,
+            due_states=None,
+        )
+        logger.debug(
+            "Create Job TASK debug: due-state selection started "
+            "(profile=%s, phase=%s, limit=%s, max_target_id=%s)",
+            profile_log_name,
+            phase,
+            limit,
+            max_target_id,
+        )
+        # last_scan_filter and order_by are fixed internal SQL fragments.
+        due_state_ids_sql = f"""
+            SELECT tss.id
+              FROM target_scan_states AS tss
+              JOIN targets AS t
+                ON t.id = tss.target_id
+             WHERE tss.scanprofile_id = :profile_id
+               AND t.active = 1
+               AND t.id <= :max_target_id
+               AND tss.working = 0
+               AND {last_scan_filter}
+               {applicability_sql}
+             ORDER BY {order_by}
+             LIMIT :limit
+        """
+        rows = db.session.execute(
             text(due_state_ids_sql),
             {
                 "profile_id": profile.id,
                 "cutoff": cutoff,
-                "limit": state_limit,
+                "limit": limit,
                 "max_target_id": int(max_target_id),
             },
         ).fetchall()
-    ]
+        logger.debug(
+            "Create Job TASK debug: due-state selection finished "
+            "(profile=%s, phase=%s, selected=%s, elapsed=%.2fs)",
+            profile_log_name,
+            phase,
+            len(rows),
+            time.perf_counter() - selection_started,
+        )
+        return [row[0] for row in rows]
+
+    state_ids = select_state_ids(
+        "tss.last_scan IS NULL",
+        "tss.target_id ASC",
+        state_limit,
+        "never_scanned",
+    )
+    remaining = state_limit - len(state_ids)
+    state_ids.extend(
+        select_state_ids(
+            "tss.last_scan <= :cutoff",
+            "tss.last_scan ASC, tss.target_id ASC",
+            remaining,
+            "expired",
+        )
+    )
     if not state_ids:
         return []
 
+    _mark_queue_generation_stage(
+        "due_state_hydration",
+        profile=profile_log_name,
+        max_target_id=max_target_id,
+        phase="hydrate",
+        limit=state_limit,
+        due_states=len(state_ids),
+    )
     states = (
         db.session.query(TargetScanStates)
         .options(joinedload(TargetScanStates.target))
@@ -1005,6 +1242,7 @@ def task_create_jobs():
 
     # Step 1: release states stuck in working mode without an active job.
     # The called helper stays deliberately batched to protect SQLite.
+    _mark_queue_generation_stage("orphan_state_release")
     orphan_started = time.perf_counter()
     if _should_run_orphan_state_release():
         orphan_release = _release_orphaned_working_states()
@@ -1021,6 +1259,7 @@ def task_create_jobs():
 
     # Step 2: create missing target/profile runtime rows.
     # Without those rows, an active target cannot enter the scheduler.
+    _mark_queue_generation_stage("state_sync")
     sync_started = time.perf_counter()
     seeded_states = _sync_missing_scan_states(deadline=generation_deadline)
     logger.debug(
@@ -1062,6 +1301,7 @@ def task_create_jobs():
 
     # Step 4: load queue metadata once for this tick.
     # waiting_counts avoids recounting the DB after each profile.
+    _mark_queue_generation_stage("queue_metadata")
     metadata_started = time.perf_counter()
     profiles = (
         db.session.query(ScanProfiles)
@@ -1146,6 +1386,20 @@ def task_create_jobs():
             queue_target,
             queue_deficit,
         )
+        _mark_queue_generation_stage(
+            "cycle_reconcile",
+            profile=profile.name,
+            profile_index=profile_index,
+            profile_total=len(profiles),
+            cycle_id=None,
+            max_target_id=None,
+            batch=None,
+            phase=None,
+            limit=None,
+            due_states=None,
+            queue_waiting=waiting_before,
+            queue_target=queue_target,
+        )
 
         # Step 7: reconcile only the profile that is about to generate work.
         # Commit immediately so aggregate scans for different profiles never
@@ -1193,6 +1447,20 @@ def task_create_jobs():
             getattr(scan_cycle, "scan_unit_count", 0),
             waiting_before,
             queue_target,
+        )
+        _mark_queue_generation_stage(
+            "due_state_load",
+            profile=profile.name,
+            profile_index=profile_index,
+            profile_total=len(profiles),
+            cycle_id=getattr(scan_cycle, "id", None),
+            max_target_id=cycle_max_target_id,
+            batch=1,
+            phase=None,
+            limit=state_batch_size,
+            due_states=None,
+            queue_waiting=waiting_before,
+            queue_target=queue_target,
         )
         scan_nses = _serialize_profile_nses(profile)
         profile_counts = {
@@ -1271,6 +1539,18 @@ def task_create_jobs():
                 waiting_before,
                 queue_target,
             )
+            _mark_queue_generation_stage(
+                "job_staging",
+                profile=profile.name,
+                cycle_id=getattr(scan_cycle, "id", None),
+                max_target_id=cycle_max_target_id,
+                batch=batch_number + 1,
+                phase=None,
+                limit=state_limit,
+                due_states=len(due_states),
+                queue_waiting=waiting_before,
+                queue_target=queue_target,
+            )
 
             # Transform the batch without autoflush. The only write window is
             # the explicit commit immediately following this block.
@@ -1286,6 +1566,18 @@ def task_create_jobs():
                 )
             stage_elapsed = time.perf_counter() - stage_started
 
+            _mark_queue_generation_stage(
+                "batch_commit",
+                profile=profile.name,
+                cycle_id=getattr(scan_cycle, "id", None),
+                max_target_id=cycle_max_target_id,
+                batch=batch_number + 1,
+                phase=None,
+                limit=state_limit,
+                due_states=len(due_states),
+                queue_waiting=waiting_before,
+                queue_target=queue_target,
+            )
             commit_started = time.perf_counter()
             db.session.commit()
             commit_elapsed = time.perf_counter() - commit_started
@@ -1299,6 +1591,18 @@ def task_create_jobs():
                 profile_counts[counter_name] += job_counts[counter_name]
 
             jobs_created_this_tick = totals["range_jobs"] + totals["host_jobs"]
+            _record_queue_generation_commit(
+                new_jobs,
+                profile=profile.name,
+                cycle_id=getattr(scan_cycle, "id", None),
+                max_target_id=cycle_max_target_id,
+                batch=batch_number,
+                phase=None,
+                limit=state_limit,
+                due_states=len(due_states),
+                queue_waiting=waiting_after,
+                queue_target=queue_target,
+            )
             logger.info(
                 "Create Job TASK generated: profile=%s batch=%s cycle_id=%s "
                 "jobs_generated=%s range_jobs=%s host_jobs=%s "
@@ -1412,7 +1716,13 @@ def task_create_jobs():
         "range_jobs": totals["range_jobs"],
         "host_jobs": totals["host_jobs"],
         "states_scheduled": totals["scheduled_states"],
+        "profiles_total": len(profiles),
+        "profiles_with_jobs": profiles_with_jobs,
         "profiles_full": profiles_already_full,
+        "profiles_without_due_states": profiles_without_due_states,
+        "profiles_without_ports": profiles_without_ports,
+        "profiles_without_cycle": profiles_without_cycle,
+        "job_budget_exhausted": budget_exhausted,
         "seeded_states": seeded_states,
         "cycles_checked": cycles_checked,
         "orphan_states_checked": orphan_release["checked_states"],

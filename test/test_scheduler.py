@@ -108,6 +108,132 @@ class StalledJobWatchdogTest(TestCase):
             self.scheduler.task_scheduler_maintenance,
         )
 
+    def test_maintenance_tick_runs_queue_watchdog_independently(self):
+        """The one-minute maintenance slot observes a stuck orchestration slot."""
+        call_order = []
+        session = mock.Mock()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler,
+            "_log_queue_generation_watchdog",
+            side_effect=lambda: call_order.append("queue_watchdog") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_export_to_dbs",
+            side_effect=lambda: call_order.append("export") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_run_due_reports",
+            side_effect=lambda: call_order.append("reports") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_cleanup_jobs",
+            side_effect=lambda: call_order.append("cleanup_jobs") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_cleanup_search_sessions",
+            side_effect=lambda: call_order.append("cleanup_search") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_cleanup_export_jobs",
+            side_effect=lambda: call_order.append("cleanup_export") or {},
+        ):
+            self.scheduler.task_scheduler_maintenance()
+
+        self.assertEqual(
+            call_order,
+            [
+                "queue_watchdog",
+                "export",
+                "reports",
+                "cleanup_jobs",
+                "cleanup_search",
+                "cleanup_export",
+            ],
+        )
+
+    def test_queue_generation_watchdog_reports_exact_stage_after_five_minutes(self):
+        """Maintenance can diagnose create_jobs while its next ticks are skipped."""
+        with self.scheduler._queue_generation_lock:
+            original_progress = dict(self.scheduler._queue_generation_progress)
+        try:
+            with mock.patch.object(
+                self.scheduler.time, "perf_counter", return_value=100.0
+            ):
+                self.scheduler._begin_queue_generation()
+            with mock.patch.object(
+                self.scheduler.time, "perf_counter", return_value=110.0
+            ):
+                self.scheduler._mark_queue_generation_stage(
+                    "due_state_selection",
+                    profile="Common Web",
+                    profile_index=1,
+                    profile_total=13,
+                    cycle_id=20,
+                    max_target_id=96520,
+                    batch=1,
+                    phase="never_scanned",
+                    limit=256,
+                    queue_waiting=0,
+                    queue_target=256,
+                )
+
+            with mock.patch.object(self.scheduler.logger, "error") as early_error:
+                early_status = self.scheduler._log_queue_generation_watchdog(now=399.0)
+            self.assertFalse(early_status["stalled"])
+            early_error.assert_not_called()
+
+            with mock.patch.object(self.scheduler.logger, "error") as error_log:
+                status = self.scheduler._log_queue_generation_watchdog(now=401.0)
+
+            self.assertTrue(status["active"])
+            self.assertTrue(status["stalled"])
+            self.assertEqual(status["stage"], "due_state_selection")
+            logged_values = error_log.call_args.args
+            self.assertIn("Common Web", logged_values)
+            self.assertIn("never_scanned", logged_values)
+            self.assertIn(96520, logged_values)
+            self.assertIn(256, logged_values)
+        finally:
+            with self.scheduler._queue_generation_lock:
+                self.scheduler._queue_generation_progress.clear()
+                self.scheduler._queue_generation_progress.update(original_progress)
+
+    def test_queue_generation_watchdog_reports_five_zero_output_ticks(self):
+        """Repeated completed ticks with no jobs produce a periodic diagnostic."""
+        with self.scheduler._queue_generation_lock:
+            original_progress = dict(self.scheduler._queue_generation_progress)
+        try:
+            for finished_at in (100.0, 160.0, 220.0, 280.0, 340.0):
+                with mock.patch.object(
+                    self.scheduler.time, "perf_counter", return_value=finished_at
+                ):
+                    self.scheduler._begin_queue_generation()
+                    self.scheduler._finish_queue_generation(
+                        {
+                            "jobs_created": 0,
+                            "profiles_total": 13,
+                            "profiles_full": 0,
+                            "profiles_without_due_states": 13,
+                        }
+                    )
+
+            with mock.patch.object(self.scheduler.logger, "warning") as warning_log:
+                status = self.scheduler._log_queue_generation_watchdog(now=401.0)
+
+            self.assertFalse(status["active"])
+            self.assertEqual(status["zero_output_ticks"], 5)
+            self.assertEqual(status["zero_output_seconds"], 301)
+            self.assertIn(
+                "profiles_without_due_states=13",
+                " ".join(str(value) for value in warning_log.call_args.args),
+            )
+        finally:
+            with self.scheduler._queue_generation_lock:
+                self.scheduler._queue_generation_progress.clear()
+                self.scheduler._queue_generation_progress.update(original_progress)
+
     def test_scan_tick_generates_jobs_without_entering_backend_maintenance(self):
         """The scan tick cannot call a slow export path before creating jobs."""
         call_order = []
@@ -152,9 +278,54 @@ class StalledJobWatchdogTest(TestCase):
             )
 
         self.assertEqual(states, [])
-        sql_clause, params = session.execute.call_args.args
-        self.assertIn("t.id <= :max_target_id", str(sql_clause))
-        self.assertEqual(params["max_target_id"], 123)
+        self.assertEqual(session.execute.call_count, 2)
+        never_scanned_call, expired_call = session.execute.call_args_list
+        never_scanned_sql, never_scanned_params = never_scanned_call.args
+        expired_sql, expired_params = expired_call.args
+        self.assertIn("t.id <= :max_target_id", str(never_scanned_sql))
+        self.assertIn("tss.last_scan IS NULL", str(never_scanned_sql))
+        self.assertIn("tss.last_scan <= :cutoff", str(expired_sql))
+        self.assertNotIn("CASE", str(never_scanned_sql))
+        self.assertNotIn("CASE", str(expired_sql))
+        self.assertEqual(never_scanned_params["max_target_id"], 123)
+        self.assertEqual(expired_params["max_target_id"], 123)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript("""
+                CREATE TABLE targets (
+                    id INTEGER PRIMARY KEY,
+                    active BOOLEAN NOT NULL
+                );
+                CREATE TABLE target_scan_states (
+                    id INTEGER PRIMARY KEY,
+                    target_id INTEGER NOT NULL,
+                    scanprofile_id INTEGER NOT NULL,
+                    working BOOLEAN DEFAULT 0,
+                    last_scan DATETIME
+                );
+                CREATE INDEX idx_target_scan_states_due
+                    ON target_scan_states(
+                        scanprofile_id,
+                        working,
+                        last_scan,
+                        target_id
+                    );
+                """)
+            for sql_clause, params in (
+                (never_scanned_sql, never_scanned_params),
+                (expired_sql, expired_params),
+            ):
+                plan = " ".join(
+                    row[3]
+                    for row in connection.execute(
+                        f"EXPLAIN QUERY PLAN {sql_clause}", params
+                    )
+                )
+                self.assertIn("idx_target_scan_states_due", plan)
+                self.assertNotIn("TEMP B-TREE", plan)
+        finally:
+            connection.close()
 
     def test_large_ipv4_target_is_split_directly_into_atomic_24_jobs(self):
         """A /16 becomes 256 /24 jobs without losing part of the target."""
