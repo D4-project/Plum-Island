@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.base import SchedulerNotRunningError
 from netaddr import IPNetwork, cidr_merge
 import meilisearch
-from meilisearch.errors import MeilisearchApiError, MeilisearchError
+from meilisearch.errors import MeilisearchError
 from nmap2json.smarthash import port_smart_hash
 from requests.exceptions import HTTPError
 from sqlalchemy import text
@@ -2490,23 +2490,25 @@ if db.app.config["ONLINETLD"]:
     db.app.config["TLDS"] = fetch_tlds()
 db.app.config["TLDS"] += db.app.config["TLDADD"]  # Append to the list the custom TLDs.
 
-client.create_index("plum")
+try:
+    client.create_index("plum")
+except MeilisearchError as error:
+    # Meilisearch may be starting/restarting independently.  Keep the web
+    # application alive; scheduler tasks will retry their requests later.
+    logger.warning("Meilisearch unavailable during startup; deferring index setup: %s", error)
 index = client.index("plum")
 # Save the client Index to the global config.
 db.app.config["MEILI_IDX"] = index
 # index.add_documents({"hello": "Word"})
 
 # If the database is new, set the searchable attibute.
-current_attrs = index.get_searchable_attributes()
 try:
+    current_attrs = index.get_searchable_attributes()
     if not current_attrs:  # ou current_attrs == ["*"] selon la version
-        # Declare filterable fields
         task = index.update_filterable_attributes(["ip"])
         index.wait_for_task(task.task_uid)
-        # Wait the indexation
-except MeilisearchApiError:
-    task = index.update_filterable_attributes(["ip"])
-    index.wait_for_task(task.task_uid)
+except MeilisearchError as error:
+    logger.warning("Deferred Meilisearch index configuration: %s", error)
 
 # Start the scheduled jobs.
 scheduler = BackgroundScheduler()

@@ -230,24 +230,26 @@ def meili_document_id(document):
 
 
 def remove_present_meili_uids(index, connection, batch_size):
-    """Stream Meilisearch IDs and remove them from candidate storage."""
-    offset = 0
-    processed = 0
-    total = None
-    while True:
-        page = index.get_documents(
-            {
-                "limit": batch_size,
-                "offset": offset,
-                "fields": ["id"],
-            }
-        )
-        results = list(getattr(page, "results", []) or [])
-        if total is None:
-            total = getattr(page, "total", None)
-        if not results:
-            break
+    """Remove candidates already present in Meili using bounded ID fetches.
 
+    Walking the complete Meilisearch collection with increasing offsets becomes
+    progressively slower and can time out on production-sized indexes. The
+    candidate set already comes from Kvrocks, so ask Meilisearch only for those
+    known IDs. The document-fetch endpoint accepts an ``ids`` array and avoids
+    deep pagination entirely.
+    """
+    processed = 0
+    checked = 0
+    candidate_total = connection.execute(
+        "SELECT COUNT(*) FROM candidates"
+    ).fetchone()[0]
+    candidate_uids = (
+        row[0]
+        for row in connection.execute("SELECT uid FROM candidates ORDER BY uid")
+    )
+    for uid_batch in chunked(candidate_uids, batch_size):
+        page = index.get_documents({"ids": uid_batch, "fields": ["id"]})
+        results = list(getattr(page, "results", []) or [])
         document_ids = [
             document_id
             for document_id in (meili_document_id(item) for item in results)
@@ -258,12 +260,14 @@ def remove_present_meili_uids(index, connection, batch_size):
             ((document_id,) for document_id in document_ids),
         )
         connection.commit()
-        offset += len(results)
+        checked += len(uid_batch)
         processed += len(results)
-        if processed % 100_000 < len(results):
-            total_text = total if total is not None else "?"
+        if checked % 100_000 < len(uid_batch):
             print(
-                f"Compared {processed}/{total_text} Meilisearch documents", flush=True
+                f"Compared {checked}/{candidate_total} Kvrocks UIDs against "
+                "Meilisearch; "
+                f"present={processed}",
+                flush=True,
             )
     return processed
 

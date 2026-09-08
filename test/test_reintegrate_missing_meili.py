@@ -36,13 +36,9 @@ class MissingMeiliRepairTest(TestCase):
         )
         self.connection.commit()
         index = mock.Mock()
-        index.get_documents.side_effect = [
-            SimpleNamespace(
-                results=[SimpleNamespace(id="present")],
-                total=1,
-            ),
-            SimpleNamespace(results=[], total=1),
-        ]
+        index.get_documents.return_value = SimpleNamespace(
+            results=[SimpleNamespace(id="present")]
+        )
 
         processed = repair.remove_present_meili_uids(index, self.connection, 100)
 
@@ -51,6 +47,9 @@ class MissingMeiliRepairTest(TestCase):
         ).fetchall()
         self.assertEqual(processed, 1)
         self.assertEqual(remaining, [("missing",)])
+        index.get_documents.assert_called_once_with(
+            {"ids": ["missing", "present"], "fields": ["id"]}
+        )
 
     def test_raw_recovery_keeps_newest_matching_document(self):
         """Repeated UID observations recover newest raw body."""

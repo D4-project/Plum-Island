@@ -963,7 +963,10 @@ def _reindex_tags_unlocked(args, progress_callback=None):
         meili_index = meili_client.index(index_name)
         total_docs = None
         try:
-            stats = meili_index.get_stats()
+            # Stats are only for the UI denominator; never let this optional
+            # request delay the actual Kvrocks reindex.
+            stats_client = meilisearch.Client(meili_url, meili_api_key, timeout=2)
+            stats = stats_client.index(index_name).get_stats()
             if isinstance(stats, dict):
                 total_docs = stats.get("numberOfDocuments")
             else:
