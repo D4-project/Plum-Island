@@ -115,6 +115,18 @@ class TeamCityDetectionTest(TestCase):
         self.assertEqual(result["exact"], {"x-shared": True})
         self.assertEqual(result["ambiguous"], ["x-"])
 
+    def test_legacy_header_fallback_strips_value_predicate(self):
+        class Rule:
+            query = (
+                "http_headval:www-authenticate.bg:realm OR "
+                "http_headval:www-authenticate.lk:rocketmq"
+            )
+
+        self.assertEqual(
+            headers_required_by_tag_rules([Rule()]),
+            {"www-authenticate": True},
+        )
+
 
 if __name__ == "__main__":
     main()

@@ -641,7 +641,9 @@ def headers_required_by_tag_rules(rules):
             query = str(getattr(rule, "query", "") or "")
         if criteria_groups is None:
             for field, header_name in TAG_RULE_HEADER_RE.findall(query):
-                header_name = header_name.strip().lower()
+                header_name = re.sub(
+                    r"\.(?:lk|like|bg|begin)$", "", header_name.strip().lower()
+                )
                 if is_valid_http_header_name(header_name):
                     required[header_name] = required.get(header_name, False) or field.lower() == "http_headval"
             continue
@@ -685,6 +687,30 @@ def ensure_rule_required_headers(session, compiled_rules=None, commit=True):
         .all()
     }
     changed = False
+
+    # Older reconciliation logic could persist the value predicate as part of
+    # the header name (for example ``www-authenticate.bg``).  Fold those rows
+    # into the canonical header row when the base name is now required.
+    for row in session.query(CollectedHeaders).all():
+        malformed = re.match(r"^(.+)\.(?:lk|like|bg|begin)$", str(row.header_name or ""))
+        if not malformed:
+            continue
+        canonical_name = malformed.group(1)
+        if canonical_name not in required:
+            continue
+        canonical = existing.get(canonical_name)
+        if canonical is None:
+            canonical = CollectedHeaders(
+                header_name=canonical_name,
+                collect_value=bool(row.collect_value),
+            )
+            session.add(canonical)
+            existing[canonical_name] = canonical
+        elif row.collect_value and not canonical.collect_value:
+            canonical.collect_value = True
+        session.delete(row)
+        changed = True
+
     for header_name, collect_value in required.items():
         row = existing.get(header_name)
         if row is None:
