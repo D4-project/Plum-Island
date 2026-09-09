@@ -16,7 +16,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.schedulers.base import SchedulerNotRunningError
+from apscheduler.schedulers.base import (
+    BaseScheduler,
+    SchedulerNotRunningError,
+    STATE_STOPPED,
+)
 from netaddr import IPNetwork, cidr_merge
 import meilisearch
 from meilisearch.errors import MeilisearchError
@@ -59,6 +63,29 @@ from .utils.scan_cycles import (
 )
 
 logger = logging.getLogger("flask_appbuilder")
+
+
+class SafeBackgroundScheduler(BackgroundScheduler):
+    """Stop the scheduler loop before shutting down its worker executor.
+
+    APScheduler 3.x shuts down executors before joining the background loop.
+    During process teardown that ordering lets one final ``_process_jobs`` call
+    submit to an already-closed ThreadPoolExecutor.
+    """
+
+    def shutdown(self, wait=True):
+        if self.state == STATE_STOPPED:
+            raise SchedulerNotRunningError
+
+        # Keep the executor alive until no scheduler loop can submit more jobs.
+        self.state = STATE_STOPPED
+        self.wakeup()
+        scheduler_thread = getattr(self, "_thread", None)
+        if scheduler_thread is not None and scheduler_thread is not threading.current_thread():
+            scheduler_thread.join()
+
+        BaseScheduler.shutdown(self, wait=wait)
+        self._thread = None
 
 JOB_TARGET_CHUNK_SIZE = 256
 DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE = 256
@@ -2511,7 +2538,7 @@ except MeilisearchError as error:
     logger.warning("Deferred Meilisearch index configuration: %s", error)
 
 # Start the scheduled jobs.
-scheduler = BackgroundScheduler()
+scheduler = SafeBackgroundScheduler()
 scheduler.add_job(
     func=task_master_of_puppets,
     trigger="interval",
