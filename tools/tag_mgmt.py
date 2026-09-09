@@ -1078,6 +1078,11 @@ def _reindex_tags_unlocked(args, progress_callback=None):
 
             updated_docs += flush_tag_batch(indexer, pending_docs)
             scan_cursor = next_cursor
+            # ``all_uids`` can grow while scans are being received. Refresh
+            # the denominator so progress remains meaningful during a long
+            # reindex, and never report a processed count above the total.
+            live_total_docs = int(indexer.r.scard("all_uids") or 0)
+            total_docs = max(total_docs, live_total_docs, processed_docs)
             print(
                 "Progress: "
                 f"processed={processed_docs}; total={total_docs}; "
