@@ -1,0 +1,6 @@
+description: SAP
+query: http_title.bg:"SAP Commerce Cloud" OR x509_subject.lk:"SAP Trust Community" OR x509_subject.lk:"SAP Commerce" OR http_title.lk:"SAP PPM"
+tags:
+- product:sap
+- vendor:sap
+version: 20260909T000000Z

@@ -26,6 +26,8 @@
 
 - Add NordVPN detection for `nordvpn.com` on port 8443, closes #197.
 
+- Add generic SAP detection signals while preserving product-specific favicon rules, closes #198.
+
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
 
 - Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
