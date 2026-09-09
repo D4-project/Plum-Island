@@ -18,23 +18,40 @@
     text-overflow: ellipsis;
     vertical-align: middle;
 }
+.tagrule-reindex-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+}
+.tagrule-reindex-status {
+    margin-left: 0.5em;
+}
+.tagrule-reindex-progress-wrap {
+    margin-top: 1em;
+    width: 100%;
+}
 </style>
 {% endblock %}
 
 {% block list_list scoped %}
     <div class="well well-sm">
-        <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
-            <i class="fa fa-save"></i> Save to disk
-        </a>
-        <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
-            <i class="fa fa-download"></i> Download ZIP
-        </a>
-        <button type="button" id="tagrule-reindex-all" class="btn btn-sm btn-warning">
-            <i class="fa fa-refresh"></i> Reindex all active rules
-        </button>
-        <span id="tagrule-reindex-status" class="text-muted" style="margin-left:1em"></span>
-        <div class="progress" style="display:inline-block;width:20rem;margin:0 0 0 1em;vertical-align:middle">
-            <div id="tagrule-reindex-progress" class="progress-bar progress-bar-warning" role="progressbar" style="width:0%">0%</div>
+        <div class="tagrule-reindex-actions">
+            <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
+                <i class="fa fa-save"></i> Save to disk
+            </a>
+            <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
+                <i class="fa fa-download"></i> Download ZIP
+            </a>
+            <button type="button" id="tagrule-reindex-all" class="btn btn-sm btn-warning">
+                <i class="fa fa-refresh"></i> Reindex all active rules
+            </button>
+            <span id="tagrule-reindex-status" class="text-muted tagrule-reindex-status"></span>
+        </div>
+        <div class="progress tagrule-reindex-progress-wrap" title="No reindex progress yet">
+            <div id="tagrule-reindex-progress" class="progress-bar progress-bar-warning"
+                 role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+                 style="width:0%">0%</div>
         </div>
     </div>
     {{ super() }}
@@ -48,17 +65,41 @@
     const statusUrl = "{{ url_for('TagRulesView.reindex_status', job_id='JOB_ID') }}";
     const status = document.getElementById('tagrule-reindex-status');
     const progress = document.getElementById('tagrule-reindex-progress');
+    const progressWrap = progress.closest('.tagrule-reindex-progress-wrap');
     let active = false;
     function setButtons(disabled) {
         document.querySelectorAll('.tagrule-reindex, #tagrule-reindex-all').forEach(b => b.disabled = disabled);
     }
+    function updateProgress(data) {
+        const processed = Number(data.processed);
+        const total = Number(data.total);
+        const errors = Number(data.errors || 0);
+        const hasCounts = Number.isFinite(processed) && Number.isFinite(total) && total > 0;
+        const pct = data.status === 'done'
+            ? 100
+            : hasCounts ? Math.min(100, Math.round(processed * 100 / total)) : 0;
+        const detail = hasCounts
+            ? `${processed}/${total}${errors > 0 ? `, ${errors} error${errors === 1 ? '' : 's'}` : ''}`
+            : data.status === 'done' ? 'Completed' : 'Progress unavailable';
+        progressWrap.title = detail;
+        progress.setAttribute('aria-label', detail);
+        progress.setAttribute('aria-valuenow', String(pct));
+        progress.style.width = pct + '%';
+        progress.textContent = pct + '%';
+        if (data.status === 'running' && !hasCounts) {
+            progress.classList.add('progress-bar-striped', 'active');
+        } else {
+            progress.classList.remove('progress-bar-striped', 'active');
+        }
+    }
     function poll(jobId) {
         fetch(statusUrl.replace('JOB_ID', jobId)).then(r => r.json()).then(data => {
-            status.textContent = data.message || data.status;
-            if (data.processed !== undefined) status.textContent += ' — processed ' + data.processed + ', updated ' + data.updated + ', errors ' + data.errors;
-            if (data.total > 0 && data.processed !== undefined) { const pct = Math.min(100, Math.round(data.processed * 100 / data.total)); progress.style.width = pct + '%'; progress.textContent = pct + '%'; }
-            else if (data.status === 'running') { progress.style.width = '100%'; progress.classList.add('progress-bar-striped', 'active'); progress.textContent = '…'; }
-            if (data.status === 'done') { progress.style.width = '100%'; progress.classList.remove('progress-bar-striped', 'active'); progress.textContent = '100%'; }
+            updateProgress(data);
+            status.textContent = data.status === 'done' ? 'Reindex completed'
+                : data.status === 'error' ? (data.message || 'Reindex failed')
+                : data.status === 'running' ? 'Reindex in progress'
+                : data.status === 'queued' ? 'Reindex queued'
+                : (data.message || data.status);
             if (data.status === 'queued' || data.status === 'running') return setTimeout(() => poll(jobId), 1500);
             active = false; setButtons(false);
         }).catch(() => { status.textContent = 'Unable to read reindex status'; active = false; setButtons(false); });
