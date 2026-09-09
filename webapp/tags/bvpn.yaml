@@ -1,0 +1,7 @@
+description: BVPN
+query: x509_subject.lk:bvpn.com
+tags:
+- product:bvpn
+- vendor:bvpn
+- type:vpn
+version: 20260909T000000Z
