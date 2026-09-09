@@ -1,4 +1,5 @@
 {% extends "appbuilder/general/model/list.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
 
 {% block head_css %}
 {{ super() }}
@@ -31,6 +32,15 @@
     margin-top: 1em;
     width: 100%;
 }
+.tagrule-row-actions {
+    align-items: center;
+    display: inline-flex;
+    gap: 2px;
+}
+.tagrule-reindex:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
 </style>
 {% endblock %}
 
@@ -57,6 +67,41 @@
     {{ super() }}
 {% endblock %}
 
+{% block begin_loop_values %}
+    {% for item in value_columns %}
+        {% set pk = pks[loop.index-1] %}
+        <tr>
+            {% if actions %}
+            <td>
+                <input id="{{pk}}" class="action_check" name="rowid" value="{{pk}}" type="checkbox">
+            </td>
+            {% endif %}
+            {% if can_show or can_edit or can_delete %}
+                <td>
+                    <center>
+                        <div class="tagrule-row-actions">
+                            {{ lib.btn_crud(can_show, can_edit, can_delete, pk, modelview_name, filters) }}
+                            <button type="button" class="btn btn-xs btn-default tagrule-reindex"
+                                    data-rule-id="{{pk}}" title="Reindex this rule">
+                                <i class="fa fa-recycle" aria-hidden="true"></i>
+                                <span class="sr-only">Reindex</span>
+                            </button>
+                        </div>
+                    </center>
+                </td>
+            {% endif %}
+            {% for value in include_columns %}
+                {% set formatter = formatters_columns.get(value) %}
+                {% if formatter %}
+                    <td>{{ formatter(item[value]) }}</td>
+                {% else %}
+                    <td>{{ item[value] }}</td>
+                {% endif %}
+            {% endfor %}
+        </tr>
+    {% endfor %}
+{% endblock %}
+
 {% block tail_js %}
 {{ super() }}
 <script>
@@ -68,7 +113,10 @@
     const progressWrap = progress.closest('.tagrule-reindex-progress-wrap');
     let active = false;
     function setButtons(disabled) {
-        document.querySelectorAll('.tagrule-reindex, #tagrule-reindex-all').forEach(b => b.disabled = disabled);
+        document.querySelectorAll('.tagrule-reindex, #tagrule-reindex-all').forEach(b => {
+            b.disabled = disabled;
+            b.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+        });
     }
     function updateProgress(data) {
         const processed = Number(data.processed);

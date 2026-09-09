@@ -3116,7 +3116,6 @@ class TagRulesView(ModelView):
         "tags_html",
         "name_html",
         "updated_at_html",
-        "reindex_html",
     ]
     show_columns = [
         "active",
@@ -3146,7 +3145,6 @@ class TagRulesView(ModelView):
         "created_at_html": "Created",
         "updated_at": "Updated",
         "updated_at_html": "Updated",
-        "reindex_html": "Reindex",
     }
 
     def _normalize_tag_rule_item(self, item):
