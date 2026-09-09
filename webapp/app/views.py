@@ -3417,7 +3417,13 @@ class TagRulesView(ModelView):
                         rule_id = int(rule_id)
                     except (TypeError, ValueError):
                         rule_id = None
-                job_id = self._launch_tag_reindex_job(rule_id, resume_state=shared)
+                # Status files written before cursor persistence can only be
+                # restarted safely from the beginning; do not carry their old
+                # counters into a fresh scan.
+                resume_state = shared if "scan_cursor" in shared else {}
+                job_id = self._launch_tag_reindex_job(
+                    rule_id, resume_state=resume_state
+                )
                 if job_id is not None:
                     with TAG_REINDEX_STATES_LOCK:
                         state = dict(TAG_REINDEX_STATES.get(job_id, {}))

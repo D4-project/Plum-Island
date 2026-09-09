@@ -87,18 +87,21 @@
         const total = Number(data.total);
         const errors = Number(data.errors || 0);
         const hasCounts = Number.isFinite(processed) && Number.isFinite(total) && total > 0;
+        const indeterminate = data.status === 'running' && !hasCounts;
         const pct = data.status === 'done'
             ? 100
             : hasCounts ? Math.min(100, Math.round(processed * 100 / total)) : 0;
         const detail = hasCounts
             ? `${processed}/${total}${errors > 0 ? `, ${errors} error${errors === 1 ? '' : 's'}` : ''}`
-            : data.status === 'done' ? 'Completed' : 'Progress unavailable';
+            : data.status === 'done' ? 'Completed'
+            : indeterminate ? 'Reindex in progress'
+            : 'Progress unavailable';
         progressWrap.title = detail;
         progress.setAttribute('aria-label', detail);
         progress.setAttribute('aria-valuenow', String(pct));
-        progress.style.width = pct + '%';
-        progress.textContent = pct + '%';
-        if (data.status === 'running' && !hasCounts) {
+        progress.style.width = (indeterminate ? 100 : pct) + '%';
+        progress.textContent = indeterminate ? '…' : pct + '%';
+        if (indeterminate) {
             progress.classList.add('progress-bar-striped', 'active');
         } else {
             progress.classList.remove('progress-bar-striped', 'active');
