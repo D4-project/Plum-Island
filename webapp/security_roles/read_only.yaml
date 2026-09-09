@@ -79,6 +79,7 @@ permissions:
 - can bulk import on TargetsApi
 - can export full status on KVSearchView
 - can export full start on KVSearchView
+- can tags on KVSearchView
 - can query on KVSearchView
 - can export on KVSearchView
 - can export full download on KVSearchView

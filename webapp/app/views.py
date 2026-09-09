@@ -681,6 +681,7 @@ class KVSearchView(BaseView):
     SEARCH_SESSION_TTL_SECONDS = 3600
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
+    TAG_LOOKUP_BATCH_LIMIT = 500
     HTTP_HEADER_SUGGEST_LIMIT = 128
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
     SINCE_PREFIX = "since:"
@@ -1982,6 +1983,49 @@ class KVSearchView(BaseView):
                 )
             }
         )
+
+    @expose("/tags", methods=["POST"])
+    @has_access
+    def tags(self):
+        """
+        Return normalized tags for a bounded batch of scan UIDs.
+
+        Tags are stored in Kvrocks and can be fetched independently from the
+        search result documents, allowing the search page to enrich rows
+        asynchronously without querying Meilisearch.
+        """
+        payload = request.get_json(silent=True) or {}
+        raw_uids = payload.get("uids")
+        if not isinstance(raw_uids, list):
+            return jsonify({"error": "uids must be a list"}), 400
+
+        uids = []
+        seen_uids = set()
+        for raw_uid in raw_uids:
+            uid = str(raw_uid or "").strip()
+            if not uid or uid in seen_uids:
+                continue
+            seen_uids.add(uid)
+            uids.append(uid)
+            if len(uids) >= self.TAG_LOOKUP_BATCH_LIMIT:
+                break
+
+        if not uids:
+            return jsonify({"tags_by_uid": {}})
+
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        pipeline = indexer.r.pipeline(transaction=False)
+        for uid in uids:
+            pipeline.smembers(f"tags:{uid}")
+        tag_sets = pipeline.execute()
+
+        tags_by_uid = {
+            uid: sorted(normalize_tags(tags), key=str.lower)
+            for uid, tags in zip(uids, tag_sets)
+        }
+        return jsonify({"tags_by_uid": tags_by_uid})
 
     @expose("/export")
     @has_access

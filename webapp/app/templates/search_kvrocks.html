@@ -40,6 +40,13 @@ let tagSuggestSelectedIndex = -1;
 let tagSuggestContext = null;
 let manualTimeRangeSnapshot = null;
 let sinceDirectiveModeActive = false;
+const TAG_LOOKUP_BATCH_SIZE = 200;
+let pendingTagLookups = new Map();
+let tagLookupTimer = null;
+let activeTagLookupAbortController = null;
+let tagLookupInFlight = false;
+let tagLookupGeneration = 0;
+const ipTagsByAddress = new Map();
 
 window.addEventListener('pagehide', () => {
     searchPageUnloading = true;
@@ -54,6 +61,123 @@ function abortActiveSearch() {
     if (activeSearchAbortController) {
         activeSearchAbortController.abort();
     }
+    if (activeTagLookupAbortController) {
+        activeTagLookupAbortController.abort();
+    }
+}
+
+function resetTagLookups() {
+    tagLookupGeneration += 1;
+    pendingTagLookups.clear();
+    ipTagsByAddress.clear();
+    if (tagLookupTimer) {
+        clearTimeout(tagLookupTimer);
+        tagLookupTimer = null;
+    }
+    if (activeTagLookupAbortController) {
+        activeTagLookupAbortController.abort();
+        activeTagLookupAbortController = null;
+    }
+    tagLookupInFlight = false;
+}
+
+function normalizeClientTag(value) {
+    let normalized = String(value || '').trim().toLowerCase();
+    while (normalized.startsWith('tag:') && normalized.split(':').length >= 3) {
+        normalized = normalized.slice(4).trim();
+    }
+    return normalized;
+}
+
+function updateIpTags(ip) {
+    const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
+    if (!target) {
+        return;
+    }
+    const tags = [...(ipTagsByAddress.get(ip) || [])].sort((a, b) => a.localeCompare(b));
+    target.replaceChildren();
+    for (const tag of tags) {
+        const badge = document.createElement('span');
+        badge.className = 'label label-info search-ip-tag';
+        badge.textContent = tag;
+        target.appendChild(badge);
+    }
+    target.hidden = tags.length === 0;
+}
+
+function scheduleTagLookup() {
+    if (tagLookupTimer || tagLookupInFlight || pendingTagLookups.size === 0) {
+        return;
+    }
+    tagLookupTimer = setTimeout(() => {
+        tagLookupTimer = null;
+        processTagLookupQueue();
+    }, 0);
+}
+
+async function processTagLookupQueue() {
+    if (tagLookupInFlight || pendingTagLookups.size === 0) {
+        return;
+    }
+    const generation = tagLookupGeneration;
+    const batch = [...pendingTagLookups.keys()].slice(0, TAG_LOOKUP_BATCH_SIZE);
+    const ipByUid = new Map();
+    for (const uid of batch) {
+        ipByUid.set(uid, pendingTagLookups.get(uid));
+        pendingTagLookups.delete(uid);
+    }
+
+    tagLookupInFlight = true;
+    const controller = new AbortController();
+    activeTagLookupAbortController = controller;
+    try {
+        const res = await fetch('/kvsearchview/tags', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({uids: batch}),
+            signal: controller.signal
+        });
+        const data = await readJsonResponse(res);
+        if (generation !== tagLookupGeneration) {
+            return;
+        }
+        for (const [uid, rawTags] of Object.entries(data.tags_by_uid || {})) {
+            const tags = [...new Set((rawTags || []).map(normalizeClientTag).filter(Boolean))];
+            for (const ip of (ipByUid.get(uid) || [])) {
+                const ipTags = ipTagsByAddress.get(ip) || new Set();
+                for (const tag of tags) {
+                    ipTags.add(tag);
+                }
+                ipTagsByAddress.set(ip, ipTags);
+                updateIpTags(ip);
+            }
+        }
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
+            console.warn('Tag lookup failed', error);
+        }
+    } finally {
+        if (activeTagLookupAbortController === controller) {
+            activeTagLookupAbortController = null;
+        }
+        tagLookupInFlight = false;
+        scheduleTagLookup();
+    }
+}
+
+function queueTagsForSearchChunk(results) {
+    for (const [ip, uids] of Object.entries(results || {})) {
+        for (const rawUid of (uids || [])) {
+            const uid = String(rawUid || '').trim();
+            if (!uid) {
+                continue;
+            }
+            const ips = pendingTagLookups.get(uid) || new Set();
+            ips.add(ip);
+            pendingTagLookups.set(uid, ips);
+        }
+    }
+    scheduleTagLookup();
 }
 
 function isSearchNavigationAbort(error) {
@@ -1137,6 +1261,12 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         copyButton.appendChild(copyIcon);
         title.appendChild(copyButton);
 
+        const tagContainer = document.createElement('span');
+        tagContainer.className = 'search-ip-tags';
+        tagContainer.dataset.searchIpTags = ipLabel;
+        tagContainer.hidden = true;
+        title.appendChild(tagContainer);
+
         if (ipMeta) {
             title.appendChild(ipMeta);
         }
@@ -1191,6 +1321,8 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         });
     });
 
+    queueTagsForSearchChunk(data.results || {});
+
     return returnedIps;
 }
 
@@ -1233,6 +1365,7 @@ async function runSearchPage(cursorTs, append) {
         setLoadMoreLoading(true);
     }
     if (!append) {
+        resetTagLookups();
         lastSuccessfulSearch = null;
         setDownloadButtonState(false);
         hitsDiv.innerHTML = '';
@@ -1417,6 +1550,17 @@ document.addEventListener('DOMContentLoaded', () => {
     align-items: center;
     gap: 0.25rem;
     white-space: nowrap;
+}
+.search-ip-tags {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+.search-ip-tag {
+    font-size: 0.72em;
+    font-weight: normal;
 }
 .timestamp-separator {
     font-weight: 600;
