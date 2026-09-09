@@ -41,6 +41,8 @@ def read_reindex_status():
 def _write_reindex_status(**updates):
     current = read_reindex_status() or {}
     current.update(updates)
+    if current.get("status") == "running":
+        current["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
     temporary = REINDEX_STATUS_FILE.with_suffix(".tmp")
     temporary.write_text(json.dumps(current), encoding="utf-8")
     temporary.replace(REINDEX_STATUS_FILE)
@@ -826,6 +828,42 @@ def chunked(iterable, chunk_size):
         yield batch
 
 
+def iter_kvrocks_document_batches(indexer, batch_size, start_cursor=0):
+    """Yield ``(documents, next_cursor)`` batches reconstructed from Kvrocks."""
+    cursor = int(start_cursor or 0)
+    while True:
+        next_cursor, uid_batch = indexer.r.sscan(
+            "all_uids", cursor=cursor, count=batch_size
+        )
+        uid_batch = [str(uid) for uid in uid_batch]
+        documents = []
+        if uid_batch:
+            pipe = indexer.r.pipeline(transaction=False)
+            for uid in uid_batch:
+                pipe.hgetall(f"doc:{uid}")
+                for field in REINDEX_FIELDS:
+                    pipe.smembers(f"{field}s:{uid}")
+            results = pipe.execute()
+            fields_per_uid = len(REINDEX_FIELDS) + 1
+            for offset, uid in enumerate(uid_batch):
+                values = results[offset * fields_per_uid : (offset + 1) * fields_per_uid]
+                metadata = values[0] or {}
+                document = {
+                    "id": uid,
+                    "uid": uid,
+                    "ip": metadata.get("ip", ""),
+                }
+                for field, field_values in zip(REINDEX_FIELDS, values[1:]):
+                    if field_values:
+                        document[field] = sorted(str(value) for value in field_values)
+                documents.append(document)
+
+        yield documents, int(next_cursor)
+        if int(next_cursor) == 0:
+            break
+        cursor = int(next_cursor)
+
+
 def iter_kvrocks_documents(indexer, batch_size):
     """Yield tag-rule documents reconstructed from Kvrocks indexes.
 
@@ -833,27 +871,8 @@ def iter_kvrocks_documents(indexer, batch_size):
     fields directly avoids the expensive full-document scan against
     Meilisearch, which can timeout or overload the search backend.
     """
-    uid_iterator = indexer.r.sscan_iter("all_uids", count=batch_size)
-    for uid_batch in chunked((str(uid) for uid in uid_iterator), batch_size):
-        pipe = indexer.r.pipeline(transaction=False)
-        for uid in uid_batch:
-            pipe.hgetall(f"doc:{uid}")
-            for field in REINDEX_FIELDS:
-                pipe.smembers(f"{field}s:{uid}")
-        results = pipe.execute()
-        fields_per_uid = len(REINDEX_FIELDS) + 1
-        for offset, uid in enumerate(uid_batch):
-            values = results[offset * fields_per_uid : (offset + 1) * fields_per_uid]
-            metadata = values[0] or {}
-            document = {
-                "id": uid,
-                "uid": uid,
-                "ip": metadata.get("ip", ""),
-            }
-            for field, field_values in zip(REINDEX_FIELDS, values[1:]):
-                if field_values:
-                    document[field] = sorted(str(value) for value in field_values)
-            yield document
+    for documents, _next_cursor in iter_kvrocks_document_batches(indexer, batch_size):
+        yield from documents
 
 
 def delete_keys_by_pattern(redis_client, pattern, batch_size):
@@ -1026,49 +1045,52 @@ def _reindex_tags_unlocked(args, progress_callback=None):
             flush_existing_tag_indexes(indexer, args.batch_size)
 
         pending_docs = []
-        processed_docs = 0
-        updated_docs = 0
-        error_docs = 0
+        processed_docs = int(getattr(args, "processed", 0) or 0)
+        updated_docs = int(getattr(args, "updated", 0) or 0)
+        error_docs = int(getattr(args, "errors", 0) or 0)
+        scan_cursor = int(getattr(args, "resume_cursor", 0) or 0)
 
-        for kvrocks_doc in iter_kvrocks_documents(indexer, args.batch_size):
-            processed_docs += 1
+        for documents, next_cursor in iter_kvrocks_document_batches(
+            indexer, args.batch_size, start_cursor=scan_cursor
+        ):
+            pending_docs = []
+            for kvrocks_doc in documents:
+                processed_docs += 1
 
-            try:
-                parsed_doc = dict(kvrocks_doc)
-                parsed_doc["tag"] = apply_tag_rules_to_document(
-                    parsed_doc, tag_rules=compiled_rules
-                )
-                pending_docs.append(
-                    {
-                        "uid": kvrocks_doc["uid"],
-                        "tag": parsed_doc["tag"],
-                    }
-                )
-            except Exception as error:
-                error_docs += 1
-                print(
-                    "[WARN] Unable to reparse Kvrocks document "
-                    f"{kvrocks_doc.get('id', '<unknown>')}: {error}",
-                    flush=True,
-                )
-                continue
-
-            if len(pending_docs) >= args.batch_size:
-                updated_docs += flush_tag_batch(indexer, pending_docs)
-                print(
-                    "Progress: "
-                    f"processed={processed_docs}; total={total_docs}; "
-                    f"updated={updated_docs}; "
-                    f"errors={error_docs}",
-                    flush=True,
-                )
-                if progress_callback:
-                    progress_callback(
-                        f"Progress: processed={processed_docs}; total={total_docs or 0}; "
-                        f"updated={updated_docs}; errors={error_docs}"
+                try:
+                    parsed_doc = dict(kvrocks_doc)
+                    parsed_doc["tag"] = apply_tag_rules_to_document(
+                        parsed_doc, tag_rules=compiled_rules
+                    )
+                    pending_docs.append(
+                        {
+                            "uid": kvrocks_doc["uid"],
+                            "tag": parsed_doc["tag"],
+                        }
+                    )
+                except Exception as error:
+                    error_docs += 1
+                    print(
+                        "[WARN] Unable to reparse Kvrocks document "
+                        f"{kvrocks_doc.get('id', '<unknown>')}: {error}",
+                        flush=True,
                     )
 
-        updated_docs += flush_tag_batch(indexer, pending_docs)
+            updated_docs += flush_tag_batch(indexer, pending_docs)
+            scan_cursor = next_cursor
+            print(
+                "Progress: "
+                f"processed={processed_docs}; total={total_docs}; "
+                f"updated={updated_docs}; errors={error_docs}; "
+                f"cursor={scan_cursor}",
+                flush=True,
+            )
+            if progress_callback:
+                progress_callback(
+                    f"Progress: processed={processed_docs}; total={total_docs or 0}; "
+                    f"updated={updated_docs}; errors={error_docs}; cursor={scan_cursor}"
+                )
+
         print(
             "Done. "
             f"processed={processed_docs}; updated={updated_docs}; errors={error_docs}",
@@ -1077,14 +1099,27 @@ def _reindex_tags_unlocked(args, progress_callback=None):
         if progress_callback:
             progress_callback(
                 f"Done. processed={processed_docs}; total={total_docs or processed_docs}; "
-                f"updated={updated_docs}; errors={error_docs}"
+                f"updated={updated_docs}; errors={error_docs}; cursor=0"
             )
 
 
 def reindex_tags(args, progress_callback=None):
     """Run a serialized tag reindex, shared by CLI and web UI."""
     with reindex_execution_lock():
-        _write_reindex_status(status="running", message="Reindex started", processed=0, total=0)
+        _write_reindex_status(
+            status="running",
+            message="Reindex started",
+            processed=int(getattr(args, "processed", 0) or 0),
+            total=int(getattr(args, "total", 0) or 0),
+            updated=int(getattr(args, "updated", 0) or 0),
+            errors=int(getattr(args, "errors", 0) or 0),
+            scan_cursor=int(getattr(args, "resume_cursor", 0) or 0),
+            pid=os.getpid(),
+            rule_id=getattr(args, "rule_id", None),
+            allrules=bool(getattr(args, "allrules", False)),
+            batch_size=int(getattr(args, "batch_size", MAX_BATCH_SIZE)),
+            started_at=datetime.now(timezone.utc).isoformat(),
+        )
         def callback(message):
             text = str(message)
             updates = {"message": text}
@@ -1093,10 +1128,17 @@ def reindex_tags(args, progress_callback=None):
                 updates.update(processed=int(match.group(1)), updated=int(match.group(3)), errors=int(match.group(4)))
                 if match.group(2):
                     updates["total"] = int(match.group(2))
+            cursor_match = re.search(r"cursor=(\d+)", text)
+            if cursor_match:
+                updates["scan_cursor"] = int(cursor_match.group(1))
             _write_reindex_status(**updates)
             if progress_callback:
                 progress_callback(message)
-        result = _reindex_tags_unlocked(args, progress_callback=callback)
+        try:
+            result = _reindex_tags_unlocked(args, progress_callback=callback)
+        except Exception as error:
+            _write_reindex_status(status="error", message=str(error))
+            raise
         _write_reindex_status(status="done", message="Reindex completed")
         return result
 
