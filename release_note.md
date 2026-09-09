@@ -34,6 +34,8 @@
 
 - Add Lighttpd server detection, closes #201.
 
+- Add Sucuri Website Firewall detection, closes #121.
+
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
 
 - Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.

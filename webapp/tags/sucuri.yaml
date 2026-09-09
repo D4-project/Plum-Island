@@ -1,0 +1,7 @@
+description: Sucuri Website Firewall
+query: http_server.lk:"Sucuri/Cloudproxy" OR http_header:x-sucuri-id OR http_header:x-sucuri-block OR http_title.lk:"Sucuri WebSite Firewall - Access Denied"
+tags:
+- product:sucuri-firewall
+- vendor:sucuri
+- type:firewall
+version: 20260909T000000Z
