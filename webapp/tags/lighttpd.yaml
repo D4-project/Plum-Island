@@ -1,0 +1,6 @@
+description: Lighttpd
+query: http_server.lk:lighttpd
+tags:
+- product:lighttpd
+- vendor:lighttpd
+version: 20260909T000000Z

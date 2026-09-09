@@ -32,6 +32,8 @@
 
 - Extend OPNsense detection with server, certificate, title, and favicon fingerprints, closes #200.
 
+- Add Lighttpd server detection, closes #201.
+
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
 
 - Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
