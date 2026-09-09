@@ -712,6 +712,7 @@ def load_reindex_runtime():
         parse_json,
     )
     from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
+        apply_tag_rules_to_document,
         compile_tag_rule_records,
     )
 
@@ -724,6 +725,7 @@ def load_reindex_runtime():
         "KVrocksIndexer": KVrocksIndexer,
         "fetch_tlds": fetch_tlds,
         "parse_json": parse_json,
+        "apply_tag_rules_to_document": apply_tag_rules_to_document,
         "compile_tag_rule_records": compile_tag_rule_records,
     }
 
@@ -783,25 +785,75 @@ def configure_parser_http_headers(
     }
 
 
-def iter_meili_documents(index, page_size):
-    """
-    Yield Meilisearch documents page by page in read-only mode.
-    """
-    offset = 0
-    while True:
-        print(
-            f"Fetching Meili documents offset={offset} limit={page_size}",
-            flush=True,
-        )
-        documents = index.get_documents({"limit": page_size, "offset": offset})
-        results = list(getattr(documents, "results", []) or [])
-        if not results:
-            break
+REINDEX_FIELDS = (
+    "net",
+    "fqdn",
+    "fqdn_requested",
+    "host",
+    "domain",
+    "domain_requested",
+    "tld",
+    "port",
+    "http_title",
+    "http_favicon_path",
+    "http_favicon_mmhash",
+    "http_favicon_md5",
+    "http_favicon_sha256",
+    "http_cookiename",
+    "http_etag",
+    "http_header",
+    "http_headval",
+    "http_server",
+    "x509_issuer",
+    "x509_md5",
+    "x509_sha1",
+    "x509_sha256",
+    "x509_subject",
+    "x509_san",
+    "banner",
+)
 
-        for result in results:
-            yield dict(result)
 
-        offset += len(results)
+def chunked(iterable, chunk_size):
+    """Yield lists containing at most ``chunk_size`` items."""
+    batch = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) >= chunk_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def iter_kvrocks_documents(indexer, batch_size):
+    """Yield tag-rule documents reconstructed from Kvrocks indexes.
+
+    Tag rules consume the normalized fields stored in Kvrocks. Reading these
+    fields directly avoids the expensive full-document scan against
+    Meilisearch, which can timeout or overload the search backend.
+    """
+    uid_iterator = indexer.r.sscan_iter("all_uids", count=batch_size)
+    for uid_batch in chunked((str(uid) for uid in uid_iterator), batch_size):
+        pipe = indexer.r.pipeline(transaction=False)
+        for uid in uid_batch:
+            pipe.hgetall(f"doc:{uid}")
+            for field in REINDEX_FIELDS:
+                pipe.smembers(f"{field}s:{uid}")
+        results = pipe.execute()
+        fields_per_uid = len(REINDEX_FIELDS) + 1
+        for offset, uid in enumerate(uid_batch):
+            values = results[offset * fields_per_uid : (offset + 1) * fields_per_uid]
+            metadata = values[0] or {}
+            document = {
+                "id": uid,
+                "uid": uid,
+                "ip": metadata.get("ip", ""),
+            }
+            for field, field_values in zip(REINDEX_FIELDS, values[1:]):
+                if field_values:
+                    document[field] = sorted(str(value) for value in field_values)
+            yield document
 
 
 def delete_keys_by_pattern(redis_client, pattern, batch_size):
@@ -904,10 +956,8 @@ def load_kvrocks_endpoint(tools_config):
 
 def _reindex_tags_unlocked(args, progress_callback=None):
     """
-    Recompute Kvrocks tags from Meilisearch documents.
+    Recompute Kvrocks tags from the normalized Kvrocks document indexes.
     """
-    import meilisearch  # pylint: disable=import-outside-toplevel
-
     validate_batch_size(args.batch_size)
     suppress_connection_debug_logs()
     tools_config = load_tools_config()
@@ -921,8 +971,8 @@ def _reindex_tags_unlocked(args, progress_callback=None):
     ensure_default_collected_headers = runtime["ensure_default_collected_headers"]
     KVrocksIndexer = runtime["KVrocksIndexer"]
     fetch_tlds = runtime["fetch_tlds"]
-    parse_json = runtime["parse_json"]
     compile_tag_rule_records = runtime["compile_tag_rule_records"]
+    apply_tag_rules_to_document = runtime["apply_tag_rules_to_document"]
 
     with app.app_context():
         configure_parser_from_tools_config(app.config, tools_config)
@@ -952,29 +1002,8 @@ def _reindex_tags_unlocked(args, progress_callback=None):
             if target_rule is None:
                 raise SystemExit(f"Tag rule id {args.rule_id} not found")
 
-        meili_url = get_tool_config_value(tools_config, "IN_MEILI_URL")
-        meili_api_key = get_tool_config_value(tools_config, "IN_MEILI_API_KEY")
-        index_name = tools_config.get("INDEX_NAME", "plum")
-
-        if not meili_url:
-            raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
-
-        meili_client = meilisearch.Client(meili_url, meili_api_key)
-        meili_index = meili_client.index(index_name)
-        total_docs = None
-        try:
-            # Stats are only for the UI denominator; never let this optional
-            # request delay the actual Kvrocks reindex.
-            stats_client = meilisearch.Client(meili_url, meili_api_key, timeout=2)
-            stats = stats_client.index(index_name).get_stats()
-            if isinstance(stats, dict):
-                total_docs = stats.get("numberOfDocuments")
-            else:
-                total_docs = getattr(stats, "number_of_documents", None)
-            total_docs = int(total_docs) if total_docs is not None else None
-        except Exception:
-            total_docs = None
         indexer = KVrocksIndexer(kvrocks_host, kvrocks_port)
+        total_docs = int(indexer.r.scard("all_uids") or 0)
 
         if args.allrules:
             print("Mode: all active tag rules", flush=True)
@@ -989,7 +1018,7 @@ def _reindex_tags_unlocked(args, progress_callback=None):
             f"{len(active_rules)} DB rows",
             flush=True,
         )
-        print(f"Reading source documents from {meili_url} / index={index_name}")
+        print(f"Reading source documents from Kvrocks all_uids ({total_docs})")
         print(f"Writing tags to Kvrocks {kvrocks_host}:{kvrocks_port}")
         print(f"Batch size: {args.batch_size} documents max")
 
@@ -1001,22 +1030,25 @@ def _reindex_tags_unlocked(args, progress_callback=None):
         updated_docs = 0
         error_docs = 0
 
-        for meili_doc in iter_meili_documents(meili_index, args.batch_size):
+        for kvrocks_doc in iter_kvrocks_documents(indexer, args.batch_size):
             processed_docs += 1
 
             try:
-                parsed_doc = parse_json(meili_doc, app.config, tag_rules=compiled_rules)
+                parsed_doc = dict(kvrocks_doc)
+                parsed_doc["tag"] = apply_tag_rules_to_document(
+                    parsed_doc, tag_rules=compiled_rules
+                )
                 pending_docs.append(
                     {
-                        "uid": parsed_doc["uid"],
-                        "tag": parsed_doc.get("tag", []),
+                        "uid": kvrocks_doc["uid"],
+                        "tag": parsed_doc["tag"],
                     }
                 )
             except Exception as error:
                 error_docs += 1
                 print(
-                    "[WARN] Unable to reparse Meili document "
-                    f"{meili_doc.get('id', '<unknown>')}: {error}",
+                    "[WARN] Unable to reparse Kvrocks document "
+                    f"{kvrocks_doc.get('id', '<unknown>')}: {error}",
                     flush=True,
                 )
                 continue
@@ -1025,7 +1057,8 @@ def _reindex_tags_unlocked(args, progress_callback=None):
                 updated_docs += flush_tag_batch(indexer, pending_docs)
                 print(
                     "Progress: "
-                    f"processed={processed_docs}; updated={updated_docs}; "
+                    f"processed={processed_docs}; total={total_docs}; "
+                    f"updated={updated_docs}; "
                     f"errors={error_docs}",
                     flush=True,
                 )
