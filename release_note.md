@@ -24,6 +24,8 @@
 
 - Add SonicWall Secure Mobile Access server detection and tagging, closes #191.
 
+- Add NordVPN detection for `nordvpn.com` on port 8443, closes #197.
+
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
 
 - Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
