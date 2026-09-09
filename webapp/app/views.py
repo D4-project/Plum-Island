@@ -2503,9 +2503,10 @@ class TargetsView(ModelView):
     add_template = "add_targetsview.html"
     edit_template = "edit_targetsview.html"
     list_template = "list_targetsview.html"
-    list_columns = ["value", "description", "last_scan", "active", "working"]
+    list_columns = ["id", "value", "description", "last_scan", "active", "working"]
     search_columns = ["value", "description", "active", "working", "scanprofiles"]
     label_columns = {
+        "id": "ID",
         "value": "CIDR/Host",
         "scanprofiles": "Scan profiles",
         "duration_html": "Scan Cycle",

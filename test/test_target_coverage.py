@@ -81,6 +81,11 @@ class TargetCoverageTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "already covered"):
             TargetsView().pre_update(item)
 
+    def test_target_list_starts_with_sortable_id_column(self):
+        self.assertEqual(TargetsView.list_columns[0], "id")
+        self.assertEqual(TargetsView.list_columns[1], "value")
+        self.assertEqual(TargetsView.label_columns["id"], "ID")
+
 
 if __name__ == "__main__":
     unittest.main()
