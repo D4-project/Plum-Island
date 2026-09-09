@@ -32,6 +32,7 @@ from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
 from flask_appbuilder.filemanager import FileManager
 from flask_appbuilder.models.sqla.interface import SQLAInterface
+from flask_appbuilder.widgets import ListWidget
 from flask_login import current_user
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileAllowed
@@ -3104,6 +3105,12 @@ class CollectedHeadersView(ModelView):
         return self
 
 
+class TagRulesListWidget(ListWidget):
+    """Tag-rule list with reindex in the per-row CRUD action group."""
+
+    template = "tagrules_list_widget.html"
+
+
 class TagRulesView(ModelView):
     """
     CRUD interface for search-backed tagging rules.
@@ -3111,6 +3118,7 @@ class TagRulesView(ModelView):
 
     datamodel = SQLAInterface(TagRules)
     list_template = "list_tagrulesview.html"
+    list_widget = TagRulesListWidget
     list_columns = [
         "active_html",
         "tags_html",
