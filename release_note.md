@@ -6,6 +6,8 @@
 
 - Display deduplicated tags asynchronously beside IPs in KVrocks search results using batched Kvrocks lookups for every UID belonging to each IP within the requested time range; grant the read-only role access to the tag lookup route.
 
+- Classify generic webmail detections with `type:webmail` instead of `product:webmail`.
+
 - Persist asynchronous Meilisearch export tasks across scheduler ticks, isolate backend maintenance from scan orchestration, yield immediately after submission so indexing cannot block scan-job generation, enforce Meilisearch-before-Kvrocks ordering, and add a resumable raw-JSON recovery tool with task progress for Kvrocks-only documents.
 
 - Bound queue generation to short 256-state commits so scan-result reception can interleave, reconcile cycles per profile instead of globally, defer expensive cycle-history pruning outside queue generation and result reception, search for missing runtime states without holding SQLite's writer lock, and split /16 targets directly into /24 jobs without per-address expansion.

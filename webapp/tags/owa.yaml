@@ -4,7 +4,7 @@ query: http_favicon_mmhash:1768726119 OR http_favicon_mmhash:1356662359 OR http_
   OR http_favicon_mmhash:442749392 OR http_header:x-owa-version
 tags:
 - product:owa
-- product:webmail
+- type:webmail
 - vendor:windows
 - product:outlook
-version: 20260520T133458Z
+version: 20260909T000000Z
