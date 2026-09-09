@@ -198,7 +198,7 @@ function isSearchNavigationAbort(error) {
 
 function bindSearchNavigationAbort() {
     document.addEventListener('click', (event) => {
-        const link = event.target.closest('.ip-detail-link');
+        const link = event.target.closest('.ip-address-link');
         if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
             return;
         }
@@ -1243,16 +1243,18 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         title.className = 'panel-title';
 
         const collapseLink = document.createElement('a');
-        collapseLink.setAttribute('data-toggle', 'collapse');
-        collapseLink.setAttribute('data-parent', '#hits');
-        collapseLink.href = `#collapse-ip-${resultIndex}`;
+        collapseLink.className = 'ip-address-link';
+        collapseLink.href = detailUrl;
+        collapseLink.title = `Open details for ${ipLabel}`;
         collapseLink.textContent = ipLabel;
         title.appendChild(collapseLink);
 
         const detailLink = document.createElement('a');
         detailLink.className = 'ip-detail-link';
-        detailLink.href = detailUrl;
-        detailLink.title = `Open details for ${ipLabel}`;
+        detailLink.setAttribute('data-toggle', 'collapse');
+        detailLink.setAttribute('data-parent', '#hits');
+        detailLink.href = `#collapse-ip-${resultIndex}`;
+        detailLink.title = `Expand scan reports for ${ipLabel}`;
         const detailIcon = document.createElement('i');
         detailIcon.className = 'fa fa-info-circle';
         detailIcon.setAttribute('aria-hidden', 'true');
@@ -1544,15 +1546,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
 </script>
 <style>
+.panel-title {
+    align-items: flex-start;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+}
+.panel-title > a,
+.panel-title > button {
+    flex: 0 0 auto;
+}
 .timestamp-meta {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    flex: 0 0 auto;
     margin-left: auto;
     font-size: 0.85em;
     font-family: "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
     color: #6c757d;
-    float: right;
+    float: none;
     text-align: right;
 }
 .timestamp-chip {
@@ -1565,7 +1578,9 @@ document.addEventListener('DOMContentLoaded', () => {
     display: inline-flex;
     align-items: center;
     flex-wrap: wrap;
+    flex: 1 1 auto;
     gap: 0.25rem;
+    min-width: 0;
     margin-left: 0.4rem;
     vertical-align: middle;
 }
