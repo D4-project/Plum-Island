@@ -47,6 +47,10 @@ let activeTagLookupAbortController = null;
 let tagLookupInFlight = false;
 let tagLookupGeneration = 0;
 const ipTagsByAddress = new Map();
+let pendingIpExpansions = new Map();
+let ipExpansionTimer = null;
+let activeIpExpansionAbortController = null;
+let ipExpansionInFlight = false;
 const resolvedTagIps = new Set();
 
 window.addEventListener('pagehide', () => {
@@ -65,6 +69,9 @@ function abortActiveSearch() {
     if (activeTagLookupAbortController) {
         activeTagLookupAbortController.abort();
     }
+    if (activeIpExpansionAbortController) {
+        activeIpExpansionAbortController.abort();
+    }
 }
 
 function resetTagLookups() {
@@ -81,6 +88,16 @@ function resetTagLookups() {
         activeTagLookupAbortController = null;
     }
     tagLookupInFlight = false;
+    pendingIpExpansions.clear();
+    if (ipExpansionTimer) {
+        clearTimeout(ipExpansionTimer);
+        ipExpansionTimer = null;
+    }
+    if (activeIpExpansionAbortController) {
+        activeIpExpansionAbortController.abort();
+        activeIpExpansionAbortController = null;
+    }
+    ipExpansionInFlight = false;
 }
 
 function normalizeClientTag(value) {
@@ -116,6 +133,19 @@ function updateIpTags(ip) {
         target.appendChild(badge);
     }
     target.hidden = tags.length === 0;
+}
+
+function updateIpTimestamps(ip, timestampData) {
+    const target = document.querySelector(`[data-search-ip-timestamps="${CSS.escape(ip)}"]`);
+    if (!target || !timestampData) {
+        return;
+    }
+    const replacement = buildTimestampMeta(timestampData.min_seen, timestampData.max_seen);
+    if (!replacement) {
+        return;
+    }
+    replacement.dataset.searchIpTimestamps = ip;
+    target.replaceWith(replacement);
 }
 
 function scheduleTagLookup() {
@@ -161,6 +191,7 @@ async function processTagLookupQueue() {
             ipTagsByAddress.set(ip, new Set(tags));
             resolvedTagIps.add(ip);
             updateIpTags(ip);
+            updateIpTimestamps(ip, (data.timestamps_by_ip || {})[ip]);
         }
     } catch (error) {
         if (error?.name !== 'AbortError') {
@@ -188,6 +219,74 @@ function queueTagsForSearchChunk(results, timeRange) {
         }
     }
     scheduleTagLookup();
+}
+
+function scheduleIpExpansion() {
+    if (ipExpansionTimer || ipExpansionInFlight || pendingIpExpansions.size === 0) {
+        return;
+    }
+    ipExpansionTimer = setTimeout(() => {
+        ipExpansionTimer = null;
+        processIpExpansionQueue();
+    }, 0);
+}
+
+async function processIpExpansionQueue() {
+    if (ipExpansionInFlight || pendingIpExpansions.size === 0) {
+        return;
+    }
+    const generation = tagLookupGeneration;
+    const batch = [...pendingIpExpansions.keys()].slice(0, TAG_LOOKUP_BATCH_SIZE);
+    const config = pendingIpExpansions.get(batch[0]);
+    for (const ip of batch) {
+        pendingIpExpansions.delete(ip);
+    }
+    ipExpansionInFlight = true;
+    const controller = new AbortController();
+    activeIpExpansionAbortController = controller;
+    try {
+        const res = await fetch('/kvsearchview/expand_ips', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                ips: batch,
+                query: config.query,
+                from_ts: config.fromTs,
+                to_ts: config.toTs
+            }),
+            signal: controller.signal
+        });
+        const data = await readJsonResponse(res);
+        if (generation !== tagLookupGeneration) {
+            return;
+        }
+        for (const [ip, uids] of Object.entries(data.results || {})) {
+            appendUidPanels(ip, uids, (data.uid_timestamps || {})[ip] || {});
+            updateIpTimestamps(ip, (data.timestamps || {})[ip]);
+        }
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
+            console.warn('IP search expansion failed', error);
+        }
+    } finally {
+        if (activeIpExpansionAbortController === controller) {
+            activeIpExpansionAbortController = null;
+        }
+        ipExpansionInFlight = false;
+        scheduleIpExpansion();
+    }
+}
+
+function queueIpExpansionForSearchChunk(results, timeRange, query) {
+    const config = {
+        query,
+        fromTs: timeRange?.from_ts ?? null,
+        toTs: timeRange?.to_ts ?? null
+    };
+    for (const ip of Object.keys(results || {})) {
+        pendingIpExpansions.set(ip, config);
+    }
+    scheduleIpExpansion();
 }
 
 function isSearchNavigationAbort(error) {
@@ -1218,6 +1317,55 @@ async function loadMoreResults() {
     await runSearchPage(lastSuccessfulSearch.nextCursor, true);
 }
 
+function appendUidPanels(ip, uids, timestamps) {
+    const uidsDiv = document.querySelector(`[data-search-ip-uids="${CSS.escape(ip)}"]`);
+    if (!uidsDiv) {
+        return;
+    }
+    const resultIndex = uidsDiv.dataset.resultIndex;
+    const existing = new Set(
+        [...uidsDiv.querySelectorAll('[data-search-uid]')].map((element) => element.dataset.searchUid)
+    );
+    let uidIndex = uidsDiv.children.length;
+    for (const uid of (uids || [])) {
+        const uidLabel = String(uid);
+        if (existing.has(uidLabel)) {
+            continue;
+        }
+        existing.add(uidLabel);
+        const uidPanel = document.createElement('div');
+        uidPanel.className = 'panel panel-info';
+        const uidTimestamp = timestamps && timestamps[uidLabel] ? timestamps[uidLabel] : null;
+        const uidHeading = document.createElement('div');
+        uidHeading.className = 'panel-heading';
+        const uidTitle = document.createElement('h5');
+        uidTitle.className = 'panel-title';
+        const uidLink = document.createElement('a');
+        uidLink.href = '#';
+        uidLink.dataset.uid = uidLabel;
+        uidLink.dataset.searchUid = uidLabel;
+        uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
+        uidLink.textContent = uidLabel;
+        uidLink.addEventListener('click', (event) => {
+            event.preventDefault();
+            loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+        });
+        uidTitle.appendChild(uidLink);
+        if (uidTimestamp) {
+            uidTitle.appendChild(buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen));
+        }
+        uidHeading.appendChild(uidTitle);
+        uidPanel.appendChild(uidHeading);
+        const uidBody = document.createElement('div');
+        uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
+        uidBody.className = 'panel-body';
+        uidBody.style.display = 'none';
+        uidPanel.appendChild(uidBody);
+        uidsDiv.appendChild(uidPanel);
+        uidIndex += 1;
+    }
+}
+
 function renderSearchChunk(data, baseIndex, hitsDiv) {
     const returnedIps = Object.keys(data.results || {});
     const requestedHostnames = data.requested_hostnames || {};
@@ -1280,6 +1428,7 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         title.appendChild(tagContainer);
 
         if (ipMeta) {
+            ipMeta.dataset.searchIpTimestamps = ipLabel;
             title.appendChild(ipMeta);
         }
 
@@ -1292,48 +1441,17 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         const uidsDiv = document.createElement('div');
         uidsDiv.className = 'panel-body';
         uidsDiv.id = `uids-${resultIndex}`;
+        uidsDiv.dataset.searchIpUids = ipLabel;
+        uidsDiv.dataset.resultIndex = resultIndex;
         collapse.appendChild(uidsDiv);
         ipPanel.appendChild(collapse);
         hitsDiv.appendChild(ipPanel);
 
-        sortedUids.forEach((uid, uidIndex) => {
-            const uidPanel = document.createElement('div');
-            uidPanel.className = 'panel panel-info';
-            const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
-            const uidLabel = uid;
-            const uidMeta = uidTimestamp
-                ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
-                : null;
-            const uidHeading = document.createElement('div');
-            uidHeading.className = 'panel-heading';
-            const uidTitle = document.createElement('h5');
-            uidTitle.className = 'panel-title';
-            const uidLink = document.createElement('a');
-            uidLink.href = '#';
-            uidLink.dataset.uid = uid;
-            uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
-            uidLink.textContent = uidLabel;
-            uidLink.addEventListener('click', (event) => {
-                event.preventDefault();
-                loadUid(uidLink.dataset.uid, uidLink.dataset.target);
-            });
-            uidTitle.appendChild(uidLink);
-            if (uidMeta) {
-                uidTitle.appendChild(uidMeta);
-            }
-            uidHeading.appendChild(uidTitle);
-            uidPanel.appendChild(uidHeading);
-
-            const uidBody = document.createElement('div');
-            uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
-            uidBody.className = 'panel-body';
-            uidBody.style.display = 'none';
-            uidPanel.appendChild(uidBody);
-            uidsDiv.appendChild(uidPanel);
-        });
+        appendUidPanels(ipLabel, sortedUids, ipTimestamps);
     });
 
     queueTagsForSearchChunk(data.results || {}, data.time_range || {});
+    queueIpExpansionForSearchChunk(data.results || {}, data.time_range || {}, document.getElementById('query').value || '');
 
     return returnedIps;
 }

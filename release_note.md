@@ -6,6 +6,8 @@
 
 - Display deduplicated tags asynchronously beside IPs in KVrocks search results using batched Kvrocks lookups for every UID belonging to each IP within the requested time range; grant the read-only role access to the tag lookup route.
 
+- Expand each first-page search IP asynchronously with all matching UIDs in the requested range, without slowing the initial 100-IP search.
+
 - Classify generic webmail detections with `type:webmail` instead of `product:webmail`.
 
 - Refresh the tag reindex progress denominator while new scan UIDs arrive, preventing processed counts from exceeding the displayed total.

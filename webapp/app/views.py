@@ -2057,12 +2057,127 @@ class KVSearchView(BaseView):
             tag_pipeline.smembers(f"tags:{uid}")
         tags_by_uid = dict(zip(eligible_list, tag_pipeline.execute()))
         tags_by_ip = {}
+        timestamps_by_ip = {}
         for ip in ips:
             tags = []
+            first_seen_values = []
+            last_seen_values = []
             for uid in ip_uids[ip]:
                 tags.extend(tags_by_uid.get(uid) or [])
+                if uid not in eligible_uids:
+                    continue
+                document = documents.get(uid) or {}
+                first_seen, last_seen = indexer.normalize_seen_range(
+                    document.get("first_seen"), document.get("last_seen")
+                )
+                if first_seen is not None:
+                    first_seen_values.append(first_seen)
+                if last_seen is not None:
+                    last_seen_values.append(last_seen)
             tags_by_ip[ip] = sorted(normalize_tags(tags), key=str.lower)
-        return jsonify({"tags_by_ip": tags_by_ip})
+            timestamps_by_ip[ip] = {
+                "min_seen": min(first_seen_values) if first_seen_values else None,
+                "max_seen": max(last_seen_values) if last_seen_values else None,
+            }
+        return jsonify(
+            {"tags_by_ip": tags_by_ip, "timestamps_by_ip": timestamps_by_ip}
+        )
+
+    @expose("/expand_ips", methods=["POST"])
+    @has_access
+    def expand_ips(self):
+        """Resolve every matching UID for the already displayed IPs."""
+        payload = request.get_json(silent=True) or {}
+        raw_ips = payload.get("ips")
+        query = str(payload.get("query") or "").strip()
+        if not isinstance(raw_ips, list) or not query:
+            return jsonify({"error": "ips and query are required"}), 400
+
+        ips = []
+        seen_ips = set()
+        for raw_ip in raw_ips:
+            ip = str(raw_ip or "").strip()
+            if ip and ip not in seen_ips and is_valid_ip(ip):
+                seen_ips.add(ip)
+                ips.append(ip)
+            if len(ips) >= self.TAG_LOOKUP_BATCH_LIMIT:
+                break
+        if not ips:
+            return jsonify({"results": {}, "timestamps": {}, "tags_by_ip": {}})
+
+        time_range, time_status, time_error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts"), query=query
+        )
+        criteria_groups, query_status, query_error = self.parse_query(
+            query, allow_since_directive=True
+        )
+        if not time_status or not query_status:
+            return jsonify({"error": time_error or query_error or "Invalid query"}), 400
+
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        ip_uids = {
+            ip: set(indexer.r.smembers(f"ip:{ip}")) for ip in ips
+        }
+        candidate_uids = sorted({uid for values in ip_uids.values() for uid in values})
+        doc_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in candidate_uids:
+            doc_pipeline.hgetall(f"doc:{uid}")
+        documents = dict(zip(candidate_uids, doc_pipeline.execute()))
+        eligible = set()
+        timestamps_by_uid = {}
+        for uid, document in documents.items():
+            first_seen, last_seen = indexer.normalize_seen_range(
+                document.get("first_seen"), document.get("last_seen")
+            )
+            timestamps_by_uid[uid] = {"first_seen": first_seen, "last_seen": last_seen}
+            if (
+                first_seen is not None
+                and last_seen is not None
+                and last_seen >= time_range["from_ts"]
+                and first_seen <= time_range["to_ts"]
+            ):
+                eligible.add(uid)
+
+        matching = self._get_matching_uids(indexer, criteria_groups, scoped_uids=eligible)
+        results = {}
+        timestamps = {}
+        uid_timestamps = {}
+        tags_by_ip = {}
+        tag_uids = sorted(matching)
+        tag_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in tag_uids:
+            tag_pipeline.smembers(f"tags:{uid}")
+        tags_by_uid = dict(zip(tag_uids, tag_pipeline.execute()))
+        for ip in ips:
+            matched_uids = sorted(ip_uids[ip].intersection(matching))
+            results[ip] = matched_uids
+            uid_timestamps[ip] = {
+                uid: timestamps_by_uid[uid] for uid in matched_uids
+            }
+            timestamps[ip] = {
+                "min_seen": min(
+                    (timestamps_by_uid[uid]["first_seen"] for uid in matched_uids),
+                    default=None,
+                ),
+                "max_seen": max(
+                    (timestamps_by_uid[uid]["last_seen"] for uid in matched_uids),
+                    default=None,
+                ),
+            }
+            tags = []
+            for uid in matched_uids:
+                tags.extend(tags_by_uid.get(uid) or [])
+            tags_by_ip[ip] = sorted(normalize_tags(tags), key=str.lower)
+        return jsonify(
+            {
+                "results": results,
+                "timestamps": timestamps,
+                "uid_timestamps": uid_timestamps,
+                "tags_by_ip": tags_by_ip,
+            }
+        )
 
     @expose("/export")
     @has_access
