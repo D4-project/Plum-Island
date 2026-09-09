@@ -4,7 +4,7 @@
 
 - Add GUI reindex controls to the tag-rules list (all rules or one selected rule), live progress/status polling, and a shared file lock so CLI and GUI reindexes cannot overlap.
 
-- Display deduplicated UID tags asynchronously beside IPs in KVrocks search results using batched Kvrocks lookups; grant the read-only role access to the tag lookup route.
+- Display deduplicated tags asynchronously beside IPs in KVrocks search results using batched Kvrocks lookups for every UID belonging to each IP within the requested time range; grant the read-only role access to the tag lookup route.
 
 - Persist asynchronous Meilisearch export tasks across scheduler ticks, isolate backend maintenance from scan orchestration, yield immediately after submission so indexing cannot block scan-job generation, enforce Meilisearch-before-Kvrocks ordering, and add a resumable raw-JSON recovery tool with task progress for Kvrocks-only documents.
 

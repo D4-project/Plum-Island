@@ -41,12 +41,13 @@ let tagSuggestContext = null;
 let manualTimeRangeSnapshot = null;
 let sinceDirectiveModeActive = false;
 const TAG_LOOKUP_BATCH_SIZE = 200;
-let pendingTagLookups = new Map();
+let pendingTagLookups = new Set();
 let tagLookupTimer = null;
 let activeTagLookupAbortController = null;
 let tagLookupInFlight = false;
 let tagLookupGeneration = 0;
 const ipTagsByAddress = new Map();
+const resolvedTagIps = new Set();
 
 window.addEventListener('pagehide', () => {
     searchPageUnloading = true;
@@ -70,6 +71,7 @@ function resetTagLookups() {
     tagLookupGeneration += 1;
     pendingTagLookups.clear();
     ipTagsByAddress.clear();
+    resolvedTagIps.clear();
     if (tagLookupTimer) {
         clearTimeout(tagLookupTimer);
         tagLookupTimer = null;
@@ -98,7 +100,18 @@ function updateIpTags(ip) {
     target.replaceChildren();
     for (const tag of tags) {
         const badge = document.createElement('span');
-        badge.className = 'label label-info search-ip-tag';
+        const prefix = tag.split(':', 1)[0];
+        const prefixClass = {
+            vuln: 'ip-detail-tag-vuln',
+            vendor: 'ip-detail-tag-vendor',
+            product: 'ip-detail-tag-product',
+            type: 'ip-detail-tag-type',
+            proto: 'ip-detail-tag-proto',
+            lang: 'ip-detail-tag-lang',
+            cpe: 'ip-detail-tag-cpe',
+            hard: 'ip-detail-tag-cpe'
+        }[prefix] || '';
+        badge.className = `ip-detail-tag search-ip-tag ${prefixClass}`.trim();
         badge.textContent = tag;
         target.appendChild(badge);
     }
@@ -121,10 +134,8 @@ async function processTagLookupQueue() {
     }
     const generation = tagLookupGeneration;
     const batch = [...pendingTagLookups.keys()].slice(0, TAG_LOOKUP_BATCH_SIZE);
-    const ipByUid = new Map();
-    for (const uid of batch) {
-        ipByUid.set(uid, pendingTagLookups.get(uid));
-        pendingTagLookups.delete(uid);
+    for (const ip of batch) {
+        pendingTagLookups.delete(ip);
     }
 
     tagLookupInFlight = true;
@@ -134,23 +145,22 @@ async function processTagLookupQueue() {
         const res = await fetch('/kvsearchview/tags', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({uids: batch}),
+            body: JSON.stringify({
+                ips: batch,
+                from_ts: tagLookupTimeRange.fromTs,
+                to_ts: tagLookupTimeRange.toTs
+            }),
             signal: controller.signal
         });
         const data = await readJsonResponse(res);
         if (generation !== tagLookupGeneration) {
             return;
         }
-        for (const [uid, rawTags] of Object.entries(data.tags_by_uid || {})) {
+        for (const [ip, rawTags] of Object.entries(data.tags_by_ip || {})) {
             const tags = [...new Set((rawTags || []).map(normalizeClientTag).filter(Boolean))];
-            for (const ip of (ipByUid.get(uid) || [])) {
-                const ipTags = ipTagsByAddress.get(ip) || new Set();
-                for (const tag of tags) {
-                    ipTags.add(tag);
-                }
-                ipTagsByAddress.set(ip, ipTags);
-                updateIpTags(ip);
-            }
+            ipTagsByAddress.set(ip, new Set(tags));
+            resolvedTagIps.add(ip);
+            updateIpTags(ip);
         }
     } catch (error) {
         if (error?.name !== 'AbortError') {
@@ -165,16 +175,16 @@ async function processTagLookupQueue() {
     }
 }
 
-function queueTagsForSearchChunk(results) {
-    for (const [ip, uids] of Object.entries(results || {})) {
-        for (const rawUid of (uids || [])) {
-            const uid = String(rawUid || '').trim();
-            if (!uid) {
-                continue;
-            }
-            const ips = pendingTagLookups.get(uid) || new Set();
-            ips.add(ip);
-            pendingTagLookups.set(uid, ips);
+let tagLookupTimeRange = {fromTs: null, toTs: null};
+
+function queueTagsForSearchChunk(results, timeRange) {
+    tagLookupTimeRange = {
+        fromTs: timeRange?.from_ts ?? null,
+        toTs: timeRange?.to_ts ?? null
+    };
+    for (const ip of Object.keys(results || {})) {
+        if (!resolvedTagIps.has(ip)) {
+            pendingTagLookups.add(ip);
         }
     }
     scheduleTagLookup();
@@ -1321,7 +1331,7 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         });
     });
 
-    queueTagsForSearchChunk(data.results || {});
+    queueTagsForSearchChunk(data.results || {}, data.time_range || {});
 
     return returnedIps;
 }
@@ -1554,13 +1564,44 @@ document.addEventListener('DOMContentLoaded', () => {
 .search-ip-tags {
     display: inline-flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.25rem;
     margin-left: 0.4rem;
     vertical-align: middle;
 }
+.ip-detail-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
+    display: inline-flex;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.2rem 0.5rem;
+}
 .search-ip-tag {
-    font-size: 0.72em;
-    font-weight: normal;
+    white-space: nowrap;
+}
+.ip-detail-tag-vuln {
+    background: #d9534f;
+}
+.ip-detail-tag-vendor {
+    background: #6f42c1;
+}
+.ip-detail-tag-product {
+    background: #2f6f73;
+}
+.ip-detail-tag-type {
+    background: #b45f06;
+}
+.ip-detail-tag-proto {
+    background: #337ab7;
+}
+.ip-detail-tag-lang {
+    background: #5cb85c;
+}
+.ip-detail-tag-cpe {
+    background: #777;
 }
 .timestamp-separator {
     font-weight: 600;

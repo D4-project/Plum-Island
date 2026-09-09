@@ -681,7 +681,7 @@ class KVSearchView(BaseView):
     SEARCH_SESSION_TTL_SECONDS = 3600
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
-    TAG_LOOKUP_BATCH_LIMIT = 500
+    TAG_LOOKUP_BATCH_LIMIT = 200
     HTTP_HEADER_SUGGEST_LIMIT = 128
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
     SINCE_PREFIX = "since:"
@@ -1988,44 +1988,81 @@ class KVSearchView(BaseView):
     @has_access
     def tags(self):
         """
-        Return normalized tags for a bounded batch of scan UIDs.
+        Return normalized tags for all scan UIDs behind a bounded batch of IPs.
 
         Tags are stored in Kvrocks and can be fetched independently from the
         search result documents, allowing the search page to enrich rows
-        asynchronously without querying Meilisearch.
+        asynchronously without querying Meilisearch. UID history is limited
+        to the requested search time range.
         """
         payload = request.get_json(silent=True) or {}
-        raw_uids = payload.get("uids")
-        if not isinstance(raw_uids, list):
-            return jsonify({"error": "uids must be a list"}), 400
+        raw_ips = payload.get("ips")
+        if not isinstance(raw_ips, list):
+            return jsonify({"error": "ips must be a list"}), 400
 
-        uids = []
-        seen_uids = set()
-        for raw_uid in raw_uids:
-            uid = str(raw_uid or "").strip()
-            if not uid or uid in seen_uids:
+        ips = []
+        seen_ips = set()
+        for raw_ip in raw_ips:
+            ip = str(raw_ip or "").strip()
+            if not ip or ip in seen_ips or not is_valid_ip(ip):
                 continue
-            seen_uids.add(uid)
-            uids.append(uid)
-            if len(uids) >= self.TAG_LOOKUP_BATCH_LIMIT:
+            seen_ips.add(ip)
+            ips.append(ip)
+            if len(ips) >= self.TAG_LOOKUP_BATCH_LIMIT:
                 break
 
-        if not uids:
-            return jsonify({"tags_by_uid": {}})
+        if not ips:
+            return jsonify({"tags_by_ip": {}})
+
+        time_range, time_status, time_error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts")
+        )
+        if not time_status:
+            return jsonify({"error": time_error or "Invalid time range"}), 400
 
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
-        pipeline = indexer.r.pipeline(transaction=False)
-        for uid in uids:
-            pipeline.smembers(f"tags:{uid}")
-        tag_sets = pipeline.execute()
-
-        tags_by_uid = {
-            uid: sorted(normalize_tags(tags), key=str.lower)
-            for uid, tags in zip(uids, tag_sets)
+        ip_pipeline = indexer.r.pipeline(transaction=False)
+        for ip in ips:
+            ip_pipeline.smembers(f"ip:{ip}")
+        ip_uids = {
+            ip: sorted(set(uids or []))
+            for ip, uids in zip(ips, ip_pipeline.execute())
         }
-        return jsonify({"tags_by_uid": tags_by_uid})
+        all_uids = sorted({uid for uids in ip_uids.values() for uid in uids})
+        if not all_uids:
+            return jsonify({"tags_by_ip": {ip: [] for ip in ips}})
+
+        doc_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in all_uids:
+            doc_pipeline.hgetall(f"doc:{uid}")
+        documents = dict(zip(all_uids, doc_pipeline.execute()))
+        eligible_uids = set()
+        for uid, document in documents.items():
+            first_seen, last_seen = indexer.normalize_seen_range(
+                document.get("first_seen"), document.get("last_seen")
+            )
+            if (
+                first_seen is not None
+                and last_seen is not None
+                and last_seen >= time_range["from_ts"]
+                and first_seen <= time_range["to_ts"]
+            ):
+                eligible_uids.add(uid)
+
+        tag_pipeline = indexer.r.pipeline(transaction=False)
+        eligible_list = sorted(eligible_uids)
+        for uid in eligible_list:
+            tag_pipeline.smembers(f"tags:{uid}")
+        tags_by_uid = dict(zip(eligible_list, tag_pipeline.execute()))
+        tags_by_ip = {}
+        for ip in ips:
+            tags = []
+            for uid in ip_uids[ip]:
+                tags.extend(tags_by_uid.get(uid) or [])
+            tags_by_ip[ip] = sorted(normalize_tags(tags), key=str.lower)
+        return jsonify({"tags_by_ip": tags_by_ip})
 
     @expose("/export")
     @has_access
