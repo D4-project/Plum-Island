@@ -48,6 +48,8 @@
 
 - Extend Dahua detection with camera classification, favicon fingerprints, and certificate issuer matching, closes #204.
 
+- Add Apache JMeter Dashboard detection from title and favicon fingerprints, closes #205.
+
 - Add Sucuri Website Firewall detection, closes #121.
 
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
