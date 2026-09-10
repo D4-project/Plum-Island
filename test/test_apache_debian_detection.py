@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT_DIR / "webapp" / "app" / "utils"))
 from tagrules import document_matches_criteria_groups  # pylint: disable=wrong-import-position
 
 
-APACHE_GROUPS = [{"http_server.lk": ["Apache/"]}]
+APACHE_GROUPS = [{"http_server.bg": ["Apache/"]}]
 DEBIAN_GROUPS = [{"http_server.lk": ["(Debian)"]}]
 
 
@@ -49,7 +49,7 @@ class ApacheDebianDetectionTest(TestCase):
     def test_yaml_rule_contains_expected_query_and_tags(self):
         apache_rule = yaml.safe_load((ROOT_DIR / "webapp/tags/apache.yaml").read_text())
         debian_rule = yaml.safe_load((ROOT_DIR / "webapp/tags/debian.yaml").read_text())
-        self.assertEqual(apache_rule["query"], 'http_server.lk:"Apache/"')
+        self.assertEqual(apache_rule["query"], 'http_server.bg:"Apache/"')
         self.assertIn('http_server.lk:"(Debian)"', debian_rule["query"])
         self.assertEqual(
             apache_rule["tags"], ["product:apache", "vendor:apache"]

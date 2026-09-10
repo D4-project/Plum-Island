@@ -1,5 +1,5 @@
 description: Apache
-query: http_server.lk:"Apache/"
+query: http_server.bg:"Apache/"
 tags:
 - product:apache
 - vendor:apache
