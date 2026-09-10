@@ -1,0 +1,6 @@
+description: Pterodactyl
+query: 'http_favicon_mmhash:846001371 OR http_favicon_md5:17ce6e2889f7a873a72564283f47cab4 OR http_favicon_sha256:eeb77a3447905ef66a0e44be6f28c29ed8e6aaf59214fd0bfb54df1dbdabd931 OR http_title:"Pterodactyl"'
+tags:
+- product:pterodactyl
+- vendor:pterodactyl
+version: 20260910T000000Z

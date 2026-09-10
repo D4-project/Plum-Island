@@ -42,6 +42,8 @@
 
 - Add Lighttpd server detection, closes #201.
 
+- Add Pterodactyl detection from title and favicon fingerprints, closes #202.
+
 - Add Sucuri Website Firewall detection, closes #121.
 
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
