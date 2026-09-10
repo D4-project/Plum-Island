@@ -28,6 +28,21 @@ Fields:
 | `tags` | yes | List of tags to apply |
 | `version` | recommended | Rule timestamp used during imports |
 
+## Query matching operators
+
+Use the operator that expresses where the text occurs:
+
+- `.bg` / `.begin` match a value from its beginning.
+- `.lk` / `.like` match text occurring anywhere in the value.
+
+For performance, prefer the operators in this order: an exact match without a
+modifier is fastest, followed by `.bg` / `.begin`, then `.lk` / `.like`.
+Use the least expensive operator that matches the required semantics.
+
+For example, use `http_server.bg:"Apache/"` for a server banner beginning with
+`Apache/`, and `http_server.lk:"(Debian)"` when the Debian marker occurs later
+in the banner.
+
 ## Version policy
 
 `tools/tag_mgmt.py import` imports YAML rules into the SQLite database.
