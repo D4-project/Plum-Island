@@ -1,7 +1,0 @@
-description: Apache on Debian
-query: http_server.lk:"Apache/2.4.25 (Debian)"
-tags:
-- product:apache
-- product:debian
-- vendor:debian
-version: 20260910T000000Z
