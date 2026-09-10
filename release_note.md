@@ -44,6 +44,8 @@
 
 - Add Pterodactyl detection from title and favicon fingerprints, closes #202.
 
+- Add Apache on Debian detection from the reported HTTP server banner, closes #203.
+
 - Add Sucuri Website Firewall detection, closes #121.
 
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
