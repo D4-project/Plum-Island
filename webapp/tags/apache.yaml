@@ -1,0 +1,6 @@
+description: Apache
+query: http_server.lk:"Apache/"
+tags:
+- product:apache
+- vendor:apache
+version: 20260910T000000Z

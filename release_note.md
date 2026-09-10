@@ -44,7 +44,7 @@
 
 - Add Pterodactyl detection from title and favicon fingerprints, closes #202.
 
-- Add Apache on Debian detection from the reported HTTP server banner, closes #203.
+- Split Apache and Debian detection for the reported HTTP server banner (`Apache/` and `(Debian)`), closes #203.
 
 - Add Sucuri Website Firewall detection, closes #121.
 
