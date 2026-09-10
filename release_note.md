@@ -50,6 +50,8 @@
 
 - Add Apache JMeter Dashboard detection from title and favicon fingerprints, closes #205.
 
+- Tag SimpleHTTP server banners directly as Python.
+
 - Add Sucuri Website Firewall detection, closes #121.
 
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.

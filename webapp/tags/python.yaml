@@ -1,5 +1,5 @@
 description: Python Language
-query: http_server.lk:python/ or http_server.lk:werkzeug/ or http_server.bg:wisp-server-python
+query: http_server.lk:python/ OR http_server.lk:werkzeug/ OR http_server.bg:wisp-server-python OR http_server.bg:"SimpleHTTP"
 tags:
 - lang:python
-version: 20260520T133458Z
+version: 20260910T000000Z
