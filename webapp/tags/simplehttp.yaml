@@ -1,0 +1,8 @@
+description: SimpleHTTP
+query: http_server.bg:"SimpleHTTP"
+tags:
+- product:simplehttp
+- type:web-server
+- lang:python
+- vendor:python
+version: 20260910T000000Z

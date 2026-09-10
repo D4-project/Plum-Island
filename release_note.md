@@ -50,7 +50,7 @@
 
 - Add Apache JMeter Dashboard detection from title and favicon fingerprints, closes #205.
 
-- Tag SimpleHTTP server banners directly as Python.
+- Add a dedicated SimpleHTTP rule with the `lang:python` tag.
 
 - Add Sucuri Website Firewall detection, closes #121.
 
