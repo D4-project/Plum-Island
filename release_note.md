@@ -46,6 +46,8 @@
 
 - Split Apache and Debian detection for the reported HTTP server banner (`Apache/` and `(Debian)`), closes #203.
 
+- Extend Dahua detection with camera classification, favicon fingerprints, and certificate issuer matching, closes #204.
+
 - Add Sucuri Website Firewall detection, closes #121.
 
 - Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.

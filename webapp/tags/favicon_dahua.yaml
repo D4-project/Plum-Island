@@ -1,6 +1,7 @@
 description: Dahua
-query: http_favicon_mmhash:-1466785234
+query: 'http_favicon_mmhash:-1466785234 OR http_favicon_mmhash:1653394551 OR http_favicon_md5:a437e84d20c9cf7442fffab49e0f07e7 OR http_favicon_sha256:6fe49ae6a389a8cc3ef2866682443909dbb6987ca1918392b6e5d6473cbdd969 OR x509_issuer.lk:dahua'
 tags:
 - product:dahua
+- type:camera
 - vendor:dahua
-version: 20260520T133458Z
+version: 20260910T000000Z
