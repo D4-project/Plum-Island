@@ -39,11 +39,13 @@ DUMPABLE_FIELDS = [
     "tag",
     "tld",
     "x509_issuer",
+    "x509_issuer_cn",
     "x509_md5",
     "x509_san",
     "x509_sha1",
     "x509_sha256",
     "x509_subject",
+    "x509_subject_cn",
 ]
 
 

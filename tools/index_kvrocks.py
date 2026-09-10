@@ -40,10 +40,12 @@ INDEX_FIELDS = [
     "http_headval",
     "http_server",
     "x509_issuer",
+    "x509_issuer_cn",
     "x509_md5",
     "x509_sha1",
     "x509_sha256",
     "x509_subject",
+    "x509_subject_cn",
     "x509_san",
     "banner",
 ]
@@ -62,6 +64,7 @@ BATCH_SIZE = DEFAULT_BATCH_SIZE
 PARSER_CONF = {}
 KVrocksIndexer = None
 parse_json = None
+prepare_kvrocks_document = None
 fetch_tlds = None
 TAG_RUNTIME = {}
 WORKER_SEEN_SNAPSHOT = None
@@ -129,7 +132,7 @@ def load_runtime_dependencies(retag=False):
     """
     Import runtime dependencies after help handling.
     """
-    global KVrocksIndexer, TAG_RUNTIME, parse_json, fetch_tlds
+    global KVrocksIndexer, TAG_RUNTIME, parse_json, prepare_kvrocks_document, fetch_tlds
 
     if retag:
         sys.path.insert(0, str(WEBAPP_DIR))
@@ -144,6 +147,7 @@ def load_runtime_dependencies(retag=False):
         )
         from app.utils.result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
+            prepare_kvrocks_document as runtime_prepare_kvrocks_document,
         )
         from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
             compile_tag_rule_records,
@@ -164,12 +168,14 @@ def load_runtime_dependencies(retag=False):
         )
         from result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
+            prepare_kvrocks_document as runtime_prepare_kvrocks_document,
         )
 
         TAG_RUNTIME = {}
 
     KVrocksIndexer = RuntimeKVrocksIndexer
     parse_json = runtime_parse_json
+    prepare_kvrocks_document = runtime_prepare_kvrocks_document
     fetch_tlds = runtime_fetch_tlds
 
 
@@ -241,7 +247,7 @@ def json_import(json_file, seen_snapshot=None, tag_rules=None):
         if parsed_doc is None:
             return None
         apply_seen_snapshot(parsed_doc, seen_snapshot)
-        return parsed_doc
+        return prepare_kvrocks_document(doc, parsed_doc, tag_rules=tag_rules)
 
 
 def parse_meili_document(doc, seen_snapshot=None, tag_rules=None):
@@ -252,7 +258,7 @@ def parse_meili_document(doc, seen_snapshot=None, tag_rules=None):
     if parsed_doc is None:
         return None
     apply_seen_snapshot(parsed_doc, seen_snapshot)
-    return parsed_doc
+    return prepare_kvrocks_document(doc, parsed_doc, tag_rules=tag_rules)
 
 
 def init_parse_worker(parser_conf, seen_snapshot, tag_rules):

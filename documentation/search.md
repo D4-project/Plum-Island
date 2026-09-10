@@ -69,10 +69,12 @@ No modifier means exact match. `like` without any scope reducer may slow down th
 | `http_favicon_sha256` | | Favicon SHA-256 hash |
 | `banner` | `like`, `begin` | Service banner |
 | `x509_issuer` | `like`, `begin` | TLS certificate issuer |
+| `x509_issuer_cn` | `like`, `begin` | TLS certificate issuer common name |
 | `x509_md5` | | TLS certificate MD5 hash |
 | `x509_sha1` | | TLS certificate SHA-1 hash |
 | `x509_sha256` | | TLS certificate SHA-256 hash |
 | `x509_subject` | `like`, `begin` | TLS certificate subject |
+| `x509_subject_cn` | `like`, `begin` | TLS certificate subject common name |
 | `x509_san` | `like`, `begin` | TLS certificate subject alternative names |
 
 Certificate-derived `fqdn`, `host`, and `domain` values require rebuilding/reimporting the Kvrocks index for scans collected before the parser change.

@@ -39,7 +39,7 @@ from .models import (
 from .models import TagRules
 from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn, fetch_tlds
 from .utils.kvrocks import KVrocksIndexer
-from .utils.result_parser import parse_json
+from .utils.result_parser import parse_json, prepare_kvrocks_document
 from .utils.reports import (
     build_report_markdown,
     compute_new_open_ports,
@@ -1925,7 +1925,13 @@ def _load_job_export_documents(export_context, job_uid):
             if parsed_doc is None:
                 continue
             meili_documents.append(object_to_save)
-            kvrocks_documents.append(parsed_doc)
+            kvrocks_documents.append(
+                prepare_kvrocks_document(
+                    object_to_save,
+                    parsed_doc,
+                    tag_rules=export_context.active_tag_rules,
+                )
+            )
     return meili_documents, kvrocks_documents
 
 

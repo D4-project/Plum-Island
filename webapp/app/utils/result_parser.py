@@ -244,6 +244,119 @@ def get_ssl_info(data: dict, target: str, _general: bool = False):
     }
 
 
+_CERTIFICATE_NAME_ORDER = (
+    ("commonName", "CN"),
+    ("organizationalUnitName", "OU"),
+    ("organizationName", "O"),
+    ("localityName", "L"),
+    ("stateOrProvinceName", "ST"),
+    ("countryName", "C"),
+)
+_CERTIFICATE_NAME_ESCAPES = re.compile(r"([\\,+=\"<>;])")
+
+
+def _certificate_values(value):
+    """Return deterministic string values for one certificate attribute."""
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    return [str(item) for item in values if item is not None and str(item) != ""]
+
+
+def _escape_certificate_value(value):
+    """Escape separators and leading/trailing spaces in one DN value."""
+    escaped = _CERTIFICATE_NAME_ESCAPES.sub(r"\\\1", str(value))
+    escaped = escaped.replace("\n", r"\0A").replace("\r", r"\0D")
+    if escaped.startswith("#"):
+        escaped = "\\" + escaped
+    if escaped.startswith(" "):
+        escaped = "\\ " + escaped[1:]
+    if escaped.endswith(" "):
+        escaped = escaped[:-1] + r"\ "
+    return escaped
+
+
+def serialize_certificate_name(name):
+    """Serialize an Nmap issuer/subject mapping to a stable searchable DN."""
+    if not isinstance(name, dict):
+        return None
+
+    pairs = []
+    consumed = set()
+    for source_key, output_key in _CERTIFICATE_NAME_ORDER:
+        values = _certificate_values(name.get(source_key))
+        if values:
+            pairs.extend(
+                f"{output_key}={_escape_certificate_value(value)}"
+                for value in values
+            )
+        consumed.add(source_key)
+
+    for source_key in sorted(str(key) for key in name if str(key) not in consumed):
+        values = _certificate_values(name.get(source_key))
+        pairs.extend(
+            f"{source_key}={_escape_certificate_value(value)}" for value in values
+        )
+    return ", ".join(pairs) or None
+
+
+def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
+    """Add certificate indexes to a copy destined for Kvrocks.
+
+    ``parse_json`` remains the public parser and is deliberately not modified by
+    this enrichment step. The raw scan document is used only while preparing the
+    secondary Kvrocks document.
+    """
+    indexed_doc = dict(parsed_doc or {})
+    issuer_dns = []
+    subject_dns = []
+    issuer_cns = []
+    subject_cns = []
+
+    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+        for script in port.get("scripts", []):
+            if script.get("id") != "ssl-cert":
+                continue
+            issuer = script.get("issuer")
+            subject = script.get("subject")
+            issuer_cns.extend(_certificate_values((issuer or {}).get("commonName")))
+            subject_cns.extend(_certificate_values((subject or {}).get("commonName")))
+            issuer_dn = serialize_certificate_name(issuer)
+            subject_dn = serialize_certificate_name(subject)
+            if issuer_dn:
+                issuer_dns.append(issuer_dn)
+            if subject_dn:
+                subject_dns.append(subject_dn)
+
+    issuer_cns = list(dict.fromkeys(issuer_cns))
+    subject_cns = list(dict.fromkeys(subject_cns))
+    issuer_dns = list(dict.fromkeys(issuer_dns))
+    subject_dns = list(dict.fromkeys(subject_dns))
+
+    if not issuer_cns:
+        issuer_cns = list(indexed_doc.get("x509_issuer", []) or [])
+    if not subject_cns:
+        subject_cns = list(indexed_doc.get("x509_subject", []) or [])
+    if issuer_cns:
+        indexed_doc["x509_issuer_cn"] = issuer_cns
+    if subject_cns:
+        indexed_doc["x509_subject_cn"] = subject_cns
+    if issuer_dns:
+        indexed_doc["x509_issuer"] = issuer_dns
+    if subject_dns:
+        indexed_doc["x509_subject"] = subject_dns
+
+    if tag_rules is not None:
+        indexed_doc.pop("tag", None)
+        computed_tags = apply_tag_rules_to_document(
+            indexed_doc, tag_rules=tag_rules
+        )
+        if computed_tags:
+            indexed_doc["tag"] = computed_tags
+
+    return indexed_doc
+
+
 def get_body(data, target):
     """
     Get a Key from the Json with the parsing syntax.

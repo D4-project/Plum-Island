@@ -104,10 +104,12 @@ Current generic fields:
 | `http_headval` | yes | value only | Configured HTTP header value stored as `header:value` |
 | `http_server` | yes | yes | HTTP Server header |
 | `x509_issuer` | yes | yes | TLS issuer |
+| `x509_issuer_cn` | yes | yes | TLS issuer common name |
 | `x509_md5` | yes | no | TLS certificate MD5 |
 | `x509_sha1` | yes | no | TLS certificate SHA-1 |
 | `x509_sha256` | yes | no | TLS certificate SHA-256 |
 | `x509_subject` | yes | yes | TLS subject |
+| `x509_subject_cn` | yes | yes | TLS subject common name |
 | `x509_san` | yes | yes | TLS SAN values |
 | `banner` | yes | yes | Service banner |
 
