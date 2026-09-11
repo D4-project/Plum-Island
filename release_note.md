@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Fix MySQL tag-rule import by using the supported `banner.lk` query field.
+
 - Extend FRITZ!Box detection with HTTP title and TLS SAN signals, closes #206.
 
 - Add Nginx HTTP Server-header and default-title detection, closes #208.

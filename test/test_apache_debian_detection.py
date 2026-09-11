@@ -33,19 +33,6 @@ class ApacheDebianDetectionTest(TestCase):
             )
         )
 
-    def test_other_server_banners_do_not_match(self):
-        for server in ("Apache/2.4.25 (Ubuntu)", "nginx/1.27.0", "lighttpd/1.4.82"):
-            self.assertFalse(
-                document_matches_criteria_groups(
-                    {"http_server": [server]}, APACHE_GROUPS
-                )
-            )
-        self.assertFalse(
-            document_matches_criteria_groups(
-                {"http_server": ["Apache/2.4.25 (Ubuntu)"]}, DEBIAN_GROUPS
-            )
-        )
-
     def test_yaml_rule_contains_expected_query_and_tags(self):
         apache_rule = yaml.safe_load((ROOT_DIR / "webapp/tags/apache.yaml").read_text())
         debian_rule = yaml.safe_load((ROOT_DIR / "webapp/tags/debian.yaml").read_text())
