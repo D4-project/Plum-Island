@@ -1,0 +1,7 @@
+description: AsyncRAT C2 certificate
+query: x509_issuer_cn:"AsyncRAT Server"
+tags:
+- product:asyncrat
+- vendor:asyncrat
+- type:c2
+version: 20260911T000000Z

@@ -3,4 +3,4 @@ query: http_server.bg:"Apache/"
 tags:
 - product:apache
 - vendor:apache
-version: 20260910T000000Z
+version: 20260911T000000Z

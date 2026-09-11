@@ -1,0 +1,7 @@
+description: IcedID C2 certificate
+query: x509_subject.lk:"O=Internet Widgits Pty Ltd, ST=Some-State, C=AU, CN=localhost"
+tags:
+- product:icedid
+- vendor:icedid
+- type:c2
+version: 20260911T000000Z

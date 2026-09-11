@@ -1,0 +1,7 @@
+description: ShadowPad C2 certificate
+query: x509_subject.lk:"CN=myServer, OU=mygroup, O=myorganization, L=mycity, ST=myprovince, C=CN"
+tags:
+- product:shadowpad
+- vendor:shadowpad
+- type:c2
+version: 20260911T000000Z

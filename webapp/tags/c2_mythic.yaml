@@ -1,0 +1,7 @@
+description: Mythic C2 certificate
+query: x509_issuer.lk:"O=Mythic"
+tags:
+- product:mythic
+- vendor:mythic
+- type:c2
+version: 20260911T000000Z

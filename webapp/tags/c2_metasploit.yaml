@@ -1,0 +1,7 @@
+description: Metasploit C2 certificate
+query: x509_issuer_cn:"MetasploitSelfSignedCA"
+tags:
+- product:metasploit
+- vendor:rapid7
+- type:c2
+version: 20260911T000000Z

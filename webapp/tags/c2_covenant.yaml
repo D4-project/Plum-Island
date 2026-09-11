@@ -1,0 +1,7 @@
+description: Covenant C2 certificate
+query: x509_subject.lk:"CN=Covenant"
+tags:
+- product:covenant
+- vendor:covenant
+- type:c2
+version: 20260911T000000Z

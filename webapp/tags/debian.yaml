@@ -4,4 +4,4 @@ query: banner.bg:ssh-2.0-openssh AND banner.lk:debian or banner.bg:"+OK Dovecot"
 tags:
 - vendor:debian
 - product:debian
-version: 20260520T133458Z
+version: 20260911T000000Z

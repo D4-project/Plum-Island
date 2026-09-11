@@ -1,0 +1,7 @@
+description: BitRAT C2 certificate
+query: x509_issuer_cn:"BitRAT"
+tags:
+- product:bitrat
+- vendor:bitrat
+- type:c2
+version: 20260911T000000Z

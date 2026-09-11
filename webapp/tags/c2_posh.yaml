@@ -1,0 +1,7 @@
+description: Posh C2 certificate
+query: x509_issuer_cn:"P18055077"
+tags:
+- product:posh-c2
+- vendor:poshc2
+- type:c2
+version: 20260911T000000Z

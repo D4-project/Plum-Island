@@ -1,0 +1,7 @@
+description: Gozi C2 certificate
+query: x509_issuer.lk:"CN=*, OU=1, O=1, L=1, ST=1, C=XX"
+tags:
+- product:gozi
+- vendor:gozi
+- type:c2
+version: 20260911T000000Z
