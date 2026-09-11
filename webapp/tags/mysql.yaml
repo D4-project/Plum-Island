@@ -1,8 +1,8 @@
 description: MySQL
 query: banner.bg:"J\x00\x00\x00\x0A" AND banner.lk:"this MySQL server" OR banner.bg:"G\x00\x00\x00\xFF"
-  AND banner.lk:"this MySQL server" OR banner.bg:"I\x00\x00\x00\x0A"
+  AND banner.lk:"this MySQL server" OR banner.bg:"I\x00\x00\x00\x0A" OR header.lk:"\x00mysql_native_password"
 tags:
 - product:database
 - product:mysql
 - vendor:mysql
-version: 20260520T133458Z
+version: 20260911T000000Z
