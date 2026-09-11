@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Extend FRITZ!Box detection with HTTP title and TLS SAN signals, closes #206.
+
 - Add Nginx HTTP Server-header and default-title detection, closes #208.
 
 - Add GUI reindex controls to the tag-rules list (all rules or one selected rule), live progress/status polling, and a shared file lock so CLI and GUI reindexes cannot overlap.
