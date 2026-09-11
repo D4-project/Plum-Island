@@ -400,6 +400,10 @@ If you skip one of these, the feature will look half-implemented.
 - webapp/tags/*.yaml
 - release_note.md
 
+When you modify an existing YAML rule, increase its UTC `version` in
+`YYYYMMDDTHHMMSSZ` format; imports replace the stored rule only when this value
+is newer.
+
 Do not add automated tests for detection-only YAML rule changes. Keep these changes limited to the rule file and release note unless the parser, indexer, or tag engine behavior itself changes.
 
 Also keep the split of responsibilities clear:

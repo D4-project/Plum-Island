@@ -26,7 +26,7 @@ Fields:
 | `description` | yes | Human-readable rule description |
 | `query` | yes | Structured search query using the same syntax as the search UI |
 | `tags` | yes | List of tags to apply |
-| `version` | recommended | Rule timestamp used during imports |
+| `version` | recommended | UTC timestamp (`YYYYMMDDTHHMMSSZ`) used during imports |
 
 ## Query matching operators
 
@@ -52,6 +52,11 @@ Conflict policy:
 - New YAML rules are inserted.
 - Existing DB rules are replaced only when the YAML version is newer than the DB rule timestamp.
 - A YAML file without `version` does not replace an existing DB rule.
+
+When changing any rule field (`description`, `query`, or `tags`), update its
+`version` to a newer UTC timestamp in
+`YYYYMMDDTHHMMSSZ` format. Without that increase, an existing SQLite rule will
+not receive the YAML change during import.
 
 This keeps local DB edits unless the YAML file carries a newer version.
 

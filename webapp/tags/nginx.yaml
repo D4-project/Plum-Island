@@ -1,0 +1,7 @@
+description: Nginx
+query: 'http_server.bg:nginx OR http_title.bg:"welcome to nginx!"'
+tags:
+- product:nginx
+- vendor:nginx
+- type:web-server
+version: 20260911T000000Z

@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add Nginx HTTP Server-header and default-title detection, closes #208.
+
 - Add GUI reindex controls to the tag-rules list (all rules or one selected rule), live progress/status polling, and a shared file lock so CLI and GUI reindexes cannot overlap.
 
 - Display deduplicated tags asynchronously beside IPs in KVrocks search results using batched Kvrocks lookups for every UID belonging to each IP within the requested time range; grant the read-only role access to the tag lookup route.
