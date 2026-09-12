@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Batch Kvrocks search set reads in non-transactional pipelines of at most 500 commands, preserving query semantics and adding search/pagination regression coverage, refs #161.
+
 - Fix MySQL tag-rule import by using the supported `banner.lk` query field.
 
 - Extend FRITZ!Box detection with HTTP title and TLS SAN signals, closes #206.

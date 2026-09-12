@@ -1,5 +1,7 @@
 # Kvrocks Objects
 
+Contributor reference: [search engine internals and change contract](sysinternal/search_engine.md).
+
 Plum Island uses Kvrocks as the fast search index for parsed scan documents.
 The full scan document remains in Meilisearch; Kvrocks stores compact reverse indexes that map searchable values to document UIDs.
 

@@ -1,5 +1,7 @@
 # Search
 
+Contributor reference: [search engine internals and change contract](sysinternal/search_engine.md).
+
 Plum Island stores parsed scan results in Kvrocks indexes. The main search UI uses these indexes to find matching scan documents and then loads full result details from Meilisearch when needed.
 
 ## Query syntax

@@ -270,6 +270,13 @@ This is the core orchestration path. Small mistakes here can stall scans, duplic
 
 ### If you change search
 
+Before coding, read [Search engine internals](documentation/sysinternal/search_engine.md),
+[Kvrocks objects](documentation/kvrocks_objects.md), and [Search syntax](documentation/search.md).
+The internals guide records current execution paths, invariants, known differences,
+and required regression checks. Use it to assess impact before modifying search.
+Update it in the same change when behavior or architecture changes; keep existing
+semantics during performance-only work, and identify intentional semantic fixes explicitly.
+
 - `webapp/app/views.py`
 - `webapp/app/utils/kvrocks.py`
 - `webapp/app/utils/result_parser.py`
