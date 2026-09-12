@@ -2,7 +2,7 @@
 
 ## Since Last release Changes.
 
-- Batch Kvrocks search set reads in non-transactional pipelines of at most 500 commands, preserving query semantics and adding search/pagination regression coverage, refs #161.
+- Revert the #161 search batching experiment after a reported 348.930 s versus 42.986 s regression; retain functional search tests and document performance-validation limits.
 
 - Fix MySQL tag-rule import by using the supported `banner.lk` query field.
 

@@ -2,8 +2,8 @@
 
 Read this guide before modifying search parsing, Kvrocks reads/indexes, search
 pagination, exports, or tag matching. Update it in the same change when the
-documented behavior changes. Baseline inspected: commit `66dfbb2`, with the local
-bounded-read implementation for #161 described below.
+documented behavior changes. Search implementation restored to commit `66dfbb2` after the #161 performance
+regression described below.
 
 Related references: [key schema](../kvrocks_objects.md), [user search syntax](../search.md),
 [tag rules](../tagging.md), and [repository instructions](../../AGENT.md).
@@ -198,7 +198,7 @@ Multiple OR groups or values can repeat work. Asynchronous enrichment improves
 time to first display while adding later requests; it does not eliminate total
 history/tag work.
 
-PR #161 addresses sequential reads in four specific loops, described below. It
+The rejected #161 optimization targeted sequential reads in four specific loops. It
 does not implement a new index, a result cache, early server-side set intersection,
 or a cardinality-based planner. Treat those as separate proposals with their own
 behavior and resource checks.
@@ -218,42 +218,76 @@ When fixing one of these differences, state the before/after behavior, update
 user docs and this guide, and test both index-backed search and tag evaluation
 where applicable. Do not label that change as performance-only.
 
-## Bounded pipelines for search set reads
+## Rejected optimization #161: performance regression
 
-The implementation for [#161](https://github.com/D4-project/Plum-Island/pull/161)
-groups SMEMBERS reads in four loops that previously used serial reads:
-HTTP header-value matching, unscoped initial candidate collection, unscoped
-modifier evaluation, and scoped modifier evaluation.
+The bounded-read experiment for [#161](https://github.com/D4-project/Plum-Island/pull/161)
+was introduced in commit `aeea750`, then rolled back. The four search loops use
+the preceding serial implementation again: HTTP header-value matching, unscoped
+candidate collection, unscoped modifier evaluation, and scoped modifier evaluation.
+Existing pipelines elsewhere in the application are unaffected.
 
-`_get_uids_from_keys(keys, scoped_uids=None)` consumes keys incrementally, with
-at most `SMEMBERS_BATCH_SIZE = 500` commands per `pipeline(transaction=False)`.
-Callers retain key filtering and query evaluation order; the helper unions replies,
-intersecting each reply with the supplied scope when present. It processes the final
-partial batch, avoids empty executes, and releases reply references before reading
-another batch. Pipeline context management releases resources on errors, which
-propagate instead of returning partial success. Exact/IP/CIDR reads are outside
-this particular optimization.
+The experiment used a shared helper with at most 500 SMEMBERS commands per
+non-transactional pipeline, and SCAN count hints of 1000. Key filtering and UID
+intersections were preserved. Maintainer observations from the deployed controller:
 
-`SCAN count=1000` is an iteration hint; it does not enforce the pipeline limit.
-For K selected key occurrences, expect `ceil(K / 500)` executes per loop, while
-SMEMBERS command count remains K and SCAN requests still occur. A pipeline is a
-client batching mechanism, not a server command called PIPELINE.
+| Observation | Bounded-read experiment | Previous implementation restored |
+| --- | --- | --- |
+| First 100 IPs, 3/93 days inspected | 348.930 s | 42.986 s |
+| Indexed documents | 1,325,331 | 1,325,534 |
+| Indexed IPs | 195,620 | 195,620 |
+| Initial progress after rollback | Not measured separately | 0 results, 1/93 days, 3.539 s |
 
-This bounds command/key buffering, not reply bytes: one set may be large and the
-final UID result still occupies memory. Measure peak memory and latency on
-representative data. Do not claim 500 is an optimal universal setting.
+The reported totals indicate approximately **8.1 times slower** execution with
+the experiment. These are maintainer-reported UI cumulative processing times,
+not an independently controlled benchmark. The index changed between observations;
+cache state, concurrent load and exact server-side bottleneck were not isolated.
+This is sufficient operational evidence to reject deployment of the experiment,
+not proof of a universal slowdown factor or one specific root cause.
 
-On an unchanged index, require identical UID sets. Concurrent writes can change
-observations because read timing changes; neither the existing multi-read search
-nor non-transactional batching provides a snapshot. Do not add transactions or
-locking as an incidental response to that limitation.
+### Why the tests did not protect performance
+
+Before deployment, 149 tests passed, including 14 new tests. Another 4,000
+before/after comparisons on a small stable in-memory fixture produced identical
+UID sets. This established functional evidence and batching mechanics, not
+performance at production scale.
+
+The fake client did not model Kvrocks execution, storage I/O, socket transfer,
+large response parsing, shared-process contention or representative set
+cardinalities. Command-count assertions rewarded batching even when it could be
+slower in practice. No live Kvrocks performance benchmark had been completed.
+
+Limiting a pipeline to 500 commands does **not** bound response bytes: each set
+can contain many UIDs. Time filtering still intersects after full matching sets
+are read, so a narrow date window does not bound those reads. SCAN count changes
+can also alter work per iteration. Large reply buffering/parsing and scheduling
+are plausible factors, not confirmed causes. Fewer client waits alone cannot
+establish an end-to-end improvement.
+
+The rollback retains the independent matching, date and pagination tests in
+[test_kvrocks_search.py](../../test/test_kvrocks_search.py). Assertions that required
+the removed batching strategy were deleted. Do not weaken functional expectations
+to accommodate another optimization.
+
+### Gate for another performance proposal
+
+Before deployment, compare baseline and candidate on representative Kvrocks data:
+same query and dates, comparable index contents and load, repeated runs in alternating
+order, and clearly identified cold/warm cache conditions. Measure first progress,
+first 100 IPs, full-search/export time, response volume, peak memory, CPU and concurrent
+page responsiveness. Include common high-cardinality values such as Apache/nginx,
+scoped and unscoped searches, and multiple time windows.
+
+Unit tests must still establish UID equivalence. If representative performance
+validation is unavailable, report that limitation and keep the change experimental;
+do not treat unit-test success or fewer pipeline executes as deployment approval.
+Preserve the separate overlap and last_seen-window semantics and current not/nt
+behavior during transport-only work.
 
 ## Required change workflow and verification
 
-[test_kvrocks_search_batches.py](../../test/test_kvrocks_search_batches.py) exercises
-all four read paths and actual search view methods against an instrumented in-memory
-store. It includes batch boundaries, response lifetime, failure propagation, header
-and generic matching, OR/AND, overlapping dates, and pagination beyond 100 IPs.
+[test_kvrocks_search.py](../../test/test_kvrocks_search.py) exercises matching and
+actual search view methods against an instrumented in-memory store. It includes
+header and generic matching, OR/AND, overlapping dates, and pagination beyond 100 IPs.
 The view tests load selected methods with AST extraction to avoid application startup;
 they do not exercise HTTP routes, browser rendering or live backend performance.
 

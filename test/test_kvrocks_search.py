@@ -1,4 +1,4 @@
-"""Search semantics and bounded transport checks without external services."""
+"""Search semantics regression checks without external services."""
 
 import ast
 import copy
@@ -8,7 +8,6 @@ import shlex
 import sys
 import time
 import unittest
-import weakref
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,7 +31,6 @@ class MemoryPipeline:
 
     def __exit__(self, *_args):
         self.commands.clear()
-        self.client.closed += 1
 
     def smembers(self, key):
         self.commands.append(("set", key))
@@ -45,13 +43,10 @@ class MemoryPipeline:
 
     def execute(self):
         self.client.batches.append((self.transaction, list(self.commands)))
-        if self.client.fail_batch == len(self.client.batches):
-            raise ConnectionError("injected pipeline failure")
         results = []
         for kind, key in self.commands:
             if kind == "set":
                 result = set(self.client.sets.get(key, set()))
-                self.client.reply_refs.append(weakref.ref(result))
             elif kind == "hash":
                 result = dict(self.client.hashes.get(key, {}))
             else:
@@ -72,9 +67,6 @@ class MemoryClient:  # pylint: disable=too-many-instance-attributes
         self.direct_reads = []
         self.scans = []
         self.batches = []
-        self.reply_refs = []
-        self.closed = 0
-        self.fail_batch = None
         self.scan_keys = None
 
     def pipeline(self, transaction=True):
@@ -136,52 +128,8 @@ def sample_indexer():
     )
 
 
-class SearchBatchTest(unittest.TestCase):
-    """Exercise independent expected results and all four batched paths."""
-
-    def test_batch_boundaries_and_empty_execute(self):
-        for size in (0, 1, 499, 500, 501, 1001):
-            with self.subTest(size=size):
-                indexer = make_indexer({f"key:{i}": {str(i)} for i in range(size)})
-                self.assertEqual(
-                    indexer._get_uids_from_keys(iter(indexer.r.sets)),
-                    {str(i) for i in range(size)},
-                )
-                self.assertEqual(len(indexer.r.batches), (size + 499) // 500)
-                for transaction, commands in indexer.r.batches:
-                    self.assertFalse(transaction)
-                    self.assertGreater(len(commands), 0)
-                    self.assertLessEqual(len(commands), 500)
-                self.assertEqual(indexer.r.direct_reads, [])
-                self.assertEqual(indexer.r.closed, len(indexer.r.batches))
-
-    def test_incremental_consumption_and_reply_release(self):
-        indexer = make_indexer({"key": {"u1"}})
-
-        def keys():
-            yield from ("key" for _ in range(500))
-            self.assertEqual(len(indexer.r.batches), 1)
-            self.assertTrue(all(ref() is None for ref in indexer.r.reply_refs))
-            yield "key"
-
-        self.assertEqual(indexer._get_uids_from_keys(keys()), {"u1"})
-
-    def test_missing_keys_duplicate_scans_and_scope(self):
-        indexer = make_indexer({"key": {"u1", "outside"}})
-        scope = {"u1"}
-        self.assertEqual(
-            indexer._get_uids_from_keys(["key", "missing", "key"], scope), {"u1"}
-        )
-        self.assertEqual(scope, {"u1"})
-        self.assertEqual(indexer._get_uids_from_keys(["key"], set()), set())
-
-    def test_backend_error_propagates_and_closes_pipeline(self):
-        indexer = make_indexer({"key": {"u1"}})
-        indexer.r.fail_batch = 2
-        with self.assertRaisesRegex(ConnectionError, "injected"):
-            indexer._get_uids_from_keys(["key"] * 501)
-        self.assertEqual(indexer.r.closed, 2)
-        self.assertTrue(all(ref() is None for ref in indexer.r.reply_refs))
+class SearchMatchingTest(unittest.TestCase):
+    """Preserve UID matching behavior independently of transport strategy."""
 
     def test_duplicate_scan_keys_missing_sets_and_no_matches(self):
         indexer = sample_indexer()
@@ -200,39 +148,6 @@ class SearchBatchTest(unittest.TestCase):
         )
         self.assertEqual(empty.r.batches, [])
         self.assertEqual(empty.r.direct_reads, [])
-
-    def test_all_four_callers_use_multiple_batches(self):
-        for path in ("fallback", "seeded", "scoped", "header"):
-            with self.subTest(path=path):
-                field = "http_headval:x-test" if path == "header" else "http_server"
-                sets = {f"{field}:match-{i}": {str(i), "outside"} for i in range(1001)}
-                scope = {str(i) for i in range(1001)}
-                indexer = make_indexer(sets)
-                if path == "header":
-                    result = indexer._get_uids_for_http_headval(
-                        "x-test:match", "bg", scope
-                    )
-                elif path == "scoped":
-                    result = indexer.get_uids_by_criteria_scoped(
-                        {"http_server.bg": ["match"]}, scope
-                    )
-                elif path == "seeded":
-                    indexer.r.sets["port:443"] = scope
-                    result = indexer.get_uids_by_criteria(
-                        {"port": ["443"], "http_server.bg": ["match"]}
-                    )
-                else:
-                    result = indexer.get_uids_by_criteria({"http_server.bg": ["match"]})
-                expected = scope | {"outside"} if path == "fallback" else scope
-                self.assertEqual(set(result), expected)
-                self.assertEqual(
-                    [len(commands) for _, commands in indexer.r.batches],
-                    [500, 500, 1] * (2 if path == "fallback" else 1),
-                )
-                self.assertEqual(
-                    indexer.r.direct_reads, ["port:443"] if path == "seeded" else []
-                )
-                self.assertTrue(all(count == 1000 for _, count in indexer.r.scans))
 
     def test_modifier_aliases_and_exact_matches(self):
         cases = [
@@ -310,7 +225,9 @@ class SearchBatchTest(unittest.TestCase):
             {"u1", "u2"},
         )
         self.assertEqual(indexer._get_uids_for_http_headval("x*:php", "bg"), {"u1"})
-        self.assertIn((r"http_headval:x\*:*", 1000), indexer.r.scans)
+        self.assertIn(
+            r"http_headval:x\*:*", [pattern for pattern, _ in indexer.r.scans]
+        )
         for raw in ("missing", ":php", "x:", "bad name:php", "x" * 129 + ":php"):
             self.assertEqual(indexer._get_uids_for_http_headval(raw, "lk"), set())
         self.assertEqual(indexer._get_uids_for_http_headval("x:php", "not"), set())

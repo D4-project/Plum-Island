@@ -10,7 +10,6 @@ try:
 except ImportError:
     from timeutils import utcnow_iso
 from datetime import datetime, timezone
-from itertools import islice
 import ipaddress
 import logging
 import re
@@ -19,7 +18,6 @@ from netaddr import IPNetwork
 
 logger = logging.getLogger("flask_appbuilder")
 HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
-SMEMBERS_BATCH_SIZE = 500
 
 
 class KVrocksIndexer:
@@ -450,23 +448,6 @@ class KVrocksIndexer:
         """
         return "".join(f"\\{char}" if char in "\\*?[]" else char for char in str(value))
 
-    def _get_uids_from_keys(self, keys, scoped_uids=None):
-        """Read set keys incrementally, limiting each non-transactional batch."""
-        matching_uids = set()
-        key_iterator = iter(keys)
-        while batch := list(islice(key_iterator, SMEMBERS_BATCH_SIZE)):
-            with self.r.pipeline(transaction=False) as pipe:
-                for key in batch:
-                    pipe.smembers(key)
-                for members in pipe.execute():
-                    key_uids = set(members)
-                    if scoped_uids is not None:
-                        key_uids.intersection_update(scoped_uids)
-                    matching_uids.update(key_uids)
-                    # Release reply references before fetching another batch.
-                    del members, key_uids
-        return matching_uids
-
     def _get_uids_for_http_headval(self, raw_value, suffix="", scoped_uids=None):
         """
         Resolve http_headval:header[.modifier]:value against exact header names.
@@ -494,15 +475,20 @@ class KVrocksIndexer:
         if suffix not in ("like", "lk", "begin", "bg"):
             return set()
 
+        matching_uids = set()
         key_prefix = f"http_headval:{header_name}:"
         escaped_prefix = f"http_headval:{self._escape_redis_glob(header_name)}:"
-        matching_keys = (
-            key
-            for key in self.r.scan_iter(match=f"{escaped_prefix}*", count=1000)
-            if key.startswith(key_prefix)
-            and self._modifier_matches(key[len(key_prefix) :], search_value, suffix)
-        )
-        return self._get_uids_from_keys(matching_keys, scoped_uids)
+        for key in self.r.scan_iter(match=f"{escaped_prefix}*"):
+            if not key.startswith(key_prefix):
+                continue
+            indexed_value = key[len(key_prefix) :]
+            if not self._modifier_matches(indexed_value, search_value, suffix):
+                continue
+            key_uids = set(self.r.smembers(key))
+            if scoped_uids is not None:
+                key_uids.intersection_update(scoped_uids)
+            matching_uids.update(key_uids)
+        return matching_uids
 
     def get_uids_by_criteria(self, criteria: dict):
         """
@@ -653,9 +639,9 @@ class KVrocksIndexer:
                         "No usable criteria get uid list from Base field: %s",
                         base_field,
                     )
-                    partial_result = self._get_uids_from_keys(
-                        self.r.scan_iter(match=f"{base_field}:*", count=1000)
-                    )
+                    partial_result = set()
+                    for key in self.r.scan_iter(match=f"{base_field}:*", count=1000):
+                        partial_result.update(self.r.smembers(key))
                     if not partial_result:
                         return []
 
@@ -683,14 +669,19 @@ class KVrocksIndexer:
 
                 # handle .like / .lk / .begin / .bg
                 if suffix in ("like", "lk", "begin", "bg", "not", "nt"):
-                    matching_keys = (
-                        key
-                        for key in self.r.scan_iter(f"{base_field}:*", count=1000)
-                        if self._modifier_matches(key.split(":", 1)[1], value, suffix)
-                    )
-                    matching_uids = self._get_uids_from_keys(
-                        matching_keys, partial_result
-                    )
+                    # substring = value.rstrip("*")
+                    for key in self.r.scan_iter(f"{base_field}:*"):
+                        val = key.split(":", 1)[1]
+                        # If NOT is needed here later, use the already scoped
+                        # partial_result to subtract matching keys instead of
+                        # rescanning every UID value ad hoc.
+                        # IF like or begin we select it.
+                        if (suffix in ("like", "lk") and value in val) or (
+                            suffix in ("begin", "bg") and val.startswith(value)
+                        ):
+                            matching_uids.update(
+                                self.r.smembers(key).intersection(partial_result)
+                            )
                     partial_result = partial_result.intersection(matching_uids)
                 else:
                     # exact match
@@ -751,14 +742,14 @@ class KVrocksIndexer:
                         )
                     )
                 elif suffix in ("like", "lk", "begin", "bg", "not", "nt"):
-                    matching_keys = (
-                        key
-                        for key in self.r.scan_iter(f"{base_field}:*", count=1000)
-                        if self._modifier_matches(key.split(":", 1)[1], value, suffix)
-                    )
-                    value_uids.update(
-                        self._get_uids_from_keys(matching_keys, partial_result)
-                    )
+                    for key in self.r.scan_iter(f"{base_field}:*"):
+                        val = key.split(":", 1)[1]
+                        if (suffix in ("like", "lk") and value in val) or (
+                            suffix in ("begin", "bg") and val.startswith(value)
+                        ):
+                            value_uids.update(
+                                self.r.smembers(key).intersection(partial_result)
+                            )
                 else:
                     value_uids.update(
                         self.r.smembers(f"{base_field}:{value}").intersection(
