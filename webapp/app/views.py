@@ -819,7 +819,7 @@ class KVSearchView(BaseView):
         """
         timestamp_array = {}
         for ip in results_ip:
-            ip_timestamps = indexer.get_timestamp_for_ip(ip)
+            ip_timestamps = indexer.get_timestamp_for_ip(ip, scoped_uids=results_ip[ip])
             filtered_timestamps = {
                 uid: ip_timestamps[uid]
                 for uid in results_ip[ip]

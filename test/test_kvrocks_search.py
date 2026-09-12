@@ -10,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 # pylint: disable=missing-function-docstring,protected-access
 
@@ -263,6 +264,98 @@ class SearchMatchingTest(unittest.TestCase):
         )
 
 
+class SearchTimestampTest(unittest.TestCase):
+    """Read only selected history while preserving IP membership and normalization."""
+
+    def test_scope_avoids_unrelated_document_reads(self):
+        history = {f"old{number}" for number in range(1000)}
+        history.update({"match1", "match2"})
+        indexer = make_indexer({"ip:8.8.8.8": history})
+        indexer.r.hashes.update(
+            {
+                "doc:match1": {"first_seen": 100, "last_seen": 200},
+                "doc:match2": {"first_seen": 150, "last_seen": 300},
+            }
+        )
+        scope = ["match2", "match1", "match1", "not-in-ip"]
+        result = indexer.get_timestamp_for_ip("8.8.8.8", scoped_uids=scope)
+        self.assertEqual(
+            result,
+            {
+                "match1": {"first_seen": 100, "last_seen": 200},
+                "match2": {"first_seen": 150, "last_seen": 300},
+                "min_seen": 100,
+                "max_seen": 300,
+            },
+        )
+        self.assertEqual(indexer.r.direct_reads, ["ip:8.8.8.8"])
+        self.assertEqual(len(indexer.r.batches), 1)
+        transaction, commands = indexer.r.batches[0]
+        self.assertTrue(transaction)
+        self.assertEqual(
+            set(commands), {("hash", "doc:match1"), ("hash", "doc:match2")}
+        )
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(scope, ["match2", "match1", "match1", "not-in-ip"])
+        self.assertEqual(indexer.r.sets["ip:8.8.8.8"], history)
+
+    def test_no_scope_keeps_full_history_and_empty_scope_does_not_fall_back(self):
+        indexer = make_indexer({"ip:8.8.8.8": {"old", "recent"}})
+        indexer.r.hashes.update(
+            {
+                "doc:old": {"first_seen": 10, "last_seen": 100},
+                "doc:recent": {"first_seen": 200, "last_seen": 300},
+            }
+        )
+        full = {
+            "old": {"first_seen": 10, "last_seen": 100},
+            "recent": {"first_seen": 200, "last_seen": 300},
+            "min_seen": 10,
+            "max_seen": 300,
+        }
+        self.assertEqual(indexer.get_timestamp_for_ip("8.8.8.8"), full)
+        self.assertEqual(indexer.get_timestamp_for_ip("8.8.8.8", None), full)
+        for scope in ([], set(), {"not-in-ip"}):
+            with self.subTest(scope=scope):
+                self.assertEqual(
+                    indexer.get_timestamp_for_ip("8.8.8.8", scope),
+                    {"min_seen": None, "max_seen": None},
+                )
+                self.assertEqual(indexer.r.batches[-1], (True, []))
+        self.assertEqual(
+            indexer.get_timestamp_for_ip("missing-ip", {"recent"}),
+            {"min_seen": None, "max_seen": None},
+        )
+
+    def test_missing_and_malformed_metadata_keep_normalized_timestamp_values(self):
+        cases = {
+            "missing": ({}, None, None),
+            "invalid": ({"first_seen": "invalid", "last_seen": -1}, None, None),
+            "first": ({"first_seen": "100"}, 100, 100),
+            "last": ({"last_seen": "200"}, 200, 200),
+            "reversed": ({"first_seen": 300, "last_seen": 100}, 100, 300),
+            "formats": (
+                {"first_seen": "2026-01-01T00:00:00Z", "last_seen": 1767225601000},
+                1767225600,
+                1767225601,
+            ),
+        }
+        indexer = make_indexer({"ip:8.8.8.8": set(cases)})
+        indexer.r.hashes = {
+            f"doc:{uid}": data for uid, (data, _, _) in cases.items() if data
+        }
+        for uid, (_, first, last) in cases.items():
+            with self.subTest(uid=uid):
+                self.assertEqual(
+                    indexer.get_timestamp_for_ip("8.8.8.8", {uid}),
+                    {
+                        uid: {"first_seen": first, "last_seen": last},
+                        "min_seen": first,
+                        "max_seen": last,
+                    },
+                )
+
+
 def isolated_search_view(indexer):
     """Load actual pure view methods without booting Flask, DBs or scheduler."""
     tree = ast.parse((ROOT / "webapp/app/views.py").read_text())
@@ -450,6 +543,45 @@ class SearchConsumerTest(unittest.TestCase):
                     self.assertNotIn("execute_command", vars(self.indexer.r))
                     self.assertNotIn("pipeline", vars(self.indexer.r))
 
+    def test_scoped_history_preserves_previous_full_and_paged_responses(self):
+        # Many tied IPs force limit+1 continuation. Unrelated, newer history must
+        # not change sorting; spanning intervals still differ between page/export.
+        for number in range(105):
+            ip = f"10.0.0.{number + 1}"
+            self.add_doc(f"extra{number}", ip, 200, 250, "nginx", "443")
+            self.add_doc(f"history{number}", ip, 1, 900, "apache", "80")
+        # Incomplete indexes: preserve omission from timestamps without changing
+        # matching UID results, and preserve null timestamps for missing docs.
+        self.indexer.r.sets["ip:8.8.8.8"].remove("u1")
+        del self.indexer.r.hashes["doc:u3"]
+        self.indexer.r.hashes["doc:extra0"] = {"first_seen": "invalid"}
+        full_history = self.indexer.get_timestamp_for_ip
+        query = "http_server.bg:nginx OR http_server:apache port:443"
+
+        for method in (self.view.execute_search, self.view.execute_search_page):
+            seen = set()
+            for _ in range(2 if method == self.view.execute_search_page else 1):
+                kwargs = (
+                    {"cursor_ts": 300, "seen_ips": seen}
+                    if method == self.view.execute_search_page
+                    else {}
+                )
+                with patch.object(
+                    self.indexer,
+                    "get_timestamp_for_ip",
+                    side_effect=lambda ip, **_kwargs: full_history(ip),
+                ):
+                    # The old path reads all metadata and filters in the view.
+                    previous = method(query, 200, 300, **kwargs)
+                current = method(query, 200, 300, **kwargs)
+                previous.pop("processingTimeMs")
+                current.pop("processingTimeMs")
+                self.assertEqual(current, previous)
+                # Dict equality ignores key order; check the visible IP order too.
+                self.assertEqual(list(current["results"]), list(previous["results"]))
+                seen.update(current["results"])
+        self.assertFalse(current["pagination"]["has_more"])
+
     def test_debug_continuation_beyond_100_ips(self):
         for number in range(105):
             self.add_doc(
@@ -469,7 +601,7 @@ class SearchConsumerTest(unittest.TestCase):
             self.assertEqual(measured["debug"]["counts"]["returned_ips"], expected_size)
             seen.update(measured["results"])
 
-    def test_debug_counts_full_sets_and_ip_history_outside_matches(self):
+    def test_debug_counts_full_sets_but_only_matching_ip_metadata(self):
         data = self.view.execute_search_page("http_server.lk:nginx debug", 200, 300)
         diagnostics = data["debug"]
         self.assertEqual(diagnostics["window"], {"from_ts": 200, "to_ts": 300})
@@ -481,9 +613,9 @@ class SearchConsumerTest(unittest.TestCase):
         self.assertEqual(commands["SCAN"]["reply_items"], 2)
         self.assertEqual(commands["SCAN"]["direct_calls"], 1)
         self.assertEqual(commands["SMEMBERS"]["direct_calls"], 2)
-        # Both nginx UIDs fetched before scope intersection; both IP history docs read.
+        # Full nginx/IP sets still read; only the matching history document fetched.
         self.assertEqual(commands["SMEMBERS"]["max_reply_items"], 2)
-        self.assertEqual(commands["HGETALL"]["pipeline_calls"], 2)
+        self.assertEqual(commands["HGETALL"]["pipeline_calls"], 1)
         self.assertEqual(commands["GET"]["pipeline_calls"], 1)
         self.assertEqual(commands["SCARD"]["direct_calls"], 2)
         self.assertGreaterEqual(

@@ -128,6 +128,9 @@ The UI starts with a one-day window and renders each response immediately, even
 when fewer than 100 IPs match. It widens empty windows and continues until 100 IPs
 are displayed or the range is exhausted. Each response waits for its window's
 query evaluation and metadata reads to finish.
+Timestamp metadata is read only for matching UIDs belonging to each candidate IP;
+unrelated historical documents are excluded before those reads. IP detail pages
+retain their full history.
 Exports run on the full filtered result set, not only on the currently visible results.
 
 ## Performance diagnostics

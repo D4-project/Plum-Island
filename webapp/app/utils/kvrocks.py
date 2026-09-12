@@ -861,12 +861,13 @@ class KVrocksIndexer:
             "last_seen": last_seen,
         }
 
-    def get_timestamp_for_ip(self, ip):
+    def get_timestamp_for_ip(self, ip, scoped_uids=None):
         """
-        This functions ask timestamp for a given IP
+        Read timestamps for an IP, optionally restricted to matching UIDs.
 
-        :param self: Description
-        :param ip: Description
+        None keeps full history; an empty scope selects no documents. Intersect
+        with IP membership before reading metadata so incomplete indexes retain
+        the same behavior as reading full history and filtering afterward.
 
         127.0.0.1:6666> smembers ip:146.0.178.196
             1) "0512bce3-96ef-54cc-861d-3eca8056eb1f"
@@ -880,6 +881,8 @@ class KVrocksIndexer:
         max_last_seen = -1
 
         uids = self.r.smembers(f"ip:{ip}")
+        if scoped_uids is not None:
+            uids = uids.intersection(scoped_uids)
         pipe = self.r.pipeline()
         for uid in uids:
             pipe.hgetall(f"doc:{uid}")

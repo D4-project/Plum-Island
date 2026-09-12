@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Restrict search timestamp metadata reads to matching UIDs within each IP's membership set; preserve full IP detail history, date semantics, ordering and pagination.
+
 - Add opt-in `debug` search diagnostics with per-stage timings, Kvrocks command/reply counters and a downloadable browser report; preserve matching and pagination.
 
 - Revert the #161 search batching experiment after a reported 348.930 s versus 42.986 s regression; retain functional search tests and document performance-validation limits.
