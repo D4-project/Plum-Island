@@ -179,6 +179,7 @@ reads for 5,077 matching UIDs, and 54,923 for 1,081. The latter took 210.56 s an
 identify excess reads and variable latency; they do not establish the speedup of
 scoped reads. Compare `HGETALL.pipeline_calls`, `ip_history_timestamps`, first
 response and first-results time on the same queries/dates after deployment.
+The production follow-up under diagnostics below records the observed outcome.
 
 Unit tests compare full/page responses and explicit IP ordering with the previous
 read-all-then-filter path, including more than 100 IPs and incomplete indexes.
@@ -242,6 +243,9 @@ removes it only with `allow_debug_directive=True`: page search, full search/expo
 and `expand_ips` opt in. Field values such as `http_title:debug` remain intact.
 The default parser used for tag-rule validation still rejects the directive.
 It does not create an index field or change the stored query/session/date rules.
+Activation is documented here and in the user search guide, but is not advertised
+beside the search input. The Performance panel and JSON download still appear
+after a response to a query containing `debug`.
 
 `profile_search_page` in `utils/search_debug.py` wraps `execute_search_page`.
 Only an enabled request creates `SearchDiagnostics`. Its client instance's
@@ -298,6 +302,72 @@ Regression coverage includes debug-on/off response and transport equivalence,
 parser scope, empty/invalid requests, cleanup after exceptions, and real redis-py
 SCAN dispatch/pipeline queues with server I/O mocked. No live Kvrocks performance
 claim follows from these tests. Follow the production-validation gate below.
+
+### Production observations, 2026-09-12
+
+Work stopped after scoped timestamp reads (`1b29d2a`). Diagnostics were introduced
+in `88db83a`. The following measurements were supplied by the maintainer from the
+deployed controller; they are not a controlled benchmark. All queries below used
+`debug`. Response timestamps are UTC and identify the final response of each run.
+
+| Query / implementation | Final response UTC | First response | First results inserted into DOM | Matching UID / candidate IP counts, second window | History HGETALL calls | Timestamp stage, second window |
+| --- | --- | --- | --- | --- | --- | --- |
+| `http_server.bg:nginx tag:lang:php`, before scoped reads | 14:20:41 | 20.153 s | 281.733 s | 1,081 / 670 | 54,923 | 210.557 s |
+| `tag:lang:php http_server.bg:nginx`, before scoped reads | 14:25:21 | 4.520 s | 67.071 s | 1,081 / 670 | 54,923 | 51.510 s |
+| `tag:lang:php http_server.bg:nginx`, after scoped reads | 14:35:40 | 0.572 s | 5.604 s | 1,081 / 670 | 1,081 | 2.252 s |
+| `http_server.lk:apache`, after scoped reads | 14:38:52 | 3.548 s | 34.436 s | 6,539 / 2,344 | 6,539 | 9.305 s |
+
+All runs returned zero IPs from the initial one-day window, then 100 from the
+two-day window ending at cursor `1789163999`, with a 101-IP probe and continuation
+inside that window. The nginx tag-first before/after pair selected the same number
+of time-window UIDs (53,438), matching UIDs and candidate IPs, with the same
+pagination values. These counts do not prove identity of the UID sets or IP order;
+functional equivalence is tested separately. The earlier nginx-first run selected
+52,728 window UIDs, so index contents also changed between some observations.
+
+The scoped-read change directly accounts for the decrease from 54,923 to 1,081
+HGETALL calls (about 98%). First-results time decreased about 12-fold between the
+tag-first runs, but this whole speedup cannot be attributed to the code change:
+the first window also became faster despite reading no history in either run.
+Cache, concurrent work and client/backend latency were not isolated. Preserve
+that distinction when quoting these results.
+
+Criterion ordering is still the user's order on the scoped path, after IP/network
+handling. Putting the exact PHP tag first avoided all 78 SCAN calls in the empty
+initial window; with nginx first, those calls still occurred. The second window
+retained 78 SCAN calls in either order. No automatic reordering was implemented.
+
+The Apache report demonstrates remaining costs after the fix:
+
+| Second-response stage | Time |
+| --- | --- |
+| Two object-count SCARD calls | 7.128 s |
+| Time-window selection | 11.844 s |
+| Apache criteria | 1.867 s |
+| UID-to-IP mapping | 0.449 s |
+| Scoped timestamp metadata | 9.305 s |
+| Total executor | 30.634 s |
+
+Counts and time selection account for about 62% of that response. The same
+53,438-UID window took 0.453 s to select in the preceding nginx report, versus
+11.844 s here, before Apache criteria were evaluated. This localizes variable
+elapsed client-call time; it does not establish a Kvrocks CPU, disk, network or
+Python scheduling root cause. Correlate future slow reports with controller and
+Kvrocks CPU/I/O, indexing/reindexing activity and concurrent requests before
+choosing another optimization.
+
+The fix still reads full `ip:{ip}` membership sets and executes one metadata
+pipeline per candidate IP. Apache therefore retained 2,750 direct SMEMBERS calls
+(406 criterion reads plus 2,344 IP memberships) and 2,346 pipeline executes
+(UID mapping, 2,344 timestamp pipelines, requested hostnames). The 100-IP response
+limit does not cap candidate metadata work. Fewer HGETALL commands do not remove
+these waits, global field scans or large set transfers.
+
+Deferred ideas remain separate work: exact-filter ordering, choosing between
+reverse indexes and per-UID field values, and resumable work inside a time window.
+None is part of the scoped-timestamp fix. Preserve the current date semantics,
+matching, ordering and pagination until another change is explicitly designed
+and validated against the regression and performance checks in this guide.
 
 ## Known differences: preserve or fix explicitly
 
