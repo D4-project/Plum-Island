@@ -388,8 +388,16 @@ The structured query syntax currently works like this:
 - quoted values are allowed because parsing is `shlex`-based, for example `http_title.lk:"index of"`
 - implicit `AND` inside one group
 - explicit `OR` between groups
+- standalone `NOT` before a field term, with at least one positive term per OR group
 - repeated occurrences of the same key inside one group accumulate into a list
 - supported suffix modifiers are `.lk` / `.like`, `.bg` / `.begin`, and `.not` / `.nt`
+
+Standalone NOT uses an internal `!field` key in compiled groups. The view evaluates
+positive criteria, subtracts each negative predicate within that UID scope, then
+unions OR groups. Exclusion is per scan UID, not across an IP's entire history.
+Keep exports, matching history, tag-rule evaluation and header dependency analysis
+aligned when changing this representation. Legacy `.not`/`.nt` suffix behavior is
+separate and must not be silently changed alongside the standalone operator.
 
 Time filtering also has two distinct semantics and they must not be conflated:
 

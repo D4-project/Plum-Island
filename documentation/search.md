@@ -33,6 +33,34 @@ fqdn_requested.lk:ttrenov.lu port:443
 http_header:cache-control http_headval:x-powered-by.lk:php
 ```
 
+## Excluding results with NOT
+
+Use `NOT` before a field term to exclude matching scan documents:
+
+```text
+tag:type:router AND NOT tag:vendor:mikrotik
+tag:type:router NOT tag:vendor:mikrotik NOT tag:vendor:cisco
+port:443 AND NOT http_server.lk:apache
+```
+
+`AND`, `OR` and `NOT` are case-insensitive. `AND` remains optional. `NOT`
+applies only to the next term, including its supported exact/prefix/substring
+modifier. Each OR group must contain a positive term; `NOT tag:vendor:mikrotik`
+alone is rejected. Parenthesized groups and repeated `NOT NOT` are not supported.
+`NOT` cannot target `since:` or `debug` directives or legacy `.not`/`.nt` terms.
+Quoted field values such as `http_title:"NOT AND OR"` remain literal values.
+
+Exclusions are evaluated per document UID, before grouping by IP. A document
+without the excluded value is retained, including when that field is absent.
+If one IP has both an excluded scan and another matching scan, that IP can still
+appear. Its asynchronously loaded tags cover a broader history and can therefore
+include a tag excluded from the matching scans. This is not a whole-IP blacklist.
+
+For example, `tag:type:router NOT tag:vendor:mikrotik OR tag:type:switch`
+excludes MikroTik router scans in the first group; the second group still accepts
+all switch scans. Exclusions also apply to full exports and expanded matching IP
+history, with the existing date semantics of each path. No reindex is required.
+
 ## Modifiers
 
 Supported modifiers:
@@ -41,7 +69,7 @@ Supported modifiers:
 | -------- | ----- | ------- |
 | `like` | `lk` | Substring match |
 | `begin` | `bg` | Prefix match |
-| `not` | `nt` | Exclude exact matches for fields that support generic modifiers |
+| `not` | `nt` | Legacy suffixes with differing index-search/tag-rule behavior; use standalone `NOT` for exclusions |
 
 No modifier means exact match. `like` without any scope reducer may slow down the research. `http_headval` supports only header-scoped `like` and `begin` modifiers.
 

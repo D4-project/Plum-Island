@@ -67,7 +67,8 @@ Never change `first_seen` or rebuild indexes merely to optimize reads.
 ## Parsing and field matching
 
 `parse_query` tokenizes with `shlex`, separates explicit OR groups, then calls
-`parse_query_group`. Explicit AND is optional. Repeated fields are stored as lists,
+`_parse_query_group_with_not`, which validates field terms with `parse_query_group`.
+Explicit AND is optional. Repeated fields are stored as lists,
 not overwritten. Parenthesized Boolean expressions are not implemented.
 
 Examples after parsing:
@@ -95,6 +96,51 @@ glob metacharacters are escaped for SCAN. Values may contain additional colons.
 Header collection and its automatic additions from active YAML rules control what
 is available in the index; batching cannot recover uncollected values.
 
+### Standalone NOT
+
+`NOT` binds to the next field term only, case-insensitively. An OR group requires
+at least one positive term, avoiding an implicit all-document universe. Missing
+operands, repeated NOT, NOT before AND/OR, and negated debug/since directives are
+rejected. Validate before directive/AND removal so the operand cannot silently
+shift. Parenthesized expressions are not supported. Legacy `.not`/`.nt` behavior
+is preserved; those suffixes cannot be combined with standalone NOT.
+
+Compiled groups keep their flat field-to-list structure. A leading `!` is an
+internal marker on a negated field, never a user-facing field or index key:
+
+```text
+tag:type:router and not tag:vendor:mikrotik
+=> [{"tag": ["type:router"], "!tag": ["vendor:mikrotik"]}]
+```
+
+`_get_matching_uids` evaluates the positive criteria through the existing scoped
+or unscoped path. For each negative value, it evaluates the ordinary positive
+field predicate through `get_uids_by_criteria_scoped`, restricted to remaining
+group UIDs, then subtracts that result. Repeated negative values exclude their
+union; they must not be merged into one positive AND predicate. Empty positive
+results skip exclusion reads. Union the completed groups only after exclusions.
+Do not pass `!` fields directly into the indexer or reorder positive predicates.
+
+This is UID-level exclusion. A non-excluded matching UID can retain an IP whose
+other scans carry the excluded value. Missing excluded fields also pass. The
+broader asynchronous tag aggregation remains unchanged and may display excluded
+tags from other scans. Page/full searches and `expand_ips` share the evaluator,
+so exports and matching history apply the same exclusions while retaining their
+distinct date scopes and existing pagination/order rules.
+
+The in-memory tag-rule evaluator strips `!` and inverts the existing document
+field predicate for each value. Header dependency analysis also strips it so
+headers needed for negative rules remain collected. No tag-rule chaining is
+introduced: computed tags are not input fields of parsed documents. Existing
+differences in positive field evaluation between index search and in-memory tag
+rules are not changed by the negation wrapper.
+
+Tests cover the router/MikroTik example, same-IP mixed history, missing excluded
+values, repeated exclusions, OR isolation, scoped/full date differences, quoted
+values, malformed operators/directives, header dependencies and pagination past
+100 IPs. Negation adds the reads needed for its predicates, including global field
+scans for substring/prefix terms; it is a feature, not a performance optimization.
+
 `since:N` is a time directive, removed from search criteria when allowed. One
 positive integer is accepted. In the backend, if either date bound is omitted,
 the directive supplies both inclusive UTC day bounds. Two explicit bounds take
@@ -102,7 +148,8 @@ precedence. Preserve validation and precedence when changing date handling.
 
 ## UID evaluation
 
-`_get_matching_uids` evaluates each OR group independently and unions its results.
+`_get_matching_uids` evaluates each OR group independently, subtracts its NOT
+matches as described above, and unions the completed results.
 
 `get_uids_by_criteria` currently:
 

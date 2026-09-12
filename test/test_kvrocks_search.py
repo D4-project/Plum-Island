@@ -367,6 +367,7 @@ def isolated_search_view(indexer):
     names = {
         "split_query_groups",
         "parse_query_group",
+        "_parse_query_group_with_not",
         "parse_query",
         "_parse_http_headval_term",
         "_get_matching_uids",

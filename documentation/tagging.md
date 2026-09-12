@@ -3,6 +3,13 @@
 Plum Island can apply computed tags to scan documents through tag rules.
 A tag rule is a named search query with one or more tags attached. When a scan document matches the query, the tags are written back to the document index.
 
+Rules can exclude document field values with standalone `NOT`, for example
+`port:443 AND NOT http_server.lk:apache`. Each OR group needs a positive term.
+Negation inverts the existing field predicate; an absent excluded value passes.
+This does not add rule chaining: computed tags are not inputs to other tag rules,
+so tag-based exclusions such as `NOT tag:vendor:mikrotik` are intended for search
+over the indexed tags, not for conditional dependencies between tagging rules.
+
 ## YAML format
 
 Tag rules are stored under `webapp/tags/` as YAML files.

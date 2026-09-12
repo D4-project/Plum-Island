@@ -24,7 +24,7 @@ def analyze_header_dependencies(criteria_groups):
     ambiguous = []
     for criteria in criteria_groups or []:
         for field, values in (criteria or {}).items():
-            base, _, modifier = str(field).lower().partition(".")
+            base, _, modifier = str(field).lower().removeprefix("!").partition(".")
             if base not in ("http_header", "http_headval"):
                 continue
             values = values if isinstance(values, list) else [values]
@@ -36,7 +36,9 @@ def analyze_header_dependencies(criteria_groups):
                 if base == "http_headval":
                     candidate = candidate.split(":", 1)[0].strip()
                 if candidate and re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9a-z]+", candidate):
-                    exact[candidate] = exact.get(candidate, False) or base == "http_headval"
+                    exact[candidate] = (
+                        exact.get(candidate, False) or base == "http_headval"
+                    )
     return {"exact": exact, "ambiguous": sorted(set(ambiguous))}
 
 
@@ -261,11 +263,14 @@ def document_matches_criteria_groups(document, criteria_groups):
     for criteria in criteria_groups or []:
         group_matches = True
         for field, values in criteria.items():
+            negate = field.startswith("!")
+            field = field.removeprefix("!")
             base_field, suffix = (field.split(".", 1) + [""])[:2]
             if not isinstance(values, list):
                 values = [values]
             for value in values:
-                if not _document_field_matches(document, base_field, suffix, value):
+                matches = _document_field_matches(document, base_field, suffix, value)
+                if matches == negate:
                     group_matches = False
                     break
             if not group_matches:

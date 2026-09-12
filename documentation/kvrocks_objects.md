@@ -180,6 +180,12 @@ Then each candidate key is tested in Python:
 The result set is built by intersecting fields inside one query group.
 `OR` queries are evaluated as separate groups and unioned by the caller.
 
+Standalone `NOT field:value` subtracts matching UIDs from its positive AND group
+before the OR union. For example, router UIDs minus MikroTik UIDs implements
+`tag:type:router AND NOT tag:vendor:mikrotik`. Exclusions reuse existing indexes;
+they do not create new keys. The view layer handles the compiled negation marker,
+and passes ordinary field criteria plus the remaining UID scope to the indexer.
+
 ## Rebuild behavior
 
 `tools/index_kvrocks.py --rebuild` deletes known Plum keys before reimporting dumped Meilisearch JSON documents.

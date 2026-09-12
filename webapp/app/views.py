@@ -1086,12 +1086,30 @@ class KVSearchView(BaseView):
         for criteria in criteria_groups:
             criteria = lowercase_dict(criteria)
             logger.debug(criteria)
+            positive = {
+                field: values
+                for field, values in criteria.items()
+                if not field.startswith("!")
+            }
             if scoped_uids is None:
-                matching_uids.update(indexer.get_uids_by_criteria(criteria))
+                group_uids = set(indexer.get_uids_by_criteria(positive))
             else:
-                matching_uids.update(
-                    indexer.get_uids_by_criteria_scoped(criteria, scoped_uids)
+                group_uids = set(
+                    indexer.get_uids_by_criteria_scoped(positive, scoped_uids)
                 )
+            for field, values in criteria.items():
+                if not group_uids:
+                    break
+                if not field.startswith("!"):
+                    continue
+                for value in values:
+                    excluded = indexer.get_uids_by_criteria_scoped(
+                        {field[1:]: [value]}, group_uids
+                    )
+                    group_uids.difference_update(excluded)
+                    if not group_uids:
+                        break
+            matching_uids.update(group_uids)
         return matching_uids
 
     @staticmethod
@@ -1622,6 +1640,38 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
+    def _parse_query_group_with_not(self, parts):
+        """Compile unary NOT terms separately from the existing positive AND group."""
+        positive_parts = []
+        negative_parts = []
+        tokens = iter(parts)
+        for part in tokens:
+            if part.upper() == "NOT":
+                negative = next(tokens, None)
+                if negative is None or negative.upper() in {"AND", "OR", "NOT"}:
+                    return {}, False, "NOT must be followed by a field:value term"
+                negative_parts.append(negative)
+            else:
+                positive_parts.append(part)
+        if negative_parts and not positive_parts:
+            return {}, False, "Each OR group with NOT requires a positive search term"
+        result, status, error = self.parse_query_group(positive_parts)
+        if not status:
+            return result, status, error
+        for part in negative_parts:
+            negative, status, error = self.parse_query_group([part])
+            if not status:
+                return {}, False, error
+            for field, values in negative.items():
+                if field.rsplit(".", 1)[-1] in {"not", "nt"}:
+                    return (
+                        {},
+                        False,
+                        "Use NOT with an exact, like or begin term, not .not/.nt",
+                    )
+                result.setdefault(f"!{field}", []).extend(values)
+        return result, True, ""
+
     def parse_query(
         self, query, allow_since_directive=False, allow_debug_directive=False
     ):
@@ -1635,6 +1685,21 @@ class KVSearchView(BaseView):
             query_parts = shlex.split(query or "")
         except ValueError as error:
             return [], False, f"Invalid query syntax: {error}"
+
+        # Validate before stripping AND, debug or since directives: they cannot
+        # silently become operands or move NOT onto a different search term.
+        for position, part in enumerate(query_parts):
+            if part.upper() != "NOT":
+                continue
+            operand = (
+                query_parts[position + 1] if position + 1 < len(query_parts) else ""
+            )
+            if (
+                not operand
+                or operand.upper() in {"AND", "OR", "NOT", "DEBUG"}
+                or operand.lower().startswith(self.SINCE_PREFIX)
+            ):
+                return [], False, "NOT must be followed by a field:value term"
 
         if allow_debug_directive:
             query_parts = [part for part in query_parts if part.lower() != "debug"]
@@ -1662,7 +1727,7 @@ class KVSearchView(BaseView):
                 error_messages.append(f"Empty query group around OR at segment {idx}")
                 continue
 
-            criteria, status, msg_error = self.parse_query_group(group)
+            criteria, status, msg_error = self._parse_query_group_with_not(group)
             if not status:
                 error_messages.append(msg_error or f"Invalid query group {idx}")
                 continue

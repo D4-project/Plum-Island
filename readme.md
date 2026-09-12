@@ -67,6 +67,10 @@ Example:
 domain.begin:"circl.lu" port:443 http_server.lk:nginx
 ```
 
+Exclude matching scans with `NOT`, for example
+`tag:type:router AND NOT tag:vendor:mikrotik`. Operators are case-insensitive;
+each OR group requires a positive term, and exclusion applies per scan UID.
+
 See [Search documentation](documentation/search.md) for the full field list, modifiers, examples, and date-range behavior.
 
 Append `debug` (for example `http_server.lk:apache debug`) to inspect and download
