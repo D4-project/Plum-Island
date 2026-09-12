@@ -277,6 +277,11 @@ and required regression checks. Use it to assess impact before modifying search.
 Update it in the same change when behavior or architecture changes; keep existing
 semantics during performance-only work, and identify intentional semantic fixes explicitly.
 
+Use standalone `debug` in interactive queries for request-local stage timings and
+Kvrocks counters; see the internals guide's diagnostics contract before changing
+instrumentation. Preserve identical results/commands with diagnostics on or off.
+Do not interpret unit tests or diagnostic command counts as performance validation.
+
 - `webapp/app/views.py`
 - `webapp/app/utils/kvrocks.py`
 - `webapp/app/utils/result_parser.py`

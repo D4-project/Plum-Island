@@ -203,6 +203,68 @@ does not implement a new index, a result cache, early server-side set intersecti
 or a cardinality-based planner. Treat those as separate proposals with their own
 behavior and resource checks.
 
+## Opt-in performance diagnostics
+
+Interactive queries accept standalone `debug`, case-insensitively. `parse_query`
+removes it only with `allow_debug_directive=True`: page search, full search/export
+and `expand_ips` opt in. Field values such as `http_title:debug` remain intact.
+The default parser used for tag-rule validation still rejects the directive.
+It does not create an index field or change the stored query/session/date rules.
+
+`profile_search_page` in `utils/search_debug.py` wraps `execute_search_page`.
+Only an enabled request creates `SearchDiagnostics`. Its client instance's
+`execute_command` and `pipeline` factory are temporarily wrapped and restored on
+return or exception. Never attach these hooks to a class, shared connection pool,
+or global indexer. No extra Kvrocks commands are issued, no commands reordered,
+and no pipeline transaction settings, SCAN hints or matching algorithms changed.
+
+The response gains a `debug` object with `schema_version: 1`:
+
+| Field | Meaning |
+| --- | --- |
+| `total_ms` | Monotonic elapsed time inside the page executor wrapper, including instrumentation |
+| `stages_ms` | Sequential elapsed stages: setup, object counts, parse/dates, time scope, criteria, UID-to-IP mapping, IP history timestamps, sort/selection, requested hostnames, response assembly |
+| `window` | Actual inclusive `last_seen` bounds for this request; empty if no window evaluated |
+| `counts` | Prior seen IPs, requested limit, window UIDs, matched UIDs, candidate IPs before limit/seen filtering, probe IPs including the extra result, returned IPs |
+| `kvrocks.commands` | Per-command direct calls, pipelined commands, direct elapsed/max elapsed ms, total/max reply items |
+| `kvrocks.direct_ms` / `pipeline_ms` | Time inside synchronous client calls / complete pipeline executes, including connection acquisition, backend wait, transfer, retries and decoding |
+| `pipeline_executions` / `max_pipeline_commands` | Number of execute calls (including empty ones) / largest queued command count |
+
+SCAN counts reflect actual client SCAN calls, not generator creation or yielded
+keys; its reply items count keys. Set replies count members, range replies count
+UIDs, hash replies count fields, scalar replies count one and missing replies zero.
+Repeated reads count repeatedly. These are neither byte sizes nor unique result
+counts. Counts describe successful client calls; retries and MULTI/EXEC are not
+additional logical commands. Pipeline duration cannot be attributed to individual
+commands, so their `direct_ms` remains zero unless also called directly.
+
+Stage times include client durations; do not add both. `ip_history_timestamps`
+includes reading all history for each candidate IP before keeping matching UIDs.
+A large SMEMBERS maximum versus a small `window_uids` count exposes read
+amplification, not proof that a different transport will be faster.
+
+The browser records `request_ms` through JSON decoding and `render_ms` for
+synchronous DOM insertion, then shows the report after every response. It tracks
+`first_response_ms` and `first_results_dom_ms` from the start of a fresh search;
+the latter is not a browser paint measurement. Reports span Load more requests
+until reset. Keep only the latest 100 detailed responses and cumulative totals to
+bound retention. Ignore stale responses for diagnostics using the active request
+controller. Render report text with `textContent` and download aggregates as JSON.
+
+Neither initial page loading, asynchronous tags/expansion, Meilisearch retrieval,
+exports, Flask serialization/session work after the executor nor proxy/network
+time is included in backend timings. Browser request time includes the latter
+waiting/transfer costs. No live progress is returned while a request is pending.
+Exceptions retain existing error behavior and restore hooks; they do not produce
+a completed diagnostic report. Instrumentation stores no keys, arguments, query
+text, IPs, UIDs or result bodies. Diagnostic overhead and concurrent enrichment
+can affect observed durations: use repeated comparable runs, not a speedup claim.
+
+Regression coverage includes debug-on/off response and transport equivalence,
+parser scope, empty/invalid requests, cleanup after exceptions, and real redis-py
+SCAN dispatch/pipeline queues with server I/O mocked. No live Kvrocks performance
+claim follows from these tests. Follow the production-validation gate below.
+
 ## Known differences: preserve or fix explicitly
 
 These are existing observations, not new desired semantics.

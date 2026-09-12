@@ -78,6 +78,7 @@ from .models import (
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
+from .utils.search_debug import profile_search_page
 from .utils.ip2asn import get_asn_description_for_ip
 from .utils.tagrules import (
     compile_tag_rule_definition,
@@ -1621,7 +1622,9 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
-    def parse_query(self, query, allow_since_directive=False):
+    def parse_query(
+        self, query, allow_since_directive=False, allow_debug_directive=False
+    ):
         """
         Parse the full query, supporting explicit OR between AND groups.
         """
@@ -1632,6 +1635,9 @@ class KVSearchView(BaseView):
             query_parts = shlex.split(query or "")
         except ValueError as error:
             return [], False, f"Invalid query syntax: {error}"
+
+        if allow_debug_directive:
+            query_parts = [part for part in query_parts if part.lower() != "debug"]
 
         if allow_since_directive:
             filtered_parts = []
@@ -1692,7 +1698,7 @@ class KVSearchView(BaseView):
             }
 
         criteria_groups, status, msg_error = self.parse_query(
-            query, allow_since_directive=True
+            query, allow_since_directive=True, allow_debug_directive=True
         )
         results_ip = {}
         timestamp_array = {}
@@ -1749,6 +1755,7 @@ class KVSearchView(BaseView):
             "search_id": None,
         }
 
+    @profile_search_page
     def execute_search_page(
         self,
         query,
@@ -1758,6 +1765,7 @@ class KVSearchView(BaseView):
         seen_ips=None,
         limit=None,
         window_days=None,
+        _diagnostics=None,
     ):
         """
         Fast UI search: inspect one last_seen window backwards from cursor_ts.
@@ -1775,7 +1783,12 @@ class KVSearchView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
+        if _diagnostics:
+            _diagnostics.instrument(indexer.r)
+            _diagnostics.checkpoint("setup")
         count_objects = indexer.objects_count()
+        if _diagnostics:
+            _diagnostics.checkpoint("object_counts")
         time_range, time_status, time_error = self._resolve_time_range(
             from_ts, to_ts, query=query
         )
@@ -1793,7 +1806,7 @@ class KVSearchView(BaseView):
             }
 
         criteria_groups, status, msg_error = self.parse_query(
-            query, allow_since_directive=True
+            query, allow_since_directive=True, allow_debug_directive=True
         )
         results_ip = {}
         timestamp_array = {}
@@ -1809,6 +1822,9 @@ class KVSearchView(BaseView):
 
         next_cursor = cursor_ts
         stopped_in_window = False
+        if _diagnostics:
+            _diagnostics.checkpoint("parse_and_dates")
+            _diagnostics.counts.update(seen_ips=len(seen_ips), limit=limit)
         if status and cursor_ts >= time_range["from_ts"]:
             current_to = cursor_ts
             current_from = max(
@@ -1820,11 +1836,23 @@ class KVSearchView(BaseView):
                 int((current_to - current_from) / self.SEARCH_WINDOW_SECONDS) + 1,
             )
             window_uids = indexer.get_uids_by_last_seen_range(current_from, current_to)
+            if _diagnostics:
+                _diagnostics.checkpoint("time_scope")
+                _diagnostics.window.update(from_ts=current_from, to_ts=current_to)
+                _diagnostics.counts["window_uids"] = len(window_uids)
             page_uids = self._get_matching_uids(
                 indexer, criteria_groups, scoped_uids=window_uids
             )
+            if _diagnostics:
+                _diagnostics.checkpoint("criteria")
+                _diagnostics.counts["matched_uids"] = len(page_uids)
             day_ip_map = indexer.get_ip_from_uids(page_uids)
+            if _diagnostics:
+                _diagnostics.checkpoint("uid_to_ip")
+                _diagnostics.counts["candidate_ips"] = len(day_ip_map)
             day_timestamps = self._build_timestamp_array(indexer, day_ip_map)
+            if _diagnostics:
+                _diagnostics.checkpoint("ip_history_timestamps")
             sorted_ips = sorted(
                 day_ip_map,
                 key=lambda ip: (
@@ -1849,9 +1877,14 @@ class KVSearchView(BaseView):
                 next_cursor = current_from - 1
                 exhausted = next_cursor < time_range["from_ts"]
 
+            if _diagnostics:
+                _diagnostics.checkpoint("sort_and_select")
+                _diagnostics.counts["probe_ips"] = len(results_ip)
             requested_hostname_array = self._build_requested_hostname_array(
                 indexer, results_ip
             )
+            if _diagnostics:
+                _diagnostics.checkpoint("requested_hostnames")
 
         processingtimems = (time.time() - start_time) * 1000
         has_more = bool(status and not exhausted)
@@ -1863,6 +1896,8 @@ class KVSearchView(BaseView):
             }
         returned_results = len(results_ip) if status else 0
         shown_count = len(seen_ips) + returned_results
+        if _diagnostics:
+            _diagnostics.counts["returned_ips"] = returned_results
 
         return {
             "status": status,
@@ -2111,7 +2146,7 @@ class KVSearchView(BaseView):
             payload.get("from_ts"), payload.get("to_ts"), query=query
         )
         criteria_groups, query_status, query_error = self.parse_query(
-            query, allow_since_directive=True
+            query, allow_since_directive=True, allow_debug_directive=True
         )
         if not time_status or not query_status:
             return jsonify({"error": time_error or query_error or "Invalid query"}), 400

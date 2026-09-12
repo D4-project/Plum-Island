@@ -16,6 +16,10 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "webapp/app/utils"))
 from kvrocks import KVrocksIndexer  # pylint: disable=wrong-import-position
+from search_debug import (  # pylint: disable=wrong-import-position
+    debug_requested,
+    profile_search_page,
+)
 
 
 class MemoryPipeline:
@@ -55,6 +59,12 @@ class MemoryPipeline:
         self.commands.clear()
         return results
 
+    @property
+    def command_stack(self):
+        """Expose redis-py's queued-command shape for diagnostics."""
+        names = {"set": "SMEMBERS", "string": "GET", "hash": "HGETALL"}
+        return [((names[kind], key), {}) for kind, key in self.commands]
+
 
 class MemoryClient:  # pylint: disable=too-many-instance-attributes
     """Minimal deterministic store with observable SCAN/read/pipeline calls."""
@@ -73,20 +83,35 @@ class MemoryClient:  # pylint: disable=too-many-instance-attributes
         return MemoryPipeline(self, transaction)
 
     def smembers(self, key):
-        self.direct_reads.append(key)
-        return set(self.sets.get(key, set()))
+        return self.execute_command("SMEMBERS", key)
 
     def scard(self, key):
-        return len(self.sets.get(key, set()))
+        return self.execute_command("SCARD", key)
 
     def zrangebyscore(self, key, minimum, maximum):
-        return {
-            uid
-            for uid, score in self.sorted_sets.get(key, {}).items()
-            if float(minimum) <= score <= float(maximum)
-        }
+        return self.execute_command("ZRANGEBYSCORE", key, minimum, maximum)
+
+    def execute_command(self, command, key, *args):
+        """Same dispatch point used by the real protocol client."""
+        if command == "SMEMBERS":
+            self.direct_reads.append(key)
+            return set(self.sets.get(key, set()))
+        if command == "SCARD":
+            return len(self.sets.get(key, set()))
+        if command == "ZRANGEBYSCORE":
+            return {
+                uid
+                for uid, score in self.sorted_sets.get(key, {}).items()
+                if float(args[0]) <= score <= float(args[1])
+            }
+        if command == "SCAN":
+            return 0, self._scan_keys(key, *args)
+        raise AssertionError(command)
 
     def scan_iter(self, match, count=None):
+        yield from self.execute_command("SCAN", match, count)[1]
+
+    def _scan_keys(self, match, count):
         self.scans.append((match, count))
         # Our fixtures need '*' and escaped literals, not character classes.
         pattern = ""
@@ -99,7 +124,7 @@ class MemoryClient:  # pylint: disable=too-many-instance-attributes
             else:
                 pattern += re.escape(char)
         keys = self.sets if self.scan_keys is None else self.scan_keys
-        yield from (key for key in keys if re.fullmatch(pattern, key))
+        return [key for key in keys if re.fullmatch(pattern, key)]
 
 
 def make_indexer(sets=None):
@@ -268,6 +293,7 @@ def isolated_search_view(indexer):
     namespace = {
         "time": time,
         "shlex": shlex,
+        "profile_search_page": profile_search_page,
         "logger": logging.getLogger(__name__),
         "KVrocksIndexer": lambda *_args: indexer,
         "db": SimpleNamespace(
@@ -384,6 +410,116 @@ class SearchConsumerTest(unittest.TestCase):
         self.assertFalse(set(first["results"]) & set(second["results"]))
         self.assertEqual(second["pagination"]["next_cursor"], 199)
         self.assertFalse(second["pagination"]["has_more"])
+
+    def test_debug_preserves_pages_exports_and_transport(self):
+        query = 'http_server.lk:"nginx" OR http_server:apache port:443'
+        for method in (self.view.execute_search_page, self.view.execute_search):
+            for kwargs in ({}, {"cursor_ts": 300, "seen_ips": {"9.9.9.9"}, "limit": 1}):
+                if method == self.view.execute_search and kwargs:
+                    continue
+                with self.subTest(method=method.__name__, kwargs=kwargs):
+                    plain = method(query, 200, 300, **kwargs)
+                    self.indexer.r.direct_reads.clear()
+                    self.indexer.r.scans.clear()
+                    self.indexer.r.batches.clear()
+                    measured = method("debug " + query, 200, 300, **kwargs)
+                    measured_transport = copy.deepcopy(
+                        (
+                            self.indexer.r.direct_reads,
+                            self.indexer.r.scans,
+                            self.indexer.r.batches,
+                        )
+                    )
+                    self.indexer.r.direct_reads.clear()
+                    self.indexer.r.scans.clear()
+                    self.indexer.r.batches.clear()
+                    method(query, 200, 300, **kwargs)
+                    self.assertEqual(
+                        measured_transport,
+                        (
+                            self.indexer.r.direct_reads,
+                            self.indexer.r.scans,
+                            self.indexer.r.batches,
+                        ),
+                    )
+                    self.assertNotIn("debug", plain)
+                    measured.pop("debug", None)
+                    measured.pop("processingTimeMs")
+                    plain.pop("processingTimeMs")
+                    self.assertEqual(measured, plain)
+                    self.assertNotIn("execute_command", vars(self.indexer.r))
+                    self.assertNotIn("pipeline", vars(self.indexer.r))
+
+    def test_debug_continuation_beyond_100_ips(self):
+        for number in range(105):
+            self.add_doc(
+                f"extra{number}", f"10.0.0.{number + 1}", 200, 250, "nginx", "443"
+            )
+        seen = set()
+        for expected_size in (100, 6):
+            plain = self.view.execute_search_page(
+                "http_server.bg:nginx", 200, 300, cursor_ts=300, seen_ips=seen
+            )
+            measured = self.view.execute_search_page(
+                "debug http_server.bg:nginx", 200, 300, cursor_ts=300, seen_ips=seen
+            )
+            self.assertEqual(len(measured["results"]), expected_size)
+            self.assertEqual(plain["results"], measured["results"])
+            self.assertEqual(plain["pagination"], measured["pagination"])
+            self.assertEqual(measured["debug"]["counts"]["returned_ips"], expected_size)
+            seen.update(measured["results"])
+
+    def test_debug_counts_full_sets_and_ip_history_outside_matches(self):
+        data = self.view.execute_search_page("http_server.lk:nginx debug", 200, 300)
+        diagnostics = data["debug"]
+        self.assertEqual(diagnostics["window"], {"from_ts": 200, "to_ts": 300})
+        self.assertEqual(diagnostics["counts"]["window_uids"], 3)
+        self.assertEqual(diagnostics["counts"]["matched_uids"], 1)
+        self.assertEqual(diagnostics["counts"]["candidate_ips"], 1)
+        self.assertEqual(diagnostics["counts"]["returned_ips"], 1)
+        commands = diagnostics["kvrocks"]["commands"]
+        self.assertEqual(commands["SCAN"]["reply_items"], 2)
+        self.assertEqual(commands["SCAN"]["direct_calls"], 1)
+        self.assertEqual(commands["SMEMBERS"]["direct_calls"], 2)
+        # Both nginx UIDs fetched before scope intersection; both IP history docs read.
+        self.assertEqual(commands["SMEMBERS"]["max_reply_items"], 2)
+        self.assertEqual(commands["HGETALL"]["pipeline_calls"], 2)
+        self.assertEqual(commands["GET"]["pipeline_calls"], 1)
+        self.assertEqual(commands["SCARD"]["direct_calls"], 2)
+        self.assertGreaterEqual(
+            diagnostics["total_ms"], sum(diagnostics["stages_ms"].values())
+        )
+        self.assertIn("ip_history_timestamps", diagnostics["stages_ms"])
+        # Diagnostics contain aggregates, never keys, IPs, UIDs or field values.
+        for private in ("8.8.8.8", "nginx", "u1", "http_server:"):
+            self.assertNotIn(private, str(diagnostics))
+
+    def test_debug_directive_and_invalid_queries(self):
+        for query in ("debug", "since:1 debug", "debug OR port:443", 'debug port:"443'):
+            self.assertFalse(self.view.execute_search_page(query, 200, 300)["status"])
+        self.assertFalse(self.view.parse_query("debug port:443")[1])
+        self.assertTrue(self.view.parse_query("http_title:debug")[1])
+        self.assertFalse(debug_requested('http_title:"some debug text"'))
+        self.assertTrue(debug_requested("port:443 DEBUG since:1"))
+        parsed = self.view.parse_query(
+            'DEBUG http_title:"some debug text" since:1',
+            allow_since_directive=True,
+            allow_debug_directive=True,
+        )
+        self.assertEqual(parsed[0], [{"http_title": ["some debug text"]}])
+        empty = self.view.execute_search_page("debug port:999", 200, 300)
+        self.assertTrue(empty["status"])
+        self.assertEqual(empty["debug"]["counts"]["returned_ips"], 0)
+
+    def test_debug_restores_client_after_backend_failure(self):
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("backend unavailable")
+
+        self.indexer.r.execute_command = fail
+        with self.assertRaisesRegex(RuntimeError, "backend unavailable"):
+            self.view.execute_search_page("debug port:443", 200, 300)
+        self.assertIs(self.indexer.r.execute_command, fail)
+        self.assertNotIn("pipeline", vars(self.indexer.r))
 
 
 if __name__ == "__main__":

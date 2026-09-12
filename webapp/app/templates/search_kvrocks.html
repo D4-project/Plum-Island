@@ -12,6 +12,63 @@ let searchPageUnloading = false;
 let activeSearchAbortController = null;
 const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_WINDOW_DAYS = 4096;
+const MAX_DEBUG_PAGES = 100;
+let searchDebugReport = null;
+let searchDebugStarted = 0;
+
+function resetSearchDebug() {
+    searchDebugReport = null;
+    searchDebugStarted = performance.now();
+    document.getElementById('search-debug').hidden = true;
+    document.getElementById('search-debug-report').textContent = '';
+}
+
+function recordSearchDebug(data, requestMs, renderMs, controller) {
+    if (!data.debug || activeSearchAbortController !== controller) return;
+    if (!searchDebugReport) {
+        searchDebugReport = {
+            schema_version: 1,
+            page_count: 0,
+            request_ms: 0,
+            server_ms: 0,
+            pages: []
+        };
+    }
+    searchDebugReport.page_count += 1;
+    searchDebugReport.request_ms += requestMs;
+    searchDebugReport.server_ms += data.debug.total_ms;
+    if (searchDebugReport.page_count === 1) {
+        searchDebugReport.first_response_ms = performance.now() - searchDebugStarted - renderMs;
+    }
+    if (data.debug.counts.returned_ips > 0 && searchDebugReport.first_results_dom_ms === undefined) {
+        searchDebugReport.first_results_dom_ms = performance.now() - searchDebugStarted;
+    }
+    searchDebugReport.pages.push({
+        page: searchDebugReport.page_count,
+        received_at: new Date().toISOString(),
+        request_ms: requestMs,
+        render_ms: renderMs,
+        status: data.status,
+        pagination: data.pagination,
+        ...data.debug
+    });
+    if (searchDebugReport.pages.length > MAX_DEBUG_PAGES) searchDebugReport.pages.shift();
+    document.getElementById('search-debug').hidden = false;
+    document.getElementById('search-debug-summary').textContent =
+        `Performance: ${searchDebugReport.page_count} responses, latest ${formatProcessingTime(requestMs)}`;
+    document.getElementById('search-debug-report').textContent = JSON.stringify(searchDebugReport, null, 2);
+}
+
+function downloadSearchDebug() {
+    if (!searchDebugReport) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(searchDebugReport, null, 2)], {type: 'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'search-debug.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const TAG_SUGGEST_DEBOUNCE_MS = 120;
 const EXPORT_CONFIGS = {
     ips: {
@@ -1495,6 +1552,7 @@ async function runSearchPage(cursorTs, append) {
         setLoadMoreLoading(true);
     }
     if (!append) {
+        resetSearchDebug();
         resetTagLookups();
         lastSuccessfulSearch = null;
         setDownloadButtonState(false);
@@ -1545,10 +1603,12 @@ async function runSearchPage(cursorTs, append) {
                 remaining,
                 windowDays
             );
+            const requestStarted = performance.now();
             const res = await fetch(`/kvsearchview/query?${params.toString()}`, {
                 signal: searchAbortController.signal
             });
             const data = await readJsonResponse(res);
+            const requestMs = performance.now() - requestStarted;
             lastData = data;
             searchId = data.search_id || searchId;
 
@@ -1557,12 +1617,15 @@ async function runSearchPage(cursorTs, append) {
             scannedDays += Number(pagination.scanned_days || 0);
 
             if (data.status === false) {
+                recordSearchDebug(data, requestMs, 0, searchAbortController);
                 setAlertMessage(errorDiv, data.msg_error || '', 'alert-warning', '');
                 hasMore = false;
                 break;
             }
 
+            const renderStarted = performance.now();
             const returnedIps = renderSearchChunk(data, renderedCount, hitsDiv);
+            recordSearchDebug(data, requestMs, performance.now() - renderStarted, searchAbortController);
             if (returnedIps.length > 0) {
                 renderedCount += returnedIps.length;
                 addedThisRun += returnedIps.length;
@@ -2058,6 +2121,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
             <div class="text-muted mt-1" style="font-size: 0.9em;">
                 Use implicit <code>AND</code> inside one group and explicit <code>OR</code> between groups.
+                Add <code>debug</code> for performance diagnostics.
             </div>
         </div>
         <div class="search-toolbar-actions">
@@ -2066,6 +2130,13 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
     </div>
 </div>
+
+<details id="search-debug" hidden>
+    <summary id="search-debug-summary">Performance diagnostics</summary>
+    <p>Available after each response. Includes search pages only; history, tags and document loading run separately.</p>
+    <button type="button" class="btn btn-default" onclick="downloadSearchDebug()">Download JSON</button>
+    <pre id="search-debug-report" style="max-height: 28em; overflow: auto;"></pre>
+</details>
 
 <div id="info-spinner" class="search-status mt-1" role="status" aria-live="polite" style="display:none;">
     <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>

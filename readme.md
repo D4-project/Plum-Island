@@ -69,6 +69,9 @@ domain.begin:"circl.lu" port:443 http_server.lk:nginx
 
 See [Search documentation](documentation/search.md) for the full field list, modifiers, examples, and date-range behavior.
 
+Append `debug` (for example `http_server.lk:apache debug`) to inspect and download
+per-page performance diagnostics without changing search criteria.
+
 ## Tagging
 
 Tag rules are stored as YAML definitions and can also be managed from the web UI.

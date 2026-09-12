@@ -143,7 +143,7 @@ tags:*
 
 ## Date filtering
 
-The search UI applies date filtering by intersecting two sorted-set queries:
+Full search and exports apply date filtering by intersecting two sorted-set queries:
 
 ```text
 last_seen_index >= from_ts
@@ -152,7 +152,7 @@ first_seen_index <= to_ts
 
 This selects documents whose observation interval overlaps the requested search interval.
 
-For last-seen-only filtering, Plum reads:
+Initial UI page discovery instead selects each backward `last_seen` window with:
 
 ```text
 ZRANGEBYSCORE last_seen_index from_ts to_ts

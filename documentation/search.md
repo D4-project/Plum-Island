@@ -118,9 +118,45 @@ By default:
 - start date is evaluated at `00:00:00`
 - end date is evaluated at `23:59:59`
 
-The time filter matches scan documents whose seen interval overlaps the selected range.
+Initial IP discovery walks backward through windows of document `last_seen`.
+Expanded IP history and full exports select documents whose seen interval overlaps
+the selected range. These scopes differ for documents spanning the entire range.
 
 ## Result loading
 
-For responsiveness, the UI renders the first matching 100 IPs first.
+The UI starts with a one-day window and renders each response immediately, even
+when fewer than 100 IPs match. It widens empty windows and continues until 100 IPs
+are displayed or the range is exhausted. Each response waits for its window's
+query evaluation and metadata reads to finish.
 Exports run on the full filtered result set, not only on the currently visible results.
+
+## Performance diagnostics
+
+Add the standalone keyword `debug` to a structured search:
+
+```text
+http_server.lk:apache debug
+http_server.lk:nginx since:3 debug
+```
+
+After each page response, including empty pages, open **Performance** below the
+search controls. **Download JSON** saves a report for troubleshooting. The report
+includes backend stage times, Kvrocks command counts and reply sizes in items,
+window/matching/IP counts, browser request times and time to first results inserted
+into the page. Keep the query and selected dates separately when comparing runs.
+
+`debug` is case-insensitive and does not change filters, dates, ordering or
+pagination. `http_title:debug` still searches for that value; `debug` alone is not a
+valid search. Exports and IP history expansion ignore the directive while retaining
+the same criteria. Tag-rule queries do not accept it.
+
+This measures interactive search pages only. It does not measure initial page
+loading, asynchronous tags/history, Meilisearch document loading or export jobs.
+There is no live backend progress inside a pending page request. Client-call times
+include waiting, transfer and decoding; they are not Kvrocks CPU time. Counts are
+items, not bytes or distinct UIDs. Instrumentation adds overhead when enabled;
+compare several runs rather than treating one report as a benchmark.
+
+The browser retains the latest 100 detailed responses plus cumulative request/server
+times and response count until a new search or reload. No query text, keys, IPs,
+UIDs or document contents are included in diagnostics.

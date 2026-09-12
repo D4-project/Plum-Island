@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add opt-in `debug` search diagnostics with per-stage timings, Kvrocks command/reply counters and a downloadable browser report; preserve matching and pagination.
+
 - Revert the #161 search batching experiment after a reported 348.930 s versus 42.986 s regression; retain functional search tests and document performance-validation limits.
 
 - Fix MySQL tag-rule import by using the supported `banner.lk` query field.
