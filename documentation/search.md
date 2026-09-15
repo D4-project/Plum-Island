@@ -161,6 +161,12 @@ unrelated historical documents are excluded before those reads. IP detail pages
 retain their full history.
 Exports run on the full filtered result set, not only on the currently visible results.
 
+The **Results of last scans** panel on a target detail page uses the target's
+oldest displayed scan timestamp through the current time. It renders IPs first,
+then retrieves their tag badges asynchronously in the same 200-IP batches as
+the structured search. Selecting an IP opens its IP detail page; its info icon
+expands the matching scan results.
+
 ## Performance diagnostics
 
 Add the standalone keyword `debug` to a structured search:

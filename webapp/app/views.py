@@ -571,7 +571,7 @@ def get_scanprofile_cycle_rows(pk):
 
 def get_target_search_time_range(pk):
     """
-    Return a search range starting one day before the oldest target scan stat.
+    Return a search range from the oldest displayed target scan stat through now.
     """
     timestamps = []
     states = (
@@ -588,7 +588,7 @@ def get_target_search_time_range(pk):
     if not timestamps:
         return {}
 
-    from_date = min(timestamps) - timedelta(days=1)
+    from_date = min(timestamps)
     to_date = datetime.now(timezone.utc)
     return {
         "from_ts": int(from_date.replace(tzinfo=timezone.utc).timestamp()),

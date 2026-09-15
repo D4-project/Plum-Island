@@ -82,7 +82,7 @@
 <div id="hits" class="panel-group mt-2"></div>
 <div id="load-more-container" class="mt-2"></div>
 
-
+<script src="{{ url_for('static', filename='js/ip_tag_enrichment.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
 <script>
 const targetSearchQuery = {{ get_target_value(pk) | tojson }};
 const targetRequestedHostname = {{ get_target_requested_hostname(pk) | tojson }};
@@ -91,6 +91,7 @@ const TARGET_SEARCH_PAGE_SIZE = 100;
 const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
 const TARGET_SEARCH_WINDOW_SECONDS = 86400;
 let targetSearchState = null;
+let targetTagEnricher = null;
 
 async function readJsonResponse(res) {
     const contentType = res.headers.get('content-type') || '';
@@ -102,6 +103,16 @@ async function readJsonResponse(res) {
     const snippet = rawText.trim().slice(0, 300) || `HTTP ${res.status}`;
     throw new Error(snippet);
 }
+
+function renderTargetIpTags(ip, tags) {
+    const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
+    window.renderIpTagBadges(target, tags);
+}
+
+targetTagEnricher = window.createIpTagEnricher({
+    readJsonResponse,
+    renderTags: renderTargetIpTags
+});
 
 function copyIpToClipboard(ip, triggerEl) {
     const markCopied = () => {
@@ -254,6 +265,7 @@ async function search() {
         uidCount: 0,
         ipCount: 0
     };
+    targetTagEnricher.reset();
 
     infoDiv.textContent = '';
     errorDiv.textContent = '';
@@ -387,19 +399,22 @@ function renderTargetResults(results, baseIndex, hitsDiv) {
 
         const title = document.createElement('h4');
         title.className = 'panel-title';
-        const collapseLink = document.createElement('a');
-        collapseLink.setAttribute('data-toggle', 'collapse');
-        collapseLink.setAttribute('data-parent', '#hits');
-        collapseLink.href = `#collapse-ip-${resultIndex}`;
-        collapseLink.textContent = ip;
-        title.appendChild(collapseLink);
+        const ipLink = document.createElement('a');
+        ipLink.className = 'ip-address-link';
+        ipLink.href = `/ip/${encodeURIComponent(ip)}`;
+        ipLink.title = `Open details for ${ip}`;
+        ipLink.setAttribute('aria-label', `Open details for ${ip}`);
+        ipLink.textContent = ip;
+        title.appendChild(ipLink);
         titleRow.appendChild(title);
 
         const detailLink = document.createElement('a');
         detailLink.className = 'target-ip-action';
-        detailLink.href = `/ip/${encodeURIComponent(ip)}`;
-        detailLink.title = `Open details for ${ip}`;
-        detailLink.setAttribute('aria-label', `Open details for ${ip}`);
+        detailLink.setAttribute('data-toggle', 'collapse');
+        detailLink.setAttribute('data-parent', '#hits');
+        detailLink.href = `#collapse-ip-${resultIndex}`;
+        detailLink.title = `Expand scan results for ${ip}`;
+        detailLink.setAttribute('aria-label', `Expand scan results for ${ip}`);
         const detailIcon = document.createElement('i');
         detailIcon.className = 'fa fa-info-circle';
         detailIcon.setAttribute('aria-hidden', 'true');
@@ -419,6 +434,12 @@ function renderTargetResults(results, baseIndex, hitsDiv) {
         copyButton.appendChild(copyIcon);
         titleRow.appendChild(copyButton);
 
+        const tagContainer = document.createElement('span');
+        tagContainer.className = 'search-ip-tags';
+        tagContainer.dataset.searchIpTags = ip;
+        tagContainer.hidden = true;
+        titleRow.appendChild(tagContainer);
+
         heading.appendChild(titleRow);
         ipPanel.appendChild(heading);
 
@@ -431,10 +452,10 @@ function renderTargetResults(results, baseIndex, hitsDiv) {
         collapse.appendChild(uidsDiv);
         ipPanel.appendChild(collapse);
 
-        if (detailLink && targetRequestedHostname) {
-            const url = new URL(detailLink.getAttribute('href'), window.location.origin);
+        if (targetRequestedHostname) {
+            const url = new URL(ipLink.getAttribute('href'), window.location.origin);
             url.searchParams.set('hostname', targetRequestedHostname);
-            detailLink.setAttribute('href', `${url.pathname}${url.search}`);
+            ipLink.setAttribute('href', `${url.pathname}${url.search}`);
         }
         hitsDiv.appendChild(ipPanel);
 
@@ -466,6 +487,7 @@ function renderTargetResults(results, baseIndex, hitsDiv) {
             uidsDiv.appendChild(uidPanel);
         });
     });
+    targetTagEnricher.queue(results, targetSearchTimeRange);
     return returnedIps;
 }
 
@@ -547,5 +569,29 @@ async function loadUid(uid, targetId) {
   .target-ip-action.copied {
     color: #3c763d;
   }
+
+  .target-result-title-row .search-ip-tags {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+
+  .target-result-title-row .ip-detail-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
+    display: inline-flex;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.2rem 0.5rem;
+  }
+
+  .target-result-title-row .ip-detail-tag-vuln { background: #d9534f; }
+  .target-result-title-row .ip-detail-tag-vendor { background: #6f42c1; }
+  .target-result-title-row .ip-detail-tag-product { background: #2f6f73; }
+  .target-result-title-row .ip-detail-tag-type { background: #b45f06; }
+  .target-result-title-row .ip-detail-tag-lang { background: #5cb85c; }
+  .target-result-title-row .ip-detail-tag-cpe { background: #777; }
 </style>
 {% endblock %}

@@ -5,6 +5,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const template = fs.readFileSync(path.join(__dirname, '../webapp/app/templates/search_kvrocks.html'), 'utf8');
+const tagEnrichment = fs.readFileSync(
+    path.join(__dirname, '../webapp/app/static/js/ip_tag_enrichment.js'), 'utf8'
+);
 const source = template.split('<script>')[1].split('</script>')[0];
 const elements = new Map();
 let clock = 10;
@@ -30,6 +33,7 @@ const context = vm.createContext({
     },
     window: {addEventListener: () => {}}
 });
+vm.runInContext(tagEnrichment, context);
 vm.runInContext(source, context);
 const run = (code) => vm.runInContext(code, context);
 run('resetSearchDebug(); activeSearchAbortController = {};');

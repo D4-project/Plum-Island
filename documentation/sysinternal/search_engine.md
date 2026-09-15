@@ -18,6 +18,8 @@ Function names below are navigation anchors; line numbers drift as code changes.
 | [kvrocks.py](../../webapp/app/utils/kvrocks.py), `KVrocksIndexer` | Write/read reverse indexes; return matching UID sets and metadata |
 | [views.py](../../webapp/app/views.py), `KVSearchView` | Parse queries, evaluate OR groups, select time scopes, group by IP, paginate and export |
 | [search_kvrocks.html](../../webapp/app/templates/search_kvrocks.html) | Collect dates, fetch adaptive pages, render IPs, request history/tags |
+| [show_targetsview.html](../../webapp/app/templates/show_targetsview.html) | Query a target from its oldest displayed scan through now; render target results and request tags |
+| [ip_tag_enrichment.js](../../webapp/app/static/js/ip_tag_enrichment.js) | Shared asynchronous, batched tag retrieval for structured search and target results |
 | [tagrules.py](../../webapp/app/utils/tagrules.py) | Compile queries and evaluate rules against parsed documents in memory |
 
 ```mermaid

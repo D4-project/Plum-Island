@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Align Target Show results with structured search: shared asynchronous tag badges, exact displayed scan-date scope, and IP/info-icon navigation behavior, closes #220.
+
 - Detect SMTP from ESMTP greeting banners, closes #212.
 
 - Detect Postfix and Ubuntu from SMTP ESMTP banners, closes #213.
