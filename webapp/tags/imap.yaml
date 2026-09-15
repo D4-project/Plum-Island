@@ -1,0 +1,5 @@
+description: IMAP capability greeting
+query: banner.bg:"* OK" AND banner.lk:imap4
+tags:
+- proto:imap
+version: 20260915T123013Z

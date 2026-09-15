@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add IMAP protocol detection from capability greeting banners, closes #217.
+
 - Extend INSTAR camera detection with reported favicon MD5 and SHA-256 fingerprints, closes #211.
 
 - Add case-insensitive standalone `NOT` exclusions to structured search, exports and matching IP history, with per-UID semantics and OR-group isolation; support negated document predicates in tag rules.
