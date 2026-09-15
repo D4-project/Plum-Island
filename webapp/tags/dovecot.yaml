@@ -3,5 +3,6 @@ query: banner.lk:dovecot AND banner.lk:imap4rev1 OR banner.bg:"+OK Dovecot"
 tags:
 - product:dovecot
 - proto:imap
+- proto:pop3
 - vendor:dovecot
-version: 20260520T133458Z
+version: 20260915T123330Z

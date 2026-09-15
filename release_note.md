@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Tag Dovecot greeting banners with POP3, closes #216.
+
 - Add IMAP protocol detection from capability greeting banners, closes #217.
 
 - Extend INSTAR camera detection with reported favicon MD5 and SHA-256 fingerprints, closes #211.
