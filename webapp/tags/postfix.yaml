@@ -1,0 +1,5 @@
+description: Postfix SMTP server
+query: banner.bg:220 AND banner.lk:"esmtp postfix"
+tags:
+- product:postfix
+version: 20260915T123711Z

@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Detect Postfix and Ubuntu from SMTP ESMTP banners, closes #213.
+
 - Detect Exim from SMTP ESMTP banners, closes #215.
 
 - Tag Dovecot greeting banners with POP3, closes #216.
