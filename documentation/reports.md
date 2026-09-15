@@ -9,7 +9,7 @@ A report contains:
 - a name and description
 - a structured search query
 - one or more recipient email addresses
-- a monthly schedule
+- a monthly or weekly schedule
 - a `Report active` flag
 
 `Report active` only controls automatic scheduled delivery.
@@ -19,11 +19,18 @@ Preview and manual `Run now` actions remain available for inactive reports.
 
 Report queries are always executed inside a reporting interval.
 
-For monthly reports:
+For monthly reports, interval is one calendar month ending at run time.
+For weekly reports, interval is seven days ending at run time.
 
-- if the report has already run, the interval starts at `last_run_at`
-- if the report has never run, the interval starts one calendar month before the run time
-- the interval ends at the current run time
+For monthly schedules, `Day` is day of month (`1`–`28`). For weekly
+schedules, it is weekday (`1` = Monday through `7` = Sunday).
+
+Reports never use `last_run_at` to choose their content. Preview, manual run,
+and scheduled run therefore produce same period at same run time. `last_run_at`
+records delivery only.
+
+Monthly comparison uses preceding calendar month. Weekly comparison uses
+preceding seven days.
 
 The query is the business filter. The report interval is the time filter imposed by reporting.
 
@@ -37,7 +44,7 @@ The current report body contains:
 - query and reporting period
 - number of matching IPs and scan results
 - open port summary
-- `New opened port`, comparing the current monthly interval with the previous monthly interval
+- `New opened port`, comparing the current period with preceding period
 - host list sorted by numeric IP order
 - per-host tags when present
 - per-host open ports and scan result count
@@ -64,7 +71,7 @@ Because Passive DNS enrichment can be slow, preview first opens a progress modal
 
 The modal follows the report generation order:
 
-- `Generating monthly report`
+- `Generating report`
 - `Comparing with previous report`
 - `Resolving Passive DNS X/XX`
 

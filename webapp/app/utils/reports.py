@@ -9,7 +9,7 @@ import logging
 import re
 import smtplib
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 import requests
@@ -21,6 +21,8 @@ logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MONTHLY = "monthly"
+WEEKLY = "weekly"
+REPORT_SCHEDULE_TYPES = frozenset((MONTHLY, WEEKLY))
 REPORT_FQDN_LIMIT = 25
 
 
@@ -74,12 +76,15 @@ def normalize_report_fields(report):
 
     report.emails = "\n".join(validate_report_emails(report.emails))
     report.schedule_type = str(report.schedule_type or MONTHLY).strip().lower()
-    if report.schedule_type != MONTHLY:
-        raise ValueError("Only monthly report scheduling is supported")
+    if report.schedule_type not in REPORT_SCHEDULE_TYPES:
+        raise ValueError("Report schedule type must be monthly or weekly")
 
     report.schedule_day = int(report.schedule_day or 1)
-    if report.schedule_day < 1 or report.schedule_day > 28:
-        raise ValueError("Report schedule day must be between 1 and 28")
+    max_schedule_day = 28 if report.schedule_type == MONTHLY else 7
+    if report.schedule_day < 1 or report.schedule_day > max_schedule_day:
+        if report.schedule_type == MONTHLY:
+            raise ValueError("Monthly report day must be between 1 and 28")
+        raise ValueError("Weekly report day must be between 1 (Monday) and 7 (Sunday)")
 
     report.schedule_hour = int(report.schedule_hour or 0)
     if report.schedule_hour < 0 or report.schedule_hour > 23:
@@ -108,8 +113,23 @@ def compute_next_report_run(report, now=None):
     Compute the next automatic run time for one report.
     """
     now = ensure_utc_naive(now) or utcnow_naive()
-    schedule_day = max(1, min(int(report.schedule_day or 1), 28))
+    schedule_type = str(getattr(report, "schedule_type", "") or MONTHLY).lower()
+    schedule_day = int(report.schedule_day or 1)
     schedule_hour = max(0, min(int(report.schedule_hour or 0), 23))
+    if schedule_type == WEEKLY:
+        schedule_day = max(1, min(schedule_day, 7))
+        days_until_schedule = (schedule_day - 1 - now.weekday()) % 7
+        candidate = (now + timedelta(days=days_until_schedule)).replace(
+            hour=schedule_hour,
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        if candidate <= now:
+            candidate += timedelta(days=7)
+        return candidate
+
+    schedule_day = max(1, min(schedule_day, 28))
     candidate = now.replace(
         day=schedule_day,
         hour=schedule_hour,
@@ -126,26 +146,32 @@ def compute_report_interval(report, run_at=None):
     """
     Return the temporal search interval for a report run.
 
-    Monthly reports search since their last real run. Before the first run,
-    the interval defaults to one calendar month before the run time.
+    Return one full reporting period ending at run_at.
+
+    Report content is determined by schedule type, never by last_run_at:
+    monthly reports cover the preceding calendar month; weekly reports cover
+    the preceding seven days. This keeps Preview, manual runs and scheduled
+    runs comparable even when a report is run more than once.
     """
     run_at = ensure_utc_naive(run_at) or utcnow_naive()
-    last_run_at = ensure_utc_naive(getattr(report, "last_run_at", None))
-    if last_run_at is None or last_run_at >= run_at:
-        last_run_at = _subtract_one_month(run_at)
-    return last_run_at, run_at
+    schedule_type = str(getattr(report, "schedule_type", "") or MONTHLY).lower()
+    if schedule_type == WEEKLY:
+        return run_at - timedelta(days=7), run_at
+    return _subtract_one_month(run_at), run_at
 
 
 def compute_previous_report_interval(report, from_dt, to_dt):
     """
     Return the previous comparable report interval.
     """
-    _ = to_dt
-    if str(getattr(report, "schedule_type", "") or "").lower() != MONTHLY:
-        return None, None
-
     from_dt = ensure_utc_naive(from_dt)
-    if from_dt is None:
+    to_dt = ensure_utc_naive(to_dt)
+    if from_dt is None or to_dt is None:
+        return None, None
+    schedule_type = str(getattr(report, "schedule_type", "") or MONTHLY).lower()
+    if schedule_type == WEEKLY:
+        return from_dt - timedelta(days=7), from_dt
+    if schedule_type != MONTHLY:
         return None, None
     return _subtract_one_month(from_dt), from_dt
 
@@ -473,7 +499,7 @@ def build_report_markdown(
     else:
         lines.append("- No indexed open ports found.")
 
-    if str(getattr(report, "schedule_type", "") or "").lower() == MONTHLY:
+    if str(getattr(report, "schedule_type", "") or "").lower() in REPORT_SCHEDULE_TYPES:
         lines.extend(["", "## New opened port", ""])
         if new_open_ports:
             for ip in sorted(new_open_ports, key=_ip_sort_key):

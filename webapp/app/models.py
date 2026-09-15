@@ -898,6 +898,23 @@ class Reports(Model):
                 f'<span class="label label-info">monthly day '
                 f"{schedule_day:02d} at {schedule_hour:02d}:00</span>"
             )
+        if self.schedule_type == "weekly":
+            schedule_day = max(1, min(int(self.schedule_day or 1), 7))
+            weekdays = (
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
+            )
+            weekday = weekdays[schedule_day - 1]
+            schedule_hour = int(self.schedule_hour or 0)
+            return Esc(
+                f'<span class="label label-info">weekly {weekday} '
+                f"at {schedule_hour:02d}:00</span>"
+            )
         return Esc(
             f'<span class="label label-default">'
             f"{_html_escape(self.schedule_type)}</span>"

@@ -3846,9 +3846,18 @@ class ReportsView(ModelView):
         "active": BooleanField("Report active", default=False),
     }
     edit_form_extra_fields = {
+        "schedule_type": SelectField(
+            "Schedule type",
+            choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
+            default="monthly",
+        ),
         "active": BooleanField("Report active"),
     }
     search_columns = ["name", "description", "query", "emails", "active"]
+        "schedule_type": SelectField(
+            "Schedule type",
+            choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
+        ),
     base_order = ("updated_at", "desc")
     label_columns = {
         "id": "ID",
@@ -3859,7 +3868,7 @@ class ReportsView(ModelView):
         "emails": "Reporting emails",
         "emails_html": "Reporting emails",
         "schedule_type": "Schedule type",
-        "schedule_day": "Day of month",
+        "schedule_day": "Day (monthly: 1-28; weekly: 1=Monday, 7=Sunday)",
         "schedule_hour": "Hour UTC",
         "schedule_html": "Schedule",
         "last_run_at": "Last report",
