@@ -3844,20 +3844,20 @@ class ReportsView(ModelView):
     edit_columns = add_columns
     add_form_extra_fields = {
         "active": BooleanField("Report active", default=False),
-    }
-    edit_form_extra_fields = {
         "schedule_type": SelectField(
             "Schedule type",
             choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
             default="monthly",
         ),
-        "active": BooleanField("Report active"),
     }
-    search_columns = ["name", "description", "query", "emails", "active"]
+    edit_form_extra_fields = {
+        "active": BooleanField("Report active"),
         "schedule_type": SelectField(
             "Schedule type",
             choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
         ),
+    }
+    search_columns = ["name", "description", "query", "emails", "active"]
     base_order = ("updated_at", "desc")
     label_columns = {
         "id": "ID",
