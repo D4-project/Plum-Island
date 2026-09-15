@@ -1,0 +1,5 @@
+description: Exim SMTP server
+query: banner.bg:220 AND banner.lk:esmtp AND banner.lk:exim
+tags:
+- product:exim
+version: 20260915T123513Z

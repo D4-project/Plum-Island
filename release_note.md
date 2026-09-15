@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Detect Exim from SMTP ESMTP banners, closes #215.
+
 - Tag Dovecot greeting banners with POP3, closes #216.
 
 - Add IMAP protocol detection from capability greeting banners, closes #217.
