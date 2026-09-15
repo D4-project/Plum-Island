@@ -4633,6 +4633,9 @@ class StatsView(BaseView):
             "fqdn_count": fqdn_count,
             "cidr_host_count": cidr_host_count,
             "total_hosts_to_scan": total_hosts_to_scan,
+            "scanned_port_count": (
+                db.session.query(Ports.id).join(Ports.scanprofiles).distinct().count()
+            ),
             "kv_scanned_host_count": 0,
             "kv_scan_result_count": 0,
         }

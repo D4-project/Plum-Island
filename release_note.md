@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Show the number of unique ports configured across scan profiles in Stats.
+
 - Align Target Show results with structured search: shared asynchronous tag badges, exact displayed scan-date scope, and IP/info-icon navigation behavior, closes #220.
 
 - Detect SMTP from ESMTP greeting banners, closes #212.
