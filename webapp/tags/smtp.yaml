@@ -1,0 +1,5 @@
+description: SMTP ESMTP greeting
+query: banner.bg:220 AND banner.lk:esmtp
+tags:
+- proto:smtp
+version: 20260915T123904Z

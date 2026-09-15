@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Detect SMTP from ESMTP greeting banners, closes #212.
+
 - Detect Postfix and Ubuntu from SMTP ESMTP banners, closes #213.
 
 - Detect Exim from SMTP ESMTP banners, closes #215.
