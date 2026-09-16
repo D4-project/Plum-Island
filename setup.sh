@@ -25,6 +25,10 @@ if [  -f "webapp/$CONFIG_FILE" ]; then
 python3 -m venv .venv
 VENV_PYTHON="$PWD/.venv/bin/python"
 "$VENV_PYTHON" -m pip install -r requirements.txt
+if ! "$VENV_PYTHON" -c "import reportlab"; then
+  echo "ERROR: ReportLab PDF support installation failed."
+  exit 1
+fi
 key=`head -c32 /dev/urandom | base64`
 csrf=`head -c32 /dev/urandom | base64`
 cd webapp

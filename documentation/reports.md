@@ -45,8 +45,8 @@ The current report body contains:
 - query and reporting period
 - number of matching IPs and scan results
 - open port summary, showing total hosts exposing each port during the report period
-- `New opened port`, explaining and grouping ports newly observed against the preceding equivalent period under bold port labels with numerically sorted affected IP sub-bullets
-- non-empty `FQDN detected` and `FQDN discovered in Passive DNS` lists, each sorted by domain; both list affected IPs. Detected FQDNs include hostnames from any scan result field, including certificate records; Passive DNS keeps records active within the previous 90 days and shows the latest observation
+- `New opened port`, explaining and grouping ports newly observed against the preceding equivalent period under bold port labels with numerically sorted affected IPv4/IPv6 sub-bullets; IPs link to their matching Full report dump host
+- non-empty `FQDN detected` and `FQDN discovered in Passive DNS` lists, each sorted by domain; both list affected IPs linked to their matching Full report dump host. Detected FQDNs include hostnames from any scan result field, including certificate records; Passive DNS keeps records active within the previous 90 days and shows the latest observation
 - full report dump sorted by numeric IP order
 - per-host tags when present
 - redundant `vendor:<name>` tags are omitted when matching `product:<name>` exists
@@ -73,9 +73,12 @@ Example host entry:
 
 The `Preview` action generates the canonical Markdown report without sending email,
 then renders its safe HTML subset. Preview offers an index linked to stable heading
-anchors and a print action. HTML escaping is applied to all report values; host tags
-render as simple HTML `code` tags without custom CSS. The index follows the report
-title and summary metadata.
+anchors, print action, and a PDF download once generation is complete. The PDF uses
+a cover page with the report name, a linked index on page two, starts every level-two
+report section on a new page, and preserves internal IP links to the Full report dump. HTML escaping is
+applied to all report values; host tags render as simple HTML
+`code` tags without custom CSS. The index follows the report title and summary
+metadata.
 Because Passive DNS enrichment can be slow, preview first opens a progress modal and only redirects to the rendered report when generation is complete.
 
 The modal follows the report generation order:

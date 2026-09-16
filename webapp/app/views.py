@@ -78,6 +78,7 @@ from .models import (
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
+from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
 from .utils.ip2asn import get_asn_description_for_ip
 from .utils.tagrules import (
@@ -98,6 +99,7 @@ from .utils.reports import (
     compute_report_ptr_cutoff,
     compute_previous_report_interval,
     datetime_to_epoch,
+    generate_report_pdf,
     normalize_report_fields,
     render_report_markdown_html,
     send_report_markdown,
@@ -2794,6 +2796,7 @@ class IPDetailView(BaseView):
                         "user_hostnames": sorted(set(user_hostnames), key=str.lower),
                         "tags": uid_tags,
                         "port": port,
+                        "web_scheme": port_web_scheme(port, uid_tags),
                     }
                 )
                 if not user_hostnames:
@@ -4151,7 +4154,38 @@ class ReportsView(ModelView):
             report_html=Markup(render_report_markdown_html(state.get("markdown", ""))),
             from_dt=state.get("from_dt"),
             to_dt=state.get("to_dt"),
+            pdf_url=url_for("ReportsView.preview_pdf", job_id=job_id),
         )
+
+    @expose("/preview_pdf/<string:job_id>")
+    @has_access
+    def preview_pdf(self, job_id):
+        """Download a completed report preview as a PDF."""
+        state = get_report_preview_state(job_id)
+        if state is None:
+            return make_response("Preview job not found", 404)
+        if not self._preview_state_allowed(state):
+            return make_response("Forbidden", 403)
+        if state.get("status") != "done":
+            return make_response("Report preview is not complete", 409)
+
+        report = (
+            db.session.query(Reports)
+            .filter(Reports.id == state.get("report_id"))
+            .one_or_none()
+        )
+        if report is None:
+            return make_response("Report not found", 404)
+
+        filename = re.sub(r"[^A-Za-z0-9._-]+", "_", str(report.name)).strip("._")
+        response = make_response(
+            generate_report_pdf(report.name, state.get("markdown", ""))
+        )
+        response.headers["Content-Type"] = "application/pdf"
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="{filename or "report"}.pdf"'
+        )
+        return response
 
     @expose("/preview/<int:pk>")
     @has_access

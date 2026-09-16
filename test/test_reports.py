@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT_DIR / "webapp"))
 from app.utils.reports import (  # pylint: disable=wrong-import-position
     build_report_markdown,
     collect_report_passive_dns_fqdns,
+    generate_report_pdf,
     render_report_markdown_html,
     send_report_markdown,
 )
@@ -205,6 +206,38 @@ class ReportProtocolViewsTest(TestCase):
             markdown.index("## FQDN detected"), markdown.index("## Full report dump")
         )
 
+    def test_global_ip_summaries_link_to_full_report_dump_hosts(self):
+        """Summary IPs link to their corresponding Full report dump host."""
+        markdown = build_report_markdown(
+            REPORT,
+            {"results": {"192.0.2.1": {"web"}}},
+            {},
+            {},
+            None,
+            datetime(2023, 11, 15),
+            per_ip_requested_fqdns={"192.0.2.1": ["www.example.com"]},
+            per_ip_pdns_fqdns={
+                "192.0.2.1": [{"fqdn": "legacy.example.com", "last_seen": 1700000000}]
+            },
+            new_open_ports={"192.0.2.1": ["443"]},
+        )
+        html = render_report_markdown_html(markdown)
+
+        self.assertIn('<li id="host-192-0-2-1">192.0.2.1', html)
+        self.assertGreaterEqual(html.count('href="#host-192-0-2-1"'), 3)
+
+    def test_ipv6_summary_links_to_full_report_dump_host(self):
+        """IPv6 literals retain a safe, stable Full report dump anchor."""
+        html = render_report_markdown_html(
+            "## FQDN detected\n\n"
+            "- ipv6.example (2001:db8::1)\n\n"
+            "## Full report dump\n\n"
+            "- 2001:db8::1\n"
+        )
+
+        self.assertIn('href="#host-2001-db8--1">2001:db8::1</a>', html)
+        self.assertIn('<li id="host-2001-db8--1">2001:db8::1', html)
+
     def test_new_open_ports_are_grouped_by_port(self):
         """Newly opened ports summarize numerically sorted affected hosts."""
         markdown = build_report_markdown(
@@ -246,17 +279,18 @@ class ReportProtocolViewsTest(TestCase):
         self.assertTrue(markdown.startswith("# Report for Protocol report.\n"))
         self.assertNotIn("- Title:", markdown)
 
-    def test_report_description_repeating_query_is_omitted(self):
-        """The query must not be repeated above the report heading."""
+    def test_report_description_is_omitted(self):
+        """Description must not appear above the report heading."""
         report = SimpleNamespace(
             name="domain circl",
-            description="domain:circl.lu",
+            description="Incident",
             query="domain:circl.lu",
             schedule_type="monthly",
         )
         markdown = build_report_markdown(report, {"results": {}}, {}, {}, None, None)
 
         self.assertTrue(markdown.startswith("# Report for Domain circl.\n"))
+        self.assertNotIn("Incident", markdown)
         self.assertEqual(markdown.count("domain:circl.lu"), 1)
         self.assertLess(
             markdown.index("# Report for Domain circl."), markdown.index("- Query:")
@@ -333,14 +367,35 @@ class ReportProtocolViewsTest(TestCase):
         self.assertIn('href="#summary"', html)
 
     def test_preview_template_has_print_control_and_rendered_html(self):
-        """Preview template prints rendered output while hiding controls."""
+        """Completed preview exposes print and PDF download controls."""
         template = (ROOT_DIR / "webapp/app/templates/report_preview.html").read_text(
             encoding="utf-8"
         )
         self.assertIn("{{ report_html }}", template)
         self.assertIn("window.print()", template)
+        self.assertIn("Download PDF", template)
+        self.assertIn("{{ pdf_url }}", template)
         self.assertIn("@media print", template)
         self.assertIn(".report-preview-toolbar", template)
+
+    def test_report_pdf_has_cover_index_and_section_page_breaks(self):
+        """PDF includes cover, linked index, then starts every H2 on a new page."""
+        pdf = generate_report_pdf(
+            "domain circl",
+            "# Report for Domain circl.\n\n"
+            "- Query: `domain:circl.lu`\n\n"
+            "## FQDN detected\n\n"
+            "- www.example.com (192.0.2.1)\n\n"
+            "## Open ports\n\n"
+            "- 443: 1 host\n\n"
+            "## Full report dump\n\n"
+            "- 192.0.2.1\n",
+        )
+
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        self.assertIn(b"/Title (Domain circl)", pdf)
+        self.assertGreaterEqual(pdf.count(b"/Type /Page\n"), 6)
+        self.assertGreaterEqual(pdf.count(b"/Subtype /Link"), 4)
 
     @patch("app.utils.reports.requests.get")
     def test_passive_dns_retains_time_last_and_tolerates_failures(self, request_get):

@@ -2,7 +2,10 @@
 Helpers for scheduled Markdown reports.
 """
 
+# pylint: disable=too-many-lines
+
 import calendar
+from io import BytesIO
 from html import escape
 import ipaddress
 import json
@@ -14,6 +17,11 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
 import requests
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .timeutils import ensure_utc_naive, utcnow_naive
 
@@ -36,6 +44,8 @@ REPORT_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 REPORT_LIST_RE = re.compile(r"^(\s*)-\s+(.+?)\s*$")
 REPORT_INLINE_CODE_RE = re.compile(r"(`[^`]*`)")
 REPORT_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+REPORT_IP_LITERAL_RE = re.compile(r"(?<![0-9a-f:.])([0-9a-f:.]+)(?![0-9a-f:.])", re.I)
+REPORT_PDF_LIST_RE = re.compile(r"^(\s*)-\s+(.+?)\s*$")
 
 
 def normalize_report_emails(emails_value):
@@ -683,7 +693,35 @@ def _report_passive_dns_fqdns(per_ip_pdns_fqdns, active_since):
     ]
 
 
-def _render_report_inline(text):
+def _report_host_anchor_id(ip):
+    """Return the stable Full report dump anchor for one IP."""
+    try:
+        normalized_ip = ipaddress.ip_address(str(ip)).compressed
+        return f"host-{normalized_ip.replace('.', '-').replace(':', '-')}"
+    except ValueError:
+        return ""
+
+
+def _render_report_text(text, link_ips=False):
+    """Escape text, optionally linking IP literals to their host dump anchors."""
+    if not link_ips:
+        return escape(text)
+
+    rendered = []
+    position = 0
+    for match in REPORT_IP_LITERAL_RE.finditer(text):
+        ip = match.group(1)
+        anchor_id = _report_host_anchor_id(ip)
+        if not anchor_id:
+            continue
+        rendered.append(escape(text[position : match.start()]))
+        rendered.append(f'<a href="#{anchor_id}">{escape(ip)}</a>')
+        position = match.end()
+    rendered.append(escape(text[position:]))
+    return "".join(rendered)
+
+
+def _render_report_inline(text, link_ips=False):
     """Escape report text while retaining inline-code presentation."""
     rendered = []
     for part in REPORT_INLINE_CODE_RE.split(str(text)):
@@ -692,17 +730,21 @@ def _render_report_inline(text):
         else:
             escaped_parts = REPORT_BOLD_RE.split(part)
             rendered.extend(
-                f"<strong>{escape(value)}</strong>" if index % 2 else escape(value)
+                (
+                    f"<strong>{_render_report_text(value, link_ips)}</strong>"
+                    if index % 2
+                    else _render_report_text(value, link_ips)
+                )
                 for index, value in enumerate(escaped_parts)
             )
     return "".join(rendered)
 
 
-def _render_report_list_item(text):
+def _render_report_list_item(text, link_ips=False):
     """Render a report list item, exposing host tags as simple HTML code tags."""
     label, separator, tag_values = str(text).partition(": ")
     if label != "Tag" or not separator:
-        return _render_report_inline(text)
+        return _render_report_inline(text, link_ips)
     tags = [tag.strip() for tag in tag_values.split(",") if tag.strip()]
     return "Tag: " + " ".join(f"<code>{escape(tag)}</code>" for tag in tags)
 
@@ -714,7 +756,7 @@ def _report_heading_id(text, heading_ids):
     return slug if heading_ids[slug] == 1 else f"{slug}-{heading_ids[slug]}"
 
 
-def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-statements
+def render_report_markdown_html(  # pylint: disable=too-many-branches,too-many-locals,too-many-statements
     markdown_body,
 ):
     """Render Plum report Markdown subset as escaped HTML with a heading index."""
@@ -725,6 +767,7 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
     list_item_open = []
     heading_ids = {}
     toc_insert_at = None
+    current_section = ""
 
     def close_paragraph():
         if paragraphs:
@@ -748,6 +791,8 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
             close_lists()
             level = len(heading_match.group(1))
             title = heading_match.group(2)
+            if level == 2:
+                current_section = title
             if level > 1 and toc_insert_at is None:
                 toc_insert_at = len(lines)
             heading_id = _report_heading_id(title, heading_ids)
@@ -772,7 +817,19 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
                 list_depth += 1
             if list_item_open[-1]:
                 lines.append("</li>")
-            lines.append(f"<li>{_render_report_list_item(list_match.group(2))}")
+            item = list_match.group(2)
+            anchor_id = ""
+            if current_section == "Full report dump" and target_depth == 1:
+                anchor_id = _report_host_anchor_id(item)
+            link_ips = current_section in {
+                "New opened port",
+                "FQDN detected",
+                "FQDN discovered in Passive DNS",
+            }
+            anchor_attribute = f' id="{anchor_id}"' if anchor_id else ""
+            lines.append(
+                f"<li{anchor_attribute}>{_render_report_list_item(item, link_ips)}"
+            )
             list_item_open[-1] = True
             continue
         if not source_line.strip():
@@ -799,6 +856,175 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
     return f'<article class="report-html">{"".join(lines)}</article>'
 
 
+def _render_report_pdf_text(text, link_ips=False):
+    """Escape PDF text, optionally linking IP literals to host destinations."""
+    if not link_ips:
+        return escape(text)
+
+    rendered = []
+    position = 0
+    for match in REPORT_IP_LITERAL_RE.finditer(text):
+        ip = match.group(1)
+        anchor_id = _report_host_anchor_id(ip)
+        if not anchor_id:
+            continue
+        rendered.append(escape(text[position : match.start()]))
+        rendered.append(f'<a href="#{anchor_id}">{escape(ip)}</a>')
+        position = match.end()
+    rendered.append(escape(text[position:]))
+    return "".join(rendered)
+
+
+def _render_report_pdf_inline(text, link_ips=False):
+    """Escape report text for ReportLab's small Paragraph markup subset."""
+    rendered = []
+    for part in REPORT_INLINE_CODE_RE.split(str(text)):
+        if part.startswith("`") and part.endswith("`"):
+            rendered.append(f'<font name="Courier">{escape(part[1:-1])}</font>')
+            continue
+        bold_parts = REPORT_BOLD_RE.split(part)
+        rendered.extend(
+            (
+                f"<b>{_render_report_pdf_text(value, link_ips)}</b>"
+                if index % 2
+                else _render_report_pdf_text(value, link_ips)
+            )
+            for index, value in enumerate(bold_parts)
+        )
+    return "".join(rendered)
+
+
+def generate_report_pdf(report_name, markdown_body):  # pylint: disable=too-many-locals
+    """Generate a PDF with cover, linked index, and one page per H2 section."""
+    cover_title = str(report_name or "Report")
+    cover_title = cover_title[:1].upper() + cover_title[1:]
+    markdown_lines = str(markdown_body or "").splitlines()
+    heading_ids = {}
+    sections = []
+    for source_line in markdown_lines:
+        heading_match = REPORT_HEADING_RE.match(source_line)
+        if heading_match and len(heading_match.group(1)) == 2:
+            section_title = heading_match.group(2)
+            sections.append(
+                (section_title, _report_heading_id(section_title, heading_ids))
+            )
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+        title=cover_title,
+        author="P.L.U.M.",
+    )
+    styles = getSampleStyleSheet()
+    cover_style = ParagraphStyle(
+        "ReportCover",
+        parent=styles["Title"],
+        alignment=TA_CENTER,
+        fontSize=30,
+        leading=36,
+    )
+    section_style = ParagraphStyle(
+        "ReportSection",
+        parent=styles["Heading1"],
+        spaceAfter=0.35 * cm,
+    )
+    subsection_style = ParagraphStyle(
+        "ReportSubsection",
+        parent=styles["Heading2"],
+        spaceBefore=0.2 * cm,
+        spaceAfter=0.2 * cm,
+    )
+    paragraph_style = ParagraphStyle(
+        "ReportParagraph",
+        parent=styles["BodyText"],
+        leading=14,
+        spaceAfter=0.18 * cm,
+    )
+
+    story = [
+        Spacer(1, 11 * cm),
+        Paragraph(_render_report_pdf_inline(cover_title), cover_style),
+        PageBreak(),
+        Paragraph("Index", section_style),
+    ]
+    for title, section_id in sections:
+        story.append(
+            Paragraph(
+                f'• <a href="#{section_id}">{_render_report_pdf_inline(title)}</a>',
+                paragraph_style,
+            )
+        )
+    story.append(PageBreak())
+
+    current_section = ""
+    section_index = 0
+    for source_line in markdown_lines:
+        heading_match = REPORT_HEADING_RE.match(source_line)
+        list_match = REPORT_PDF_LIST_RE.match(source_line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            title = heading_match.group(2)
+            if level == 1:
+                continue
+            if level == 2:
+                current_section = title
+                section_id = sections[section_index][1]
+                section_index += 1
+                story.extend(
+                    [
+                        PageBreak(),
+                        Paragraph(
+                            f'<a name="{section_id}"/>'
+                            f"{_render_report_pdf_inline(title)}",
+                            section_style,
+                        ),
+                    ]
+                )
+            else:
+                story.append(
+                    Paragraph(_render_report_pdf_inline(title), subsection_style)
+                )
+            continue
+        if not source_line.strip():
+            story.append(Spacer(1, 0.12 * cm))
+            continue
+        if list_match:
+            depth = len(list_match.group(1).expandtabs(2)) // 2
+            item = list_match.group(2)
+            anchor_id = ""
+            if current_section == "Full report dump" and depth == 0:
+                anchor_id = _report_host_anchor_id(item)
+            link_ips = current_section in {
+                "New opened port",
+                "FQDN detected",
+                "FQDN discovered in Passive DNS",
+            }
+            anchor_markup = f'<a name="{anchor_id}"/>' if anchor_id else ""
+            list_style = ParagraphStyle(
+                f"ReportList{depth}",
+                parent=paragraph_style,
+                leftIndent=(depth + 1) * 0.45 * cm,
+                firstLineIndent=-0.3 * cm,
+            )
+            story.append(
+                Paragraph(
+                    f"{anchor_markup}• {_render_report_pdf_inline(item, link_ips)}",
+                    list_style,
+                )
+            )
+            continue
+        story.append(
+            Paragraph(_render_report_pdf_inline(source_line.strip()), paragraph_style)
+        )
+
+    document.build(story)
+    return buffer.getvalue()
+
+
 def build_report_markdown(  # pylint: disable=too-many-statements
     report,
     search_results,
@@ -821,26 +1047,20 @@ def build_report_markdown(  # pylint: disable=too-many-statements
     report_name = str(report.name or "")
     report_title = report_name[:1].upper() + report_name[1:]
 
-    lines = []
-    if report.description and report.description != report.query:
-        lines.extend([report.description, ""])
-
-    lines.extend(
-        [
-            f"# Report for {report_title}.",
-            "",
-            f"- Query: `{report.query}`",
-            f"- Period: {_format_datetime(from_dt)} to {_format_datetime(to_dt)}",
-            f"- Matching IPs: {total_ips}",
-            f"- Matching scans: {total_scans}",
-            "",
-            "## Open ports",
-            "",
-            "This section summarizes the total number of hosts exposing each open "
-            "port during the report period.",
-            "",
-        ]
-    )
+    lines = [
+        f"# Report for {report_title}.",
+        "",
+        f"- Query: `{report.query}`",
+        f"- Period: {_format_datetime(from_dt)} to {_format_datetime(to_dt)}",
+        f"- Matching IPs: {total_ips}",
+        f"- Matching scans: {total_scans}",
+        "",
+        "## Open ports",
+        "",
+        "This section summarizes the total number of hosts exposing each open "
+        "port during the report period.",
+        "",
+    ]
 
     if port_counter:
         for port, count in sorted(

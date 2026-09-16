@@ -14,6 +14,11 @@
     <button class="btn btn-default report-print-action" type="button" onclick="window.print()">
         <i class="fa fa-print" aria-hidden="true"></i> Print
     </button>
+    {% if pdf_url %}
+    <a class="btn btn-default report-pdf-action" href="{{ pdf_url }}">
+        <i class="fa fa-file-pdf-o" aria-hidden="true"></i> Download PDF
+    </a>
+    {% endif %}
 </div>
 
 {{ report_html }}

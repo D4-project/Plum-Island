@@ -452,22 +452,19 @@
                 </small>
                 {% endif %}
             </h4>
-            {% set has_https = 'https' in port_card.service_names or 'https-alt' in port_card.service_names %}
-            {% set has_http = 'http' in port_card.service_names %}
-            {% set has_http_proxy = 'http-proxy' in port_card.service_names %}
-            {% if has_https or has_http or has_http_proxy %}
             <div class="ip-port-title-actions">
                 <button
                     type="button"
                     class="ip-port-link"
-                    onclick="openPortSite('{{ 'https' if has_https else 'http' }}', '{{ port_card.portid }}')"
-                    title="Open {{ 'https' if has_https else 'http' }} service"
-                    aria-label="Open {{ 'https' if has_https else 'http' }} service"
+                    data-port="{{ port_card.portid }}"
+                    onclick="openPortSite(this)"
+                    style="display: none;"
+                    title="Open web service"
+                    aria-label="Open web service"
                 >
                     <i class="fa fa-external-link" aria-hidden="true"></i>
                 </button>
             </div>
-            {% endif %}
         </div>
         <div class="ip-port-summary">
             {{ port_card.observation_count }} IP observation{% if port_card.observation_count != 1 %}s{% endif %}
@@ -501,6 +498,7 @@
                 class="tab-pane {% if loop.last %}active{% endif %}"
                 id="port-{{ port_idx }}-{{ loop.index0 }}"
                 data-user-hostnames='{{ observation.user_hostnames | tojson }}'
+                data-web-scheme="{{ observation.web_scheme }}"
             >
                 <div class="ip-port-observation-meta">
                     First seen: {{ observation.first_seen or "N/A" }}
@@ -863,21 +861,37 @@
     }
 
     function buildPortSiteUrl(scheme, port) {
+        if (!['http', 'https'].includes(scheme)) return null;
+        const numericPort = Number(port);
+        if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) return null;
         const hostnameFilter = document.getElementById('scan-hostname-filter');
         const selectedValue = hostnameFilter ? hostnameFilter.value : '';
         const targetHost = selectedValue && selectedValue !== '__ip_only__' ? selectedValue : ip;
         const normalizedHost = formatUrlHost(targetHost);
-        const numericPort = Number(port);
         const defaultPort = scheme === 'https' ? 443 : 80;
-        const portSuffix = Number.isInteger(numericPort) && numericPort > 0 && numericPort !== defaultPort
+        const portSuffix = numericPort !== defaultPort
             ? `:${numericPort}`
             : '';
         return `${scheme}://${normalizedHost}${portSuffix}`;
     }
 
-    function openPortSite(scheme, port) {
-        const url = buildPortSiteUrl(scheme, port);
-        window.open(url, '_blank', 'noopener,noreferrer');
+    function updatePortSiteLink(card) {
+        const button = card.querySelector('.ip-port-link');
+        if (!button) return;
+        const pane = card.querySelector('.ip-port-tab-content > .tab-pane.active');
+        const scheme = pane ? pane.getAttribute('data-web-scheme') : '';
+        const available = Boolean(buildPortSiteUrl(scheme, button.getAttribute('data-port')));
+        button.style.display = available ? '' : 'none';
+        button.title = available ? `Open ${scheme} service` : 'Open web service';
+        button.setAttribute('aria-label', button.title);
+    }
+
+    function openPortSite(button) {
+        const card = button.closest('.ip-port-card');
+        const pane = card ? card.querySelector('.ip-port-tab-content > .tab-pane.active') : null;
+        const scheme = pane ? pane.getAttribute('data-web-scheme') : '';
+        const url = buildPortSiteUrl(scheme, button.getAttribute('data-port'));
+        if (url) window.open(url, '_blank', 'noopener,noreferrer');
     }
     window.openPortSite = openPortSite;
 
@@ -940,6 +954,7 @@
                 lastVisibleTab.classList.add('active');
                 lastVisiblePane.classList.add('active');
             }
+            updatePortSiteLink(card);
         });
 
         if (emptyState) {
@@ -966,6 +981,11 @@
     }
 
     const hostnameFilter = document.getElementById('scan-hostname-filter');
+    if (window.jQuery) {
+        window.jQuery('.ip-port-tabs a[data-toggle="tab"]').on('shown.bs.tab', function () {
+            updatePortSiteLink(this.closest('.ip-port-card'));
+        });
+    }
     if (hostnameFilter) {
         selectRequestedHostnameFromUrl(hostnameFilter);
         hostnameFilter.addEventListener('change', updatePortFilter);
