@@ -57,7 +57,7 @@ class OpnsenseDetectionTest(TestCase):
 
     def test_yaml_rule_preserves_existing_signal_and_tags(self):
         rule = yaml.safe_load(
-            (ROOT_DIR / "webapp/tags/tags/favicon_opnsense.yaml").read_text()
+            (ROOT_DIR / "webapp/tags/tags/opnsense.yaml").read_text()
         )
         self.assertIn("http_favicon_mmhash:-1148190371", rule["query"])
         self.assertIn("http_server.lk:OPNsense", rule["query"])

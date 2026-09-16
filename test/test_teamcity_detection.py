@@ -88,7 +88,7 @@ class TeamCityDetectionTest(TestCase):
         self.assertFalse(document_matches_criteria_groups(document, TEAMCITY_GROUPS))
 
     def test_yaml_rule_contains_all_signals(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/favicon_teamcity.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/teamcity.yaml").read_text())
         self.assertIn("http_favicon_mmhash:-1944119648", rule["query"])
         self.assertIn("http_header:teamcity-node-id", rule["query"])
         self.assertIn("http_favicon_md5:cee18e28257988b40028043e65a6c2a3", rule["query"])
