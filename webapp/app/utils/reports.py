@@ -822,7 +822,7 @@ def build_report_markdown(  # pylint: disable=too-many-statements
     report_title = report_name[:1].upper() + report_name[1:]
 
     lines = []
-    if report.description:
+    if report.description and report.description != report.query:
         lines.extend([report.description, ""])
 
     lines.extend(

@@ -246,6 +246,22 @@ class ReportProtocolViewsTest(TestCase):
         self.assertTrue(markdown.startswith("# Report for Protocol report.\n"))
         self.assertNotIn("- Title:", markdown)
 
+    def test_report_description_repeating_query_is_omitted(self):
+        """The query must not be repeated above the report heading."""
+        report = SimpleNamespace(
+            name="domain circl",
+            description="domain:circl.lu",
+            query="domain:circl.lu",
+            schedule_type="monthly",
+        )
+        markdown = build_report_markdown(report, {"results": {}}, {}, {}, None, None)
+
+        self.assertTrue(markdown.startswith("# Report for Domain circl.\n"))
+        self.assertEqual(markdown.count("domain:circl.lu"), 1)
+        self.assertLess(
+            markdown.index("# Report for Domain circl."), markdown.index("- Query:")
+        )
+
     def test_report_heading_uppercases_user_title_first_character(self):
         """Report heading normalizes the first character of the configured title."""
         report = SimpleNamespace(
