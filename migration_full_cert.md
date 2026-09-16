@@ -187,7 +187,7 @@ les conditions AND/OR originales (notamment les deux critères de Sliver en AND)
 | `tools/index_kvrocks.py` | Ajouter les CN à `INDEX_FIELDS` et vérifier le nettoyage des quatre familles de clés lors du rebuild |
 | `tools/dump_object.py` | Exposer les nouveaux champs |
 | `webapp/app/templates/search_kvrocks.html` | Aide : distinguer CN et DN complet |
-| `documentation/search.md`, `documentation/kvrocks_objects.md`, `documentation/tagging.md` | Contrat, syntaxe, exemples et migration |
+| `documentation/search.md`, `documentation/kvrocks_objects.md`, Plum-Antibodies `documentation/tagging.md` | Contrat, syntaxe, exemples et migration |
 | `documentation/tools.md`, `documentation/recovery-tools.md`, `documentation/migration.md` | Procédure complète et limites opérationnelles |
 | `readme.md`, `release_note.md` | Annoncer le changement de sens et le rebuild requis |
 
