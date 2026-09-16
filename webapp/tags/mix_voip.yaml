@@ -1,7 +1,7 @@
 description: MixVoip
-query: 'http_title:"MIXpbx :: Configuration and managagement"'
+query: 'http_title:"MIXpbx :: Configuration and managagement" OR http_favicon_mmhash:1285754718 OR http_favicon_md5:7C66796976885F63BB885A7FBDBB5BB1 OR http_favicon_sha256:ee306ef8bf87f86d0cd65619dd08384ff312c85419b068d461627d47fd1d875c'
 tags:
 - product:mixvoip
-- product:telephony
+- type:telephony
 - vendor:mixvoip
-version: 20260520T133458Z
+version: 20260916T000000Z

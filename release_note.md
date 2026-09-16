@@ -18,6 +18,8 @@
 
 - Extend INSTAR camera detection with reported favicon MD5 and SHA-256 fingerprints, closes #211.
 
+- Extend MixVoip detection with favicon mmhash, MD5, and SHA-256 fingerprints, closes #224.
+
 - Add case-insensitive standalone `NOT` exclusions to structured search, exports and matching IP history, with per-UID semantics and OR-group isolation; support negated document predicates in tag rules.
 
 - Restrict search timestamp metadata reads to matching UIDs within each IP's membership set; preserve full IP detail history, date semantics, ordering and pagination.
