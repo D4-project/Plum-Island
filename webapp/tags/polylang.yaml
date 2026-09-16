@@ -1,9 +1,0 @@
-description: Polylang
-query: http_headval:x-redirect-by.bg:polylang
-tags:
-- product:polylang
-- product:wordpress
-- type:cms
-- lang:php
-- vendor:polylang
-version: 20260520T133458Z

@@ -417,7 +417,7 @@ If you skip one of these, the feature will look half-implemented.
 
 ### If you change YAML detection rules
 
-- webapp/tags/*.yaml
+- webapp/tags/tags/*.yaml
 - release_note.md
 
 When you modify an existing YAML rule, increase its UTC `version` in

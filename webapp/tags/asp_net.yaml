@@ -1,8 +1,0 @@
-description: ASP.NET
-query: http_favicon_mmhash:1772087922 OR http_headval:x-powered-by.bg:asp.net OR http_header:x-aspnet-version
-  OR http_header:x-aspnetmvc-version
-tags:
-- lang:asp
-- vendor:windows
-- product:asp-net
-version: 20260520T133458Z

@@ -1,8 +1,0 @@
-description: Cisco SSH
-query: banner.bg:ssh-2.0-cisco-
-tags:
-- vendor:cisco
-- type:router
-- proto:ssh
-- product:cisco-ssh
-version: 20260520T133458Z

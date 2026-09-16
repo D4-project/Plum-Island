@@ -35,7 +35,7 @@ class SimpleHttpDetectionTest(TestCase):
         )
 
     def test_yaml_rule_contains_simplehttp_signal(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/simplehttp.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/simplehttp.yaml").read_text())
         self.assertEqual(rule["description"], "SimpleHTTP")
         self.assertEqual(rule["query"], 'http_server.bg:"SimpleHTTP"')
         self.assertEqual(

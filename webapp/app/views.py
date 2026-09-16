@@ -3774,6 +3774,7 @@ class TagRulesView(ModelView):
         tags_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "tags",
+            "tags",
         )
         os.makedirs(tags_dir, exist_ok=True)
         exported = 0

@@ -1,6 +1,0 @@
-description: HP iLO
-query: http_favicon_mmhash:2059618623 OR x509_issuer:"ilo default issuer (do not trust)"
-tags:
-- product:hp-ilo
-- vendor:hp
-version: 20260520T133458Z

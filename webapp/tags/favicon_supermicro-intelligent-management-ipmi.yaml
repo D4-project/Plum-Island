@@ -1,6 +1,0 @@
-description: Supermicro Intelligent Management (IPMI)
-query: http_favicon_mmhash:1410610129
-tags:
-- product:supermicro-intelligent-management-ipmi
-- vendor:supermicro
-version: 20260520T133458Z

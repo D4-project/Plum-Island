@@ -1,7 +1,0 @@
-description: FileZilla FTP Server
-query: banner.bg:220-filezilla OR x509_issuer:"filezilla-server self signed certificate"
-tags:
-- proto:ftp
-- product:filezilla
-- vendor:filezilla
-version: 20260520T133458Z

@@ -12,7 +12,7 @@ over the indexed tags, not for conditional dependencies between tagging rules.
 
 ## YAML format
 
-Tag rules are stored under `webapp/tags/` as YAML files.
+Tag rules are stored under `webapp/tags/tags/` as YAML files.
 The filename, with `.yaml`, is the rule name.
 
 Example:
@@ -69,7 +69,7 @@ This keeps local DB edits unless the YAML file carries a newer version.
 
 ## Import commands
 
-Import every YAML rule from `webapp/tags/`:
+Import every YAML rule from `webapp/tags/tags/`:
 
 ```bash
 .venv/bin/python tools/tag_mgmt.py import --all
@@ -78,7 +78,7 @@ Import every YAML rule from `webapp/tags/`:
 Import one YAML file only:
 
 ```bash
-.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/tags/hashicorp_vault.yaml
 ```
 
 Import the YAML rule matching an existing DB tag rule id:

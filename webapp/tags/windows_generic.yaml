@@ -1,6 +1,0 @@
-description: Windows
-query: http_server.lk:(Win64) or http_server.bg:microsoft-iis
-tags:
-- vendor:windows
-- product:windows
-version: 20260520T133458Z

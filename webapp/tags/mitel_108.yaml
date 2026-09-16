@@ -1,7 +1,0 @@
-description: Mitel 108 Rack
-query: http_title.lk:"mitel 108" OR banner.lk:"mitel108 login" OR x509_subject.lk:"mitel
-  deutschland" OR x509_issuer.lk:"mitel deutschland"
-tags:
-- vendor:pbx
-- product:mitel
-version: 20260520T133458Z

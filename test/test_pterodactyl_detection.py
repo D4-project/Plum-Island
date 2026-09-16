@@ -52,7 +52,7 @@ class PterodactylDetectionTest(TestCase):
         )
 
     def test_yaml_rule_contains_expected_query_and_tags(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/pterodactyl.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/pterodactyl.yaml").read_text())
         self.assertIn("http_favicon_mmhash:846001371", rule["query"])
         self.assertIn('http_title:"Pterodactyl"', rule["query"])
         self.assertEqual(

@@ -1,7 +1,0 @@
-description: NordVPN
-query: domain:nordvpn.com AND port:8443
-tags:
-- product:nordvpn
-- vendor:nordvpn
-- type:vpn
-version: 20260909T000000Z

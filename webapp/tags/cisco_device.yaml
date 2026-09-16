@@ -1,6 +1,0 @@
-description: Cisco Device
-query: banner.lk:-cisco-
-tags:
-- vendor:cisco
-- product:cisco-device
-version: 20260520T133458Z

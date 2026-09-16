@@ -1,6 +1,0 @@
-description: NetData
-query: http_favicon_mmhash:1302486561
-tags:
-- product:netdata
-- vendor:netdata
-version: 20260520T133458Z

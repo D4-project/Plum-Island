@@ -146,7 +146,7 @@ The setup script creates a local Python virtual environment, installs `requireme
 
 - default TCP ports
 - HTTP header tagging collection
-- YAML tag rules from `webapp/tags/`
+- YAML tag rules from `webapp/tags/tags/`
 - NSE scripts from `https://github.com/D4-project/Plum-Rules-NSE`
 - all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
 

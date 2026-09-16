@@ -44,7 +44,7 @@ class SapDetectionTest(TestCase):
             self.assertFalse(document_matches_criteria_groups(document, SAP_GROUPS))
 
     def test_yaml_rule_contains_expected_query_and_tags(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/sap.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/sap.yaml").read_text())
         self.assertEqual(
             rule["query"],
             'http_title.bg:"SAP Commerce Cloud" OR '

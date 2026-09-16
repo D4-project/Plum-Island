@@ -70,7 +70,7 @@ class ScreenConnectDetectionTest(TestCase):
             )
 
     def test_yaml_rule_contains_expected_query_and_tag(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/screenconnect.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/screenconnect.yaml").read_text())
         self.assertEqual(rule["query"], "http_server.bg:screenconnect/")
         self.assertEqual(rule["tags"], ["product:screenconnect"])
 

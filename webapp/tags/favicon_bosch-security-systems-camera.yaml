@@ -1,6 +1,0 @@
-description: Bosch Security Systems (Camera)
-query: http_favicon_mmhash:-1702769256
-tags:
-- product:bosch-security-systems
-- vendor:camera
-version: 20260520T133458Z

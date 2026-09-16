@@ -76,7 +76,7 @@ class CiscoSwitchDetectionTest(TestCase):
         self.assertFalse(document_matches_criteria_groups(result, SWITCH_GROUPS))
 
     def test_yaml_rule_contains_supplied_signals(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/cisco_switch.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/cisco_switch.yaml").read_text())
         self.assertIn("http_favicon_mmhash:-627596452", rule["query"])
         self.assertIn(
             "http_favicon_md5:c859808fad284ad07d0c7c6836d18b8e",

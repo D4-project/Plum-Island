@@ -1,6 +1,0 @@
-description: Ubuntu
-query: banner.bg:ssh-2.0-openssh AND banner.lk:ubuntu OR http_headval:x-powered-by.lk:ubuntu OR banner.lk:esmtp AND banner.lk:"(ubuntu)"
-tags:
-- vendor:ubuntu
-- product:ubuntu
-version: 20260915T123711Z

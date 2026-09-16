@@ -1,6 +1,0 @@
-description: Zabbix
-query: http_favicon_mmhash:892542951
-tags:
-- product:zabbix
-- vendor:zabbix
-version: 20260520T133458Z

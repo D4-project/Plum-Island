@@ -1,5 +1,0 @@
-description: BGP
-query: banner.bg:"\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\FF\00\15\03\06\05"
-tags:
-- proto:bgp
-version: 20260520T133458Z

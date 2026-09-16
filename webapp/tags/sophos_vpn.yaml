@@ -1,9 +1,0 @@
-description: Sophos VPN
-query: http_favicon_mmhash:553933550 OR http_favicon_md5:01B785147724520AEC8C968266995141 OR
-  http_favicon_sha256:fed339c5d4ad411d80eb8e67b43e8427a27d970b997510b9d0286a33ce39abad OR
-  http_title.bg:"VPN Portal" OR http_favicon_md5:DC07CE58639E2DEEDDD787B3C7BF432E
-tags:
-- product:sophosvpn
-- vendor:sophos
-- type:vpn
-version: 20260916T000000Z

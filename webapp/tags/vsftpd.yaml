@@ -1,7 +1,0 @@
-description: vsftpd
-query: banner.bg:"220 (vsftpd "
-tags:
-- proto:ftp
-- product:vsftpd
-- vendor:vsftpd
-version: 20260520T133458Z

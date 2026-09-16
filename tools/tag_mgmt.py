@@ -22,7 +22,9 @@ import yaml
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEBAPP_DIR = BASE_DIR / "webapp"
-DEFAULT_TAGS_DIR = WEBAPP_DIR / "tags"
+# Plum-Antibodies is mounted at webapp/tags as a Git submodule. Its own
+# bundled rules live below the repository's tags/ directory.
+DEFAULT_TAGS_DIR = WEBAPP_DIR / "tags" / "tags"
 TOOLS_CONFIG = BASE_DIR / "tools" / "config.yaml"
 MISSING_VERSION_TIME = datetime(1970, 1, 1)
 TAG_FLUSH_BATCH_SIZE = 1000

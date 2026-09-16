@@ -1,8 +1,0 @@
-description: Telnet XDISPLOC option
-query: banner.bg:"\xFF\xFB" banner.lk:"\xFF\xFB " OR banner.bg:"\xFF\xFD"
-  banner.lk:"\xFF\xFD " OR banner.bg:"\xFF\xFC" banner.lk:"\xFF\xFC " OR
-  banner.bg:"\xFF\xFE" banner.lk:"\xFF\xFE " OR banner.bg:"\xFF\xFA" banner.lk:"\xFF\xFA "
-tags:
-- proto:x-window
-- proto:telnet
-version: 20260520T133458Z

@@ -1,6 +1,0 @@
-description: WorldClient for Mdaemon
-query: http_favicon_mmhash:1985721423 OR http_favicon_mmhash:-35107086
-tags:
-- product:worldclient-for-mdaemon
-- vendor:worldclient
-version: 20260520T133458Z

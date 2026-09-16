@@ -1,7 +1,0 @@
-description: Apache RocketMQ
-query: http_headval:www-authenticate.lk:rocketmq
-tags:
-- product:rocketmq
-- type:message-queue
-- vendor:apache
-version: 20260520T133458Z

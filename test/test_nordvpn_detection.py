@@ -33,7 +33,7 @@ class NordVpnDetectionTest(TestCase):
             )
 
     def test_yaml_rule_contains_expected_query_and_tags(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/nordvpn.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/nordvpn.yaml").read_text())
         self.assertEqual(rule["query"], "domain:nordvpn.com AND port:8443")
         self.assertEqual(
             rule["tags"], ["product:nordvpn", "vendor:nordvpn", "type:vpn"]

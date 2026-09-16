@@ -1,6 +1,0 @@
-description: Cisco Meraki
-query: http_favicon_mmhash:163842882
-tags:
-- vendor:cisco
-- product:meraki
-version: 20260520T133458Z

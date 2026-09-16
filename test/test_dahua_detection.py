@@ -52,7 +52,7 @@ class DahuaDetectionTest(TestCase):
         )
 
     def test_yaml_rule_contains_expected_signals_and_tags(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/favicon_dahua.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/favicon_dahua.yaml").read_text())
         self.assertIn("http_favicon_mmhash:1653394551", rule["query"])
         self.assertIn("http_favicon_md5:a437e84d20c9cf7442fffab49e0f07e7", rule["query"])
         self.assertIn("x509_issuer.lk:dahua", rule["query"])

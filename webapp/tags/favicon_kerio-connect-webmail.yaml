@@ -1,6 +1,0 @@
-description: Kerio Connect (Webmail)
-query: http_favicon_mmhash:-677167908 OR http_favicon_mmhash:-1678298769
-tags:
-- product:kerio-connect-webmail
-- vendor:kerio
-version: 20260520T133458Z

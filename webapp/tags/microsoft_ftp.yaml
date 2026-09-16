@@ -1,7 +1,0 @@
-description: Microsoft FTP Service
-query: banner.lk:"microsoft ftp service"
-tags:
-- proto:ftp
-- vendor:windows
-- product:microsoft-ftp-service
-version: 20260520T133458Z

@@ -1,7 +1,0 @@
-description: Raspberry
-query: banner.bg:ssh-2.0-openssh AND banner.lk:raspbian OR http_server.lk:raspbian
-tags:
-- type:linux
-- vendor:debian
-- product:raspberry
-version: 20260520T133458Z

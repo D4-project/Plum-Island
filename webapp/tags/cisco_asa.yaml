@@ -1,7 +1,0 @@
-description: Cisco ASA
-query: x509_issuer:"cn=asa temporary self signed certificate"
-tags:
-- vendor:cisco
-- product:cisco-asa
-- type:firewall
-version: 20260520T133458Z

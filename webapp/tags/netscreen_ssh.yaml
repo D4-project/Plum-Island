@@ -1,8 +1,0 @@
-description: NetScreen SSH
-query: banner.bg:ssh-2.0-netscreen
-tags:
-- vendor:netscreen
-- type:firewall
-- proto:ssh
-- product:netscreen-ssh
-version: 20260520T133458Z

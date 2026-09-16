@@ -42,7 +42,7 @@ class SucuriDetectionTest(TestCase):
         )
 
     def test_yaml_rule_contains_expected_query_and_tags(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/sucuri.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/sucuri.yaml").read_text())
         self.assertIn("http_header:x-sucuri-id", rule["query"])
         self.assertEqual(
             rule["tags"], ["product:sucuri-firewall", "vendor:sucuri", "type:firewall"]

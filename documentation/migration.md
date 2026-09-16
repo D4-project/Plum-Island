@@ -68,7 +68,7 @@ Run the initial setup loader to ensure current roles, TCP ports, header collecti
 .venv/bin/python tools/initial_setup.py
 ```
 
-This imports current YAML tag rules from `webapp/tags/`, clones/updates `https://github.com/D4-project/Plum-Rules-NSE`, imports NSE scripts, and creates the all-target `Default banner scan` profile for ports `22`, `80`, and `443` with `banner.nse`.
+This imports current YAML tag rules from `webapp/tags/tags/`, clones/updates `https://github.com/D4-project/Plum-Rules-NSE`, imports NSE scripts, and creates the all-target `Default banner scan` profile for ports `22`, `80`, and `443` with `banner.nse`.
 
 ## 5. Configure tool migration targets
 

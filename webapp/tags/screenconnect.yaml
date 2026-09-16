@@ -1,5 +1,0 @@
-description: ScreenConnect
-query: http_server.bg:screenconnect/
-tags:
-- product:screenconnect
-version: 20260908T000000Z

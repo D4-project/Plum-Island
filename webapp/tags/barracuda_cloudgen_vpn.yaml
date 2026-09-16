@@ -1,9 +1,0 @@
-description: Barracuda CloudGen VPN
-query: http_title.lk:/portal/totp.html OR x509_subject.bg:"ssl vpn on barracuda
-  cloudgen firewall"
-tags:
-- vendor:barracuda
-- product:barracuda-cloudgen-firewall
-- type:firewall
-- type:vpn
-version: 20260520T133458Z

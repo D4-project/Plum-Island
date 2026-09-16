@@ -53,7 +53,7 @@ It performs these actions:
 - create/update security roles from `webapp/security_roles/*.yaml`
 - create the default TCP protocol and TCP ports
 - create the default HTTP header tagging collection from `webapp/app/models.py`
-- import YAML tag rules from `webapp/tags/` into the application database
+- import YAML tag rules from `webapp/tags/tags/` into the application database
 - clone/update `https://github.com/D4-project/Plum-Rules-NSE` into `external/Plum-Rules-NSE` and import every `.nse` file into the `nses` table
 - create an all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
 
@@ -87,7 +87,7 @@ If a script with the same filename already exists, it is updated only when the c
 
 Manage tag YAML import, DB rules, and Kvrocks tag indexes. Running it without a subcommand prints help and does nothing.
 
-Import YAML tag rules from `webapp/tags/` into the SQLite application database:
+Import YAML tag rules from `webapp/tags/tags/` into the SQLite application database:
 
 ```bash
 .venv/bin/python tools/tag_mgmt.py import --all
@@ -98,11 +98,11 @@ Useful import options:
 ```bash
 .venv/bin/python tools/tag_mgmt.py import --all --dry-run
 .venv/bin/python tools/tag_mgmt.py import --id 42
-.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/tags/hashicorp_vault.yaml
 .venv/bin/python tools/tag_mgmt.py import --all --tags-dir webapp/tags
 .venv/bin/python tools/tag_mgmt.py delete --all
 .venv/bin/python tools/tag_mgmt.py delete --id 42
-.venv/bin/python tools/tag_mgmt.py delete --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py delete --tags-file webapp/tags/tags/hashicorp_vault.yaml
 .venv/bin/python tools/tag_mgmt.py flush-tag tag:proto:ssh
 ```
 

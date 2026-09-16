@@ -1,6 +1,0 @@
-description: Netflix
-query: http_favicon_mmhash:902521196
-tags:
-- product:netflix
-- vendor:netflix
-version: 20260520T133458Z

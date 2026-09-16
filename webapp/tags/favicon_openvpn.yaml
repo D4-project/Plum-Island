@@ -1,6 +1,0 @@
-description: OpenVPN
-query: http_favicon_mmhash:396533629
-tags:
-- product:openvpn
-- vendor:openvpn
-version: 20260520T133458Z

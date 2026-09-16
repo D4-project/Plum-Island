@@ -35,7 +35,7 @@ class LighttpdDetectionTest(TestCase):
         )
 
     def test_yaml_rule_contains_expected_query_and_tags(self):
-        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/lighttpd.yaml").read_text())
+        rule = yaml.safe_load((ROOT_DIR / "webapp/tags/tags/lighttpd.yaml").read_text())
         self.assertEqual(rule["query"], "http_server.lk:lighttpd")
         self.assertEqual(
             rule["tags"], ["product:lighttpd", "vendor:lighttpd"]

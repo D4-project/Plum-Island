@@ -1,6 +1,0 @@
-description: Octoprint (3D printer)
-query: http_favicon_mmhash:1307375944
-tags:
-- product:octoprint-3d-printer
-- vendor:octoprint
-version: 20260520T133458Z

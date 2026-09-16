@@ -108,7 +108,7 @@ def import_tag_rules(dry_run=False):
     from tag_mgmt import import_rules  # pylint: disable=import-outside-toplevel
 
     args = SimpleNamespace(
-        tags_dir=str(WEBAPP_DIR / "tags"),
+        tags_dir=str(WEBAPP_DIR / "tags" / "tags"),
         tags_file=None,
         all=True,
         rule_id=None,

@@ -1,6 +1,0 @@
-description: Cisco Meraki Dashboard
-query: http_favicon_mmhash:804949239
-tags:
-- vendor:cisco
-- product:meraki-dashboard
-version: 20260520T133458Z

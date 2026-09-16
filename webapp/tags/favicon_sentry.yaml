@@ -1,6 +1,0 @@
-description: Sentry
-query: http_favicon_mmhash:2063428236
-tags:
-- product:sentry
-- vendor:sentry
-version: 20260520T133458Z
