@@ -13,6 +13,14 @@ if [ ! -d "webapp" ]; then
   echo "ERROR: This script should be launched in the project directory."
   exit 1
   fi
+
+# Tag rules are maintained in the Plum-Antibodies Git submodule. Initialize it
+# here so a regular `git clone` is sufficient for a fresh installation.
+if ! git submodule update --init --recursive; then
+  echo "ERROR: Could not initialize the Plum-Antibodies tag submodule."
+  exit 1
+fi
+
 if [  -f "webapp/app.db" ]; then
   echo "ERROR: The Database has already been created, remove app.db if you want to reset the instance."
   exit 1

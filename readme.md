@@ -137,7 +137,7 @@ Python package dependencies are listed in [requirements.txt](requirements.txt):
 ## Quick setup
 
 ```bash
-git clone https://github.com/D4-project/Plum-Island
+git clone --recurse-submodules https://github.com/D4-project/Plum-Island
 cd Plum-Island
 ./setup.sh
 ```

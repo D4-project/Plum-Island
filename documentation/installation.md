@@ -14,10 +14,14 @@ Before starting the setup, make sure Meilisearch and Kvrocks are running and rea
 Clone the repository and run the setup script:
 
 ```bash
-git clone https://github.com/D4-project/Plum-Island
+git clone --recurse-submodules https://github.com/D4-project/Plum-Island
 cd Plum-Island
 ./setup.sh
 ```
+
+The tag rules are provided by the `Plum-Antibodies` submodule. `setup.sh`
+initializes it automatically; for an existing checkout, run
+`git submodule update --init --recursive` before setup.
 
 It will ask for location of Kvrocks and Meilisearch:
 ```
@@ -65,7 +69,7 @@ python run.py
 ### Quick start
 
 ```bash
-git clone https://github.com/D4-project/Plum-Island
+git clone --recurse-submodules https://github.com/D4-project/Plum-Island
 cd Plum-Island
 cp .env.example .env
 ```

@@ -99,7 +99,7 @@ Useful import options:
 .venv/bin/python tools/tag_mgmt.py import --all --dry-run
 .venv/bin/python tools/tag_mgmt.py import --id 42
 .venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/tags/hashicorp_vault.yaml
-.venv/bin/python tools/tag_mgmt.py import --all --tags-dir webapp/tags
+.venv/bin/python tools/tag_mgmt.py import --all --tags-dir webapp/tags/tags
 .venv/bin/python tools/tag_mgmt.py delete --all
 .venv/bin/python tools/tag_mgmt.py delete --id 42
 .venv/bin/python tools/tag_mgmt.py delete --tags-file webapp/tags/tags/hashicorp_vault.yaml
