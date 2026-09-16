@@ -1,0 +1,6 @@
+description: Gandi domain parking
+query: http_favicon_mmhash:2015787914 OR http_favicon_md5:D98661CA3371E1A8FA03E00ED8BD603E OR http_favicon_sha256:2ca8a7d5bf257b1522cc51f7c192f63132bead19555afd3149bfb63d5203ac5a
+tags:
+- vendor:gandi
+- type:parking
+version: 20260916T000000Z
