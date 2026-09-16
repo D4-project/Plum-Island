@@ -16,7 +16,6 @@ import requests
 
 from .timeutils import ensure_utc_naive, utcnow_naive
 
-
 logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -24,6 +23,8 @@ MONTHLY = "monthly"
 WEEKLY = "weekly"
 REPORT_SCHEDULE_TYPES = frozenset((MONTHLY, WEEKLY))
 REPORT_FQDN_LIMIT = 25
+REPORT_WEB_PROTOCOL_TAGS = frozenset(("proto:http", "proto:https"))
+REPORT_MAIL_PROTOCOL_TAGS = frozenset(("proto:smtp", "proto:imap", "proto:pop3"))
 
 
 def normalize_report_emails(emails_value):
@@ -373,6 +374,29 @@ def _extract_pdns_fqdn(record):
     return ""
 
 
+def _extract_pdns_last_seen(record):
+    """Return a validated CIRCL Passive DNS ``time_last`` epoch timestamp."""
+    value = (record or {}).get("time_last")
+    if isinstance(value, bool):
+        return None
+    try:
+        timestamp = int(value)
+        datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, TypeError, ValueError):
+        return None
+    return timestamp if timestamp > 0 else None
+
+
+def _format_pdns_last_seen(timestamp):
+    """Format a validated Passive DNS timestamp or return the fallback label."""
+    if timestamp is None:
+        return "N/A"
+    try:
+        return _format_datetime(datetime.fromtimestamp(timestamp, tz=timezone.utc))
+    except (OverflowError, OSError, TypeError, ValueError):
+        return "N/A"
+
+
 def collect_report_passive_dns_fqdns(
     app_config,
     ips,
@@ -397,7 +421,9 @@ def collect_report_passive_dns_fqdns(
 
     per_ip_pdns = {}
     for done, ip in enumerate(ips, start=1):
-        requested_fqdns = per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
+        requested_fqdns = (
+            per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
+        )
         remaining = REPORT_FQDN_LIMIT - len(requested_fqdns)
         if remaining <= 0:
             update_progress(done)
@@ -423,7 +449,12 @@ def collect_report_passive_dns_fqdns(
             if not fqdn or fqdn in seen:
                 continue
             seen.add(fqdn)
-            pdns_fqdns.append(fqdn)
+            pdns_fqdns.append(
+                {
+                    "fqdn": fqdn,
+                    "last_seen": _extract_pdns_last_seen(record),
+                }
+            )
             if len(pdns_fqdns) >= remaining:
                 break
 
@@ -447,6 +478,137 @@ def compute_new_open_ports(per_ip_ports, previous_per_ip_ports):
         if new_ports:
             new_open_ports[ip] = new_ports
     return new_open_ports
+
+
+def _normalize_report_pdns_entry(entry):
+    """Normalize current and legacy Passive DNS report entry shapes."""
+    if isinstance(entry, dict):
+        fqdn = _normalize_report_fqdn(entry.get("fqdn"))
+        last_seen = entry.get("last_seen")
+    else:
+        fqdn = _normalize_report_fqdn(entry)
+        last_seen = None
+    return fqdn, last_seen
+
+
+def _report_associated_fqdns(ptr_fqdns, requested_fqdns, pdns_fqdns):
+    """Return deduplicated report FQDNs in their established source order."""
+    seen_associated = set()
+    associated_entries = []
+    for fqdn in ptr_fqdns:
+        fqdn_key = str(fqdn).lower()
+        if fqdn_key in seen_associated:
+            continue
+        seen_associated.add(fqdn_key)
+        associated_entries.append((fqdn, "ptr", None))
+    for fqdn in requested_fqdns:
+        fqdn_key = str(fqdn).lower()
+        if fqdn_key in seen_associated:
+            continue
+        seen_associated.add(fqdn_key)
+        associated_entries.append((fqdn, "", None))
+    for entry in pdns_fqdns:
+        fqdn, last_seen = _normalize_report_pdns_entry(entry)
+        fqdn_key = fqdn.lower()
+        if not fqdn or fqdn_key in seen_associated:
+            continue
+        seen_associated.add(fqdn_key)
+        associated_entries.append((fqdn, "pdns", last_seen))
+    return associated_entries
+
+
+def _report_host_lines(ip, _uids, report_data):  # pylint: disable=too-many-locals
+    """Render one host and its associated FQDNs as Markdown list lines."""
+    per_ip_ports = report_data["ports"]
+    per_ip_tags = report_data["tags"]
+    per_ip_requested_fqdns = report_data["requested_fqdns"]
+    per_ip_ptr_fqdns = report_data["ptr_fqdns"]
+    per_ip_pdns_fqdns = report_data["pdns_fqdns"]
+    tags = per_ip_tags.get(ip, []) if per_ip_tags else []
+    requested_fqdns = (
+        per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
+    )
+    ptr_fqdns = per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else []
+    pdns_fqdns = per_ip_pdns_fqdns.get(ip, []) if per_ip_pdns_fqdns else []
+    ports = per_ip_ports.get(ip) or []
+    ports_text = ", ".join(ports) if ports else "none"
+    lines = [f"- {ip}"]
+    if tags:
+        lines.append(f"  - Tag: {', '.join(tags)}")
+    lines.extend(
+        [
+            f"  - Open ports: {ports_text}",
+        ]
+    )
+    associated_entries = _report_associated_fqdns(
+        ptr_fqdns,
+        requested_fqdns,
+        pdns_fqdns,
+    )
+    associated_count = len(associated_entries)
+    if associated_count:
+        lines.append(f"  - Associated FQDNs ({associated_count})")
+        for fqdn, source, last_seen in associated_entries[:REPORT_FQDN_LIMIT]:
+            if source == "pdns":
+                lines.append(
+                    f"    - {fqdn} (pdns) — last seen: "
+                    f"{_format_pdns_last_seen(last_seen)}"
+                )
+            else:
+                suffix = f" ({source})" if source else ""
+                lines.append(f"    - {fqdn}{suffix}")
+        if associated_count > REPORT_FQDN_LIMIT:
+            remaining_count = associated_count - REPORT_FQDN_LIMIT
+            lines.append(f"    - {remaining_count} additional fqdn not listed here")
+    return lines
+
+
+def _report_protocol_groups(results, per_ip_tags):
+    """Split report IPs into web, mail, and unclassified protocol views."""
+    groups = {"Web hosts": [], "Mail related": [], "Other": []}
+    for ip in sorted(results, key=_ip_sort_key):
+        tags = set(per_ip_tags.get(ip, []) if per_ip_tags else [])
+        is_web = bool(tags & REPORT_WEB_PROTOCOL_TAGS)
+        is_mail = bool(tags & REPORT_MAIL_PROTOCOL_TAGS)
+        if is_web:
+            groups["Web hosts"].append(ip)
+        if is_mail:
+            groups["Mail related"].append(ip)
+        if not is_web and not is_mail:
+            groups["Other"].append(ip)
+    return groups
+
+
+def _fqdn_domain_sort_key(fqdn):
+    """Sort FQDNs by their domain labels before their hostname labels."""
+    return tuple(reversed(str(fqdn).rstrip(".").lower().split(".")))
+
+
+def _report_detected_fqdns(per_ip_ptr_fqdns, per_ip_requested_fqdns):
+    """Return unique non-Passive-DNS FQDNs, sorted by domain."""
+    detected = {}
+    for per_ip_fqdns in (per_ip_ptr_fqdns or {}, per_ip_requested_fqdns or {}):
+        for fqdns in per_ip_fqdns.values():
+            for fqdn in fqdns:
+                normalized = str(fqdn).strip()
+                if normalized:
+                    detected.setdefault(normalized.lower(), normalized)
+    return sorted(detected.values(), key=_fqdn_domain_sort_key)
+
+
+def _report_passive_dns_fqdns(per_ip_pdns_fqdns):
+    """Return unique Passive DNS FQDNs and their most recent observation."""
+    detected = {}
+    for entries in (per_ip_pdns_fqdns or {}).values():
+        for entry in entries:
+            fqdn, last_seen = _normalize_report_pdns_entry(entry)
+            if not fqdn:
+                continue
+            key = fqdn.lower()
+            previous = detected.get(key)
+            if previous is None or (last_seen or 0) > (previous[1] or 0):
+                detected[key] = (fqdn, last_seen)
+    return sorted(detected.values(), key=lambda entry: _fqdn_domain_sort_key(entry[0]))
 
 
 def build_report_markdown(
@@ -512,64 +674,39 @@ def build_report_markdown(
         else:
             lines.append("- No newly opened ports detected.")
 
+    report_data = {
+        "ports": per_ip_ports,
+        "tags": per_ip_tags,
+        "requested_fqdns": per_ip_requested_fqdns,
+        "ptr_fqdns": per_ip_ptr_fqdns,
+        "pdns_fqdns": per_ip_pdns_fqdns,
+    }
+    detected_fqdns = _report_detected_fqdns(per_ip_ptr_fqdns, per_ip_requested_fqdns)
+    if detected_fqdns:
+        lines.extend(["", "## FQDN detected", ""])
+        lines.extend(f"- {fqdn}" for fqdn in detected_fqdns)
+
+    passive_dns_fqdns = _report_passive_dns_fqdns(per_ip_pdns_fqdns)
+    if passive_dns_fqdns:
+        lines.extend(["", "## Passive DNS FQDN detected", ""])
+        lines.extend(
+            f"- {fqdn} — last seen: {_format_pdns_last_seen(last_seen)}"
+            for fqdn, last_seen in passive_dns_fqdns
+        )
+
+    for section, ips in _report_protocol_groups(results, per_ip_tags).items():
+        if not ips:
+            continue
+        lines.extend(["", f"## {section}", ""])
+        for ip in ips:
+            lines.extend(_report_host_lines(ip, results[ip], report_data))
+
     lines.extend(["", "## Hosts", ""])
     if not results:
         lines.append("No matching hosts.")
     else:
         for ip in sorted(results, key=_ip_sort_key):
-            tags = per_ip_tags.get(ip, []) if per_ip_tags else []
-            requested_fqdns = (
-                per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
-            )
-            ptr_fqdns = per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else []
-            pdns_fqdns = per_ip_pdns_fqdns.get(ip, []) if per_ip_pdns_fqdns else []
-            ports = per_ip_ports.get(ip) or []
-            ports_text = ", ".join(ports) if ports else "none"
-            lines.extend(
-                [
-                    f"- {ip}",
-                ]
-            )
-            if tags:
-                lines.append(f"  - Tag: {', '.join(tags)}")
-            lines.extend(
-                [
-                    f"  - Open ports: {ports_text}",
-                    f"  - Scan results: {len(results[ip])}",
-                ]
-            )
-            seen_associated = set()
-            associated_entries = []
-            for fqdn in ptr_fqdns:
-                fqdn_key = str(fqdn).lower()
-                if fqdn_key in seen_associated:
-                    continue
-                seen_associated.add(fqdn_key)
-                associated_entries.append((fqdn, "ptr"))
-            for fqdn in requested_fqdns:
-                fqdn_key = str(fqdn).lower()
-                if fqdn_key in seen_associated:
-                    continue
-                seen_associated.add(fqdn_key)
-                associated_entries.append((fqdn, ""))
-            for fqdn in pdns_fqdns:
-                fqdn_key = str(fqdn).lower()
-                if fqdn_key in seen_associated:
-                    continue
-                seen_associated.add(fqdn_key)
-                associated_entries.append((fqdn, "pdns"))
-
-            associated_count = len(associated_entries)
-            if associated_count:
-                lines.append(f"  - Associated FQDNs ({associated_count})")
-                for fqdn, source in associated_entries[:REPORT_FQDN_LIMIT]:
-                    suffix = f" ({source})" if source else ""
-                    lines.append(f"    - {fqdn}{suffix}")
-                if associated_count > REPORT_FQDN_LIMIT:
-                    remaining_count = associated_count - REPORT_FQDN_LIMIT
-                    lines.append(
-                        f"    - {remaining_count} additional fqdn not listed here"
-                    )
+            lines.extend(_report_host_lines(ip, results[ip], report_data))
 
     lines.extend(
         [

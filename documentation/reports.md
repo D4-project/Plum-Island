@@ -45,10 +45,13 @@ The current report body contains:
 - number of matching IPs and scan results
 - open port summary
 - `New opened port`, comparing the current period with preceding period
+- non-empty `FQDN detected` and `Passive DNS FQDN detected` lists, each sorted by domain; the first excludes Passive DNS entries
 - host list sorted by numeric IP order
 - per-host tags when present
-- per-host open ports and scan result count
+- per-host open ports
 - per-host associated FQDNs from PTR records seen in the last 6 months, then `fqdn_requested`, completed with Passive DNS `A` records up to 25 entries
+- non-empty protocol host views: `Web hosts` (`proto:http` or `proto:https`), `Mail related` (`proto:smtp`, `proto:imap`, or `proto:pop3`), and `Other` for hosts without those tags
+- Passive DNS FQDNs include their CIRCL `time_last` observation timestamp, or `N/A` when unavailable
 - an as-is disclaimer
 
 Example host entry:
@@ -57,11 +60,10 @@ Example host entry:
 - 158.64.1.27
   - Tag: vuln:filelisting
   - Open ports: 443
-  - Scan results: 1
   - Associated FQDNs (3)
     - reverse.example.org (ptr)
     - scan-request.example.org
-    - historical.example.org (pdns)
+    - historical.example.org (pdns) — last seen: 2026-09-16 12:00:00 UTC
 ```
 
 ## Preview generation
