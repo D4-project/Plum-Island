@@ -99,6 +99,7 @@ from .utils.reports import (
     compute_previous_report_interval,
     datetime_to_epoch,
     normalize_report_fields,
+    render_report_markdown_html,
     send_report_markdown,
 )
 from .utils.scan_cycles import (
@@ -4147,7 +4148,7 @@ class ReportsView(ModelView):
         return self.render_template(
             "report_preview.html",
             report=report,
-            markdown=state.get("markdown", ""),
+            report_html=Markup(render_report_markdown_html(state.get("markdown", ""))),
             from_dt=state.get("from_dt"),
             to_dt=state.get("to_dt"),
         )
@@ -4171,7 +4172,7 @@ class ReportsView(ModelView):
         return self.render_template(
             "report_preview.html",
             report=report,
-            markdown=markdown,
+            report_html=Markup(render_report_markdown_html(markdown)),
             from_dt=from_dt,
             to_dt=to_dt,
         )

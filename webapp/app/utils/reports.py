@@ -3,6 +3,7 @@ Helpers for scheduled Markdown reports.
 """
 
 import calendar
+from html import escape
 import ipaddress
 import json
 import logging
@@ -23,8 +24,18 @@ MONTHLY = "monthly"
 WEEKLY = "weekly"
 REPORT_SCHEDULE_TYPES = frozenset((MONTHLY, WEEKLY))
 REPORT_FQDN_LIMIT = 25
+REPORT_PDNS_ACTIVE_DAYS = 90
 REPORT_WEB_PROTOCOL_TAGS = frozenset(("proto:http", "proto:https"))
 REPORT_MAIL_PROTOCOL_TAGS = frozenset(("proto:smtp", "proto:imap", "proto:pop3"))
+REPORT_REMOTE_ACCESS_TAGS = frozenset(
+    ("type:vpn", "proto:ssh", "proto:telnet", "proto:rdp")
+)
+REPORT_HIDDEN_TAGS = frozenset(("domain:circl.lu",))
+REPORT_WEBSERVICES_SECTION = "Webservices related host"
+REPORT_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+REPORT_LIST_RE = re.compile(r"^(\s*)-\s+(.+?)\s*$")
+REPORT_INLINE_CODE_RE = re.compile(r"(`[^`]*`)")
+REPORT_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 
 
 def normalize_report_emails(emails_value):
@@ -480,6 +491,20 @@ def compute_new_open_ports(per_ip_ports, previous_per_ip_ports):
     return new_open_ports
 
 
+def group_new_open_ports_by_port(new_open_ports):
+    """Group newly opened ports by port, with numerically sorted IPs."""
+    per_port_ips = {}
+    for ip, ports in (new_open_ports or {}).items():
+        for port in ports:
+            per_port_ips.setdefault(port, []).append(ip)
+    return {
+        port: sorted(ips, key=_ip_sort_key)
+        for port, ips in sorted(
+            per_port_ips.items(), key=lambda item: _port_sort_key(item[0])
+        )
+    }
+
+
 def _normalize_report_pdns_entry(entry):
     """Normalize current and legacy Passive DNS report entry shapes."""
     if isinstance(entry, dict):
@@ -517,6 +542,29 @@ def _report_associated_fqdns(ptr_fqdns, requested_fqdns, pdns_fqdns):
     return associated_entries
 
 
+def _report_display_tags(tags):
+    """Hide redundant vendor tags when an equivalent product tag exists."""
+    product_values = set()
+    for tag in tags:
+        namespace, separator, value = str(tag).partition(":")
+        if separator and namespace.lower() == "product":
+            product_values.add(value.lower())
+
+    displayed = []
+    for tag in tags:
+        namespace, separator, value = str(tag).partition(":")
+        if str(tag).lower() in REPORT_HIDDEN_TAGS:
+            continue
+        if (
+            separator
+            and namespace.lower() == "vendor"
+            and value.lower() in product_values
+        ):
+            continue
+        displayed.append(tag)
+    return displayed
+
+
 def _report_host_lines(ip, _uids, report_data):  # pylint: disable=too-many-locals
     """Render one host and its associated FQDNs as Markdown list lines."""
     per_ip_ports = report_data["ports"]
@@ -524,7 +572,7 @@ def _report_host_lines(ip, _uids, report_data):  # pylint: disable=too-many-loca
     per_ip_requested_fqdns = report_data["requested_fqdns"]
     per_ip_ptr_fqdns = report_data["ptr_fqdns"]
     per_ip_pdns_fqdns = report_data["pdns_fqdns"]
-    tags = per_ip_tags.get(ip, []) if per_ip_tags else []
+    tags = _report_display_tags(per_ip_tags.get(ip, []) if per_ip_tags else [])
     requested_fqdns = (
         per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
     )
@@ -564,17 +612,25 @@ def _report_host_lines(ip, _uids, report_data):  # pylint: disable=too-many-loca
 
 
 def _report_protocol_groups(results, per_ip_tags):
-    """Split report IPs into web, mail, and unclassified protocol views."""
-    groups = {"Web hosts": [], "Mail related": [], "Other": []}
+    """Split report IPs into web, mail, remote-access, and other views."""
+    groups = {
+        REPORT_WEBSERVICES_SECTION: [],
+        "Mail related": [],
+        "Remote access": [],
+        "Other": [],
+    }
     for ip in sorted(results, key=_ip_sort_key):
         tags = set(per_ip_tags.get(ip, []) if per_ip_tags else [])
         is_web = bool(tags & REPORT_WEB_PROTOCOL_TAGS)
         is_mail = bool(tags & REPORT_MAIL_PROTOCOL_TAGS)
+        is_remote_access = bool(tags & REPORT_REMOTE_ACCESS_TAGS)
         if is_web:
-            groups["Web hosts"].append(ip)
+            groups[REPORT_WEBSERVICES_SECTION].append(ip)
         if is_mail:
             groups["Mail related"].append(ip)
-        if not is_web and not is_mail:
+        if is_remote_access:
+            groups["Remote access"].append(ip)
+        if not is_web and not is_mail and not is_remote_access:
             groups["Other"].append(ip)
     return groups
 
@@ -585,33 +641,158 @@ def _fqdn_domain_sort_key(fqdn):
 
 
 def _report_detected_fqdns(per_ip_ptr_fqdns, per_ip_requested_fqdns):
-    """Return unique non-Passive-DNS FQDNs, sorted by domain."""
+    """Return non-Passive-DNS FQDNs with their affected IPs, sorted by domain."""
     detected = {}
     for per_ip_fqdns in (per_ip_ptr_fqdns or {}, per_ip_requested_fqdns or {}):
-        for fqdns in per_ip_fqdns.values():
+        for ip, fqdns in per_ip_fqdns.items():
             for fqdn in fqdns:
                 normalized = str(fqdn).strip()
                 if normalized:
-                    detected.setdefault(normalized.lower(), normalized)
-    return sorted(detected.values(), key=_fqdn_domain_sort_key)
+                    entry = detected.setdefault(normalized.lower(), [normalized, set()])
+                    entry[1].add(ip)
+    return [
+        (fqdn, sorted(ips, key=_ip_sort_key))
+        for fqdn, ips in sorted(
+            detected.values(), key=lambda entry: _fqdn_domain_sort_key(entry[0])
+        )
+    ]
 
 
-def _report_passive_dns_fqdns(per_ip_pdns_fqdns):
-    """Return unique Passive DNS FQDNs and their most recent observation."""
+def _report_passive_dns_fqdns(per_ip_pdns_fqdns, active_since):
+    """Return active Passive DNS FQDNs with affected IPs and latest observation."""
     detected = {}
-    for entries in (per_ip_pdns_fqdns or {}).values():
+    for ip, entries in (per_ip_pdns_fqdns or {}).items():
         for entry in entries:
             fqdn, last_seen = _normalize_report_pdns_entry(entry)
-            if not fqdn:
+            if not fqdn or last_seen is None or last_seen < active_since:
                 continue
             key = fqdn.lower()
             previous = detected.get(key)
-            if previous is None or (last_seen or 0) > (previous[1] or 0):
-                detected[key] = (fqdn, last_seen)
-    return sorted(detected.values(), key=lambda entry: _fqdn_domain_sort_key(entry[0]))
+            if previous is None:
+                detected[key] = [fqdn, {ip}, last_seen]
+                continue
+            previous[1].add(ip)
+            if last_seen > previous[2]:
+                previous[0] = fqdn
+                previous[2] = last_seen
+    return [
+        (fqdn, sorted(ips, key=_ip_sort_key), last_seen)
+        for fqdn, ips, last_seen in sorted(
+            detected.values(), key=lambda entry: _fqdn_domain_sort_key(entry[0])
+        )
+    ]
 
 
-def build_report_markdown(
+def _render_report_inline(text):
+    """Escape report text while retaining inline-code presentation."""
+    rendered = []
+    for part in REPORT_INLINE_CODE_RE.split(str(text)):
+        if part.startswith("`") and part.endswith("`"):
+            rendered.append(f"<code>{escape(part[1:-1])}</code>")
+        else:
+            escaped_parts = REPORT_BOLD_RE.split(part)
+            rendered.extend(
+                f"<strong>{escape(value)}</strong>" if index % 2 else escape(value)
+                for index, value in enumerate(escaped_parts)
+            )
+    return "".join(rendered)
+
+
+def _render_report_list_item(text):
+    """Render a report list item, exposing host tags as simple HTML code tags."""
+    label, separator, tag_values = str(text).partition(": ")
+    if label != "Tag" or not separator:
+        return _render_report_inline(text)
+    tags = [tag.strip() for tag in tag_values.split(",") if tag.strip()]
+    return "Tag: " + " ".join(f"<code>{escape(tag)}</code>" for tag in tags)
+
+
+def _report_heading_id(text, heading_ids):
+    """Create a predictable unique fragment identifier for a heading."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-") or "section"
+    heading_ids[slug] = heading_ids.get(slug, 0) + 1
+    return slug if heading_ids[slug] == 1 else f"{slug}-{heading_ids[slug]}"
+
+
+def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-statements
+    markdown_body,
+):
+    """Render Plum report Markdown subset as escaped HTML with a heading index."""
+    lines = []
+    headings = []
+    paragraphs = []
+    list_depth = 0
+    list_item_open = []
+    heading_ids = {}
+
+    def close_paragraph():
+        if paragraphs:
+            lines.append(f"<p>{_render_report_inline(' '.join(paragraphs))}</p>")
+            paragraphs.clear()
+
+    def close_lists():
+        nonlocal list_depth
+        while list_depth:
+            if list_item_open[-1]:
+                lines.append("</li>")
+            lines.append("</ul>")
+            list_item_open.pop()
+            list_depth -= 1
+
+    for source_line in str(markdown_body or "").splitlines():
+        heading_match = REPORT_HEADING_RE.match(source_line)
+        list_match = REPORT_LIST_RE.match(source_line)
+        if heading_match:
+            close_paragraph()
+            close_lists()
+            level = len(heading_match.group(1))
+            title = heading_match.group(2)
+            heading_id = _report_heading_id(title, heading_ids)
+            lines.append(
+                f'<h{level} id="{heading_id}">{_render_report_inline(title)}</h{level}>'
+            )
+            if level > 1:
+                headings.append((level, title, heading_id))
+            continue
+        if list_match:
+            close_paragraph()
+            target_depth = len(list_match.group(1).expandtabs(2)) // 2 + 1
+            while list_depth > target_depth:
+                if list_item_open[-1]:
+                    lines.append("</li>")
+                lines.append("</ul>")
+                list_item_open.pop()
+                list_depth -= 1
+            while list_depth < target_depth:
+                lines.append("<ul>")
+                list_item_open.append(False)
+                list_depth += 1
+            if list_item_open[-1]:
+                lines.append("</li>")
+            lines.append(f"<li>{_render_report_list_item(list_match.group(2))}")
+            list_item_open[-1] = True
+            continue
+        if not source_line.strip():
+            close_paragraph()
+            close_lists()
+            continue
+        close_lists()
+        paragraphs.append(source_line.strip())
+
+    close_paragraph()
+    close_lists()
+    toc = ""
+    if headings:
+        toc_items = "".join(
+            f'<li class="report-toc-level-{level}"><a href="#{heading_id}">'
+            f"{_render_report_inline(title)}</a></li>"
+            for level, title, heading_id in headings
+        )
+        toc = f'<nav class="report-toc" aria-label="Report index"><h2>Index</h2><ul>{toc_items}</ul></nav>'
+    return f'<article class="report-html">{toc}{"".join(lines)}</article>'
+
+
+def build_report_markdown(  # pylint: disable=too-many-statements
     report,
     search_results,
     per_ip_ports,
@@ -630,24 +811,26 @@ def build_report_markdown(
     results = search_results.get("results") or {}
     total_ips = len(results)
     total_scans = sum(len(uids) for uids in results.values())
+    report_name = str(report.name or "")
+    report_title = report_name[:1].upper() + report_name[1:]
 
-    lines = [
-        f"# {report.name}",
-        "",
-    ]
+    lines = []
     if report.description:
         lines.extend([report.description, ""])
 
     lines.extend(
         [
-            "## Summary",
+            f"# Report for {report_title}.",
             "",
             f"- Query: `{report.query}`",
             f"- Period: {_format_datetime(from_dt)} to {_format_datetime(to_dt)}",
             f"- Matching IPs: {total_ips}",
             f"- Matching scans: {total_scans}",
             "",
-            "## Open Ports",
+            "## Open ports",
+            "",
+            "This section summarizes the total number of hosts exposing each open "
+            "port during the report period.",
             "",
         ]
     )
@@ -663,14 +846,17 @@ def build_report_markdown(
 
     if str(getattr(report, "schedule_type", "") or "").lower() in REPORT_SCHEDULE_TYPES:
         lines.extend(["", "## New opened port", ""])
+        lines.extend(
+            [
+                "Ports newly observed as open during this report period, compared "
+                "with the preceding equivalent period.",
+                "",
+            ]
+        )
         if new_open_ports:
-            for ip in sorted(new_open_ports, key=_ip_sort_key):
-                lines.extend(
-                    [
-                        f"- {ip}",
-                        f"  - New ports: {', '.join(new_open_ports[ip])}",
-                    ]
-                )
+            for port, ips in group_new_open_ports_by_port(new_open_ports).items():
+                lines.append(f"- **{port}**")
+                lines.extend(f"  - {ip}" for ip in ips)
         else:
             lines.append("- No newly opened ports detected.")
 
@@ -684,24 +870,54 @@ def build_report_markdown(
     detected_fqdns = _report_detected_fqdns(per_ip_ptr_fqdns, per_ip_requested_fqdns)
     if detected_fqdns:
         lines.extend(["", "## FQDN detected", ""])
-        lines.extend(f"- {fqdn}" for fqdn in detected_fqdns)
-
-    passive_dns_fqdns = _report_passive_dns_fqdns(per_ip_pdns_fqdns)
-    if passive_dns_fqdns:
-        lines.extend(["", "## Passive DNS FQDN detected", ""])
         lines.extend(
-            f"- {fqdn} — last seen: {_format_pdns_last_seen(last_seen)}"
-            for fqdn, last_seen in passive_dns_fqdns
+            [
+                "FQDNs (Fully Qualified domain names) detected from scanned hosts. "
+                "These hostnames can be collected from any scan result fields, "
+                "including records within certificates.",
+                "",
+            ]
+        )
+        lines.extend(f"- {fqdn} ({', '.join(ips)})" for fqdn, ips in detected_fqdns)
+
+    report_end = ensure_utc_naive(to_dt or utcnow_naive())
+    active_since = int(
+        (report_end - timedelta(days=REPORT_PDNS_ACTIVE_DAYS))
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+    )
+    passive_dns_fqdns = _report_passive_dns_fqdns(per_ip_pdns_fqdns, active_since)
+    if passive_dns_fqdns:
+        lines.extend(["", "## FQDN discovered in Passive DNS", ""])
+        lines.append(
+            "Additional Passive DNS records not detected, observed within the last 90 days."
+        )
+        lines.append("")
+        lines.extend(
+            f"- {fqdn} ({', '.join(ips)}) — last seen: "
+            f"{_format_pdns_last_seen(last_seen)}"
+            for fqdn, ips, last_seen in passive_dns_fqdns
         )
 
     for section, ips in _report_protocol_groups(results, per_ip_tags).items():
         if not ips:
             continue
         lines.extend(["", f"## {section}", ""])
+        if section == REPORT_WEBSERVICES_SECTION:
+            lines.extend(["Hosts with at least one exposed web service.", ""])
+        elif section == "Mail related":
+            lines.extend(["Hosts with at least one exposed mail service.", ""])
+        elif section == "Remote access":
+            lines.extend(
+                [
+                    "Hosts with at least one exposed VPN, SSH, Telnet, or RDP service.",
+                    "",
+                ]
+            )
         for ip in ips:
             lines.extend(_report_host_lines(ip, results[ip], report_data))
 
-    lines.extend(["", "## Hosts", ""])
+    lines.extend(["", "## Full report dump", ""])
     if not results:
         lines.append("No matching hosts.")
     else:
@@ -752,6 +968,7 @@ def send_report_markdown(app_config, report, markdown_body):
     message["From"] = smtp_from
     message["To"] = ", ".join(recipients)
     message.set_content(markdown_body)
+    message.add_alternative(render_report_markdown_html(markdown_body), subtype="html")
 
     smtp_class = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
     with smtp_class(smtp_host, smtp_port, timeout=30) as smtp:

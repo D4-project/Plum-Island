@@ -40,17 +40,20 @@ Reports are generated as Markdown.
 
 The current report body contains:
 
-- report summary
+- top-level `Report for <name>.` heading
+- report summary metadata
 - query and reporting period
 - number of matching IPs and scan results
-- open port summary
-- `New opened port`, comparing the current period with preceding period
-- non-empty `FQDN detected` and `Passive DNS FQDN detected` lists, each sorted by domain; the first excludes Passive DNS entries
-- host list sorted by numeric IP order
+- open port summary, showing total hosts exposing each port during the report period
+- `New opened port`, explaining and grouping ports newly observed against the preceding equivalent period under bold port labels with numerically sorted affected IP sub-bullets
+- non-empty `FQDN detected` and `FQDN discovered in Passive DNS` lists, each sorted by domain; both list affected IPs. Detected FQDNs include hostnames from any scan result field, including certificate records; Passive DNS keeps records active within the previous 90 days and shows the latest observation
+- full report dump sorted by numeric IP order
 - per-host tags when present
+- redundant `vendor:<name>` tags are omitted when matching `product:<name>` exists
+- the report-specific `domain:circl.lu` tag is omitted from host display
 - per-host open ports
 - per-host associated FQDNs from PTR records seen in the last 6 months, then `fqdn_requested`, completed with Passive DNS `A` records up to 25 entries
-- non-empty protocol host views: `Web hosts` (`proto:http` or `proto:https`), `Mail related` (`proto:smtp`, `proto:imap`, or `proto:pop3`), and `Other` for hosts without those tags
+- non-empty protocol host views: `Webservices related host` for HTTP/HTTPS, `Mail related` for SMTP/IMAP/POP3, `Remote access` for VPN/SSH/Telnet/RDP, and `Other` for hosts without those tags
 - Passive DNS FQDNs include their CIRCL `time_last` observation timestamp, or `N/A` when unavailable
 - an as-is disclaimer
 
@@ -68,7 +71,10 @@ Example host entry:
 
 ## Preview generation
 
-The `Preview` action generates the Markdown report without sending email.
+The `Preview` action generates the canonical Markdown report without sending email,
+then renders its safe HTML subset. Preview offers an index linked to stable heading
+anchors and a print action. HTML escaping is applied to all report values; host tags
+render as simple HTML `code` tags without custom CSS.
 Because Passive DNS enrichment can be slow, preview first opens a progress modal and only redirects to the rendered report when generation is complete.
 
 The modal follows the report generation order:
@@ -81,6 +87,7 @@ The modal follows the report generation order:
 
 SMTP delivery is controlled by the `REPORT_SMTP_*` settings in `webapp/config.py`.
 If `REPORT_SMTP_HOST` is empty, automatic report delivery is disabled.
+Delivered mail is multipart: Markdown plain text fallback and safe rendered HTML.
 
 `REPORT_PTR_LAST_SEEN_MONTHS` controls how recent a source document must be for its PTR hostname to appear in a report.
 The default is 6 months before the report end time.

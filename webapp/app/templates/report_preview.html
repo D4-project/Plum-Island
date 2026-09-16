@@ -11,9 +11,12 @@
     <a class="btn btn-primary" href="{{ url_for('ReportsView.run', pk=report.id) }}">
         Run now
     </a>
+    <button class="btn btn-default report-print-action" type="button" onclick="window.print()">
+        <i class="fa fa-print" aria-hidden="true"></i> Print
+    </button>
 </div>
 
-<pre class="report-preview-markdown">{{ markdown }}</pre>
+{{ report_html }}
 
 {{ lib.panel_end() }}
 {% endblock content %}
@@ -26,9 +29,36 @@
     margin-bottom: 1rem;
   }
 
-  .report-preview-markdown {
-    white-space: pre-wrap;
+  .report-html {
+    max-width: 1000px;
+  }
+
+  .report-html code {
+    white-space: normal;
     word-break: break-word;
+  }
+
+  .report-toc {
+    margin-bottom: 1.5rem;
+  }
+
+  .report-toc ul {
+    list-style: none;
+    padding-left: 0;
+  }
+
+  .report-toc-level-3,
+  .report-toc-level-4,
+  .report-toc-level-5,
+  .report-toc-level-6 {
+    margin-left: 1rem;
+  }
+
+  @media print {
+    .report-preview-toolbar,
+    .report-print-action {
+      display: none !important;
+    }
   }
 </style>
 {% endblock %}
