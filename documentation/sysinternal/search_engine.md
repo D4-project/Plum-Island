@@ -7,7 +7,8 @@ documented behavior changes. Search matching loops were restored to commit
 request diagnostics and scoped timestamp reads are documented here.
 
 Related references: [key schema](../kvrocks_objects.md), [user search syntax](../search.md),
-[tag rules](../tagging.md), and [repository instructions](../../AGENT.md).
+[tag rules](https://github.com/D4-project/Plum-Antibodies/blob/main/documentation/tagging.md),
+and [repository instructions](../../AGENT.md).
 Function names below are navigation anchors; line numbers drift as code changes.
 
 ## Ownership and data flow

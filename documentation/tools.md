@@ -43,6 +43,12 @@ Do not reuse an admin account in tool configuration files.
 
 ## Tag tools
 
+The YAML rules are maintained in the
+[Plum-Antibodies repository](https://github.com/D4-project/Plum-Antibodies),
+with their format and version policy documented in its
+[tagging guide](https://github.com/D4-project/Plum-Antibodies/blob/main/documentation/tagging.md).
+The checked-out submodule exposes them under `webapp/tags/tags/`.
+
 ### `initial_setup.py`
 
 Load initial database content after the Flask database has been created.

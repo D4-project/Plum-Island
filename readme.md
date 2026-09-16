@@ -92,7 +92,9 @@ tags:
 version: 20260428T170756Z
 ```
 
-See [Tagging documentation](documentation/tagging.md) for YAML format, import/export tooling, version handling, and reindexing.
+See the [Plum-Antibodies tag documentation](https://github.com/D4-project/Plum-Antibodies/blob/main/documentation/tagging.md)
+for YAML format and version handling. Import and reindex commands remain in
+the [Plum Island tools documentation](documentation/tools.md).
 
 ## Reports
 
@@ -106,7 +108,8 @@ See [Reports documentation](documentation/reports.md) for report configuration, 
 - [Installation](documentation/installation.md)
 - [Migration](documentation/migration.md)
 - [Search](documentation/search.md)
-- [Tagging](documentation/tagging.md)
+- [Tagging rules](https://github.com/D4-project/Plum-Antibodies/tree/main/tags)
+- [Tag tooling](documentation/tools.md#tag-tools)
 - [Reports](documentation/reports.md)
 - [Scan profiles, scheduling, and priority](documentation/scanning.md)
 - [Tools](documentation/tools.md)

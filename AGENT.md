@@ -417,7 +417,10 @@ If you skip one of these, the feature will look half-implemented.
 
 ### If you change YAML detection rules
 
-- webapp/tags/tags/*.yaml
+The YAML detection rules live in the `Plum-Antibodies` submodule. Follow its
+[`AGENT.md`](https://github.com/D4-project/Plum-Antibodies/blob/main/AGENT.md)
+and update the submodule pointer here after publishing rule changes.
+
 - release_note.md
 
 When you modify an existing YAML rule, increase its UTC `version` in
