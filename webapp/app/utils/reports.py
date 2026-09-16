@@ -724,6 +724,7 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
     list_depth = 0
     list_item_open = []
     heading_ids = {}
+    toc_insert_at = None
 
     def close_paragraph():
         if paragraphs:
@@ -747,6 +748,8 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
             close_lists()
             level = len(heading_match.group(1))
             title = heading_match.group(2)
+            if level > 1 and toc_insert_at is None:
+                toc_insert_at = len(lines)
             heading_id = _report_heading_id(title, heading_ids)
             lines.append(
                 f'<h{level} id="{heading_id}">{_render_report_inline(title)}</h{level}>'
@@ -789,7 +792,11 @@ def render_report_markdown_html(  # pylint: disable=too-many-locals,too-many-sta
             for level, title, heading_id in headings
         )
         toc = f'<nav class="report-toc" aria-label="Report index"><h2>Index</h2><ul>{toc_items}</ul></nav>'
-    return f'<article class="report-html">{toc}{"".join(lines)}</article>'
+    if toc and toc_insert_at is not None:
+        lines.insert(toc_insert_at, toc)
+    else:
+        lines.insert(0, toc)
+    return f'<article class="report-html">{"".join(lines)}</article>'
 
 
 def build_report_markdown(  # pylint: disable=too-many-statements

@@ -285,6 +285,17 @@ class ReportProtocolViewsTest(TestCase):
         self.assertIn("<ul><li>Host:", html)
         self.assertIn("<ul><li>Query:", html)
 
+        ordered_html = render_report_markdown_html(
+            "# Report for Domain circl.\n\n- Query: `domain:circl.lu`\n"
+            "- Matching IPs: 77\n\n## Open ports\n"
+        )
+        self.assertLess(
+            ordered_html.index("Report for Domain circl"),
+            ordered_html.index("Query:"),
+        )
+        self.assertLess(ordered_html.index("Query:"), ordered_html.index("<nav"))
+        self.assertLess(ordered_html.index("<nav"), ordered_html.index("Open ports"))
+
     @patch("app.utils.reports.smtplib.SMTP")
     def test_email_contains_markdown_and_html_alternative(self, smtp_class):
         """Report mail retains Markdown fallback alongside escaped HTML."""

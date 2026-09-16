@@ -74,7 +74,8 @@ Example host entry:
 The `Preview` action generates the canonical Markdown report without sending email,
 then renders its safe HTML subset. Preview offers an index linked to stable heading
 anchors and a print action. HTML escaping is applied to all report values; host tags
-render as simple HTML `code` tags without custom CSS.
+render as simple HTML `code` tags without custom CSS. The index follows the report
+title and summary metadata.
 Because Passive DNS enrichment can be slow, preview first opens a progress modal and only redirects to the rendered report when generation is complete.
 
 The modal follows the report generation order:
