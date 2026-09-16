@@ -24,6 +24,8 @@
 
 - Add OVH domain-parking favicon detection, closes #223.
 
+- Correct Sophos VPN favicon SHA-256 and use VPN Portal title-prefix detection, closes #221.
+
 - Add case-insensitive standalone `NOT` exclusions to structured search, exports and matching IP history, with per-UID semantics and OR-group isolation; support negated document predicates in tag rules.
 
 - Restrict search timestamp metadata reads to matching UIDs within each IP's membership set; preserve full IP detail history, date semantics, ordering and pagination.
