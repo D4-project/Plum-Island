@@ -25,6 +25,10 @@ class TagSyntaxTests(unittest.TestCase):
         """Allow scan documents to have no computed tags."""
         self.assertEqual(normalize_tags([]), [])
 
+    def test_matching_rules_can_share_a_tag(self):
+        """Collapse duplicate tags contributed by different matched rules."""
+        self.assertEqual(normalize_tags(["proto:ssh", "PROTO:SSH"]), ["proto:ssh"])
+
     def test_library_reports_the_same_invalid_syntax(self):
         """Expose the canonical validation behavior to consumers."""
         with self.assertRaises(TagValidationError):
