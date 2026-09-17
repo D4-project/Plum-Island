@@ -35,8 +35,10 @@ Island and its Plum-Antibodies tag rules from the repository root with:
 ./updisland.sh
 ```
 
-This updates the application repository and the tag-rules submodule referenced
-by it. It does not recreate the application database or configuration.
+This updates the application repository and fetches the latest Plum-Antibodies
+YAML tag rules into `webapp/tags/`, even when they are newer than the submodule
+commit pinned by Plum Island. It does not import rules, reindex tags, access
+Kvrocks, recreate the application database, or change configuration.
 
 ## Step 1 — Add a target
 
