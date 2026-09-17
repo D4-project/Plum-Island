@@ -26,6 +26,18 @@ If you need more aggressive timing for a lab or demo, update `SCHEDULER_DELAY` i
 [plum] =================================================
 ```
 
+## Update an existing installation
+
+The initial installation uses `setup.sh`. For an existing clone, refresh Plum
+Island and its Plum-Antibodies tag rules from the repository root with:
+
+```bash
+./updisland.sh
+```
+
+This updates the application repository and the tag-rules submodule referenced
+by it. It does not recreate the application database or configuration.
+
 ## Step 1 — Add a target
 
 1. Navigate to `Config > Targets`.
