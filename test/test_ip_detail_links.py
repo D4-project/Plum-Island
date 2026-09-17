@@ -63,7 +63,11 @@ class IpDetailLinksTest(unittest.TestCase):
     def test_detail_keeps_tag_and_tls_decisions_per_observation(self):
         """Execute the actual view with fake storage, without app startup."""
         indexer = make_indexer(
-            {"ip:8.8.8.8": {"old", "new"}, "tags:old": {"proto:http"}}
+            {
+                "ip:8.8.8.8": {"old", "new"},
+                "tags:old": {"proto:http"},
+                "tags:new": {"product:nginx", "vendor:nginx"},
+            }
         )
         documents = {}
         for uid, timestamp, service, host in (
@@ -145,6 +149,9 @@ class IpDetailLinksTest(unittest.TestCase):
         )
         self.assertEqual(
             context["requested_hostnames"], ["new.example.org", "old.example.org"]
+        )
+        self.assertEqual(
+            context["ip_tags"], ["product:nginx", "proto:http", "vendor:nginx"]
         )
 
     @unittest.skipUnless(shutil.which("node"), "Node.js required for IP link checks")
