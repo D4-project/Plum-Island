@@ -20,8 +20,16 @@ cd Plum-Island
 ```
 
 The tag rules are provided by the `Plum-Antibodies` submodule. `setup.sh`
-initializes it automatically; for an existing checkout, run
-`git submodule update --init --recursive` before setup.
+synchronizes and initializes it automatically.
+
+To refresh an existing clone, run this from the Plum-Island root:
+
+```bash
+./updisland.sh
+```
+
+This pulls Plum-Island and updates the Plum-Antibodies submodule to the
+revision referenced by Plum-Island.
 
 It will ask for location of Kvrocks and Meilisearch:
 ```

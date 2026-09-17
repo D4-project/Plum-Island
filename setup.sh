@@ -14,9 +14,10 @@ if [ ! -d "webapp" ]; then
   exit 1
   fi
 
-# Tag rules are maintained in the Plum-Antibodies Git submodule. Initialize it
-# here so a regular `git clone` is sufficient for a fresh installation.
-if ! git submodule update --init --recursive; then
+# Tag rules are maintained in the Plum-Antibodies Git submodule. Synchronize
+# its configured URL and initialize it so a regular `git clone` is sufficient
+# for a fresh installation.
+if ! git submodule sync --recursive || ! git submodule update --init --recursive; then
   echo "ERROR: Could not initialize the Plum-Antibodies tag submodule."
   exit 1
 fi

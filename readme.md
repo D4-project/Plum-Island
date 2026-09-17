@@ -153,4 +153,7 @@ The setup script creates a local Python virtual environment, installs `requireme
 - NSE scripts from `https://github.com/D4-project/Plum-Rules-NSE`
 - all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
 
+To refresh an existing clone, run `./updisland.sh` from the Plum-Island root.
+It updates Plum-Island and the Plum-Antibodies tag-rules submodule.
+
 See [Installation documentation](documentation/installation.md) for Meilisearch, Kvrocks, Passive DNS, Docker, and runtime configuration details.
