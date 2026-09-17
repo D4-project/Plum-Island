@@ -62,9 +62,11 @@ class FullCertificateIndexTest(TestCase):
         parsed = parse_json(raw_document, PARSER_CONFIG, tag_rules=[])
         parsed_snapshot = dict(parsed)
 
+        self.assertIn("proto:tls", parsed["tag"])
         indexed = prepare_kvrocks_document(raw_document, parsed, tag_rules=[])
 
         self.assertEqual(parsed, parsed_snapshot)
+        self.assertIn("proto:tls", indexed["tag"])
         self.assertEqual(parsed["x509_issuer"], ["Dahua Device NVR CA"])
         self.assertEqual(parsed["x509_subject"], ["camera.example.org"])
         self.assertEqual(

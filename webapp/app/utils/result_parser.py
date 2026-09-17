@@ -69,6 +69,26 @@ def is_external_ip(value):
     return ip_addr.is_global and not ip_addr.is_multicast
 
 
+def has_tls_certificate(document):
+    """Return whether an Nmap document contains a populated SSL certificate."""
+    certificate_fields = (
+        "issuer",
+        "subject",
+        "extensions",
+        "md5",
+        "sha1",
+        "sha256",
+        "pem",
+    )
+    for port in (document or {}).get("body", {}).get("ports", []):
+        for script in port.get("scripts", []):
+            if script.get("id") == "ssl-cert" and any(
+                script.get(field) for field in certificate_fields
+            ):
+                return True
+    return False
+
+
 # B -> Body.XXXX Subsearch
 # P -> Body.ports.XXXX Per Port Search
 
@@ -351,6 +371,8 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
         computed_tags = apply_tag_rules_to_document(
             indexed_doc, tag_rules=tag_rules
         )
+        if has_tls_certificate(raw_doc) and "proto:tls" not in computed_tags:
+            computed_tags.append("proto:tls")
         if computed_tags:
             indexed_doc["tag"] = computed_tags
 
@@ -831,6 +853,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
     }
 
     computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
+    if has_tls_certificate(doc) and "proto:tls" not in computed_tags:
+        computed_tags.append("proto:tls")
     if computed_tags:
         final_result["tag"] = computed_tags
 
