@@ -38,6 +38,10 @@ if ! "$VENV_PYTHON" -c "import reportlab"; then
   echo "ERROR: ReportLab PDF support installation failed."
   exit 1
 fi
+if ! "$VENV_PYTHON" -c "from plum_antibodies import validate_tag"; then
+  echo "ERROR: Plum-Antibodies tag validation library installation failed."
+  exit 1
+fi
 key=`head -c32 /dev/urandom | base64`
 csrf=`head -c32 /dev/urandom | base64`
 cd webapp

@@ -11,3 +11,4 @@ pyipasnhistory>=0.1
 nmap2json
 rich
 reportlab>=4.0.0
+-e ./webapp/tags

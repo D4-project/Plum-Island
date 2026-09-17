@@ -7,6 +7,7 @@ import logging
 import re
 
 import yaml
+from plum_antibodies import validate_tags
 
 try:
     from .mutils import lowercase_dict
@@ -44,23 +45,14 @@ def analyze_header_dependencies(criteria_groups):
 
 def normalize_tags(tags):
     """
-    Normalize tag values to unique lowercase strings.
+    Validate and normalize tag values through Plum-Antibodies.
 
     The canonical stored value is namespace:value, for example product:gitlab.
-    Legacy tag:namespace:value inputs are accepted at import/edit boundaries and
-    collapsed to the canonical form.
+    Invalid or duplicate values raise ``TagValidationError`` before a rule can
+    be stored. Legacy tag:namespace:value inputs are collapsed to the canonical
+    form by the shared validator.
     """
-    normalized = []
-    seen = set()
-    for tag in tags or []:
-        value = str(tag).strip().lower()
-        while value.startswith("tag:") and value.count(":") >= 2:
-            value = value.split(":", 1)[1].strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        normalized.append(value)
-    return normalized
+    return validate_tags(tags or [], allow_empty=True)
 
 
 def parse_tags_text(tags_value):
