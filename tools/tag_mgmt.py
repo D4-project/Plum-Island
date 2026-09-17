@@ -713,6 +713,7 @@ def load_reindex_runtime():
     )
     from app.utils.mutils import fetch_tlds  # pylint: disable=import-outside-toplevel
     from app.utils.result_parser import (  # pylint: disable=import-outside-toplevel
+        has_indexed_tls_certificate,
         parse_json,
     )
     from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
@@ -728,6 +729,7 @@ def load_reindex_runtime():
         "ensure_default_collected_headers": ensure_default_collected_headers,
         "KVrocksIndexer": KVrocksIndexer,
         "fetch_tlds": fetch_tlds,
+        "has_indexed_tls_certificate": has_indexed_tls_certificate,
         "parse_json": parse_json,
         "apply_tag_rules_to_document": apply_tag_rules_to_document,
         "compile_tag_rule_records": compile_tag_rule_records,
@@ -996,6 +998,7 @@ def _reindex_tags_unlocked(args, progress_callback=None):
     fetch_tlds = runtime["fetch_tlds"]
     compile_tag_rule_records = runtime["compile_tag_rule_records"]
     apply_tag_rules_to_document = runtime["apply_tag_rules_to_document"]
+    has_indexed_tls_certificate = runtime["has_indexed_tls_certificate"]
 
     with app.app_context():
         configure_parser_from_tools_config(app.config, tools_config)
@@ -1066,6 +1069,11 @@ def _reindex_tags_unlocked(args, progress_callback=None):
                     parsed_doc["tag"] = apply_tag_rules_to_document(
                         parsed_doc, tag_rules=compiled_rules
                     )
+                    if (
+                        has_indexed_tls_certificate(parsed_doc)
+                        and "proto:tls" not in parsed_doc["tag"]
+                    ):
+                        parsed_doc["tag"].append("proto:tls")
                     pending_docs.append(
                         {
                             "uid": kvrocks_doc["uid"],

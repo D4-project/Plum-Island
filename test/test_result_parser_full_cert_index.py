@@ -9,6 +9,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR / "webapp" / "app" / "utils"))
 
 from result_parser import (  # pylint: disable=wrong-import-position
+    has_indexed_tls_certificate,
     parse_json,
     prepare_kvrocks_document,
 )
@@ -67,6 +68,7 @@ class FullCertificateIndexTest(TestCase):
 
         self.assertEqual(parsed, parsed_snapshot)
         self.assertIn("proto:tls", indexed["tag"])
+        self.assertTrue(has_indexed_tls_certificate(indexed))
         self.assertEqual(parsed["x509_issuer"], ["Dahua Device NVR CA"])
         self.assertEqual(parsed["x509_subject"], ["camera.example.org"])
         self.assertEqual(

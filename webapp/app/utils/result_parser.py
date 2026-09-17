@@ -89,6 +89,21 @@ def has_tls_certificate(document):
     return False
 
 
+def has_indexed_tls_certificate(document):
+    """Return whether an indexed document contains certificate fields."""
+    certificate_fields = (
+        "x509_issuer",
+        "x509_issuer_cn",
+        "x509_md5",
+        "x509_sha1",
+        "x509_sha256",
+        "x509_subject",
+        "x509_subject_cn",
+        "x509_san",
+    )
+    return any((document or {}).get(field) for field in certificate_fields)
+
+
 # B -> Body.XXXX Subsearch
 # P -> Body.ports.XXXX Per Port Search
 
