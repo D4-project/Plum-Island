@@ -106,6 +106,27 @@ class ScanCycleBoundaryTest(unittest.TestCase):
         self.assertIn("2 queued job", title)
         self.assertIn("1 active job", title)
 
+    def test_running_full_progress_is_labeled_finalizing_until_finished(self):
+        """Both cycle views distinguish full progress from cycle completion."""
+        cycle = ScanProfileCycles(
+            status="running",
+            scan_unit_count=100,
+            completed_scan_unit_count=100,
+            target_count=10,
+            completed_target_count=9,
+        )
+        with mock.patch.object(cycle, "_job_blocker_counts", return_value=(2, 1)):
+            for rendered in (
+                cycle.progress_html(),
+                cycle.summary_badge_html("Current"),
+            ):
+                self.assertIn("100.0% — finalizing", rendered)
+                self.assertIn("2 queued job", rendered)
+                self.assertIn("1 active job", rendered)
+            cycle.status = "finished"
+            self.assertNotIn("finalizing", cycle.progress_html())
+            self.assertNotIn("finalizing", cycle.summary_badge_html("Previous"))
+
 
 class ScanCycleBoundaryMigrationTest(unittest.TestCase):
     """Validate migration of cycles with jobs already in progress."""

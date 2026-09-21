@@ -878,9 +878,14 @@ def _load_due_states_for_profile(
     now_utc,
     state_limit,
     max_target_id,
+    cycle_started_at=None,
 ):
     """
-    Load due target/profile states for one profile, oldest first.
+    Load due states, excluding targets already completed in the running cycle.
+
+    Keep the per-target rescan delay, but never requeue a completed target in
+    the same cycle when that cycle lasts longer than the delay. The persisted
+    start time also keeps this boundary intact across scheduler restarts.
 
     Keep never-scanned and expired states in separate index-ordered reads.
     Combining both cases with ``OR`` and ordering through ``CASE`` forces
@@ -941,6 +946,7 @@ def _load_due_states_for_profile(
             {
                 "profile_id": profile.id,
                 "cutoff": cutoff,
+                "cycle_started_at": cycle_started_at,
                 "limit": limit,
                 "max_target_id": int(max_target_id),
             },
@@ -962,9 +968,12 @@ def _load_due_states_for_profile(
         "never_scanned",
     )
     remaining = state_limit - len(state_ids)
+    expired_filter = "tss.last_scan <= :cutoff"
+    if cycle_started_at is not None:
+        expired_filter += " AND tss.last_scan < :cycle_started_at"
     state_ids.extend(
         select_state_ids(
-            "tss.last_scan <= :cutoff",
+            expired_filter,
             "tss.last_scan ASC, tss.target_id ASC",
             remaining,
             "expired",
@@ -1534,6 +1543,7 @@ def task_create_jobs():
                 now,
                 state_limit,
                 cycle_max_target_id,
+                cycle_started_at=scan_cycle.started_at if scan_cycle else None,
             )
             queue_batches_attempted += 1
             due_elapsed = time.perf_counter() - due_started

@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Stop requeuing targets already scanned in a running cycle when their rescan delay expires; allow existing jobs to drain and show `finalizing` for running cycles at 100%, without a database migration.
+
 - Show the number of unique ports configured across scan profiles in Stats.
 
 - Align Target Show results with structured search: shared asynchronous tag badges, exact displayed scan-date scope, and IP/info-icon navigation behavior, closes #220.

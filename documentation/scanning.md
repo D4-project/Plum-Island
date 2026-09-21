@@ -56,6 +56,18 @@ target imports therefore do not extend a running cycle indefinitely. An older
 target associated with an explicit profile during a cycle may still join the
 current cycle because target ID is the only membership boundary.
 
+Within a running cycle, targets with `last_scan >= cycle.started_at` are not
+scheduled again, even if their rescan delay has elapsed. Never-scanned targets
+and targets last scanned before the cycle started remain eligible under the
+normal rescan-delay rules. This boundary uses persisted timestamps and survives
+restarts. Once the cycle finishes, the next cycle can schedule targets whose
+rescan delay has elapsed.
+
+This correction requires no database migration or manual state reset. Existing
+queued and active jobs finish normally; the cycle closes when all applicable
+targets are complete and no unfinished job remains. A running cycle at 100%
+shows `finalizing` until those conditions are met.
+
 The Scan Profiles list tooltip and profile detail page expose incomplete target,
 queued job, and active job counts when a cycle remains running. A stalled active
 job is requeued by the scheduler watchdog after two hours; orphaned working

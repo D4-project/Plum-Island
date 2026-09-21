@@ -1176,9 +1176,12 @@ class ScanProfileCycles(Model):
             target_total,
             (queued_jobs, active_jobs),
         )
+        finalizing = (
+            " — finalizing" if self.status == "running" and percent >= 100 else ""
+        )
         return Esc(
             '<span class="label label-default" '
-            f'title="{_html_escape(title)}">{percent:.1f}%</span>'
+            f'title="{_html_escape(title)}">{percent:.1f}%{finalizing}</span>'
         )
 
     def summary_badge_html(self, label):
@@ -1200,9 +1203,10 @@ class ScanProfileCycles(Model):
             target_total,
             (queued_jobs, active_jobs),
         )
+        finalizing = " — finalizing" if status == "running" and percent >= 100 else ""
         return (
             f'<span class="label {label_class}" title="{_html_escape(title)}">'
-            f"{_html_escape(label)} {percent:.1f}%</span>"
+            f"{_html_escape(label)} {percent:.1f}%{finalizing}</span>"
         )
 
     def previous_cycle_html(self):

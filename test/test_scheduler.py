@@ -13,6 +13,9 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest import TestCase, mock
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(BASE_DIR, "webapp"))
 
@@ -275,6 +278,7 @@ class StalledJobWatchdogTest(TestCase):
                 datetime(2026, 8, 20, 12, 0, 0),
                 state_limit=256,
                 max_target_id=123,
+                cycle_started_at=datetime(2026, 8, 19, 12, 0, 0),
             )
 
         self.assertEqual(states, [])
@@ -285,6 +289,7 @@ class StalledJobWatchdogTest(TestCase):
         self.assertIn("t.id <= :max_target_id", str(never_scanned_sql))
         self.assertIn("tss.last_scan IS NULL", str(never_scanned_sql))
         self.assertIn("tss.last_scan <= :cutoff", str(expired_sql))
+        self.assertIn("tss.last_scan < :cycle_started_at", str(expired_sql))
         self.assertNotIn("CASE", str(never_scanned_sql))
         self.assertNotIn("CASE", str(expired_sql))
         self.assertEqual(never_scanned_params["max_target_id"], 123)
@@ -326,6 +331,138 @@ class StalledJobWatchdogTest(TestCase):
                 self.assertNotIn("TEMP B-TREE", plan)
         finally:
             connection.close()
+
+    def test_long_cycle_excludes_completed_targets_and_drains_existing_jobs(self):
+        """A cycle longer than the rescan delay drains, survives restart and closes."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.ScanProfiles.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        now = datetime(2026, 9, 21, 12)
+        started_at = datetime(2026, 8, 19, 7, 41)
+        profile = models.ScanProfiles(
+            id=7,
+            name="Common Web",
+            scan_cycle_minutes=1440,
+            apply_to_all=True,
+            current_cycle_id=20,
+        )
+        cycle = models.ScanProfileCycles(
+            id=20,
+            scanprofile=profile,
+            started_at=started_at,
+            status="running",
+            max_target_id=5,
+        )
+        states = [
+            models.TargetScanStates(
+                target=models.Targets(id=number, value=f"192.0.2.{number}"),
+                scanprofile=profile,
+                last_scan=last_scan,
+                working=number == 5,
+            )
+            for number, last_scan in enumerate(
+                [
+                    started_at + timedelta(days=1),
+                    started_at,
+                    started_at - timedelta(days=1),
+                    None,
+                    started_at + timedelta(days=1),
+                ],
+                start=1,
+            )
+        ]
+        jobs = [
+            models.Jobs(
+                uid=f"cycle-drain-{number}",
+                job="192.0.2.5",
+                scanprofile=profile,
+                scanprofile_cycle=cycle,
+                targets=[states[4].target],
+                active=bool(number),
+                finished=False,
+            )
+            for number in range(2)
+        ]
+        session.add_all([cycle, *states, *jobs])
+        session.commit()
+
+        with mock.patch.object(self.scheduler.db, "session", session):
+            # Expired completed targets and the exact start boundary stay excluded.
+            # Repeat with explicit profile membership and after reloading DB state.
+            for apply_to_all in (True, False):
+                profile.apply_to_all = apply_to_all
+                profile.targets = [state.target for state in states]
+                session.commit()
+                session.expire_all()
+                due = self.scheduler._load_due_states_for_profile(
+                    profile,
+                    now,
+                    256,
+                    cycle.max_target_id,
+                    cycle.started_at,
+                )
+                self.assertEqual([state.target_id for state in due], [4, 3])
+
+            # The remaining first-pass scans finish, while old repeated jobs drain.
+            for state in due:
+                state.last_scan = now
+            session.commit()
+            self.assertEqual(
+                self.scheduler._load_due_states_for_profile(
+                    profile,
+                    now,
+                    256,
+                    cycle.max_target_id,
+                    cycle.started_at,
+                ),
+                [],
+            )
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id,
+                cycle=cycle,
+                now=now,
+                prune_history=False,
+            )
+            self.assertEqual(cycle.status, "running")
+            self.assertEqual(cycle.completed_target_count, 4)
+            self.assertEqual(cycle._job_blocker_counts(), (1, 1))
+
+            jobs[0].finished = True
+            session.commit()
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id,
+                cycle=cycle,
+                now=now,
+                prune_history=False,
+            )
+            self.assertEqual(cycle.status, "running")
+
+            jobs[1].finished = True
+            states[4].working = False
+            states[4].last_scan = now
+            session.commit()
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id,
+                cycle=cycle,
+                now=now,
+                prune_history=False,
+            )
+            self.assertEqual(cycle.status, "finished")
+            self.assertEqual(cycle.completed_target_count, 5)
+            self.assertIsNone(profile.current_cycle_id)
+            self.assertEqual(session.query(models.Jobs).count(), 2)
+
+            # Next-cycle eligibility still uses each target's 24-hour rescan delay.
+            due = self.scheduler._load_due_states_for_profile(
+                profile,
+                now,
+                256,
+                cycle.max_target_id,
+            )
+            self.assertEqual([state.target_id for state in due], [2, 1])
 
     def test_large_ipv4_target_is_split_directly_into_atomic_24_jobs(self):
         """A /16 becomes 256 /24 jobs without losing part of the target."""
@@ -492,7 +629,9 @@ class StalledJobWatchdogTest(TestCase):
                 nmap_additional_params=None,
             ),
         ]
-        cycle = SimpleNamespace(max_target_id=100, status="running")
+        cycle = SimpleNamespace(
+            max_target_id=100, status="running", started_at=datetime(2026, 8, 19)
+        )
         session = mock.MagicMock()
         session.query.return_value.order_by.return_value.all.return_value = profiles
         config_values = {
@@ -569,7 +708,9 @@ class StalledJobWatchdogTest(TestCase):
             apply_to_all=True,
             nmap_additional_params=None,
         )
-        cycle = SimpleNamespace(max_target_id=100, status="running")
+        cycle = SimpleNamespace(
+            max_target_id=100, status="running", started_at=datetime(2026, 8, 19)
+        )
         session = mock.MagicMock()
         session.query.return_value.order_by.return_value.all.return_value = [profile]
         config_values = {
@@ -638,6 +779,12 @@ class StalledJobWatchdogTest(TestCase):
         )
         self.assertIn("queue=2/2 tick_jobs=2/10", generation_logs)
         self.assertEqual(stage_jobs.call_count, 2)
+        self.assertTrue(
+            all(
+                call.kwargs["cycle_started_at"] == cycle.started_at
+                for call in load_states.call_args_list
+            )
+        )
         self.assertEqual(session.commit.call_count, 3)
         self.assertEqual(
             [call.args[2] for call in load_states.call_args_list],
