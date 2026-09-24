@@ -477,7 +477,7 @@ def iter_yaml_files(tags_dir):
             yield path
 
 
-def get_yaml_files(args, rule_name=None):
+def get_yaml_files(args, rule_uuid=None):
     """
     Return the YAML files selected by CLI arguments.
     """
@@ -491,11 +491,12 @@ def get_yaml_files(args, rule_name=None):
     if not tags_dir.is_dir():
         raise FileNotFoundError(f"Tags directory not found: {tags_dir}")
 
-    if rule_name:
-        tags_file = tags_dir / f"{rule_name}.yaml"
-        if not tags_file.is_file():
-            raise FileNotFoundError(f"Tag YAML file not found: {tags_file}")
-        return [tags_file]
+    if rule_uuid:
+        for tags_file in iter_yaml_files(tags_dir):
+            payload, _source_version, _has_version = load_yaml_rule(tags_file)
+            if payload.get("uuid") == rule_uuid:
+                return [tags_file]
+        raise FileNotFoundError(f"Tag YAML file not found for UUID: {rule_uuid}")
 
     if not getattr(args, "all", False):
         return []
@@ -577,7 +578,7 @@ def import_rules(args):
                 db.session.rollback()
             return summary
 
-        rule_name = None
+        rule_uuid = None
         rule_id = getattr(args, "rule_id", None)
         if rule_id is not None:
             selected_rule = (
@@ -585,14 +586,14 @@ def import_rules(args):
             )
             if selected_rule is None:
                 raise SystemExit(f"Tag rule id {rule_id} not found")
-            rule_name = selected_rule.name
+            rule_uuid = selected_rule.uuid
 
-        yaml_files = get_yaml_files(args, rule_name=rule_name)
+        yaml_files = get_yaml_files(args, rule_uuid=rule_uuid)
         for yaml_file in yaml_files:
-            name = yaml_file.stem
             try:
                 payload, source_version, has_version = load_yaml_rule(yaml_file)
                 normalized = parse_tag_rule_yaml(yaml_file.read_text(encoding="utf-8"))
+                name = normalized["name"]
                 compile_tag_rule_definition(
                     name,
                     normalized["description"],
@@ -604,7 +605,11 @@ def import_rules(args):
                 print(f"SKIP {yaml_file.name}: {error}", file=sys.stderr)
                 continue
 
-            existing = db.session.query(TagRules).filter_by(name=name).one_or_none()
+            source_uuid = normalized["uuid"]
+            existing_by_uuid = (
+                db.session.query(TagRules).filter_by(uuid=source_uuid).one_or_none()
+            )
+            existing = existing_by_uuid
             tags_text = format_tags_text(normalized["tags"])
             version_label = payload.get("version") if has_version else "missing"
 
@@ -612,6 +617,7 @@ def import_rules(args):
                 summary["inserted"] += 1
                 if not args.dry_run:
                     new_rule = TagRules(
+                        uuid=source_uuid,
                         name=name,
                         active=True,
                         description=normalized["description"],
@@ -629,7 +635,9 @@ def import_rules(args):
                 continue
 
             same_content = (
-                existing.description == normalized["description"]
+                existing.uuid == source_uuid
+                and existing.name == name
+                and existing.description == normalized["description"]
                 and existing.query == normalized["query"]
                 and existing.tags == tags_text
             )
@@ -657,6 +665,8 @@ def import_rules(args):
                     f"db_updated_at={existing.updated_at}"
                 )
             if not args.dry_run:
+                existing.uuid = source_uuid
+                existing.name = name
                 existing.description = normalized["description"]
                 existing.query = normalized["query"]
                 existing.tags = tags_text
@@ -1232,6 +1242,9 @@ def delete_rules(args):
         TagRules,
         ensure_rule_required_headers,
     )
+    from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
+        parse_tag_rule_yaml,
+    )
 
     summary = {
         "deleted": 0,
@@ -1268,9 +1281,12 @@ def delete_rules(args):
                 .one_or_none()
             )
         else:
-            rule_name = Path(args.tags_file).stem
-            summary["selector"] = f"name={rule_name}"
-            rule = db.session.query(TagRules).filter_by(name=rule_name).one_or_none()
+            yaml_file = Path(args.tags_file).resolve()
+            source_uuid = parse_tag_rule_yaml(yaml_file.read_text(encoding="utf-8"))[
+                "uuid"
+            ]
+            summary["selector"] = f"uuid={source_uuid}"
+            rule = db.session.query(TagRules).filter_by(uuid=source_uuid).one_or_none()
 
         if rule is None:
             summary["missing"] = 1

@@ -236,6 +236,8 @@ Its current contract is:
 - a `Requested Hostname` dropdown is rendered before the port cards
 - the dropdown always includes `IP only` first, then all `fqdn_requested` values for that IP in alphabetical order
 - selecting a hostname filters the visible observations client-side without reloading the page
+- a port's web link requires `proto:http` on the active observation's UID; SSL/TLS evidence on that port selects HTTPS, otherwise HTTP
+- web links retain the scanned port and selected hostname/IP, and update when the active history tab or hostname changes
 - the `Informations` tab is separate and is used for external enrichment such as CIRCL geolookup and passive DNS
 
 If you change how `body.hostnames` is parsed or indexed, verify both structured search and `/ip/<ip>` together. The IP detail page now depends on the same `type == "user"` hostname semantics as `fqdn_requested`.
@@ -311,6 +313,23 @@ For the structured search page specifically, keep these moving parts aligned:
 
 Keep the first-run installer aligned with the documented initial objects: TCP ports, HTTP header collection, tag rules, NSE imports, and default scan profiles.
 
+### SQL migration filenames (mandatory)
+
+Every migration in `webapp/sql_upd/` must be named exactly
+`NN_migrate_from_<full-40-character-lowercase-git-SHA>.py`.
+
+- Inspect existing migration numbers first; use the next unused sequential number,
+  zero-padded to at least two digits. Never reuse or renumber an existing migration.
+- The SHA identifies the source revision before the schema change, not the future
+  migration commit. Resolve it with `git rev-parse <source-revision>`; for a new
+  change based on the current checkout, use `git rev-parse HEAD` before committing.
+- No abbreviated SHA, descriptive suffix, or description-only filename. Put the
+  migration purpose in its module docstring and `documentation/migration.md`.
+- When correcting a filename, update every reference in tests, documentation and
+  scripts. A rename does not authorize running the migration.
+- Before finishing, run `test/test_sql_migration_names.py` and the affected
+  migration tests against disposable databases only.
+
 ## Parsing And Search Contract
 
 The parser in `webapp/app/utils/result_parser.py` expects per-host result objects shaped roughly like:
@@ -356,22 +375,26 @@ Raw scan documents, including the Meilisearch source documents, never carry `tag
 ### Reporting contract
 
 Reports are configured from the `Reports` model and use the structured Kvrocks query syntax.
-The query is always evaluated inside the report interval. Monthly reports use `last_run_at` as the start when available; otherwise they start one calendar month before the run time.
+The query is always evaluated inside the report interval. Monthly reports cover one calendar month ending at run time; weekly reports cover seven days ending at run time. `last_run_at` records delivery only and never changes report scope.
 
-Report output is Markdown only for now. Keep the current shape aligned between code and README:
+Report Markdown is canonical. Preview and email render its safe HTML subset while
+retaining Markdown plain text. Keep the current shape aligned between code and README:
 
-- summary and period
+- top-level report title, summary metadata, and period
 - open port summary
-- monthly `New opened port` comparison before the host list
-- host list sorted by numeric IP order
+- `New opened port` grouped under bold port labels with numerically sorted affected IP sub-bullets, comparing preceding equivalent period before the host list
+- full report dump sorted by numeric IP order
 - per-host tags from Kvrocks `tags:<uid>` only; scan documents and Meilisearch documents do not contain tags
 - per-host open ports and scan result count
 - per-host associated FQDNs from PTR records found in report-period documents first, only when the source document `last_seen` is within `REPORT_PTR_LAST_SEEN_MONTHS` months before the report end, then `fqdn_requesteds:<uid>`, completed by Passive DNS `A` records up to 25 total entries
 - report-period PTR entries are rendered with `(ptr)`
 - requested FQDNs win over Passive DNS duplicates; Passive DNS-only entries are rendered with `(pdns)`
+- the global `FQDN discovered in Passive DNS` section includes only records observed within the previous 90 days
 - the as-is disclaimer
 
 The `Preview` action must not send email and must remain available for inactive reports.
+Rendered previews include a heading index with stable anchors and a print action; print
+output must hide UI controls. HTML rendering must escape every report-controlled value.
 Preview generation is asynchronous because Passive DNS enrichment can be slow:
 
 1. `/reportsview/preview_loading/<id>` renders the progress modal.

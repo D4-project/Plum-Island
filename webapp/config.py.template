@@ -180,6 +180,10 @@ SCAN_DELAY = 12
 # How many time between job scheduling in minutes
 SCHEDULER_DELAY = 10
 
+# Independent CIRCL enrichment worker: initial operational limits, tune to latency.
+NETWORK_LOOKUP_TIMEOUT_SECONDS = 10
+NETWORK_REFRESH_BATCH_SIZE = 32
+
 # Optional persistent application logging. Files use <prefix>-YYMMDD.log.
 LOG_ENABLED = False
 LOG_LEVEL = "DEBUG"

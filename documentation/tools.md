@@ -114,6 +114,7 @@ Useful import options:
 
 Version policy:
 
+- a YAML rule's mandatory UUID is its database identity; rule names and filenames may repeat
 - new rules are inserted
 - existing rules are replaced only when the YAML version is newer than the DB timestamp
 - YAML rules without `version` do not replace existing DB rules
@@ -502,3 +503,18 @@ Without `--learn`, no target import is performed.
 - `tools/config.yaml` can contain credentials. Do not commit production secrets.
 - `tools/q` and `tools/title` are local scratch files, not maintained CLI tools.
 - Prefer `--dry-run` when available before writing to the database or indexes.
+
+## Target imports and network metadata
+
+`import_whois_ranges.py` (single-target API) and `import_fqdns.py` (bulk API) use
+the same server-side target defaults: real UTC insertion timestamp and durable
+CIDR enrichment queue. No new credentials, client-side CIRCL lookup or timestamp
+arguments are required. Import descriptions remain unchanged. FQDN targets are
+inserted normally with AS enrichment unavailable; the existing optional FQDN
+resolution mode is unrelated and retains its behavior.
+
+Network failures do not roll back imports. Automatic lookups run in Plum's
+dedicated scheduler job; the target's detail button and list action force a
+lookup immediately. See [target metadata](scanning.md#target-metadata-and-network-information)
+and [migration 23](migration.md#target-network-metadata-migration-23) for history
+backfill, permissions and recovery.

@@ -10,6 +10,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = BASE_DIR / "meili_dump"
 DEFAULT_BATCH_SIZE = 1000
+DEFAULT_TASK_TIMEOUT_MS = 900_000
 
 
 def load_config():
@@ -57,6 +58,23 @@ def parse_args():
         help=(
             "Count total documents before importing and show percentages. "
             "This makes startup slower on large dumps."
+        ),
+    )
+    parser.add_argument(
+        "--task-timeout-ms",
+        type=int,
+        default=DEFAULT_TASK_TIMEOUT_MS,
+        help=(
+            "Maximum wait for each Meilisearch batch task in milliseconds. "
+            f"Default: {DEFAULT_TASK_TIMEOUT_MS}"
+        ),
+    )
+    parser.add_argument(
+        "--stat",
+        action="store_true",
+        help=(
+            "Show current OUT Meilisearch indexing state and pending document "
+            "work, then exit."
         ),
     )
     return parser.parse_args()
@@ -120,16 +138,72 @@ def format_progress(count, total_count):
     return str(count)
 
 
-def flush_batch(index, batch):
+def flush_batch(index, batch, task_timeout_ms):
     """
-    Send one batch to Meilisearch.
+    Send one batch to Meilisearch and wait for its successful completion.
     """
     if not batch:
         return 0
-    index.add_documents(batch)
+
     count = len(batch)
+    task_info = index.add_documents(batch)
+    task = index.wait_for_task(
+        task_info.task_uid,
+        timeout_in_ms=task_timeout_ms,
+        interval_in_ms=500,
+    )
+    if task.status != "succeeded":
+        error = (task.error or {}).get("message", "no error details")
+        raise RuntimeError(
+            f"Meilisearch task {task.uid} failed with status {task.status}: {error}"
+        )
     batch.clear()
     return count
+
+
+def active_indexing_tasks(client, index_name):
+    """Return every queued or processing task for one index."""
+    tasks = []
+    task_from = None
+    while True:
+        parameters = {
+            "indexUids": index_name,
+            "statuses": "enqueued,processing",
+            "limit": 1000,
+        }
+        if task_from is not None:
+            parameters["from"] = task_from
+        page = client.get_tasks(parameters)
+        tasks.extend(page.results)
+        if page.next_ is None:
+            return tasks
+        task_from = page.next_
+
+
+def print_indexing_status(client, index, index_name):
+    """Print Meilisearch document count and outstanding indexing work."""
+    stats = index.get_stats()
+    tasks = active_indexing_tasks(client, index_name)
+    queued = sum(task.status == "enqueued" for task in tasks)
+    processing = sum(task.status == "processing" for task in tasks)
+    received = sum(
+        (task.details or {}).get("receivedDocuments", 0) for task in tasks
+    )
+    indexed = sum(
+        (task.details or {}).get("indexedDocuments", 0) for task in tasks
+    )
+    remaining = max(0, received - indexed)
+
+    print(
+        "Meilisearch status: "
+        f"documents={stats.number_of_documents}; "
+        f"is_indexing={stats.is_indexing}; "
+        f"tasks_queued={queued}; tasks_processing={processing}; "
+        f"submitted_documents={received}; "
+        f"task_indexed_documents={indexed}; "
+        f"pending_documents={remaining}",
+        flush=True,
+    )
 
 
 def main():
@@ -139,6 +213,8 @@ def main():
     args = parse_args()
     if args.batch_size <= 0:
         raise SystemExit("--batch-size must be >= 1")
+    if args.task_timeout_ms <= 0:
+        raise SystemExit("--task-timeout-ms must be >= 1")
 
     import meilisearch  # pylint: disable=import-outside-toplevel
 
@@ -150,6 +226,14 @@ def main():
     if not meili_url:
         raise SystemExit("Missing OUT_MEILI_URL in tools/config.yaml")
 
+    client = meilisearch.Client(meili_url, meili_api_key)
+    index = client.index(index_name)
+
+    if args.stat:
+        print(f"Meilisearch: {meili_url} / index={index_name}", flush=True)
+        print_indexing_status(client, index, index_name)
+        return
+
     input_dir = Path(args.input_dir)
     if not input_dir.is_dir():
         raise SystemExit(f"Input directory not found: {input_dir}")
@@ -157,6 +241,7 @@ def main():
     print(f"Reading JSON dump from {input_dir}", flush=True)
     print(f"Writing documents to {meili_url} / index={index_name}", flush=True)
     print(f"Batch size: {args.batch_size}", flush=True)
+    print(f"Task timeout: {args.task_timeout_ms} ms", flush=True)
     total_count = None
     if args.progress:
         print("Counting JSON documents...", flush=True)
@@ -166,9 +251,6 @@ def main():
             f"({preflight_error_count} preflight errors)",
             flush=True,
         )
-
-    client = meilisearch.Client(meili_url, meili_api_key)
-    index = client.index(index_name)
 
     batch = []
     processed_count = 0
@@ -184,7 +266,7 @@ def main():
 
         batch.append(doc)
         if len(batch) >= args.batch_size:
-            indexed_count += flush_batch(index, batch)
+            indexed_count += flush_batch(index, batch, args.task_timeout_ms)
             print(
                 f"Progress: processed={processed_count}; "
                 f"indexed={format_progress(indexed_count, total_count)}; "
@@ -192,14 +274,15 @@ def main():
                 flush=True,
             )
 
-    indexed_count += flush_batch(index, batch)
+    indexed_count += flush_batch(index, batch, args.task_timeout_ms)
     print(
-        "Meilisearch import complete: "
+        "Meilisearch import complete; every submitted batch succeeded: "
         f"processed={processed_count} "
         f"indexed={format_progress(indexed_count, total_count)} "
         f"errors={error_count}",
         flush=True,
     )
+    print_indexing_status(client, index, index_name)
 
 
 if __name__ == "__main__":

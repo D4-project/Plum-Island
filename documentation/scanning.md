@@ -45,6 +45,50 @@ For each `target/profile` pair, Plum tracks:
 - `last_previous_scan`: completion time of the previous finished scan cycle for this target/profile
 - `cycle`: time delta between `last_scan` and `last_previous_scan`
 
+## Target metadata and network information
+
+Target details show insertion time (UTC), IPv4 CIDR / IPv6 CIDR / FQDN type,
+and structured AS information separately from the editable description. Bare IPs
+are host networks. AS records are shared by ASN; coordinates are **country
+averages**, not host or AS geolocation. Legacy `as_bgp`, `as_description` and
+`as_country` Python accessors read this shared record; old SQL columns are retained
+only for rollback and are no longer authoritative.
+
+New CIDRs automatically queue enrichment. Every accepted scan receipt checks each
+associated target and queues a lookup when its data is missing or its last
+successful lookup is **older than 24 hours**. Exactly 24 hours is still fresh.
+The dedicated `network_enrichment` scheduler job consumes this durable queue at
+`SCHEDULER_DELAY`, independently of scan orchestration and export. FQDNs are never
+resolved or enriched by this feature. Editing the target value clears old network
+metadata and schedules a new lookup only if the new value is a CIDR/IP.
+
+Requests use `https://ip.circl.lu/geolookup/<network-address>`: only the first
+address of the CIDR, including IPv6. The ASN-bearing response entry determines the
+AS for the entire CIDR, even if other addresses belong to another AS.
+
+The detail button and list **Refresh Network informations** action force an
+immediate lookup regardless of age/backoff. If a lookup is already running, the
+action reports `busy` instead of duplicating it. Both actions require a form POST
+with CSRF protection and their FAB permission: `can_refresh_network` and the
+existing `mulresolvehwois`, respectively, on `TargetsView`. The configured role
+seed grants the detail action alongside its existing list action; administrators
+should grant the new permission to equivalent custom roles. Unauthorized controls
+are hidden and direct requests are checked server-side.
+
+The configurable HTTP timeout is `NETWORK_LOOKUP_TIMEOUT_SECONDS` (initially 10 s,
+matching the existing geolookup proxy); `NETWORK_REFRESH_BATCH_SIZE` (initially 32)
+limits each automatic pass. The worker also uses the existing queue-generation
+time budget between lookups. These are initial operational settings, not throughput
+guarantees; tune with production latency. No HTTP request holds a SQL write
+transaction. A durable per-target lease lasts three timeout intervals and allows
+recovery after a process restart. Failures keep previous data and successful-refresh
+time and log a warning. Missing or stale data is retried no earlier than the next
+scheduler interval; a failed forced refresh does not invalidate still-fresh data.
+Insertion and scan receipt never depend on a successful CIRCL response.
+
+For existing installations apply migration 23 before starting this code; see
+[migration instructions](migration.md#target-network-metadata-migration-23).
+
 ## Scan-profile cycle boundaries
 
 Each scan-profile cycle stores `max_target_id`, the highest `Targets.id`

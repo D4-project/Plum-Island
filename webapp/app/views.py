@@ -26,7 +26,7 @@ import zipfile
 import yaml
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
-from flask import request, jsonify
+from flask import request, jsonify, abort
 from flask_appbuilder import BaseView
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
@@ -35,6 +35,7 @@ from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder.widgets import ListWidget
 from flask_login import current_user
 from flask_wtf import FlaskForm
+from flask_wtf.csrf import generate_csrf, validate_csrf
 from flask_wtf.file import FileField, FileAllowed
 from markupsafe import Markup, escape
 from meilisearch import Client
@@ -80,7 +81,8 @@ from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
 from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
-from .utils.ip2asn import get_asn_description_for_ip
+from .utils.network_enrichment import enrichment_due, refresh_target_network
+from .utils.ip_whois import WhoisLookupError, lookup_network_whois
 from .utils.tagrules import (
     compile_tag_rule_definition,
     normalize_tags,
@@ -601,6 +603,7 @@ def get_target_search_time_range(pk):
 
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
+app.jinja_env.globals["csrf_token"] = generate_csrf
 app.jinja_env.globals["get_target_value"] = get_target_value
 app.jinja_env.globals["get_target_requested_hostname"] = get_target_requested_hostname
 app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
@@ -2512,6 +2515,48 @@ class IPDetailView(BaseView):
     route_base = "/ip"
     default_view = "detail"
 
+    @expose("/", methods=["GET", "POST"])
+    @has_access
+    def index(self):
+        """Offer an authenticated WHOIS lookup for a user-entered IP/CIDR."""
+        if request.method == "POST":
+            try:
+                validate_csrf(request.form.get("csrf_token"))
+            except ValidationError:
+                return jsonify(error="Invalid CSRF token"), 400
+            value = request.form.get("ip", "").strip()
+            if len(value) > 64:
+                return jsonify(error="Enter a valid IP address or CIDR"), 400
+            try:
+                network = ipaddress.ip_network(value, strict=False)
+            except ValueError:
+                return jsonify(error="Enter a valid IP address or CIDR"), 400
+            try:
+                result = lookup_network_whois(network.with_prefixlen)
+            except WhoisLookupError as error:
+                logger.warning("WHOIS lookup failed for %s: %s", network, error)
+                return jsonify(error="WHOIS lookup failed; try again later"), 502
+            return jsonify(query=network.with_prefixlen, result=result)
+        return self.render_template("ip_whois_lookup.html", title="IP WHOIS")
+
+    @expose("/whois", methods=["GET"])
+    @has_access
+    def whois_lookup(self):
+        """Return WHOIS data for the IP supplied by the IP detail page."""
+        value = request.args.get("ip", "").strip()
+        if len(value) > 64:
+            return jsonify(error="Enter a valid IP address or CIDR"), 400
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return jsonify(error="Enter a valid IP address or CIDR"), 400
+        try:
+            result = lookup_network_whois(network.with_prefixlen)
+        except WhoisLookupError as error:
+            logger.warning("WHOIS lookup failed for %s: %s", network, error)
+            return jsonify(error="WHOIS lookup failed; try again later"), 502
+        return jsonify(query=network.with_prefixlen, result=result)
+
     @staticmethod
     def _safe_timestamp_to_iso(timestamp):
         """
@@ -2851,6 +2896,15 @@ class TargetsView(ModelView):
     search_columns = ["value", "description", "active", "working", "scanprofiles"]
     label_columns = {
         "id": "ID",
+        "created_at": "Inserted at (UTC)",
+        "target_type": "Target type",
+        "network_asn_display": "ASN",
+        "network_as_name": "AS name",
+        "network_country_alpha3": "Country alpha-3",
+        "network_country_numeric": "Country numeric code",
+        "network_latitude": "Latitude (country average)",
+        "network_longitude": "Longitude (country average)",
+        "network_updated_at": "Network last refreshed (UTC)",
         "value": "CIDR/Host",
         "scanprofiles": "Scan profiles",
         "duration_html": "Scan Cycle",
@@ -2886,7 +2940,16 @@ class TargetsView(ModelView):
     edit_columns = ["value", "description", "active", "working", "scanprofiles"]
     show_columns = [
         "value",
+        "created_at",
+        "target_type",
         "description",
+        "network_asn_display",
+        "network_as_name",
+        "network_country_alpha3",
+        "network_country_numeric",
+        "network_latitude",
+        "network_longitude",
+        "network_updated_at",
         "active",
         "working",
         "scanprofiles",
@@ -2921,6 +2984,23 @@ class TargetsView(ModelView):
     @staticmethod
     def _json_results(items):
         return jsonify([{"id": item.id, "text": str(item)} for item in items])
+
+    @expose("/show/<pk>")
+    @has_access
+    def show(self, pk):
+        """Refresh missing/stale CIDR AS data before rendering target details."""
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is not None and enrichment_due(item):
+            target_id = item.id
+            db.session.rollback()
+            status = refresh_target_network(target_id)
+            db.session.expire_all()
+            if status in ("failed", "busy"):
+                flash(
+                    "Network information could not be refreshed; showing saved data.",
+                    "warning",
+                )
+        return super().show(pk)
 
     @expose("/scanprofiles_remote", methods=["GET"])
     @has_access
@@ -2961,21 +3041,70 @@ class TargetsView(ModelView):
         single=False,
     )
     def mulrreslovewhois(self, items):
-        """
-        Implement Raise priority of job to 4.
-        """
-        if isinstance(items, list):
-            # Raise N record
-            for item in items:
-                info = get_asn_description_for_ip(item.value)
-                item.description = info
-        else:
-            # Raise Un tag
-            info = get_asn_description_for_ip(item.value)
-            item.description = info
-        db.session.commit()
+        """Force selected targets through the shared structured lookup."""
+        if not self.appbuilder.sm.has_access(
+            "mulresolvehwois", self.class_permission_name
+        ):
+            abort(403)
+        self._validate_network_refresh_request()
+        selected = items if isinstance(items, list) else [items]
+        target_ids = [item.id for item in selected]
+        db.session.rollback()
+        self._refresh_network_ids(target_ids)
         self.update_redirect()
         return redirect(self.get_redirect())
+
+    @staticmethod
+    def _validate_network_refresh_request():
+        """Require a form POST token for every mutation path."""
+        if request.method != "POST":
+            abort(405)
+        try:
+            validate_csrf(request.form.get("csrf_token"))
+        except ValidationError:
+            abort(400, description="Invalid CSRF token")
+
+    @staticmethod
+    def _refresh_network_ids(target_ids):
+        """Report per-target outcomes without exposing backend error details."""
+        for target_id in target_ids:
+            try:
+                outcome = refresh_target_network(target_id, force=True)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("Network refresh failed for target %s", target_id)
+                outcome = "failed"
+            flash(
+                f"Target {target_id}: network refresh {outcome}",
+                "success" if outcome == "updated" else "warning",
+            )
+
+    @expose("/refresh_network/<int:pk>", methods=["POST"])
+    @has_access
+    def refresh_network(self, pk):
+        """Force an immediate refresh from target details, with FAB permission."""
+        self._validate_network_refresh_request()
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is None:
+            abort(404)
+        db.session.rollback()
+        self._refresh_network_ids([pk])
+        return redirect(url_for("TargetsView.show", pk=pk))
+
+    @expose("/whois/<int:pk>", methods=["GET"])
+    @has_access
+    def whois(self, pk):
+        """Return current RIR WHOIS text for a stored IP/CIDR target."""
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is None:
+            abort(404)
+        if item.target_type == "FQDN":
+            return jsonify(error="WHOIS is unavailable for FQDN targets"), 400
+        try:
+            result = lookup_network_whois(item.value)
+        except WhoisLookupError as error:
+            logger.warning("WHOIS lookup failed for target %s: %s", pk, error)
+            return jsonify(error="WHOIS lookup failed; try again later"), 502
+        return jsonify(query=item.value, result=result)
 
     @action(
         "muldelete", "Delete Job", "Delete all Really?", "fa-trash-can", single=False
@@ -3463,6 +3592,7 @@ class TagRulesView(ModelView):
 
     datamodel = SQLAInterface(TagRules)
     list_template = "list_tagrulesview.html"
+    show_template = "show_tagrulesview.html"
     list_widget = TagRulesListWidget
     list_columns = [
         "active_html",
@@ -3472,10 +3602,10 @@ class TagRulesView(ModelView):
     ]
     show_columns = [
         "active",
+        "uuid",
         "name",
         "description",
         "query",
-        "tags",
         "tags_html",
         "created_at_html",
         "updated_at_html",
@@ -3486,6 +3616,7 @@ class TagRulesView(ModelView):
     base_order = ("updated_at", "desc")
     label_columns = {
         "id": "ID",
+        "uuid": "UUID",
         "name": "Rule Name",
         "name_html": "Rule Name",
         "active": "Active",
@@ -3501,6 +3632,8 @@ class TagRulesView(ModelView):
     }
 
     def _normalize_tag_rule_item(self, item):
+        if not item.uuid:
+            item.uuid = str(uuid.uuid4())
         item.name = str(item.name or "").strip()
         if not item.name:
             raise ValueError("Rule name is required")
@@ -3761,9 +3894,12 @@ class TagRulesView(ModelView):
         version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         rules = db.session.query(TagRules).order_by(TagRules.name).all()
         for rule in rules:
-            filename = rule.name.replace(" ", "_").lower() + ".yaml"
+            # Names are user-facing metadata and may duplicate; UUID is identity.
+            filename = f"{rule.uuid}.yaml"
             doc = {
+                "name": rule.name,
                 "description": rule.description,
+                "uuid": rule.uuid,
                 "query": rule.query,
                 "tags": rule.tags_list(),
                 "version": version,

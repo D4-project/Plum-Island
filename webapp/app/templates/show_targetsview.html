@@ -4,26 +4,59 @@
 {% block content %}
 {{ lib.panel_begin(title, "show") }}
 
-{% if related_views is defined %}
-    <ul class="nav nav-tabs"  style="{{"display: none;" if not related_views else "" }}">
-    <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a> </li>
+{% set target_fqdn = get_target_requested_hostname(pk) %}
+<ul class="nav nav-tabs">
+    <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a></li>
+    {% if related_views is defined %}
         {% for view in related_views %}
             <li>
                 <a href="#{{view.__class__.__name__}}" data-toggle="tab">{{view.title}}</a>
             </li>
         {% endfor %}
-    </ul>
-    <div class="tab-content">
+    {% endif %}
+    <li><a id="target-results-tab" href="#TargetResults" data-toggle="tab">Results</a></li>
+    {% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
+        {% if target_fqdn %}
+        <li class="disabled"><a href="#TargetWhois" aria-disabled="true" tabindex="-1">Whois</a></li>
+        {% else %}
+        <li><a id="target-whois-tab" href="#TargetWhois" data-toggle="tab">Whois</a></li>
+        {% endif %}
+    {% endif %}
+</ul>
+<div class="tab-content">
+    {% if related_views is defined %}
     {% for view in related_views %}
-        <div id="{{view.__class__.__name__}}" class=tab-pane">
+        <div id="{{view.__class__.__name__}}" class="tab-pane">
             {{ widgets.get('related_views')[loop.index - 1](pk = pk)|safe }}
         </div>
     {% endfor %}
-{% endif %}
+    {% endif %}
 {% block show_form %}
     <div id="Home" class="tab-pane active">
         {{ widgets.get('show')()|safe }}
-    </div>
+
+{% if appbuilder.sm.has_access('can_refresh_network', 'TargetsView') %}
+<form class="plum-target-refresh-form" action="{{ url_for('TargetsView.refresh_network', pk=pk) }}" method="post" style="display:none;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn btn-default btn-sm" title="Refresh network info" aria-label="Refresh network info">
+    <i class="fa fa-refresh" aria-hidden="true"></i>
+  </button>
+</form>
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+  const refreshForm = document.querySelector('.plum-target-refresh-form');
+  const backLabel = {{ _("Back")|tojson }};
+  if (!refreshForm) return;
+  const backButton = Array.from(document.querySelectorAll('a.btn, button.btn'))
+    .find(button => button.textContent.trim() === backLabel);
+  if (backButton) {
+    backButton.insertAdjacentElement('afterend', refreshForm);
+    refreshForm.style.display = 'inline-block';
+    refreshForm.style.marginLeft = '4px';
+  }
+})();
+</script>
+{% endif %}
 
 <div class="plum-target-show-panels">
 
@@ -65,9 +98,14 @@
     {% else %}
     <div class="alert alert-info" role="alert">No scan profile applies to this target.</div>
     {% endif %}
-  </div>
+</div>
 </div>
 
+    </div>
+    </div>
+
+    <div id="TargetResults" class="tab-pane">
+    <div class="plum-target-show-panels">
 <div class="panel panel-primary">
   <div class="panel-heading">
     <h4 class="panel-title ">Results of last scans</h4>
@@ -148,8 +186,11 @@ function copyIpToClipboard(ip, triggerEl) {
     }
 }
 
-window.addEventListener('DOMContentLoaded', async () => {
-  await search();
+let targetSearchStarted = false;
+$('#target-results-tab').on('shown.bs.tab', async () => {
+    if (targetSearchStarted) return;
+    targetSearchStarted = true;
+    await search();
 });
 
 function formatProcessingTime(milliseconds) {
@@ -515,8 +556,27 @@ async function loadUid(uid, targetId) {
 
 </div>
 
+    </div>
+    </div>
+
+    {% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
+    <div id="TargetWhois" class="tab-pane">
+      <div class="panel panel-info">
+        <div class="panel-heading"><h4 class="panel-title">WHOIS</h4></div>
+        <div class="panel-body" data-whois-url="{{ url_for('TargetsView.whois', pk=pk) }}">
+          {% if target_fqdn %}
+          <div class="alert alert-info" role="status">WHOIS is unavailable for FQDN targets.</div>
+          {% else %}
+          <p>Current registry record for <strong>{{ get_target_value(pk) }}</strong>.</p>
+          <pre id="target-whois-result" role="status" aria-live="polite">Select this tab to query the registry.</pre>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
 {% endblock show_form %}
-{% if related_views is defined %}</div>{% endif %}
+</div>
 {{ lib.panel_end() }}
 
 {% endblock content %}
@@ -594,4 +654,35 @@ async function loadUid(uid, targetId) {
   .target-result-title-row .ip-detail-tag-lang { background: #5cb85c; }
   .target-result-title-row .ip-detail-tag-cpe { background: #777; }
 </style>
+{% if appbuilder.sm.has_access('can_whois', 'TargetsView') and not target_fqdn %}
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+  const tab = document.getElementById('target-whois-tab');
+  const panel = document.getElementById('TargetWhois');
+  const result = document.getElementById('target-whois-result');
+  if (!tab || !panel || !result) return;
+  let loading = false;
+  let loaded = false;
+  tab.addEventListener('click', async () => {
+    if (loading || loaded) return;
+    loading = true;
+    result.textContent = 'Querying WHOIS registry...';
+    try {
+      const response = await fetch(panel.querySelector('[data-whois-url]').dataset.whoisUrl, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'WHOIS lookup failed.');
+      result.textContent = data.result || 'No WHOIS record returned.';
+      loaded = true;
+    } catch (error) {
+      result.textContent = error.message || 'WHOIS lookup failed. Try again.';
+    } finally {
+      loading = false;
+    }
+  });
+})();
+</script>
+{% endif %}
 {% endblock %}

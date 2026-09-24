@@ -41,6 +41,7 @@ from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
 from .utils.scan_cycles import reconcile_scanprofile_cycle
+from .utils.network_enrichment import request_network_refresh
 from .views import TargetsView
 
 
@@ -405,6 +406,33 @@ class PublicTargetsApi(ModelRestApi):
     """
 
     datamodel = SQLAInterface(Targets)
+    # Server-managed timestamps, AS associations and lease fields are read-only.
+    add_columns = ["value", "description", "active", "priority", "scanprofiles"]
+    edit_columns = ["value", "description", "active", "priority", "scanprofiles"]
+    list_columns = [
+        "id",
+        "value",
+        "description",
+        "active",
+        "priority",
+        "working",
+        "last_scan",
+        "last_previous_scan",
+        "scan_unit_count",
+        "scanprofiles",
+        "created_at",
+        "network_updated_at",
+    ]
+    show_columns = list_columns
+
+    @staticmethod
+    def _insertion_metadata(item):
+        """Report server-owned metadata without accepting it in input schemas."""
+        return {
+            "created_at": item.created_at.isoformat() + "Z",
+            "target_type": item.target_type,
+            "network_refresh_pending": bool(item.network_refresh_pending),
+        }
 
     def _coverage_error(self, item):
         return TargetsView._target_coverage_error(item)
@@ -431,7 +459,10 @@ class PublicTargetsApi(ModelRestApi):
             return self.response(
                 201,
                 **{
-                    API_RESULT_RES_KEY: self.add_model_schema.dump(item, many=False),
+                    API_RESULT_RES_KEY: {
+                        **self.add_model_schema.dump(item, many=False),
+                        **self._insertion_metadata(item),
+                    },
                     "id": self.datamodel.get_pk_value(item),
                 },
             )
@@ -942,6 +973,7 @@ class Api(BaseApi):
                 job_bot.uid,
             )
             for target in job_bot.targets:
+                request_network_refresh(target)
                 logger.debug("target_id candidate to clean: %s", target.id)
                 logger.debug("target_id candidate last scan %s", target.last_scan)
                 previous_scan = ensure_utc_naive(target.last_scan)

@@ -76,6 +76,8 @@ permissions:
 - menu access on Header Search
 - mulraisepriority on JobsView
 - mulresolvehwois on TargetsView
+- can refresh network on TargetsView
+- can whois on TargetsView
 - can bulk import on TargetsApi
 - can export full status on KVSearchView
 - can export full start on KVSearchView
@@ -94,5 +96,7 @@ permissions:
 - can export ips status on KVSearchView
 - can export ips download on KVSearchView
 - can detail on IPDetailView
+- can index on IPDetailView
+- can whois on IPDetailView
 - can passive dns on IPDetailView
 - can geolookup on IPDetailView

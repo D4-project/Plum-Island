@@ -167,6 +167,20 @@ then retrieves their tag badges asynchronously in the same 200-IP batches as
 the structured search. Selecting an IP opens its IP detail page; its info icon
 expands the matching scan results.
 
+## IP detail web links
+
+On `/ip/<ip>`, a port's open-web-service button appears when the active scan
+observation has the indexed tag `proto:http`. Service names alone do not enable
+the button. The link uses HTTPS when that port reports an SSL/TLS tunnel, a secure
+service name (`https`, `https-alt`, `ssl`, `tls`, `ssl/...` or `tls/...`), or an
+`ssl-cert` script; otherwise it uses HTTP.
+
+The destination keeps the actual scanned port: HTTP on 8080 opens
+`http://IP:8080`, HTTPS on 8443 opens `https://IP:8443`. Default HTTP/80 and
+HTTPS/443 ports are omitted from the URL. The Requested Hostname selection is
+used as the destination when selected, otherwise the IP is used. Switching a
+history tab or hostname updates the button for the newly active observation.
+
 ## Performance diagnostics
 
 Add the standalone keyword `debug` to a structured search:

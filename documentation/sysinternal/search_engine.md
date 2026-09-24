@@ -286,6 +286,26 @@ does not implement a new index, a result cache, early server-side set intersecti
 or a cardinality-based planner. Treat those as separate proposals with their own
 behavior and resource checks.
 
+## IP detail web links
+
+IP detail web links use `utils/ip_links.py`, `port_web_scheme(port, tags)`, when
+`IPDetailView.detail` builds each observation. Read `proto:http` from normalized
+Kvrocks UID tags, never from raw Meilisearch document fields or a union of tags
+across the IP's history. Tags remain UID-level: every port observation in a
+multi-port document inherits that UID's tags; no per-port tag index is introduced.
+TLS evidence is local to the observation's port (service name/tunnel or ssl-cert
+script), not another port or a previous observation. Port number alone does not
+establish TLS. No additional backend reads or reindexing are needed for link logic.
+
+The template stores `web_scheme` on each observation pane and the scanned port
+on the button as HTML data attributes. Refresh link visibility/label after a
+Bootstrap tab change and hostname filtering, and read the active pane again on
+click. URLs allow only HTTP/HTTPS and ports 1..65535, retain non-default ports,
+use the selected requested hostname or IP, and bracket IPv6 literals. Do not
+interpolate raw port values into inline JavaScript. Unit tests cover scheme
+selection, the actual view with fake storage, and actual JS helpers with a DOM
+stub; these do not replace an interactive browser check on deployed scan data.
+
 ## Opt-in performance diagnostics
 
 Interactive queries accept standalone `debug`, case-insensitively. `parse_query`

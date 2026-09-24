@@ -11,6 +11,7 @@ This is the module containing all the data models
 import html
 import re
 import shlex
+import uuid
 from flask_appbuilder import Model
 from markupsafe import Markup as Esc
 from sqlalchemy import (
@@ -20,6 +21,8 @@ from sqlalchemy import (
     String,
     Boolean,
     DateTime,
+    Float,
+    Index,
     ForeignKey,
     Table,
     Text,
@@ -30,6 +33,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import relationship, object_session, validates
 from .utils.mutils import compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
+from .utils.ip2asn import target_type
 
 NMAP_ADDITIONAL_PARAMS_MAX_LENGTH = 4096
 NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS = frozenset(";&|$" + chr(96) + "<>")
@@ -625,6 +629,16 @@ TAG_RULE_HEADER_RE = re.compile(
     r"([!#$%&'*+\-.^_`|~0-9a-z]+)",
     re.IGNORECASE,
 )
+TAG_RULE_TAG_COLOR_CLASSES = {
+    "vuln": "tagrules-tag-vuln",
+    "vendor": "tagrules-tag-vendor",
+    "product": "tagrules-tag-product",
+    "type": "tagrules-tag-type",
+    "proto": "tagrules-tag-proto",
+    "lang": "tagrules-tag-lang",
+    "cpe": "tagrules-tag-cpe",
+    "hard": "tagrules-tag-cpe",
+}
 
 
 def headers_required_by_tag_rules(rules):
@@ -746,7 +760,10 @@ class TagRules(Model):
 
     __tablename__ = "tagrules"
     id = Column(Integer, primary_key=True)
-    name = Column(String(256), unique=True, nullable=False)
+    uuid = Column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4())
+    )
+    name = Column(String(256), nullable=False)
     active = Column(Boolean, default=True, nullable=False)
     description = Column(String(512), nullable=False)
     query = Column(Text, nullable=False)
@@ -781,13 +798,16 @@ class TagRules(Model):
         if not tags:
             return Esc("")
 
-        visible_limit = 2
+        visible_limit = 5
         title = _html_escape(", ".join(tags), quote=True)
         rendered = ""
         rendered += f'<span class="tagrules-tags" title="{title}">'
         for tag in tags[:visible_limit]:
+            color_class = TAG_RULE_TAG_COLOR_CLASSES.get(
+                tag.partition(":")[0].lower(), ""
+            )
             rendered += (
-                '<span class="label label-default tagrules-tag">'
+                f'<span class="tagrules-tag {color_class}">'
                 f"{_html_escape(tag)}"
                 "</span> "
             )
@@ -1411,6 +1431,23 @@ class ScanProfiles(Model):
         return Esc(running_cycle.summary_badge_html("Current"))
 
 
+class AutonomousSystems(Model):
+    """Shared CIRCL AS metadata; coordinates are country averages."""
+
+    __tablename__ = "autonomous_systems"
+    asn = Column(BigInteger, primary_key=True, autoincrement=False)
+    name = Column(String(512), nullable=False)
+    country_alpha2 = Column(String(2))
+    country_alpha3 = Column(String(3))
+    country_numeric = Column(String(3))
+    latitude = Column(Float)
+    longitude = Column(Float)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+    def __repr__(self):
+        return f"AS{self.asn} {self.name}"
+
+
 class Targets(Model):
     """
     Class for networks and hosts targets definitions
@@ -1419,9 +1456,25 @@ class Targets(Model):
     """
 
     __tablename__ = "targets"
+    __table_args__ = (
+        Index(
+            "idx_targets_network_pending",
+            "network_refresh_pending",
+            "network_retry_at",
+            "id",
+        ),
+    )
     id = Column(Integer, primary_key=True)
     value = Column(String(45), unique=True, nullable=False)  # The CIDR or HOST
     description = Column(String(256))  # A facultative descrition
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    network_asn = Column(BigInteger, ForeignKey("autonomous_systems.asn"), index=True)
+    autonomous_system = relationship("AutonomousSystems")
+    network_updated_at = Column(DateTime)
+    network_refresh_pending = Column(Boolean, default=False, nullable=False)
+    network_retry_at = Column(DateTime)
+    network_claim = Column(String(36))
+    network_claim_until = Column(DateTime)
     active = Column(Boolean, default=True)  # To suspend the target
     working = Column(Boolean, default=False)  # Set when jobs todo are presents
     last_scan = Column(DateTime, default=None)  # Last Scan of the Range.
@@ -1433,9 +1486,98 @@ class Targets(Model):
         "TargetScanStates", back_populates="target", cascade="all, delete-orphan"
     )
 
-    as_bgp = Column(Integer, default=0)  # BGP AS Number
-    as_description = Column(String(256))  # AS Description.
-    as_country = Column(String(2), default="ZZ")  # AS Country
+    @property
+    def target_type(self):
+        """Expose address family/CIDR type without resolving hostnames."""
+        return target_type(self.value)
+
+    @property
+    def as_bgp(self):
+        """Legacy read compatibility; the relationship is the source of truth."""
+        return self.network_asn or 0
+
+    @property
+    def as_description(self):
+        """Legacy AS description accessor."""
+        return self.autonomous_system.name if self.autonomous_system else None
+
+    @property
+    def as_country(self):
+        """Legacy alpha-2 country accessor."""
+        return self.autonomous_system.country_alpha2 if self.autonomous_system else "ZZ"
+
+    def _network_info_value(self, attribute):
+        """Return one safe plain-text value for the target detail table."""
+        if self.target_type == "FQDN":
+            return "Unavailable for FQDN targets"
+        info = self.autonomous_system
+        if info is None:
+            return (
+                "Not available (refresh pending)"
+                if self.network_refresh_pending
+                else "Not available"
+            )
+        value = getattr(info, attribute)
+        return str(value) if value is not None else "Unavailable"
+
+    @property
+    def network_asn_display(self):
+        """Render the shared ASN as one ordinary detail row."""
+        value = self._network_info_value("asn")
+        return f"AS{value}" if value.isdecimal() else value
+
+    @property
+    def network_as_name(self):
+        """Expose shared AS name as a plain-text detail row."""
+        return self._network_info_value("name")
+
+    @property
+    def network_country_alpha3(self):
+        """Expose country alpha-3 code as a plain-text detail row."""
+        return self._network_info_value("country_alpha3")
+
+    @property
+    def network_country_numeric(self):
+        """Expose zero-padded numeric country code as text."""
+        return self._network_info_value("country_numeric")
+
+    @property
+    def network_latitude(self):
+        """Expose country-average latitude as a plain-text detail row."""
+        return self._network_info_value("latitude")
+
+    @property
+    def network_longitude(self):
+        """Expose country-average longitude as a plain-text detail row."""
+        return self._network_info_value("longitude")
+
+    def network_information_html(self):
+        """Show escaped structured AS data, separately from the description."""
+        if self.target_type == "FQDN":
+            return Esc("Unavailable for FQDN targets")
+        info = self.autonomous_system
+        if info is None:
+            return Esc(
+                "Not available"
+                + (" — refresh pending" if self.network_refresh_pending else "")
+            )
+        rows = [
+            ("ASN", info.asn),
+            ("AS name", info.name),
+            ("Country alpha-3", info.country_alpha3),
+            ("Country numeric code", info.country_numeric),
+            ("Latitude (country average)", info.latitude),
+            ("Longitude (country average)", info.longitude),
+        ]
+        return Esc(
+            "<dl>"
+            + "".join(
+                f"<dt>{label}</dt><dd>{_html_escape(str(value)) if value is not None else 'Unavailable'}</dd>"
+                for label, value in rows
+            )
+            + "</dl>"
+        )
+
     priority = Column(Integer, default=1)  # Priority, by default LOW
     scan_unit_count = Column(BigInteger, default=1, nullable=False)
 
@@ -1445,6 +1587,14 @@ class Targets(Model):
         Maintain the precalculated scan-unit count when target value changes.
         """
         self.scan_unit_count = compute_scan_unit_count(value)
+        if value != self.value:
+            self.autonomous_system = None
+            self.network_asn = None
+            self.network_updated_at = None
+            self.network_claim = None
+            self.network_claim_until = None
+            self.network_retry_at = None
+            self.network_refresh_pending = target_type(value) != "FQDN"
         return value
 
     @validates("priority")

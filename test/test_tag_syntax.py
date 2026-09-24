@@ -2,7 +2,7 @@
 
 import unittest
 
-from app.utils.tagrules import normalize_tags, parse_tags_text
+from app.utils.tagrules import normalize_tags, parse_tag_rule_yaml, parse_tags_text
 from plum_antibodies import TagValidationError, validate_tag
 
 
@@ -33,3 +33,16 @@ class TagSyntaxTests(unittest.TestCase):
         """Expose the canonical validation behavior to consumers."""
         with self.assertRaises(TagValidationError):
             validate_tag("product")
+
+    def test_yaml_rule_requires_name_and_uses_it_as_metadata(self):
+        """Require a YAML name without imposing name uniqueness or filename rules."""
+        document = (
+            "uuid: 9fc4762c-406d-4765-9c72-1353ae8579ae\n"
+            "name: Shared display name\n"
+            "description: Example\n"
+            "query: banner:Example\n"
+            "tags:\n- type:service\n"
+        )
+        self.assertEqual(parse_tag_rule_yaml(document)["name"], "Shared display name")
+        with self.assertRaisesRegex(ValueError, "name"):
+            parse_tag_rule_yaml(document.replace("name: Shared display name\n", ""))

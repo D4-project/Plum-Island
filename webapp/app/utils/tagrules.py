@@ -5,6 +5,7 @@ Helpers for YAML-backed search tag rules.
 import ipaddress
 import logging
 import re
+from uuid import UUID
 
 import yaml
 from plum_antibodies import validate_tags
@@ -17,6 +18,32 @@ except ImportError:
 logger = logging.getLogger("flask_appbuilder")
 
 TAG_SPLIT_RE = re.compile(r"[\n,]+")
+
+
+def normalize_rule_uuid(raw_uuid):
+    """Return one canonical UUID rule identity or reject missing/malformed input."""
+    if not isinstance(raw_uuid, str):
+        raise ValueError("Tag rule YAML requires a canonical 'uuid'")
+    value = raw_uuid.strip()
+    try:
+        parsed = UUID(value)
+    except ValueError as error:
+        raise ValueError("Tag rule YAML requires a canonical 'uuid'") from error
+    if str(parsed) != value:
+        raise ValueError("Tag rule YAML requires a canonical 'uuid'")
+    return value
+
+
+def normalize_rule_name(raw_name):
+    """Return a display name from YAML; names are intentionally non-unique."""
+    if not isinstance(raw_name, str):
+        raise ValueError("Tag rule YAML requires a non-empty 'name'")
+    value = raw_name.strip()
+    if not value or len(value) > 256:
+        raise ValueError(
+            "Tag rule YAML requires a non-empty 'name' up to 256 characters"
+        )
+    return value
 
 
 def analyze_header_dependencies(criteria_groups):
@@ -93,6 +120,8 @@ def parse_tag_rule_yaml(yaml_body):
         raise ValueError("Tag rule YAML must be a mapping")
 
     description = str(payload.get("description") or "").strip()
+    rule_uuid = normalize_rule_uuid(payload.get("uuid"))
+    name = normalize_rule_name(payload.get("name"))
     query = str(payload.get("query") or "").strip()
     raw_tags = payload.get("tags") or []
 
@@ -110,6 +139,8 @@ def parse_tag_rule_yaml(yaml_body):
         raise ValueError("Tag rule YAML requires at least one tag")
 
     return {
+        "uuid": rule_uuid,
+        "name": name,
         "description": description,
         "query": query,
         "tags": tags,

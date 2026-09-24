@@ -28,7 +28,11 @@ def get_access_token(base_url: str, username: str, password: str) -> str:
 
 
 def bulk_import_targets(base_url: str, access_token: str, bulk_payload: str) -> dict:
-    """Call the bulk_import endpoint with the given access token and bulk payload."""
+    """Import through the shared server insertion path.
+
+    The server timestamps new targets and queues CIDR network enrichment;
+    FQDNs remain unenriched. Never submit timestamps or perform a second lookup.
+    """
     bulk_import_url = f"{base_url}/targets_api/bulk_import"
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -67,7 +71,11 @@ def bulk_import_targets(base_url: str, access_token: str, bulk_payload: str) -> 
 
 
 def create_target(base_url, access_token, value, description):
-    """Create one Plum target, retry transient failures, and skip duplicates."""
+    """Create a target with server-owned insertion/enrichment metadata.
+
+    Preserve the caller's description. CIRCL enrichment is queued by the server
+    independently of this request, so slow lookups cannot cause import retries.
+    """
     target_url = f"{base_url}/api/v1/publictargetsapi/"
     headers = {
         "Authorization": f"Bearer {access_token}",

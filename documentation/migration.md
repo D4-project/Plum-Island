@@ -46,6 +46,7 @@ From `v0.2604.0` to current `main`, apply only these SQL update scripts, in orde
 .venv/bin/python webapp/sql_upd/19_migrate_from_b3b36001115d22b839ce630562bbf83ed0f166c0.py
 .venv/bin/python webapp/sql_upd/20_migrate_from_1a77f9638812f6d238b5a7f26aace1f45ae06e2e.py
 .venv/bin/python webapp/sql_upd/21_migrate_from_c1ef29af4ac597787b67d99982f9baade1817222.py
+.venv/bin/python webapp/sql_upd/22_migrate_from_e1e711f41e9239b02bdba58dc4a9a5588d89619e.py
 ```
 
 What they do:
@@ -57,8 +58,55 @@ What they do:
 - `19`: add optional Nmap parameters to scan profiles and queued jobs
 - `20`: bound running scan-profile cycles by target ID without resetting jobs
 - `21`: persist in-flight Meilisearch export tasks across scheduler ticks
+- `22`: make tag-rule UUIDs mandatory and unique, while allowing duplicate names
+- `23`: add target insertion timestamps and shared AS/network enrichment metadata;
+  follow the history preparation below before running it.
 
 Do not rerun older migrations unless migrating from a version older than `v0.2604.0`.
+
+### Target network metadata (migration 23)
+
+Stop the web app/scheduler and back up SQLite. Do not start the updated models
+against an unmigrated database. First prepare available historical scan data:
+SQL retains only surviving jobs and recent per-target/profile scan timestamps;
+older jobs/raw files may have been purged. The migration uses the earliest
+surviving **completed job scan start** (end time if start is missing), target and
+profile scan timestamps, and optional retained history CSV. Job creation time is
+not a scan timestamp.
+
+Use `tools/first_seen_csv.py --export /path/to/history.csv` with the appropriate
+read-only source configuration to include historical Kvrocks `first_seen` values.
+The migration reads that CSV locally; it never writes to Kvrocks or Meilisearch.
+The existing export's `ip,first_seen` fields match hosts to containing CIDRs.
+For FQDN history, provide an additional `target,first_seen` CSV column pair where
+`target` is the exact stored FQDN; IP history is not attributed to FQDNs by DNS.
+When available, populate that explicit column from retained scan/requested-target
+history before migrating. Other columns in the export are ignored.
+
+```bash
+.venv/bin/python webapp/sql_upd/23_migrate_from_4eb42ebc9bf251ffc5a563554967d1450d678df2.py --db /path/to/app.db --history-csv /path/to/history.csv --dry-run
+.venv/bin/python webapp/sql_upd/23_migrate_from_4eb42ebc9bf251ffc5a563554967d1450d678df2.py --db /path/to/app.db --history-csv /path/to/history.csv
+```
+
+Omit `--history-csv` only when SQL history is sufficient or its limitations are
+accepted. Dates use the oldest **available** evidence; missing purged history
+cannot be reconstructed. Targets with no available scan evidence receive the
+same migration execution time (`now()`), reported as `fallback_now`. Review the
+dry-run counts before proceeding. Dry-run migrates an in-memory backup and leaves
+the source DB untouched. Reruns preserve populated insertion dates; supply history
+on the initial run. New targets get their real insertion time thereafter.
+
+Legacy AS values are copied to the shared table for CIDRs only. They are not
+marked as a successful CIRCL lookup. Existing targets are enriched at their next
+scan receipt or manual refresh; migration does not enqueue a fleet-wide lookup.
+Descriptions, target IDs, jobs and scan states are retained. The old AS SQL columns
+remain rollback-only; the new application reads the shared table instead.
+
+Restart Plum after migration and synchronize configured roles with the setup
+loader (or grant `can_refresh_network` on `TargetsView` to authorized custom roles).
+For rollback, stop Plum and restore the **matching pre-migration DB backup and
+application revision**. Account for scans received since that backup before any
+restore; do not drop the new table while running the updated application.
 
 ## 4. Refresh seed data
 

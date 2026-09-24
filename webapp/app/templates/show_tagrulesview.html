@@ -1,0 +1,30 @@
+{% extends "appbuilder/general/model/show.html" %}
+
+{% block head_css %}
+{{ super() }}
+<style>
+.tagrules-tags {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+.tagrules-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
+    display: inline-flex;
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.2rem 0.5rem;
+    white-space: nowrap;
+}
+.tagrules-tag-vuln { background: #d9534f; }
+.tagrules-tag-vendor { background: #6f42c1; }
+.tagrules-tag-product { background: #2f6f73; }
+.tagrules-tag-type { background: #b45f06; }
+.tagrules-tag-proto { background: #337ab7; }
+.tagrules-tag-lang { background: #5cb85c; }
+.tagrules-tag-cpe { background: #777; }
+</style>
+{% endblock %}

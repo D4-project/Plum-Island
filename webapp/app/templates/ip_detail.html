@@ -399,6 +399,11 @@
             Informations
         </a>
     </li>
+    <li role="presentation">
+        <a href="#ip-whois" aria-controls="ip-whois" role="tab" data-toggle="tab">
+            Whois
+        </a>
+    </li>
 </ul>
 
 <div class="tab-content">
@@ -629,7 +634,46 @@
         </div>
     </div>
 </div>
+<div role="tabpanel" class="tab-pane" id="ip-whois">
+    <div id="ip-whois-loading" class="text-muted" role="status" aria-live="polite">Select this tab to query the registry.</div>
+    <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
+    <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>
 </div>
+</div>
+
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+    const tab = document.querySelector('a[href="#ip-whois"]');
+    const endpoint = {{ url_for('IPDetailView.whois_lookup', ip=ip) | tojson }};
+    const loading = document.getElementById('ip-whois-loading');
+    const error = document.getElementById('ip-whois-error');
+    const result = document.getElementById('ip-whois-result');
+    if (!tab || !loading || !error || !result) return;
+    let started = false;
+    $(tab).on('shown.bs.tab', async () => {
+        if (started) return;
+        started = true;
+        loading.textContent = 'Querying WHOIS registry...';
+        loading.style.display = 'block';
+        error.style.display = 'none';
+        try {
+            const response = await fetch(endpoint, {
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json' }
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'WHOIS lookup failed.');
+            loading.style.display = 'none';
+            result.style.display = 'block';
+            result.textContent = data.result || 'No WHOIS record returned.';
+        } catch (lookupError) {
+            loading.style.display = 'none';
+            error.textContent = lookupError.message || 'WHOIS lookup failed.';
+            error.style.display = 'block';
+        }
+    });
+})();
+</script>
 
 <script>
 (function () {

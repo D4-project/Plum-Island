@@ -2,6 +2,11 @@
 
 ## Since Last release Changes.
 
+- Remove technology-specific YAML detection tests from Plum-Island; retain generic parser, tag-engine and header-collection coverage.
+- Normalize migration 22/23 filenames to the full source-SHA convention; document and test the naming requirement.
+
+- Add target insertion timestamps, CIDR/FQDN types and shared AS metadata from CIRCL, with queued 24-hour automatic enrichment, permission-protected forced refreshes and migration 23 history backfill, refs #227.
+
 - Stop requeuing targets already scanned in a running cycle when their rescan delay expires; allow existing jobs to drain and show `finalizing` for running cycles at 100%, without a database migration.
 
 - Show the number of unique ports configured across scan profiles in Stats.
@@ -31,6 +36,8 @@
 - Add non-empty protocol and domain-sorted FQDN report views; preserve Passive DNS last-seen timestamps, closes #219.
 
 - Render report Markdown safely as HTML in preview and multipart email, with a printable anchored index, refs #218.
+
+- Show IP detail web links only for observations tagged `proto:http`; choose HTTPS from port-local SSL/TLS evidence, retain the scanned port, and follow the selected history tab and hostname.
 
 - Add case-insensitive standalone `NOT` exclusions to structured search, exports and matching IP history, with per-UID semantics and OR-group isolation; support negated document predicates in tag rules.
 

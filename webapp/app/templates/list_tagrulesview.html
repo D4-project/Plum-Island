@@ -7,17 +7,29 @@
     display: inline-flex;
     flex-wrap: wrap;
     gap: 2px;
-    max-width: 22rem;
     vertical-align: middle;
 }
 .tagrules-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
     display: inline-block;
+    font-size: 0.92rem;
+    font-weight: 600;
     max-width: 16rem;
     overflow: hidden;
-    padding: 0.15em 0.35em;
+    padding: 0.2rem 0.5rem;
     text-overflow: ellipsis;
     vertical-align: middle;
+    white-space: nowrap;
 }
+.tagrules-tag-vuln { background: #d9534f; }
+.tagrules-tag-vendor { background: #6f42c1; }
+.tagrules-tag-product { background: #2f6f73; }
+.tagrules-tag-type { background: #b45f06; }
+.tagrules-tag-proto { background: #337ab7; }
+.tagrules-tag-lang { background: #5cb85c; }
+.tagrules-tag-cpe { background: #777; }
 .tagrule-reindex-actions {
     align-items: center;
     display: flex;

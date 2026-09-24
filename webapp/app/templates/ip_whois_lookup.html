@@ -1,0 +1,60 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "WHOIS") }}
+
+<ul class="nav nav-tabs" role="tablist">
+    <li role="presentation" class="active">
+        <a href="#ip-whois-lookup" aria-controls="ip-whois-lookup" role="tab" data-toggle="tab">Whois</a>
+    </li>
+</ul>
+<div class="tab-content">
+    <div role="tabpanel" class="tab-pane active" id="ip-whois-lookup">
+        <p>Enter an IPv4 or IPv6 address or CIDR to query its registry record.</p>
+        <form id="ip-whois-form" action="{{ url_for('IPDetailView.index') }}" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="ip-whois-input">IP address or CIDR</label>
+                <input id="ip-whois-input" name="ip" class="form-control" type="text"
+                       maxlength="64" required autocomplete="off" autofocus>
+            </div>
+            <button class="btn btn-primary" type="submit">Lookup WHOIS</button>
+        </form>
+        <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
+        <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>
+    </div>
+</div>
+
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+    const form = document.getElementById('ip-whois-form');
+    const error = document.getElementById('ip-whois-error');
+    const result = document.getElementById('ip-whois-result');
+    if (!form || !error || !result) return;
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        error.style.display = 'none';
+        result.style.display = 'block';
+        result.textContent = 'Querying WHOIS registry...';
+        try {
+            const response = await fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json' }
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'WHOIS lookup failed.');
+            result.textContent = data.result || 'No WHOIS record returned.';
+        } catch (lookupError) {
+            result.style.display = 'none';
+            error.textContent = lookupError.message || 'WHOIS lookup failed.';
+            error.style.display = 'block';
+        }
+    });
+})();
+</script>
+
+{{ lib.panel_end() }}
+{% endblock %}

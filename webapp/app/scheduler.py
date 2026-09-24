@@ -54,6 +54,7 @@ from .utils.reports import (
     send_report_markdown,
 )
 from .utils.tagrules import compile_tag_rule_records
+from .utils.network_enrichment import process_pending_network_refreshes
 from .utils.timeutils import utcnow_aware, utcnow_naive
 from .utils.scan_cycles import (
     get_current_max_target_id,
@@ -2555,6 +2556,13 @@ except MeilisearchError as error:
 
 # Start the scheduled jobs.
 scheduler = SafeBackgroundScheduler()
+scheduler.add_job(
+    func=process_pending_network_refreshes,
+    trigger="interval",
+    id="network_enrichment",
+    max_instances=1,
+    minutes=db.app.config.get("SCHEDULER_DELAY"),
+)
 scheduler.add_job(
     func=task_master_of_puppets,
     trigger="interval",
