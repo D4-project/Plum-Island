@@ -46,7 +46,7 @@ def parse_network_information(payload):
         if (
             not raw_asn.isascii()
             or not raw_asn.isdecimal()
-            or not 0 < int(raw_asn) <= 4294967295
+            or not 0 <= int(raw_asn) <= 4294967295
         ):
             raise ValueError("Invalid ASN")
         if not isinstance(name, str) or not name.strip() or len(name) > 512:

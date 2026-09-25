@@ -105,6 +105,23 @@ class NetworkLookupTest(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 ip2asn.parse_network_information(payload)
 
+    def test_zero_asn_is_valid_for_unannounced_networks(self):
+        """Accept CIRCL ASN zero for CIDRs that are not announced."""
+        payload = [
+            {
+                "country": {
+                    "iso_code": "US",
+                    "AutonomousSystemNumber": "0",
+                    "AutonomousSystemOrganization": "Not announced",
+                },
+                "country_info": {
+                    "Alpha-3 code": "USA",
+                    "Numeric code": "840",
+                },
+            }
+        ]
+        self.assertEqual(ip2asn.parse_network_information(payload)["asn"], 0)
+
     def test_http_uses_one_fixed_https_request_without_redirects(self):
         """No enumeration, hostname resolution or user-selected service URL."""
         with mock.patch.object(ip2asn.requests, "get") as get:

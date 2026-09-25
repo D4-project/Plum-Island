@@ -20,6 +20,8 @@
 
 - Display `CIDR not announced` when CIRCL returns ASN `0` for a network target.
 
+- Accept CIRCL ASN `0` as a valid unannounced range and stop retrying fresh network data indefinitely.
+
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 
 - Add clickable structured-search keywords that append to the search bar.

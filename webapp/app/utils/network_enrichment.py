@@ -25,7 +25,7 @@ def enrichment_due(target, now=None):
         return False
     updated = ensure_utc_naive(target.network_updated_at)
     return (
-        not target.network_asn
+        target.network_asn is None
         or updated is None
         or (now or utcnow_naive()) - updated > FRESHNESS
     )
