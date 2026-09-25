@@ -4,6 +4,20 @@
 
 - Remove Read Only user creation/edit permissions and synchronize role YAML during bare-metal and Docker deployments, closes #228.
 
+- Replace ad-hoc domain parsing with `pyfaup`, including FQDN WHOIS domain extraction.
+
+- Log scanner-result ingestion and export counts for operational monitoring.
+
+- Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
+
+- Add clickable structured-search keywords that append to the search bar.
+
+- Restore aggregate tag display on IP detail pages and allow duplicate tags during retagging.
+
+- Centralize tag syntax validation through Plum-Antibodies for UI and import paths.
+
+- Retag parsed and indexed TLS certificate results with the `proto:tls` classification.
+
 - Remove technology-specific YAML detection tests from Plum-Island; retain generic parser, tag-engine and header-collection coverage.
 - Normalize migration 22/23 filenames to the full source-SHA convention; document and test the naming requirement.
 
