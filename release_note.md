@@ -22,6 +22,8 @@
 
 - Accept CIRCL ASN `0` as a valid unannounced range and stop retrying fresh network data indefinitely.
 
+- Treat CIRCL's literal `iso_code: "None"` as an unknown country so unannounced CIDR lookups can complete and retain their 24-hour freshness.
+
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 
 - Add clickable structured-search keywords that append to the search bar.

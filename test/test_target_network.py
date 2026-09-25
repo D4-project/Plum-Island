@@ -50,6 +50,19 @@ PAYLOAD = [
     },
 ]
 
+# CIRCL response shape for the unannounced 194.69.68.112/28 target.
+UNANNOUNCED_PAYLOAD = [
+    {"country": {"iso_code": "None"}, "country_info": {}},
+    {
+        "country": {
+            "iso_code": "None",
+            "AutonomousSystemNumber": "0",
+            "AutonomousSystemOrganization": "Not routed",
+        },
+        "country_info": {},
+    },
+]
+
 
 class NetworkLookupTest(unittest.TestCase):
     """Address normalization and untrusted response validation."""
@@ -169,6 +182,30 @@ class NetworkPersistenceTest(unittest.TestCase):
     def refresh(self, target_id, force=False):
         """Refresh against this test's isolated database."""
         return enrichment.refresh_target_network(target_id, force, self.factory)
+
+    def test_unannounced_circl_response_is_saved_and_stays_fresh(self):
+        """Parse real response shape through HTTP, persistence and display."""
+        target_id = self.add_target("194.69.68.112/28")
+        with mock.patch.object(ip2asn.requests, "get") as get:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = UNANNOUNCED_PAYLOAD
+            self.assertEqual(self.refresh(target_id, force=True), "updated")
+            self.assertEqual(self.refresh(target_id), "fresh")
+            get.assert_called_once()
+        with self.factory() as session:
+            target = session.get(Targets, target_id)
+            self.assertEqual(target.network_asn, 0)
+            self.assertEqual(target.network_asn_display, "CIDR not announced")
+            self.assertEqual(target.network_as_name, "Not routed")
+            self.assertIsNone(target.autonomous_system.country_alpha2)
+            self.assertEqual(target.network_country_alpha3, "Unavailable")
+            self.assertEqual(target.network_updated_at, NOW)
+            self.assertFalse(target.network_refresh_pending)
+            self.assertIsNone(target.network_retry_at)
+            self.assertFalse(enrichment.enrichment_due(target, NOW))
+            self.assertTrue(
+                enrichment.enrichment_due(target, NOW + timedelta(hours=25))
+            )
 
     def test_insert_scan_trigger_freshness_and_manual_override(self):
         """Initial queue, strict 24h boundary, and forced manual refresh."""

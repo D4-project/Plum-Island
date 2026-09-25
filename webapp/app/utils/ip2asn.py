@@ -61,6 +61,9 @@ def parse_network_information(payload):
         numeric = info.get("Numeric code")
         numeric = str(numeric).zfill(3) if numeric not in (None, "") else None
         alpha2 = country.get("iso_code") or None
+        # CIRCL uses the literal string "None" when no country is known.
+        if alpha2 == "None":
+            alpha2 = None
         if alpha3 is not None and (
             not isinstance(alpha3, str)
             or len(alpha3) != 3
