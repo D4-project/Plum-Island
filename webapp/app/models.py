@@ -490,8 +490,6 @@ DEFAULT_COLLECTED_HEADERS = (
     "x-gitlab-meta",
     "x-jitsi-release",
     "x-joomla-version",
-    "x-kubernetes-pf-flowschema-ui",
-    "x-kubernetes-pf-prioritylevel-uid",
     "x-kong-proxy-latency",
     "x-kong-upstream-latency",
     "x-kong-response-latency",

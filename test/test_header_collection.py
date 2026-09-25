@@ -57,12 +57,22 @@ class HeaderCollectionTest(TestCase):
     def test_rule_headers_are_dynamic_not_global_defaults(self):
         """Rule-specific headers must not depend on the built-in collection."""
         self.assertNotIn("x-example-node", DEFAULT_COLLECTED_HEADERS)
+        self.assertNotIn("x-kubernetes-pf-flowschema-ui", DEFAULT_COLLECTED_HEADERS)
+        self.assertNotIn("x-kubernetes-pf-prioritylevel-uid", DEFAULT_COLLECTED_HEADERS)
         rule = SimpleNamespace(
-            query="http_header:X-Example-Node OR http_headval:X-Custom-Trace"
+            query=(
+                "http_header:X-Example-Node OR "
+                "http_headval:X-Custom-Trace OR "
+                "http_header:X-Kubernetes-Pf-FlowSchema-Uid"
+            )
         )
         self.assertEqual(
             headers_required_by_tag_rules([rule]),
-            {"x-example-node": False, "x-custom-trace": True},
+            {
+                "x-example-node": False,
+                "x-custom-trace": True,
+                "x-kubernetes-pf-flowschema-uid": False,
+            },
         )
 
     def test_compiled_dependencies_keep_shared_value_requirement(self):

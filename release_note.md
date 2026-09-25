@@ -12,6 +12,8 @@
 
 - Add target insertion timestamps, CIDR/FQDN types and shared AS metadata from CIRCL, with queued 24-hour automatic enrichment, permission-protected forced refreshes and migration 23 history backfill, refs #227.
 
+- Remove Kubernetes headers from global default collection; active Kubernetes rules now enable their required headers dynamically.
+
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 
 - Add clickable structured-search keywords that append to the search bar.
