@@ -14,6 +14,8 @@
 
 - Remove Kubernetes headers from global default collection; active Kubernetes rules now enable their required headers dynamically.
 
+- Detect Kubernetes from `kubernetes.default` certificate SANs, including `svc` and `cluster.local` variants, without forcing an HTTP protocol tag.
+
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 
 - Add clickable structured-search keywords that append to the search bar.
