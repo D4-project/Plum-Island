@@ -12,6 +12,7 @@ from app.utils.ip_whois import (  # pylint: disable=wrong-import-position
     WhoisLookupError,
     _query_public_registry,
     lookup_domain_whois,
+    lookup_network_whois,
 )
 
 
@@ -52,6 +53,28 @@ class DomainParsingTest(unittest.TestCase):
         with self.assertRaises(WhoisLookupError):
             _query_public_registry("whois.example.com", "example.com")
         connect.assert_not_called()
+
+    @patch("app.utils.ip_whois._query_server")
+    def test_arin_duplicate_notice_is_removed(self, query_server):
+        """Keep one ARIN notice when the registry repeats it at the end."""
+        notice = (
+            "\n#\n"
+            "# ARIN WHOIS data and services are subject to the Terms of Use\n"
+            "# available at: https://www.arin.net/resources/registry/whois/tou/\n"
+            "#\n"
+            "# If you see inaccuracies in the results, please report at\n"
+            "# https://www.arin.net/resources/registry/whois/inaccuracy_reporting/\n"
+            "#\n"
+            "# Copyright 1997-2026, American Registry for Internet Numbers, Ltd.\n"
+            "#\n\n"
+        )
+        query_server.side_effect = [
+            "refer: whois.arin.net",
+            notice + "NetName: GOOGLE-CLOUD\n" + notice,
+        ]
+        result = lookup_network_whois("35.246.198.116")
+        self.assertEqual(result.count("# ARIN WHOIS data"), 1)
+        self.assertIn("NetName: GOOGLE-CLOUD", result)
 
 
 if __name__ == "__main__":

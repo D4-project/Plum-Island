@@ -22,6 +22,18 @@ MAX_RESPONSE_BYTES = 512 * 1024
 REFERRAL_PATTERN = re.compile(
     r"^(?:refer|whois):\s*(?:whois://)?([a-z0-9.-]+)\s*$", re.IGNORECASE | re.MULTILINE
 )
+ARIN_NOTICE_PATTERN = re.compile(
+    r"\n?#\n"
+    r"# ARIN WHOIS data and services are subject to the Terms of Use\n"
+    r"# available at: https://www\.arin\.net/resources/registry/whois/tou/\n"
+    r"#\n"
+    r"# If you see inaccuracies in the results, please report at\n"
+    r"# https://www\.arin\.net/resources/registry/whois/inaccuracy_reporting/\n"
+    r"#\n"
+    r"# Copyright [^\n]+\n"
+    r"#\n(?:\r?\n)*",
+    re.MULTILINE,
+)
 
 
 class WhoisLookupError(Exception):
@@ -55,6 +67,15 @@ def _query_server(server, query):
     return response.decode("utf-8", errors="replace").strip()
 
 
+def _deduplicate_arin_notice(result):
+    """Remove a repeated trailing ARIN legal notice from registry output."""
+    matches = list(ARIN_NOTICE_PATTERN.finditer(result))
+    if len(matches) < 2:
+        return result
+    duplicate = matches[1]
+    return (result[: duplicate.start()] + result[duplicate.end() :]).strip()
+
+
 def lookup_network_whois(value):
     """Query IANA, follow one allowlisted RIR referral, return plain text."""
     try:
@@ -74,6 +95,8 @@ def lookup_network_whois(value):
     rir_result = _query_server(server, query)
     if not rir_result:
         raise WhoisLookupError("WHOIS registry returned an empty response")
+    if server == "whois.arin.net":
+        return _deduplicate_arin_notice(rir_result)
     return rir_result
 
 
