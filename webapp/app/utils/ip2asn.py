@@ -39,9 +39,12 @@ def parse_network_information(payload):
         if not isinstance(entry, dict):
             continue
         country = entry.get("country") or {}
-        if not isinstance(country, dict) or not country.get("AutonomousSystemNumber"):
+        if not isinstance(country, dict):
             continue
-        raw_asn = str(country["AutonomousSystemNumber"])
+        asn_value = country.get("AutonomousSystemNumber")
+        if asn_value in (None, ""):
+            continue
+        raw_asn = str(asn_value)
         name = country.get("AutonomousSystemOrganization")
         if (
             not raw_asn.isascii()

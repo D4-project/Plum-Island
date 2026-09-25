@@ -111,7 +111,7 @@ class NetworkLookupTest(unittest.TestCase):
             {
                 "country": {
                     "iso_code": "US",
-                    "AutonomousSystemNumber": "0",
+                    "AutonomousSystemNumber": 0,
                     "AutonomousSystemOrganization": "Not announced",
                 },
                 "country_info": {
