@@ -6,6 +6,7 @@ meilisearch>=0.37.0
 redis>=6.4.0
 PyYAML>=6.0.3
 pyfaup-rs>=0.4.9
+idna>=3.0
 pybgpranking2>=2.0.2
 pyipasnhistory>=0.1
 nmap2json

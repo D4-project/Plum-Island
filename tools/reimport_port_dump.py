@@ -676,12 +676,6 @@ def prepare_index_kvrocks_runtime():
     index_kvrocks.load_runtime_dependencies(retag=True)
     index_kvrocks.suppress_connection_debug_logs()
 
-    if index_kvrocks.PARSER_CONF["ONLINETLD"]:
-        index_kvrocks.PARSER_CONF["TLDS"] = index_kvrocks.fetch_tlds()
-    else:
-        index_kvrocks.PARSER_CONF["TLDS"] = index_kvrocks.config.get(
-            "TLDS", index_kvrocks.config.get("PARSER_TLDS", [])
-        )
     index_kvrocks.PARSER_CONF["HTTP_HEADER_COLLECTION"] = (
         index_kvrocks.load_collected_header_collection()
     )

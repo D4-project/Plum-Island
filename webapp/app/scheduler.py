@@ -37,7 +37,7 @@ from .models import (
     ensure_rule_required_headers,
 )
 from .models import TagRules
-from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn, fetch_tlds
+from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json, prepare_kvrocks_document
 from .utils.reports import (
@@ -1114,7 +1114,7 @@ def _classify_due_states_for_chunks(due_states, max_large_range_jobs=None):
         target = state.target
         if target is None:
             continue
-        if is_valid_fqdn(target.value):
+        if is_valid_fqdn(target.value, db.app.config.get("TLDADD", ())):
             hostname_records.append(
                 {"hosts": [target.value], "targets": [target], "states": [state]}
             )
@@ -2567,13 +2567,6 @@ client = meilisearch.Client(
         DEFAULT_MEILI_HTTP_TIMEOUT_SECONDS,
     ),
 )
-
-# If the method is online fetch the TLDs.
-db.app.config["TLDS"] = []
-if db.app.config["ONLINETLD"]:
-    # Download https://data.iana.org/TLD/tlds-alpha-by-domain.txt and create an array of TLDs
-    db.app.config["TLDS"] = fetch_tlds()
-db.app.config["TLDS"] += db.app.config["TLDADD"]  # Append to the list the custom TLDs.
 
 try:
     client.create_index("plum")

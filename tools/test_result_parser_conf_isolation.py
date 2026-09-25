@@ -45,9 +45,7 @@ def parse_with_config(hostname, tld, header_name, header_value):
     Parse one document with a config unique to this call.
     """
     config = {
-        "ONLINETLD": True,
-        "TLDS": [tld],
-        "TLDADD": [],
+        "TLDADD": [tld],
         "HTTP_HEADER_COLLECTION": {header_name: True},
     }
     document = build_document(
@@ -67,8 +65,8 @@ class ResultParserConfigIsolationTest(TestCase):
         Concurrent parse_json calls must not share TLD/header config.
         """
         cases = [
-            ("alpha.example.com", "example.com", "com", "X-Alpha", "A"),
-            ("beta.example.net", "example.net", "net", "X-Beta", "B"),
+            ("alpha.example.internal", "example.internal", "internal", "X-Alpha", "A"),
+            ("beta.example.private", "example.private", "private", "X-Beta", "B"),
         ]
 
         with ThreadPoolExecutor(max_workers=2) as executor:

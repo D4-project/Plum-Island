@@ -178,9 +178,9 @@ Domain extraction in `result_parser.py` is guarded. Plum does not index every st
 
 The current contract is:
 
-- `ONLINETLD = False`: validate suffixes offline with `py-faup-rs` built-in knowledge. This is the fast offline mode.
-- `ONLINETLD = True`: validate suffixes against the explicit `TLDS` list loaded at startup. In the web app, that list is refreshed from IANA when enabled.
-- `TLDADD`: extra suffixes that are always accepted in addition to the main validation mode, for example `local`.
+- `pyfaup-rs` validates known public suffixes offline, including multi-label suffixes such as `co.uk`.
+- `TLDADD` optionally accepts extra private suffixes not known to pyfaup, for example `local`.
+- `ONLINETLD` and `TLDS` are obsolete. No IANA list is downloaded at startup.
 
 So `TLDADD` is an allow-list override, not the primary detection mechanism.
 
@@ -194,7 +194,7 @@ If a suffix is accepted, Plum may populate all of these parsed fields:
 If these fields are missing in Kvrocks while isolated parsing works, check this order first:
 
 1. the parser config actually passed to `parse_json()`
-2. whether `ONLINETLD` and `TLDS` or offline suffix detection match the intended mode
+2. whether pyfaup recognizes the suffix
 3. whether `TLDADD` contains the local/private suffixes you expect
 4. whether the data was indexed before the parser/config fix and therefore needs reindexing
 
@@ -475,7 +475,7 @@ Keep `AGENT.md`, `readme.md`, parser output, and `KVSearchView.parse_query()` al
 - `setup.sh` must use the local virtualenv Python explicitly for pip, Flask CLI, and bootstrap commands. Do not depend on shell activation to find `flask`.
 - `tools/initial_setup.py` owns first-run seed data: security roles, TCP ports, HTTP header collection, YAML tag rules, NSE imports from `https://github.com/D4-project/Plum-Rules-NSE`, and the `Default banner scan` profile.
 - Scheduler startup has side effects at import time in `webapp/app/scheduler.py`.
-- When `ONLINETLD = True`, app startup performs a live TLD download via `fetch_tlds()`.
+- Domain parsing uses pyfaup's local suffix data; startup does not download TLDs.
 - `webapp/app/jsons/` may contain copied sample scan results useful for development and parser work; do not assume this directory reflects live production data.
 - `tools/` contains helper scripts for import, export, indexing, and ad hoc maintenance; it is not the main runtime path of the web application.
 

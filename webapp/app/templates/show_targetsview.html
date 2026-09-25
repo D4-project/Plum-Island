@@ -4,7 +4,6 @@
 {% block content %}
 {{ lib.panel_begin(title, "show") }}
 
-{% set target_fqdn = get_target_requested_hostname(pk) %}
 <ul class="nav nav-tabs">
     <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a></li>
     {% if related_views is defined %}
@@ -16,11 +15,7 @@
     {% endif %}
     <li><a id="target-results-tab" href="#TargetResults" data-toggle="tab">Results</a></li>
     {% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
-        {% if target_fqdn %}
-        <li class="disabled"><a href="#TargetWhois" aria-disabled="true" tabindex="-1">Whois</a></li>
-        {% else %}
         <li><a id="target-whois-tab" href="#TargetWhois" data-toggle="tab">Whois</a></li>
-        {% endif %}
     {% endif %}
 </ul>
 <div class="tab-content">
@@ -564,12 +559,8 @@ async function loadUid(uid, targetId) {
       <div class="panel panel-info">
         <div class="panel-heading"><h4 class="panel-title">WHOIS</h4></div>
         <div class="panel-body" data-whois-url="{{ url_for('TargetsView.whois', pk=pk) }}">
-          {% if target_fqdn %}
-          <div class="alert alert-info" role="status">WHOIS is unavailable for FQDN targets.</div>
-          {% else %}
           <p>Current registry record for <strong>{{ get_target_value(pk) }}</strong>.</p>
           <pre id="target-whois-result" role="status" aria-live="polite">Select this tab to query the registry.</pre>
-          {% endif %}
         </div>
       </div>
     </div>
@@ -654,7 +645,7 @@ async function loadUid(uid, targetId) {
   .target-result-title-row .ip-detail-tag-lang { background: #5cb85c; }
   .target-result-title-row .ip-detail-tag-cpe { background: #777; }
 </style>
-{% if appbuilder.sm.has_access('can_whois', 'TargetsView') and not target_fqdn %}
+{% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
 <script nonce="{{ baselib.get_nonce() }}">
 (() => {
   const tab = document.getElementById('target-whois-tab');

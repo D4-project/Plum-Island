@@ -721,7 +721,6 @@ def load_reindex_runtime():
     from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
         KVrocksIndexer,
     )
-    from app.utils.mutils import fetch_tlds  # pylint: disable=import-outside-toplevel
     from app.utils.result_parser import (  # pylint: disable=import-outside-toplevel
         has_indexed_tls_certificate,
         parse_json,
@@ -738,7 +737,6 @@ def load_reindex_runtime():
         "TagRules": TagRules,
         "ensure_default_collected_headers": ensure_default_collected_headers,
         "KVrocksIndexer": KVrocksIndexer,
-        "fetch_tlds": fetch_tlds,
         "has_indexed_tls_certificate": has_indexed_tls_certificate,
         "parse_json": parse_json,
         "apply_tag_rules_to_document": apply_tag_rules_to_document,
@@ -761,30 +759,8 @@ def configure_parser_from_tools_config(app_config, config):
     """
     Overlay parser settings from tools/config.yaml when present.
     """
-    if "ONLINETLD" in config:
-        app_config["ONLINETLD"] = bool(config.get("ONLINETLD"))
     if "TLDADD" in config:
         app_config["TLDADD"] = list(config.get("TLDADD") or [])
-    if "TLDS" in config:
-        app_config["TLDS"] = list(config.get("TLDS") or [])
-
-
-def ensure_parser_tlds(app_config, fetch_tlds):
-    """
-    Mirror the runtime parser TLD setup for reparsing.
-    """
-    if "TLDS" not in app_config:
-        app_config["TLDS"] = []
-
-    if app_config.get("ONLINETLD") and not app_config.get("TLDS"):
-        app_config["TLDS"] = fetch_tlds()
-
-    extra_tlds = list(app_config.get("TLDADD", []))
-    existing_tlds = set(app_config.get("TLDS", []))
-    for tld in extra_tlds:
-        if tld not in existing_tlds:
-            app_config["TLDS"].append(tld)
-            existing_tlds.add(tld)
 
 
 def configure_parser_http_headers(
@@ -1005,14 +981,12 @@ def _reindex_tags_unlocked(args, progress_callback=None):
     TagRules = runtime["TagRules"]
     ensure_default_collected_headers = runtime["ensure_default_collected_headers"]
     KVrocksIndexer = runtime["KVrocksIndexer"]
-    fetch_tlds = runtime["fetch_tlds"]
     compile_tag_rule_records = runtime["compile_tag_rule_records"]
     apply_tag_rules_to_document = runtime["apply_tag_rules_to_document"]
     has_indexed_tls_certificate = runtime["has_indexed_tls_certificate"]
 
     with app.app_context():
         configure_parser_from_tools_config(app.config, tools_config)
-        ensure_parser_tlds(app.config, fetch_tlds)
         configure_parser_http_headers(
             app.config,
             db,

@@ -24,6 +24,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .timeutils import ensure_utc_naive, utcnow_naive
+from .domains import parse_hostname
 
 logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
@@ -646,8 +647,14 @@ def _report_protocol_groups(results, per_ip_tags):
 
 
 def _fqdn_domain_sort_key(fqdn):
-    """Sort FQDNs by their domain labels before their hostname labels."""
-    return tuple(reversed(str(fqdn).rstrip(".").lower().split(".")))
+    """Sort by pyfaup registered domain, preserving reverse-label ordering."""
+    normalized = str(fqdn).rstrip(".").lower()
+    parsed = parse_hostname(normalized)
+    if parsed is None:
+        return tuple(reversed(normalized.split(".")))
+    return tuple(reversed(parsed["domain"].split("."))) + tuple(
+        reversed(parsed["host"].split("."))
+    )
 
 
 def _report_detected_fqdns(per_ip_ptr_fqdns, per_ip_requested_fqdns):

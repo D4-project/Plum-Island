@@ -14,8 +14,6 @@ sys.path.insert(0, str(UTILS_DIR))
 from result_parser import parse_json  # pylint: disable=wrong-import-position
 
 PARSER_CONFIG = {
-    "ONLINETLD": False,
-    "TLDS": [],
     "TLDADD": [],
     "HTTP_HEADER_COLLECTION": {},
 }

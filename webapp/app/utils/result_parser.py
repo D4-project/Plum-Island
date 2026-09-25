@@ -20,12 +20,10 @@ For now far from performance issues anyway.
 
 import ipaddress
 import re
-from pyfaup import Url  # pylint: disable=no-name-in-module
-
 try:
-    from pyfaup import FaupCompat  # pylint: disable=no-name-in-module
+    from .domains import parse_hostname
 except ImportError:
-    FaupCompat = None
+    from domains import parse_hostname
 
 try:
     from .tagrules import apply_tag_rules_to_document
@@ -34,28 +32,15 @@ except ImportError:
 
 
 def normalize_db_conf(db_conf_local):
-    """
-    Accept either the full config dict or a legacy plain TLD list.
-    """
-    if isinstance(db_conf_local, dict):
-        conf = dict(db_conf_local)
-        conf.setdefault("ONLINETLD", False)
-        conf.setdefault("TLDS", [])
-        conf.setdefault("TLDADD", [])
-        conf["HTTP_HEADER_COLLECTION"] = normalize_http_header_collection(
-            conf.get("HTTP_HEADER_COLLECTION", {})
-        )
-        return conf
-
-    if isinstance(db_conf_local, list):
-        return {
-            "ONLINETLD": False,
-            "TLDS": db_conf_local,
-            "TLDADD": [],
-            "HTTP_HEADER_COLLECTION": {},
-        }
-
-    raise TypeError("parse_json expects a config dict or a TLD list")
+    """Normalize parser settings without mutating caller config."""
+    if not isinstance(db_conf_local, dict):
+        raise TypeError("parse_json expects a config dict")
+    conf = dict(db_conf_local)
+    conf.setdefault("TLDADD", [])
+    conf["HTTP_HEADER_COLLECTION"] = normalize_http_header_collection(
+        conf.get("HTTP_HEADER_COLLECTION", {})
+    )
+    return conf
 
 
 def is_external_ip(value):
@@ -460,123 +445,6 @@ def get_http_etag(data: dict, target: str):
     return {"http_etag": http_etag}
 
 
-def _suffix_is_allowed(suffix, suffix_str, db_conf):
-    """
-    Check suffix validity across pyfaup-rs API variants.
-    """
-    if db_conf["ONLINETLD"]:
-        if suffix_str in db_conf["TLDS"]:
-            return True
-    else:
-        is_known = getattr(suffix, "is_known", None)
-        if callable(is_known) and is_known():
-            return True
-        if is_known is None:
-            return True
-
-    return suffix_str in db_conf["TLDADD"]
-
-
-def _split_hostname_from_suffix(hostname, suffix_str):
-    """
-    Compute domain/subdomain when pyfaup-rs does not expose those attributes.
-    """
-    if not suffix_str:
-        return "", ""
-
-    suffix_tail = f".{suffix_str}"
-    if hostname.endswith(suffix_tail):
-        root = hostname[: -len(suffix_tail)]
-    else:
-        root = hostname.rsplit(".", 1)[0]
-
-    if not root:
-        return "", ""
-
-    if "." not in root:
-        return f"{root}.{suffix_str}", ""
-
-    subdomain, domain_label = root.rsplit(".", 1)
-    domain = f"{domain_label}.{suffix_str}"
-    return domain, subdomain
-
-
-def _parse_hostname_parts(hostname, db_conf):
-    """
-    Parse one hostname using pyfaup-rs, with compatibility for builds that do not
-    expose domain/subdomain attributes on Url.
-    """
-    hostname = str(hostname or "").strip().lower().rstrip(".")
-    if not hostname:
-        return None
-
-    try:
-        url = Url(f"http://{hostname}")
-    except (ValueError, TypeError):
-        return None
-
-    suffix = getattr(url, "suffix", None)
-    if not suffix:
-        return _parse_hostname_parts_compat(hostname, db_conf)
-
-    return _build_hostname_parts(
-        hostname,
-        suffix,
-        getattr(url, "domain", None),
-        getattr(url, "subdomain", None),
-        db_conf,
-    )
-
-
-def _parse_hostname_parts_compat(hostname, db_conf):
-    """
-    Parse with pyfaup-rs FaupCompat when Url exposes only raw URL fields.
-    """
-    if FaupCompat is None:
-        return None
-
-    try:
-        parser = FaupCompat()
-        parser.decode(f"http://{hostname}")
-        parsed = parser.get()
-    except (ValueError, TypeError, AttributeError):
-        return None
-
-    suffix = parsed.get("tld")
-    if not suffix:
-        return None
-
-    return _build_hostname_parts(
-        hostname,
-        suffix,
-        parsed.get("domain"),
-        parsed.get("subdomain"),
-        db_conf,
-    )
-
-
-def _build_hostname_parts(hostname, suffix, domain, subdomain, db_conf):
-    """
-    Build normalized hostname parts from pyfaup Url or FaupCompat output.
-    """
-    suffix_str = str(suffix).lower()
-    if not _suffix_is_allowed(suffix, suffix_str, db_conf):
-        return None
-
-    fallback_domain, fallback_subdomain = _split_hostname_from_suffix(
-        hostname, suffix_str
-    )
-    domain = domain or fallback_domain
-    subdomain = subdomain or fallback_subdomain
-
-    return {
-        "fqdn": hostname,
-        "host": str(subdomain).lower() if subdomain else "",
-        "domain": str(domain).lower() if domain else "",
-        "tld": suffix_str,
-    }
-
-
 def _normalize_certificate_hostname(value):
     """
     Normalize TLS certificate DNS names before hostname parsing.
@@ -623,7 +491,7 @@ def get_hosts(data: dict, target: str, db_conf: dict):
         fqdn_hosts_candidates = _hostname_candidates(body)
         if fqdn_hosts_candidates:
             for host in fqdn_hosts_candidates:
-                parsed_host = _parse_hostname_parts(host, db_conf)
+                parsed_host = parse_hostname(host, db_conf.get("TLDADD", ()))
                 if not parsed_host:
                     continue
                 fqdn_hosts.append(parsed_host["fqdn"])
@@ -634,13 +502,6 @@ def get_hosts(data: dict, target: str, db_conf: dict):
                     domains.append(parsed_host["domain"])
 
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
-
-
-def _parse_valid_hostname(hostname, db_conf: dict):
-    """
-    Parse one hostname using the configured domain validation rules.
-    """
-    return _parse_hostname_parts(hostname, db_conf)
 
 
 def get_fqdn_requested(data: dict, target: str, db_conf: dict):
@@ -660,7 +521,7 @@ def get_fqdn_requested(data: dict, target: str, db_conf: dict):
         if hostname and hostname not in fqdn_requested:
             fqdn_requested.append(hostname)
 
-        parsed_hostname = _parse_valid_hostname(hostname, db_conf)
+        parsed_hostname = parse_hostname(hostname, db_conf.get("TLDADD", ()))
         if not parsed_hostname:
             continue
         domain = parsed_hostname.get("domain")

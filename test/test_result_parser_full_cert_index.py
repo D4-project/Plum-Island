@@ -16,8 +16,6 @@ from result_parser import (  # pylint: disable=wrong-import-position
 
 
 PARSER_CONFIG = {
-    "ONLINETLD": False,
-    "TLDS": [],
     "TLDADD": [],
     "HTTP_HEADER_COLLECTION": {},
 }

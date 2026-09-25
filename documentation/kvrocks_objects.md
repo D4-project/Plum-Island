@@ -92,7 +92,7 @@ Current generic fields:
 | `host` | yes | yes | Host/subdomain part |
 | `domain` | yes | yes | Parsed registered domain |
 | `domain_requested` | yes | yes | Requested domain |
-| `tld` | yes | yes | Top-level domain |
+| `tld` | yes | yes | pyfaup public suffix (may contain multiple labels, e.g. `co.uk`) |
 | `tag` | yes | no | Computed tags, e.g. `product:gitlab` |
 | `port` | yes | no | Open port as string |
 | `http_title` | yes | yes | HTML title |

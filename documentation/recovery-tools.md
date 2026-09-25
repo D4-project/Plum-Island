@@ -213,7 +213,7 @@ IN_KVROCKS_PORT: 6666
 OUT_KVROCKS_HOST: "127.0.0.1"
 OUT_KVROCKS_PORT: 6666
 
-ONLINETLD: false
+# pyfaup validates known public suffixes offline; add private suffixes here.
 TLDADD:
   - "local"
 ```

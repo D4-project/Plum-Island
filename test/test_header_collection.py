@@ -46,8 +46,6 @@ class HeaderCollectionTest(TestCase):
         result = parse_json(
             document,
             {
-                "ONLINETLD": False,
-                "TLDS": [],
                 "TLDADD": [],
                 "HTTP_HEADER_COLLECTION": {"x-example-node": False},
             },

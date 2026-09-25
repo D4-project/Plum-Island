@@ -82,7 +82,7 @@ from .utils.kvrocks import KVrocksIndexer
 from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
 from .utils.network_enrichment import enrichment_due, refresh_target_network
-from .utils.ip_whois import WhoisLookupError, lookup_network_whois
+from .utils.ip_whois import WhoisLookupError, lookup_domain_whois, lookup_network_whois
 from .utils.tagrules import (
     compile_tag_rule_definition,
     normalize_tags,
@@ -450,7 +450,7 @@ def get_target_requested_hostname(pk):
         return ""
 
     target_value = str(result).strip().rstrip(".").lower()
-    if is_valid_fqdn(target_value):
+    if is_valid_fqdn(target_value, app.config.get("TLDADD", ())):
         return target_value
     return ""
 
@@ -3093,18 +3093,19 @@ class TargetsView(ModelView):
     @expose("/whois/<int:pk>", methods=["GET"])
     @has_access
     def whois(self, pk):
-        """Return current RIR WHOIS text for a stored IP/CIDR target."""
+        """Return WHOIS text for a stored IP/CIDR or FQDN target."""
         item = self.datamodel.get(pk, self._base_filters)
         if item is None:
             abort(404)
-        if item.target_type == "FQDN":
-            return jsonify(error="WHOIS is unavailable for FQDN targets"), 400
         try:
-            result = lookup_network_whois(item.value)
+            if item.target_type == "FQDN":
+                query, result = lookup_domain_whois(item.value)
+            else:
+                query, result = item.value, lookup_network_whois(item.value)
         except WhoisLookupError as error:
             logger.warning("WHOIS lookup failed for target %s: %s", pk, error)
             return jsonify(error="WHOIS lookup failed; try again later"), 502
-        return jsonify(query=item.value, result=result)
+        return jsonify(query=query, result=result)
 
     @action(
         "muldelete", "Delete Job", "Delete all Really?", "fa-trash-can", single=False
@@ -3194,7 +3195,7 @@ class TargetsView(ModelView):
             ip_clean = ip.strip("\n ,;'\"")  # remove surrounding "Spc ,; and all quotes
             if ip_clean == "":
                 pass
-            if is_valid_fqdn(ip_clean):
+            if is_valid_fqdn(ip_clean, app.config.get("TLDADD", ())):
                 # If we got an FQDN too.
                 new_target = Targets()
                 new_target.description = "Bulk Import"
@@ -4790,7 +4791,7 @@ class StatsView(BaseView):
             target_value = str(row.value or "").strip()
             if not target_value:
                 continue
-            if is_valid_fqdn(target_value):
+            if is_valid_fqdn(target_value, app.config.get("TLDADD", ())):
                 fqdn_count += 1
                 total_hosts_to_scan += 1
                 continue

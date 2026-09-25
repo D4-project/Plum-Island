@@ -65,7 +65,6 @@ PARSER_CONF = {}
 KVrocksIndexer = None
 parse_json = None
 prepare_kvrocks_document = None
-fetch_tlds = None
 TAG_RUNTIME = {}
 WORKER_SEEN_SNAPSHOT = None
 WORKER_TAG_RULES = None
@@ -121,8 +120,6 @@ def load_config():
     KVROCKS_HOST = config.get("OUT_KVROCKS_HOST")
     BATCH_SIZE = int(config.get("KVROCKS_BATCH_SIZE", DEFAULT_BATCH_SIZE))
     PARSER_CONF = {
-        "ONLINETLD": config.get("ONLINETLD", config.get("PARSER_ONLINETLD", False)),
-        "TLDS": [],
         "TLDADD": config.get("TLDADD", config.get("PARSER_TLDADD", ["local"])),
         "HTTP_HEADER_COLLECTION": {},
     }
@@ -132,7 +129,7 @@ def load_runtime_dependencies(retag=False):
     """
     Import runtime dependencies after help handling.
     """
-    global KVrocksIndexer, TAG_RUNTIME, parse_json, prepare_kvrocks_document, fetch_tlds
+    global KVrocksIndexer, TAG_RUNTIME, parse_json, prepare_kvrocks_document
 
     if retag:
         sys.path.insert(0, str(WEBAPP_DIR))
@@ -141,9 +138,6 @@ def load_runtime_dependencies(retag=False):
         from app.models import TagRules  # pylint: disable=import-outside-toplevel
         from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
             KVrocksIndexer as RuntimeKVrocksIndexer,
-        )
-        from app.utils.mutils import (  # pylint: disable=import-outside-toplevel
-            fetch_tlds as runtime_fetch_tlds,
         )
         from app.utils.result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
@@ -163,9 +157,6 @@ def load_runtime_dependencies(retag=False):
         from kvrocks import (  # pylint: disable=import-outside-toplevel
             KVrocksIndexer as RuntimeKVrocksIndexer,
         )
-        from mutils import (  # pylint: disable=import-outside-toplevel
-            fetch_tlds as runtime_fetch_tlds,
-        )
         from result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
             prepare_kvrocks_document as runtime_prepare_kvrocks_document,
@@ -176,7 +167,6 @@ def load_runtime_dependencies(retag=False):
     KVrocksIndexer = RuntimeKVrocksIndexer
     parse_json = runtime_parse_json
     prepare_kvrocks_document = runtime_prepare_kvrocks_document
-    fetch_tlds = runtime_fetch_tlds
 
 
 def get_config_value(*names, default=None):
@@ -824,10 +814,6 @@ def main():
     total_count = None
     tag_rules = None
 
-    if PARSER_CONF["ONLINETLD"]:
-        PARSER_CONF["TLDS"] = fetch_tlds()
-    else:
-        PARSER_CONF["TLDS"] = config.get("TLDS", config.get("PARSER_TLDS", []))
     PARSER_CONF["HTTP_HEADER_COLLECTION"] = load_collected_header_collection()
 
     if args.retag:

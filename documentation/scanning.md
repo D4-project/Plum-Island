@@ -54,6 +54,13 @@ averages**, not host or AS geolocation. Legacy `as_bgp`, `as_description` and
 `as_country` Python accessors read this shared record; old SQL columns are retained
 only for rollback and are no longer authoritative.
 
+FQDN validation and registered-domain extraction use `pyfaup-rs` offline. This
+handles public suffixes such as `co.uk`; optional `TLDADD` in `webapp/config.py`
+and `tools/config.yaml` accepts private suffixes such as `local`. The old
+`ONLINETLD`/`TLDS` settings are ignored. The target's WHOIS tab queries the
+registered domain for FQDNs, or the network for IP/CIDR targets, only when opened.
+Unknown/private suffixes have no public domain WHOIS lookup.
+
 New CIDRs automatically queue enrichment. Every accepted scan receipt checks each
 associated target and queues a lookup when its data is missing or its last
 successful lookup is **older than 24 hours**. Exactly 24 hours is still fresh.
