@@ -2,11 +2,15 @@
 
 ## Since Last release Changes.
 
+### Recent updates (2026-09-17 to 2026-09-25)
+
 - Remove Read Only user creation/edit permissions and synchronize role YAML during bare-metal and Docker deployments, closes #228.
 
 - Replace ad-hoc domain parsing with `pyfaup`, including FQDN WHOIS domain extraction.
 
 - Log scanner-result ingestion and export counts for operational monitoring.
+
+- Add target insertion timestamps, CIDR/FQDN types and shared AS metadata from CIRCL, with queued 24-hour automatic enrichment, permission-protected forced refreshes and migration 23 history backfill, refs #227.
 
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 
@@ -20,8 +24,6 @@
 
 - Remove technology-specific YAML detection tests from Plum-Island; retain generic parser, tag-engine and header-collection coverage.
 - Normalize migration 22/23 filenames to the full source-SHA convention; document and test the naming requirement.
-
-- Add target insertion timestamps, CIDR/FQDN types and shared AS metadata from CIRCL, with queued 24-hour automatic enrichment, permission-protected forced refreshes and migration 23 history backfill, refs #227.
 
 - Stop requeuing targets already scanned in a running cycle when their rescan delay expires; allow existing jobs to drain and show `finalizing` for running cycles at 100%, without a database migration.
 
