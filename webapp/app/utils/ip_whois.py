@@ -92,7 +92,10 @@ def lookup_network_whois(value):
     server = referral.group(1).lower().rstrip(".")
     if server not in RIR_WHOIS_SERVERS:
         raise WhoisLookupError("IANA returned an unsupported WHOIS referral")
-    rir_result = _query_server(server, query)
+    # ARIN treats a bare CIDR as an ambiguous search and emits a warning.
+    # Its ``n`` command performs the intended network lookup by address.
+    rir_query = f"n {network.network_address}" if server == "whois.arin.net" else query
+    rir_result = _query_server(server, rir_query)
     if not rir_result:
         raise WhoisLookupError("WHOIS registry returned an empty response")
     if server == "whois.arin.net":

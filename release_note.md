@@ -16,7 +16,7 @@
 
 - Detect Kubernetes from `kubernetes.default` certificate SANs, including `svc` and `cluster.local` variants, without forcing an HTTP protocol tag.
 
-- Remove duplicated trailing ARIN legal notices from displayed WHOIS responses.
+- Use ARIN's non-ambiguous network lookup syntax and remove duplicated trailing legal notices from WHOIS responses.
 
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 

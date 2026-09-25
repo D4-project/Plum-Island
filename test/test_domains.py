@@ -73,6 +73,7 @@ class DomainParsingTest(unittest.TestCase):
             notice + "NetName: GOOGLE-CLOUD\n" + notice,
         ]
         result = lookup_network_whois("35.246.198.116")
+        query_server.assert_any_call("whois.arin.net", "n 35.246.198.116")
         self.assertEqual(result.count("# ARIN WHOIS data"), 1)
         self.assertIn("NetName: GOOGLE-CLOUD", result)
 
