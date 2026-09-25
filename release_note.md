@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Remove Read Only user creation/edit permissions and synchronize role YAML during bare-metal and Docker deployments, closes #228.
+
 - Remove technology-specific YAML detection tests from Plum-Island; retain generic parser, tag-engine and header-collection coverage.
 - Normalize migration 22/23 filenames to the full source-SHA convention; document and test the naming requirement.
 

@@ -79,12 +79,15 @@ Useful options:
 .venv/bin/python tools/initial_setup.py --skip-tags
 .venv/bin/python tools/initial_setup.py --skip-nse
 .venv/bin/python tools/initial_setup.py --skip-profiles
+.venv/bin/python tools/initial_setup.py --roles-only
 .venv/bin/python tools/initial_setup.py --role-file webapp/security_roles/read_only.yaml
 .venv/bin/python tools/initial_setup.py --nse-repo-dir /path/to/Plum-Rules-NSE
 ```
 
 The default role file creates a `Read Only` role from `webapp/security_roles/read_only.yaml`.
 The file is intentionally plain YAML so permissions can be maintained without editing Python code.
+Use `--roles-only` during deployments to synchronize role permissions in an existing database
+without reseeding ports, headers, tag rules, NSE scripts, or scan profiles.
 
 Imported NSE files are copied into the Flask upload folder and stored in the DB with their filename and SHA-256 hash.
 If a script with the same filename already exists, it is updated only when the content hash changed.

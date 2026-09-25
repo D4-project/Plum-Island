@@ -8,3 +8,11 @@ git submodule update --init --recursive
 # remote tip instead of leaving this submodule at the commit pinned by the
 # parent repository.
 git submodule update --init --remote webapp/tags
+
+if [[ ! -x .venv/bin/python ]]; then
+    echo "ERROR: .venv/bin/python is required to synchronize security roles." >&2
+    exit 1
+fi
+
+echo "Synchronizing configured security roles..."
+.venv/bin/python tools/initial_setup.py --roles-only

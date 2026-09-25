@@ -6,9 +6,7 @@ permissions:
 - can this form post on ResetPasswordView
 - can this form get on ResetMyPasswordView
 - can this form post on ResetMyPasswordView
-- can edit on UserDBModelView
 - can show on UserDBModelView
-- can add on UserDBModelView
 - can download on UserDBModelView
 - can list on UserDBModelView
 - can userinfo on UserDBModelView

@@ -69,6 +69,11 @@ def parse_args():
         help="Do not create default scan profiles.",
     )
     parser.add_argument(
+        "--roles-only",
+        action="store_true",
+        help="Synchronize configured security roles, then skip all other seeds.",
+    )
+    parser.add_argument(
         "--role-file",
         default=str(DEFAULT_ROLE_FILE),
         help=f"Security role YAML file. Default: {DEFAULT_ROLE_FILE}",
@@ -588,6 +593,9 @@ def main():
 
     if not args.skip_roles:
         sync_security_role(args.role_file, dry_run=args.dry_run)
+
+    if args.roles_only:
+        return
 
     if not args.skip_ports:
         seed_tcp_ports(dry_run=args.dry_run)
