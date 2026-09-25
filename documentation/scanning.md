@@ -143,6 +143,17 @@ Individual Meilisearch HTTP requests are bounded by
 `MEILI_HTTP_TIMEOUT_SECONDS`, and Kvrocks socket operations by
 `KVROCKS_SOCKET_TIMEOUT_SECONDS`; both default to 10 seconds.
 
+The `/bot_api/sndjob` log reports one accepted scanner JSON file and its number
+of top-level scan results after the job commits. The scheduler's
+`finished export_to_dbs` line reports `scanner_json_files_pending` (finished
+jobs awaiting complete export at the start of the tick), `scanner_json_files_read` and
+`scan_results_read` for this tick, `port_documents_split` (per-port documents
+generated before parser filtering), `documents_submitted` (sent to Meilisearch),
+and `documents_integrated` (confirmed in Meilisearch and written to Kvrocks).
+Submission and integration normally happen on different ticks. Split/read counts
+measure work performed in that tick, so retries or multi-batch jobs can repeat
+them; they are not lifetime unique totals.
+
 ## Scan execution parameters
 
 Ports and NSE scripts are resolved exclusively from the effective `ScanProfile`.

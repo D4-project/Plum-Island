@@ -5,10 +5,12 @@
 
 import importlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest import TestCase, mock
@@ -863,8 +865,76 @@ class StalledJobWatchdogTest(TestCase):
         self.assertEqual(persisted_task_uids, [45])
         self.assertEqual(job_state["task_uid"], 45)
         self.assertEqual(summary["meili_tasks_pending"], 1)
+        self.assertEqual(summary["documents_submitted"], 1)
+        self.assertEqual(summary["documents_integrated"], 0)
         meili_index.get_task.assert_not_called()
         kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_export_counts_scanner_json_and_split_documents(self):
+        """Count raw scan records and port splits before parser filtering."""
+        with tempfile.TemporaryDirectory() as directory:
+            result_dir = Path(directory) / "a"
+            result_dir.mkdir()
+            (result_dir / "a-job.json").write_text(
+                json.dumps([{"addr": "192.0.2.1"}, {"addr": "192.0.2.2"}]),
+                encoding="utf-8",
+            )
+            context = self.scheduler.ExportContext(
+                meili_idx=mock.Mock(),
+                kvrocks_idx=mock.Mock(),
+                input_dir=directory,
+                parser_config={},
+                active_tag_rules=[],
+            )
+            counters = {
+                "scanner_json_files_read": 0,
+                "scan_results_read": 0,
+                "port_documents_split": 0,
+            }
+            with mock.patch.object(
+                self.scheduler,
+                "_split_scan_result_by_port",
+                side_effect=[
+                    [{"id": "one"}, {"id": "two"}],
+                    [{"id": "three"}],
+                ],
+            ), mock.patch.object(
+                self.scheduler,
+                "parse_json",
+                side_effect=[{"parsed": 1}, None, {"parsed": 3}],
+            ), mock.patch.object(
+                self.scheduler,
+                "prepare_kvrocks_document",
+                return_value={"indexed": True},
+            ):
+                meili_docs, kvrocks_docs = self.scheduler._load_job_export_documents(
+                    context, "a-job", counters=counters
+                )
+
+        self.assertEqual(counters["scanner_json_files_read"], 1)
+        self.assertEqual(counters["scan_results_read"], 2)
+        self.assertEqual(counters["port_documents_split"], 3)
+        self.assertEqual(len(meili_docs), 2)
+        self.assertEqual(len(kvrocks_docs), 2)
+
+    def test_export_summary_includes_pending_scanner_json_files(self):
+        """Report the durable backlog separately from files read this tick."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.scalar.return_value = 7
+        with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
+            self.scheduler, "_build_export_context", return_value=mock.Mock()
+        ), mock.patch.object(
+            self.scheduler, "_load_pending_meili_task_uids", return_value=[]
+        ), mock.patch.object(
+            self.scheduler,
+            "_advance_new_meili_export",
+            return_value=self.scheduler._export_summary(0),
+        ):
+            summary = self.scheduler.task_export_to_dbs()
+
+        self.assertEqual(summary["scanner_json_files_pending"], 7)
+        self.assertEqual(summary["scanner_json_files_read"], 0)
+        self.assertEqual(summary["documents_integrated"], 0)
 
     def test_succeeded_persisted_task_writes_kvrocks_after_status(self):
         """Confirmed Meili success precedes Kvrocks and job completion."""

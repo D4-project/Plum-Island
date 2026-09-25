@@ -26,7 +26,7 @@ import meilisearch
 from meilisearch.errors import MeilisearchError
 from nmap2json.smarthash import port_smart_hash
 from requests.exceptions import HTTPError
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import joinedload
 from . import db
 from .models import Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
@@ -1908,7 +1908,7 @@ def _export_job_state(job_data):
     }
 
 
-def _load_job_export_documents(export_context, job_uid):
+def _load_job_export_documents(export_context, job_uid, counters=None):
     """Load one immutable job result and build matching Meili/Kvrocks docs."""
     filepath = os.path.join(
         export_context.input_dir,
@@ -1924,10 +1924,16 @@ def _load_job_export_documents(export_context, job_uid):
     else:
         scan_results = []
 
+    if counters is not None:
+        counters["scanner_json_files_read"] += 1
+        counters["scan_results_read"] += len(scan_results)
+
     meili_documents = []
     kvrocks_documents = []
     for item in scan_results:
         for object_to_save in _split_scan_result_by_port(item):
+            if counters is not None:
+                counters["port_documents_split"] += 1
             parsed_doc = parse_json(
                 object_to_save,
                 export_context.parser_config,
@@ -2062,11 +2068,22 @@ def _export_summary(
     documents_exported=0,
     batches=0,
     jobs_exported=0,
+    scanner_json_files_pending=0,
+    scanner_json_files_read=0,
+    scan_results_read=0,
+    port_documents_split=0,
+    documents_submitted=0,
     **flags,
 ):
     """Return consistent scheduler metrics for every export state transition."""
     summary = {
         "jobs_scanned": jobs_scanned,
+        "scanner_json_files_pending": scanner_json_files_pending,
+        "scanner_json_files_read": scanner_json_files_read,
+        "scan_results_read": scan_results_read,
+        "port_documents_split": port_documents_split,
+        "documents_submitted": documents_submitted,
+        "documents_integrated": documents_exported,
         "documents_exported": documents_exported,
         "batches": batches,
         "jobs_marked_exported": jobs_exported,
@@ -2167,12 +2184,16 @@ def _prepare_meili_export_batch(export_context, job_states):
         "jobs": [],
         "ready_documents": 0,
         "ready_jobs": 0,
+        "scanner_json_files_read": 0,
+        "scan_results_read": 0,
+        "port_documents_split": 0,
     }
     ready_states = []
     for job_state in job_states:
         meili_documents, _kvrocks_documents = _load_job_export_documents(
             export_context,
             job_state["uid"],
+            counters=batch_state,
         )
         document_total = len(meili_documents)
         if job_state["total"] is not None and job_state["total"] != document_total:
@@ -2224,6 +2245,10 @@ def _submit_meili_export_batch(export_context, jobs_scanned, batch_state):
     return _export_summary(
         jobs_scanned,
         documents_exported=batch_state["ready_documents"],
+        scanner_json_files_read=batch_state.get("scanner_json_files_read", 0),
+        scan_results_read=batch_state.get("scan_results_read", 0),
+        port_documents_split=batch_state.get("port_documents_split", 0),
+        documents_submitted=len(batch_state["documents"]),
         batches=1,
         jobs_exported=batch_state["ready_jobs"],
         pending_tasks=1,
@@ -2240,6 +2265,9 @@ def _advance_new_meili_export(export_context):
         return _export_summary(
             len(job_states),
             documents_exported=batch_state["ready_documents"],
+            scanner_json_files_read=batch_state["scanner_json_files_read"],
+            scan_results_read=batch_state["scan_results_read"],
+            port_documents_split=batch_state["port_documents_split"],
             jobs_exported=batch_state["ready_jobs"],
         )
     return _submit_meili_export_batch(
@@ -2252,16 +2280,29 @@ def _advance_new_meili_export(export_context):
 def task_export_to_dbs():
     """Advance durable Meilisearch-first export state by at most one batch."""
     export_context = _build_export_context()
+    json_files_pending = (
+        db.session.query(func.count(Jobs.id))
+        .filter(
+            Jobs.active == False,
+            Jobs.finished == True,
+            Jobs.exported == False,
+        )
+        .scalar()
+        or 0
+    )
     pending_task_uids = _load_pending_meili_task_uids()
 
     try:
         if pending_task_uids:
-            return _resume_persisted_export(export_context, pending_task_uids)
-        return _advance_new_meili_export(export_context)
+            summary = _resume_persisted_export(export_context, pending_task_uids)
+        else:
+            summary = _advance_new_meili_export(export_context)
+        summary["scanner_json_files_pending"] = json_files_pending
+        return summary
     except (MeilisearchError, MeiliExportTaskError, HTTPError) as error:
         db.session.rollback()
         logger.error("Unable to advance export state: %s", error)
-        return _export_summary(0, errors=1)
+        return _export_summary(0, errors=1, scanner_json_files_pending=json_files_pending)
     finally:
         db.session.remove()
 

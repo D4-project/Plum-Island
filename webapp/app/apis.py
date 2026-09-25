@@ -1036,6 +1036,16 @@ class Api(BaseApi):
             time.perf_counter() - commit_started,
             time.perf_counter() - request_started,
         )
+        scan_results_received = (
+            len(result_data)
+            if isinstance(result_data, list)
+            else int(isinstance(result_data, dict))
+        )
+        logger.info(
+            "Scanner result received: job=%s json_files=1 scan_results=%s",
+            job_bot.uid,
+            scan_results_received,
+        )
         return self.response(200, message="ready")
 
 
