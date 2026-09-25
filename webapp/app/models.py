@@ -1522,6 +1522,8 @@ class Targets(Model):
     def network_asn_display(self):
         """Render the shared ASN as one ordinary detail row."""
         value = self._network_info_value("asn")
+        if value == "0":
+            return "CIDR not announced"
         return f"AS{value}" if value.isdecimal() else value
 
     @property

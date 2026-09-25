@@ -82,6 +82,12 @@ class NetworkLookupTest(unittest.TestCase):
         )
         self.assertIsNone(ip2asn.parse_network_information(payload)["latitude"])
 
+    def test_zero_asn_is_displayed_as_unannounced_cidr(self):
+        """Render ASN zero as an unannounced CIDR instead of AS0."""
+        target = Targets(value="192.0.2.0/24")
+        target.autonomous_system = AutonomousSystems(asn=0, name="Reserved")
+        self.assertEqual(target.network_asn_display, "CIDR not announced")
+
     def test_invalid_responses_do_not_fabricate_an_as(self):
         """Reject missing ASN/name, malformed arrays and non-finite coordinates."""
         for payload in (

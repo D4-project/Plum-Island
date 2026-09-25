@@ -18,6 +18,8 @@
 
 - Use ARIN's non-ambiguous network lookup syntax and remove duplicated trailing legal notices from WHOIS responses.
 
+- Display `CIDR not announced` when CIRCL returns ASN `0` for a network target.
+
 - Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
 
 - Add clickable structured-search keywords that append to the search bar.
