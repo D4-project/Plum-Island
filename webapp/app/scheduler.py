@@ -26,7 +26,7 @@ import meilisearch
 from meilisearch.errors import MeilisearchError
 from nmap2json.smarthash import port_smart_hash
 from requests.exceptions import HTTPError
-from sqlalchemy import func, text
+from sqlalchemy import bindparam, func, text
 from sqlalchemy.orm import joinedload
 from . import db
 from .models import Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
@@ -54,7 +54,12 @@ from .utils.reports import (
     send_report_markdown,
 )
 from .utils.tagrules import compile_tag_rule_records
-from .utils.network_enrichment import process_pending_network_refreshes
+from .utils.network_enrichment import (
+    enrichment_due,
+    process_pending_network_refreshes,
+    refresh_target_network,
+)
+from .utils.ip2asn import target_type
 from .utils.timeutils import utcnow_aware, utcnow_naive
 from .utils.scan_cycles import (
     get_current_max_target_id,
@@ -82,11 +87,15 @@ class SafeBackgroundScheduler(BackgroundScheduler):
         self.state = STATE_STOPPED
         self.wakeup()
         scheduler_thread = getattr(self, "_thread", None)
-        if scheduler_thread is not None and scheduler_thread is not threading.current_thread():
+        if (
+            scheduler_thread is not None
+            and scheduler_thread is not threading.current_thread()
+        ):
             scheduler_thread.join()
 
         BaseScheduler.shutdown(self, wait=wait)
         self._thread = None
+
 
 JOB_TARGET_CHUNK_SIZE = 256
 DEFAULT_QUEUE_TARGET_JOBS_PER_PROFILE = 256
@@ -880,6 +889,7 @@ def _load_due_states_for_profile(
     state_limit,
     max_target_id,
     cycle_started_at=None,
+    excluded_state_ids=None,
 ):
     """
     Load due states, excluding targets already completed in the running cycle.
@@ -937,19 +947,26 @@ def _load_due_states_for_profile(
                AND t.active = 1
                AND t.id <= :max_target_id
                AND tss.working = 0
+               {"AND tss.id NOT IN :excluded_state_ids" if excluded_state_ids else ""}
                AND {last_scan_filter}
                {applicability_sql}
              ORDER BY {order_by}
              LIMIT :limit
         """
+        statement = text(due_state_ids_sql)
+        if excluded_state_ids:
+            statement = statement.bindparams(
+                bindparam("excluded_state_ids", expanding=True)
+            )
         rows = db.session.execute(
-            text(due_state_ids_sql),
+            statement,
             {
                 "profile_id": profile.id,
                 "cutoff": cutoff,
                 "cycle_started_at": cycle_started_at,
                 "limit": limit,
                 "max_target_id": int(max_target_id),
+                "excluded_state_ids": sorted(excluded_state_ids or ()),
             },
         ).fetchall()
         logger.debug(
@@ -1135,7 +1152,9 @@ def _classify_due_states_for_chunks(due_states, max_large_range_jobs=None):
     return range_chunks, small_ranges, hostname_records
 
 
-def _enqueue_profile_job(profile, job_value, scan_ports, scan_nses, chunk, scan_cycle):
+def _enqueue_profile_job(
+    profile, job_value, scan_ports, scan_nses, chunk, scan_cycle, completed=False
+):
     """
     Add one queued job and mark its linked targets/states working.
     """
@@ -1151,13 +1170,110 @@ def _enqueue_profile_job(profile, job_value, scan_ports, scan_nses, chunk, scan_
     new_job.scan_unit_count = compute_scan_unit_count_list(job_value)
     new_job.priority = profile.priority or 0
     new_job.scanprofile_cycle = scan_cycle
+    if completed:
+        # No scanner result exists: exclude this terminal job from exporters.
+        new_job.finished = True
+        new_job.active = False
+        new_job.exported = True
+        new_job.meili_documents_total = 0
+        new_job.job_end = utcnow_naive()
     for target in chunk["targets"]:
         new_job.targets.append(target)
-        target.working = True
+        if not completed:
+            target.working = True
     for state in chunk["states"]:
-        state.working = True
+        if not completed:
+            state.working = True
     db.session.add(new_job)
     return {state.id for state in chunk["states"]}
+
+
+def _prepare_routing_states(due_states, deadline):
+    """Refresh stale CIDRs outside queue transactions; defer failed lookups."""
+    candidates = {}
+    for state in due_states:
+        target = getattr(state, "target", None)
+        if target is not None and target_type(target.value) != "FQDN":
+            candidates[state.id] = (target.id, target.value, enrichment_due(target))
+    stale_targets = {target_id for target_id, _, stale in candidates.values() if stale}
+    outcomes = {}
+    if stale_targets:
+        # Queue batches/cycles are committed by the caller. Release even the
+        # read snapshot before the enrichment service uses its own sessions.
+        db.session.rollback()
+        for target_id in sorted(stale_targets):
+            if time.perf_counter() >= deadline:
+                break
+            _mark_queue_generation_stage("routing_lookup", target_id=target_id)
+            outcomes[target_id] = refresh_target_network(target_id)
+        db.session.expire_all()
+
+    ready, unannounced, deferred = [], [], set()
+    for state in due_states:
+        candidate = candidates.get(state.id)
+        if candidate is None:
+            ready.append(state)
+            continue
+        target_id, value, stale = candidate
+        target = state.target
+        if (
+            (stale and outcomes.get(target_id) not in ("updated", "fresh"))
+            or target.value != value
+            or not target.active
+            or state.working
+            or enrichment_due(target)
+        ):
+            deferred.add(state.id)
+        elif target.network_asn == 0:
+            unannounced.append(state)
+        else:
+            ready.append(state)
+    return ready, unannounced, deferred
+
+
+def _complete_unannounced_states(
+    profile, states, scan_ports, scan_nses, cycle, max_jobs
+):
+    """Keep bounded terminal jobs for CIDRs skipped using fresh CIRCL data."""
+    if not states:
+        return 0, set()
+    ranges, small, _ = _classify_due_states_for_chunks(
+        states, max_large_range_jobs=max_jobs
+    )
+    _merge_small_ranges_into_chunks(
+        small, ranges, max_chunks=max(0, max_jobs - len(ranges))
+    )
+    completed_ids = set()
+    for chunk in ranges:
+        _enqueue_profile_job(
+            profile,
+            ",".join(chunk["cidrs"]),
+            scan_ports,
+            scan_nses,
+            chunk,
+            cycle,
+            completed=True,
+        )
+        completed_ids.update(state.id for state in chunk["states"])
+    completed_at = utcnow_naive()
+    for state in states:
+        if state.id not in completed_ids:
+            continue
+        state.last_previous_scan = state.last_scan
+        state.last_scan = completed_at
+        state.working = False
+        target = state.target
+        target.last_previous_scan = target.last_scan
+        target.last_scan = completed_at
+        target.working = any(item.working for item in target.scan_states)
+        logger.info(
+            "Scan skipped: profile=%s target=%s reason=CIDR not announced "
+            "network_updated_at=%s",
+            profile.id,
+            target.id,
+            target.network_updated_at,
+        )
+    return len(ranges), completed_ids
 
 
 def _enqueue_range_jobs(profile, range_chunks, scan_ports, scan_nses, scan_cycle):
@@ -1368,6 +1484,9 @@ def task_create_jobs():
         "range_jobs": 0,
         "host_jobs": 0,
     }
+    skipped_jobs = 0
+    skipped_states = 0
+    deferred_states = 0
     profiles_with_jobs = 0
     profiles_without_ports = 0
     profiles_without_cycle = 0
@@ -1512,11 +1631,14 @@ def task_create_jobs():
             "host_jobs": 0,
         }
         batch_number = 0
+        excluded_state_ids = set()
 
         # Step 8: fill the profile queue through independent 256-state
         # transactions. The time and job limits are checked after every commit.
         while queue_deficit > 0:
-            jobs_created_so_far = totals["range_jobs"] + totals["host_jobs"]
+            jobs_created_so_far = (
+                totals["range_jobs"] + totals["host_jobs"] + skipped_jobs
+            )
             if _queue_time_budget_reached(
                 generation_deadline,
                 max(jobs_created_so_far, queue_batches_attempted),
@@ -1545,6 +1667,7 @@ def task_create_jobs():
                 state_limit,
                 cycle_max_target_id,
                 cycle_started_at=scan_cycle.started_at if scan_cycle else None,
+                excluded_state_ids=excluded_state_ids,
             )
             queue_batches_attempted += 1
             due_elapsed = time.perf_counter() - due_started
@@ -1599,14 +1722,27 @@ def task_create_jobs():
             # Transform the batch without autoflush. The only write window is
             # the explicit commit immediately following this block.
             stage_started = time.perf_counter()
+            ready_states, unannounced_states, deferred = _prepare_routing_states(
+                due_states, generation_deadline
+            )
+            excluded_state_ids.update(deferred)
+            deferred_states += len(deferred)
             with db.session.no_autoflush:
-                job_counts = _stage_jobs_for_profile(
+                completed_jobs, completed_ids = _complete_unannounced_states(
                     profile,
-                    due_states,
+                    unannounced_states,
                     scan_ports,
                     scan_nses,
                     scan_cycle,
                     max_jobs=job_limit,
+                )
+                job_counts = _stage_jobs_for_profile(
+                    profile,
+                    ready_states,
+                    scan_ports,
+                    scan_nses,
+                    scan_cycle,
+                    max_jobs=max(0, job_limit - completed_jobs),
                 )
             stage_elapsed = time.perf_counter() - stage_started
 
@@ -1624,6 +1760,11 @@ def task_create_jobs():
             )
             commit_started = time.perf_counter()
             db.session.commit()
+            skipped_jobs += completed_jobs
+            skipped_states += len(completed_ids)
+            if completed_jobs:
+                reconcile_scanprofile_cycle(profile.id, scan_cycle, prune_history=False)
+                db.session.commit()
             commit_elapsed = time.perf_counter() - commit_started
             batch_number += 1
 
@@ -1669,13 +1810,18 @@ def task_create_jobs():
                 commit_elapsed,
             )
 
-            if new_jobs <= 0:
+            if scan_cycle.status != "running":
+                break
+
+            if new_jobs <= 0 and not completed_jobs and not deferred:
                 break
 
             waiting_before = waiting_after
             queue_deficit = queue_target - waiting_after
 
-            jobs_created_so_far = totals["range_jobs"] + totals["host_jobs"]
+            jobs_created_so_far = (
+                totals["range_jobs"] + totals["host_jobs"] + skipped_jobs
+            )
             if jobs_created_so_far >= max_new_jobs_per_tick:
                 budget_exhausted = True
                 stop_queue_fill = True
@@ -1760,6 +1906,9 @@ def task_create_jobs():
         "range_jobs": totals["range_jobs"],
         "host_jobs": totals["host_jobs"],
         "states_scheduled": totals["scheduled_states"],
+        "unannounced_jobs_completed": skipped_jobs,
+        "unannounced_states_completed": skipped_states,
+        "routing_states_deferred": deferred_states,
         "profiles_total": len(profiles),
         "profiles_with_jobs": profiles_with_jobs,
         "profiles_full": profiles_already_full,
@@ -2302,7 +2451,9 @@ def task_export_to_dbs():
     except (MeilisearchError, MeiliExportTaskError, HTTPError) as error:
         db.session.rollback()
         logger.error("Unable to advance export state: %s", error)
-        return _export_summary(0, errors=1, scanner_json_files_pending=json_files_pending)
+        return _export_summary(
+            0, errors=1, scanner_json_files_pending=json_files_pending
+        )
     finally:
         db.session.remove()
 
@@ -2573,7 +2724,9 @@ try:
 except MeilisearchError as error:
     # Meilisearch may be starting/restarting independently.  Keep the web
     # application alive; scheduler tasks will retry their requests later.
-    logger.warning("Meilisearch unavailable during startup; deferring index setup: %s", error)
+    logger.warning(
+        "Meilisearch unavailable during startup; deferring index setup: %s", error
+    )
 index = client.index("plum")
 # Save the client Index to the global config.
 db.app.config["MEILI_IDX"] = index

@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Check CIRCL routing data before scheduling CIDRs, using a 24-hour per-target cache. Complete ASN-zero jobs without scanning or exporting results; defer stale/unknown routing on lookup failure and recheck at the next due cycle.
+
 ### Recent updates (2026-09-17 to 2026-09-25)
 
 - Remove Read Only user creation/edit permissions and synchronize role YAML during bare-metal and Docker deployments, closes #228.

@@ -56,6 +56,185 @@ class StalledJobWatchdogTest(TestCase):
             datetime(2026, 7, 29, 10, 0, 0),
         )
 
+    def _routing_fixture(self):
+        """Create real scheduler states in a disposable database."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.Targets.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        now = self.scheduler.utcnow_naive()
+        profile = models.ScanProfiles(
+            name="Routing test", scan_cycle_minutes=60, apply_to_all=True
+        )
+        cycle = models.ScanProfileCycles(
+            scanprofile=profile, started_at=now, status="running", max_target_id=3
+        )
+        zero = models.AutonomousSystems(asn=0, name="Not routed")
+        states = [
+            models.TargetScanStates(
+                scanprofile=profile,
+                target=models.Targets(
+                    id=index,
+                    value=value,
+                    autonomous_system=zero,
+                    network_updated_at=now,
+                ),
+            )
+            for index, value in enumerate(
+                ("192.0.2.0/24", "2001:db8::/120", "example.org"), start=1
+            )
+        ]
+        session.add_all([cycle, *states])
+        session.commit()
+        return models, session, profile, cycle, states
+
+    def test_cached_unannounced_jobs_finish_without_scanner_or_export(self):
+        """Fresh ASN zero completes IPv4/IPv6 while FQDN work stays queued."""
+        models, session, profile, cycle, states = self._routing_fixture()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(self.scheduler, "refresh_target_network") as refresh:
+            ready, skipped, deferred = self.scheduler._prepare_routing_states(
+                states, float("inf")
+            )
+            self.assertEqual(ready, [states[2]])
+            self.assertEqual(skipped, states[:2])
+            self.assertFalse(deferred)
+            refresh.assert_not_called()
+            with session.no_autoflush:
+                count, completed = self.scheduler._complete_unannounced_states(
+                    profile, skipped, "80", "", cycle, max_jobs=10
+                )
+                self.scheduler._stage_jobs_for_profile(
+                    profile, ready, "80", "", cycle, max_jobs=10
+                )
+            session.commit()
+            self.assertEqual(count, 2)
+            self.assertEqual(completed, {states[0].id, states[1].id})
+            jobs = session.query(models.Jobs).all()
+            done = [job for job in jobs if job.finished]
+            self.assertEqual(len(done), 2)
+            for job in done:
+                self.assertTrue(job.exported)
+                self.assertFalse(job.active)
+                self.assertIsNone(job.bot_id)
+                self.assertIsNone(job.job_start)
+                self.assertEqual(job.meili_documents_total, 0)
+                self.assertLessEqual(job.scan_unit_count, 256)
+            self.assertEqual(
+                [job.job for job in jobs if not job.finished], ["example.org"]
+            )
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id, cycle, prune_history=False
+            )
+            self.assertEqual(cycle.completed_target_count, 2)
+            self.assertEqual(cycle.status, "running")
+            self.assertFalse(states[0].working)
+            self.assertTrue(states[2].working)
+
+    def test_stale_routing_is_rechecked_and_failure_is_deferred(self):
+        """A newly routed CIDR scans; lookup failure never completes a target."""
+        models, session, _, _, states = self._routing_fixture()
+        for state in states[:2]:
+            state.target.network_updated_at -= timedelta(hours=25)
+        session.commit()
+
+        def refresh(target_id):
+            self.assertFalse(session.in_transaction())
+            if target_id == 1:
+                session.get(models.Targets, target_id).autonomous_system = (
+                    models.AutonomousSystems(asn=64500, name="Routed")
+                )
+                session.get(models.Targets, target_id).network_updated_at = (
+                    self.scheduler.utcnow_naive()
+                )
+                session.commit()
+                return "updated"
+            return "failed"
+
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "refresh_target_network", side_effect=refresh
+        ) as lookup:
+            ready, skipped, deferred = self.scheduler._prepare_routing_states(
+                states, float("inf")
+            )
+        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(ready, [states[0], states[2]])
+        self.assertFalse(skipped)
+        self.assertEqual(deferred, {states[1].id})
+        self.assertIsNone(states[1].last_scan)
+        self.assertFalse(states[1].working)
+
+    def test_routing_deadline_defers_stale_checks_without_http(self):
+        """Queue generation stops starting lookups after its time budget."""
+        _, session, _, _, states = self._routing_fixture()
+        states[0].target.network_updated_at = None
+        session.commit()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(self.scheduler, "refresh_target_network") as lookup:
+            ready, skipped, deferred = self.scheduler._prepare_routing_states(states, 0)
+        lookup.assert_not_called()
+        self.assertEqual(ready, [states[2]])
+        self.assertEqual(skipped, [states[1]])
+        self.assertEqual(deferred, {states[0].id})
+
+    def test_all_unannounced_cycle_finishes_and_next_cycle_rechecks(self):
+        """Full scheduler tick closes a skipped cycle and resumes when routed."""
+        models, session, profile, cycle, states = self._routing_fixture()
+        states[2].target.active = False
+        profile.current_cycle_id = cycle.id
+        session.commit()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_should_run_orphan_state_release", return_value=False
+        ), mock.patch.object(
+            self.scheduler, "_sync_missing_scan_states", return_value=0
+        ), mock.patch.object(
+            self.scheduler, "_serialize_profile_ports", return_value="80"
+        ), mock.patch.object(
+            self.scheduler, "_serialize_profile_nses", return_value=""
+        ), mock.patch.object(
+            self.scheduler, "refresh_target_network"
+        ) as refresh:
+            summary = self.scheduler.task_create_jobs()
+            refresh.assert_not_called()
+            self.assertEqual(summary["jobs_created"], 0)
+            self.assertEqual(summary["unannounced_jobs_completed"], 2)
+            self.assertEqual(cycle.status, "finished")
+            self.assertEqual(cycle.completed_target_count, 2)
+            self.assertEqual(cycle.completed_scan_unit_count, 512)
+            with mock.patch.object(session, "remove", create=True):
+                self.assertFalse(self.scheduler._load_export_job_states())
+            self.assertEqual(self.scheduler.task_create_jobs()["jobs_created"], 0)
+            self.assertEqual(session.query(models.Jobs).count(), 2)
+
+            # The next due cycle must consult CIRCL again after cache expiry.
+            for state in states[:2]:
+                state.last_scan -= timedelta(hours=25)
+                state.target.network_updated_at -= timedelta(hours=25)
+            session.commit()
+
+            def routed(target_id):
+                target = session.get(models.Targets, target_id)
+                target.autonomous_system = models.AutonomousSystems(
+                    asn=64500 + target_id, name="Now routed"
+                )
+                target.network_updated_at = self.scheduler.utcnow_naive()
+                session.commit()
+                return "updated"
+
+            refresh.side_effect = routed
+            summary = self.scheduler.task_create_jobs()
+            self.assertEqual(refresh.call_count, 2)
+            self.assertEqual(summary["jobs_created"], 2)
+            self.assertEqual(summary["unannounced_jobs_completed"], 0)
+
     def test_watchdog_updates_only_stalled_job_state(self):
         """Watchdog clears claim fields and preserves unfinished state."""
         session = mock.Mock()
@@ -921,7 +1100,9 @@ class StalledJobWatchdogTest(TestCase):
         """Report the durable backlog separately from files read this tick."""
         session = mock.Mock()
         session.query.return_value.filter.return_value.scalar.return_value = 7
-        with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
             self.scheduler, "_build_export_context", return_value=mock.Mock()
         ), mock.patch.object(
             self.scheduler, "_load_pending_meili_task_uids", return_value=[]

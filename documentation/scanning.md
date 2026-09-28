@@ -73,6 +73,23 @@ Requests use `https://ip.circl.lu/geolookup/<network-address>`: only the first
 address of the CIDR, including IPv6. The ASN-bearing response entry determines the
 AS for the entire CIDR, even if other addresses belong to another AS.
 
+Before scheduling a CIDR job, Plum checks that target's CIRCL information. A
+successful lookup is reused for 24 hours, including ASN `0`; missing or older
+data is refreshed before any job is queued. ASN `0` means `CIDR not announced`:
+Plum creates finished, inactive jobs without assigning a scanner. These jobs are
+excluded from result export because no scan JSON was produced. Routed targets
+and FQDNs continue through normal scheduling. A failed, busy or time-budget-deferred
+lookup with no fresh data postpones scheduling; it never counts as completion.
+
+Skipped CIDRs advance target/profile completion timestamps (`last_scan` and
+`last_previous_scan`) and cycle progress, so they are checked again when next
+due. These timestamps therefore include routing-based completion without a scan.
+Logs record `Scan skipped` with target/profile IDs and lookup timestamp; scheduler summaries
+report `unannounced_jobs_completed`, `unannounced_states_completed` and
+`routing_states_deferred`. A CIDR that becomes routed is scanned at its next due
+programming after the cache expires. Existing queued jobs are not rewritten.
+No additional database migration is required.
+
 The detail button and list **Refresh Network informations** action force an
 immediate lookup regardless of age/backoff. If a lookup is already running, the
 action reports `busy` instead of duplicating it. Both actions require a form POST
