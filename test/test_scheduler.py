@@ -663,6 +663,34 @@ class StalledJobWatchdogTest(TestCase):
         self.assertEqual(small_ranges, [])
         self.assertEqual(hostname_records, [])
 
+    def test_unknown_suffix_hostname_does_not_enter_ip_network_parser(self):
+        """Stored hostnames remain schedulable after suffix data changes."""
+        hostname = SimpleNamespace(id=2, value="com.unrwa.encd")
+        invalid = SimpleNamespace(id=3, value="-sV")
+        ip_targets = [
+            SimpleNamespace(id=4, value="8.8.8.8"),
+            SimpleNamespace(id=5, value="2606:4700:4700::1111"),
+            SimpleNamespace(id=6, value="8.8.8.0/30"),
+            SimpleNamespace(id=7, value="2001:4860::/126"),
+        ]
+        states = [
+            SimpleNamespace(id=2, target=hostname),
+            SimpleNamespace(id=3, target=invalid),
+        ] + [SimpleNamespace(id=target.id, target=target) for target in ip_targets]
+        with self.assertLogs("flask_appbuilder", level="WARNING") as logs:
+            ranges, small, hosts = self.scheduler._classify_due_states_for_chunks(
+                states
+            )
+        self.assertEqual(ranges, [])
+        self.assertEqual(
+            [record["target"].value for record in small],
+            [target.value for target in ip_targets],
+        )
+        self.assertEqual([len(record["ips"]) for record in small], [1, 1, 4, 4])
+        self.assertEqual(hosts[0]["hosts"], ["com.unrwa.encd"])
+        self.assertEqual(len(hosts), 1)
+        self.assertIn("Skipping invalid target id=3", logs.output[0])
+
     def test_large_ipv4_target_queues_all_256_jobs_as_one_atomic_target(self):
         """The soft one-job limit cannot leave a /16 only partly scheduled."""
 

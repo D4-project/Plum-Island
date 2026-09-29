@@ -6,6 +6,24 @@ import idna
 from pyfaup import FaupCompat  # pylint: disable=no-name-in-module
 
 
+def is_hostname_syntax(value):
+    """Accept a DNS hostname even when its suffix is absent from pyfaup."""
+    hostname = str(value or "").strip().rstrip(".")
+    if "." not in hostname:
+        return False
+    try:
+        ascii_name = idna.encode(hostname, uts46=True, std3_rules=True).decode("ascii")
+    except (idna.IDNAError, UnicodeError):
+        return False
+    labels = ascii_name.split(".")
+    return (
+        len(ascii_name) <= 253
+        and all(0 < len(label) <= 63 for label in labels)
+        and len(labels[-1]) >= 2
+        and labels[-1][0].isalpha()
+    )
+
+
 def parse_hostname(value, extra_suffixes=()):
     """Return normalized FQDN parts, or None for invalid/unknown domains."""
     hostname = str(value or "").strip().rstrip(".")

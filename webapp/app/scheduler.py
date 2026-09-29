@@ -4,6 +4,7 @@ This module manage asynchrone tasks
 
 import os
 import atexit
+import ipaddress
 import logging
 import shutil
 import uuid
@@ -21,7 +22,7 @@ from apscheduler.schedulers.base import (
     SchedulerNotRunningError,
     STATE_STOPPED,
 )
-from netaddr import IPNetwork, cidr_merge
+from netaddr import AddrFormatError, IPNetwork, cidr_merge
 import meilisearch
 from meilisearch.errors import MeilisearchError
 from nmap2json.smarthash import port_smart_hash
@@ -37,7 +38,8 @@ from .models import (
     ensure_rule_required_headers,
 )
 from .models import TagRules
-from .utils.mutils import compute_scan_unit_count_list, is_valid_fqdn
+from .utils.mutils import compute_scan_unit_count_list
+from .utils.domains import is_hostname_syntax
 from .utils.kvrocks import KVrocksIndexer
 from .utils.result_parser import parse_json, prepare_kvrocks_document
 from .utils.reports import (
@@ -1020,7 +1022,7 @@ def _load_due_states_for_profile(
     ]
 
 
-def _append_large_network_chunks(target, state, range_chunks):
+def _append_large_network_chunks(target, state, range_chunks, network):
     """
     Split a large network directly into 256-address CIDR jobs.
 
@@ -1028,7 +1030,6 @@ def _append_large_network_chunks(target, state, range_chunks):
     merged blocks of IP objects. At the supported /16 maximum that meant
     constructing 65,536 address objects before the transaction could commit.
     """
-    network = IPNetwork(target.value)
     chunk_prefix = 24 if network.version == 4 else 120
     for subnet in network.subnet(chunk_prefix):
         range_chunks.append(
@@ -1131,23 +1132,30 @@ def _classify_due_states_for_chunks(due_states, max_large_range_jobs=None):
         target = state.target
         if target is None:
             continue
-        if is_valid_fqdn(target.value, db.app.config.get("TLDADD", ())):
-            hostname_records.append(
-                {"hosts": [target.value], "targets": [target], "states": [state]}
-            )
-        else:
-            net = IPNetwork(target.value)
-            if net.size > JOB_TARGET_CHUNK_SIZE:
-                if (
-                    max_large_range_jobs is not None
-                    and len(range_chunks) >= max_large_range_jobs
-                ):
-                    continue
-                _append_large_network_chunks(target, state, range_chunks)
-            else:
-                small_ranges.append(
-                    {"ips": list(net), "target": target, "state": state}
+        try:
+            network = ipaddress.ip_network(target.value, strict=False)
+        except (TypeError, ValueError):
+            if is_hostname_syntax(target.value):
+                hostname_records.append(
+                    {"hosts": [target.value], "targets": [target], "states": [state]}
                 )
+            else:
+                logger.warning("Skipping invalid target id=%s", target.id)
+            continue
+        try:
+            net = IPNetwork(str(network))
+        except (AddrFormatError, TypeError, ValueError):
+            logger.warning("Skipping invalid target id=%s", target.id)
+            continue
+        if net.size > JOB_TARGET_CHUNK_SIZE:
+            if (
+                max_large_range_jobs is not None
+                and len(range_chunks) >= max_large_range_jobs
+            ):
+                continue
+            _append_large_network_chunks(target, state, range_chunks, net)
+        else:
+            small_ranges.append({"ips": list(net), "target": target, "state": state})
 
     return range_chunks, small_ranges, hostname_records
 

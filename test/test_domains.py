@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "webapp"))
 
-from app.utils.domains import parse_hostname  # pylint: disable=wrong-import-position
+from app.utils.domains import (  # pylint: disable=wrong-import-position
+    is_hostname_syntax,
+    parse_hostname,
+)
 from app.utils.ip_whois import (  # pylint: disable=wrong-import-position
     WhoisLookupError,
     _query_public_registry,
@@ -26,6 +29,13 @@ class DomainParsingTest(unittest.TestCase):
         self.assertEqual(
             parse_hostname("api.example.local", ["local"])["domain"], "example.local"
         )
+
+    def test_hostname_syntax_is_independent_of_suffix_list(self):
+        self.assertTrue(is_hostname_syntax("com.unrwa.encd"))
+        self.assertIsNone(parse_hostname("com.unrwa.encd"))
+        for value in ("-sV", "foo/bar.com", "a..example.com", "8.8.8.999"):
+            with self.subTest(value=value):
+                self.assertFalse(is_hostname_syntax(value))
 
     def test_invalid_hostnames_rejected(self):
         for value in ("foo/bar.com", "example.com:43", "-bad.com", "a..example.com"):
