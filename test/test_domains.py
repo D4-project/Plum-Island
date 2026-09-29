@@ -3,7 +3,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "webapp"))
 
@@ -20,8 +20,89 @@ from app.utils.ip_whois import (  # pylint: disable=wrong-import-position
 
 
 class DomainParsingTest(unittest.TestCase):
+    @patch("app.utils.ip_whois._query_server")
+    def test_nontransferred_network_retains_cidr(self, query):
+        for cidr, address in (
+            ("192.0.2.0/24", "192.0.2.0"),
+            ("2001:db8::/48", "2001:db8::"),
+        ):
+            with self.subTest(cidr=cidr):
+                query.reset_mock(side_effect=True)
+                query.side_effect = [
+                    "refer: whois.ripe.net",
+                    "IP record",
+                    "CIDR record",
+                ]
+                self.assertEqual(lookup_network_whois(cidr), "CIDR record")
+                self.assertEqual(
+                    query.call_args_list,
+                    [
+                        call("whois.iana.org", cidr),
+                        call("whois.ripe.net", address),
+                        call("whois.ripe.net", cidr),
+                    ],
+                )
+
+    @patch("app.utils.ip_whois._query_server")
+    def test_transferred_cidr_preserves_original_network(self, query):
+        query.side_effect = [
+            "refer: whois.apnic.net",
+            "descr: Transferred to the RIPE region on 2021-12-02T13:43:36Z.",
+            "inetnum: 180.149.36.0 - 180.149.36.255",
+            "inetnum: 180.149.36.0 - 180.149.39.255\nnetname: LU-GCORELABS",
+        ]
+        self.assertIn("LU-GCORELABS", lookup_network_whois("180.149.36.0/22"))
+        self.assertEqual(
+            query.call_args_list,
+            [
+                call("whois.iana.org", "180.149.36.0/22"),
+                call("whois.apnic.net", "180.149.36.0"),
+                call("whois.ripe.net", "180.149.36.0"),
+                call("whois.ripe.net", "180.149.36.0/22"),
+            ],
+        )
+
+    @patch("app.utils.ip_whois._query_server")
+    def test_ipv6_transfer_and_single_host(self, query):
+        query.side_effect = [
+            "refer: whois.arin.net",
+            "ReferralServer: whois://whois.ripe.net:43",
+            "IPv6 record",
+        ]
+        self.assertEqual(lookup_network_whois("2001:db8::1"), "IPv6 record")
+        self.assertEqual(
+            query.call_args_list[-1], call("whois.ripe.net", "2001:db8::1")
+        )
+        self.assertEqual(query.call_count, 3)
+
+    @patch("app.utils.ip_whois._query_server")
+    def test_network_referrals_are_bounded_and_allowlisted(self, query):
+        for referral in (
+            "refer: whois.apnic.net",
+            "ReferralServer: whois://127.0.0.1",
+            "whois: whois.ripe.net.attacker.example",
+        ):
+            with self.subTest(referral=referral):
+                query.reset_mock(side_effect=True)
+                query.side_effect = ["refer: whois.apnic.net", referral]
+                with self.assertRaises(WhoisLookupError):
+                    lookup_network_whois("180.149.36.0/22")
+                self.assertEqual(query.call_count, 2)
+
+    @patch("app.utils.ip_whois._query_server")
+    def test_empty_destination_is_not_replaced_with_parent_record(self, query):
+        query.side_effect = [
+            "refer: whois.apnic.net",
+            "descr: Transferred to the RIPE region on 2021-12-02.",
+            "",
+        ]
+        with self.assertRaises(WhoisLookupError):
+            lookup_network_whois("180.149.36.0/22")
+
     def test_multilabel_public_suffix(self):
-        self.assertEqual(parse_hostname("Api.Mail.Example.CO.UK.")["domain"], "example.co.uk")
+        self.assertEqual(
+            parse_hostname("Api.Mail.Example.CO.UK.")["domain"], "example.co.uk"
+        )
         self.assertEqual(parse_hostname("api.mail.example.co.uk")["host"], "api.mail")
 
     def test_private_suffix_requires_explicit_allowance(self):

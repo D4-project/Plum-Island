@@ -22,6 +22,15 @@ MAX_RESPONSE_BYTES = 512 * 1024
 REFERRAL_PATTERN = re.compile(
     r"^(?:refer|whois):\s*(?:whois://)?([a-z0-9.-]+)\s*$", re.IGNORECASE | re.MULTILINE
 )
+NETWORK_REFERRAL_PATTERN = re.compile(
+    r"^(?:refer|whois|ReferralServer):[ \t]*(?:whois://)?"
+    r"([a-z0-9.-]+)(?::43)?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+TRANSFER_PATTERN = re.compile(
+    r"^descr:[ \t]*Transferred to the (RIPE|ARIN|APNIC|LACNIC|AFRINIC) region\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 ARIN_NOTICE_PATTERN = re.compile(
     r"\n?#\n"
     r"# ARIN WHOIS data and services are subject to the Terms of Use\n"
@@ -76,8 +85,28 @@ def _deduplicate_arin_notice(result):
     return (result[: duplicate.start()] + result[duplicate.end() :]).strip()
 
 
+def _network_referral(result):
+    """Recognize structured referrals and APNIC's transfer stub description."""
+    referral = NETWORK_REFERRAL_PATTERN.search(result)
+    if referral:
+        server = referral.group(1).lower().rstrip(".")
+        if server not in RIR_WHOIS_SERVERS:
+            raise WhoisLookupError("Unsupported WHOIS registry referral")
+        return server
+    transfer = TRANSFER_PATTERN.search(result)
+    return f"whois.{transfer.group(1).lower()}.net" if transfer else None
+
+
+def _network_registry_result(server, query):
+    """Require a nonempty response from an already allowlisted registry."""
+    result = _query_server(server, query)
+    if not result:
+        raise WhoisLookupError("WHOIS registry returned an empty response")
+    return result
+
+
 def lookup_network_whois(value):
-    """Query IANA, follow one allowlisted RIR referral, return plain text."""
+    """Resolve transfers by first IP, then retrieve the original CIDR record."""
     try:
         network = ipaddress.ip_network(value, strict=False)
     except (TypeError, ValueError) as error:
@@ -92,15 +121,25 @@ def lookup_network_whois(value):
     server = referral.group(1).lower().rstrip(".")
     if server not in RIR_WHOIS_SERVERS:
         raise WhoisLookupError("IANA returned an unsupported WHOIS referral")
-    # ARIN treats a bare CIDR as an ambiguous search and emits a warning.
-    # Its ``n`` command performs the intended network lookup by address.
-    rir_query = f"n {network.network_address}" if server == "whois.arin.net" else query
-    rir_result = _query_server(server, rir_query)
-    if not rir_result:
-        raise WhoisLookupError("WHOIS registry returned an empty response")
-    if server == "whois.arin.net":
-        return _deduplicate_arin_notice(rir_result)
-    return rir_result
+    visited = set()
+    while server not in visited:
+        visited.add(server)
+        # CIDR queries can miss smaller transfer stubs and return a parent /8.
+        address = str(network.network_address)
+        probe = f"n {address}" if server == "whois.arin.net" else address
+        result = _network_registry_result(server, probe)
+        next_server = _network_referral(result)
+        if not next_server and server != "whois.arin.net" and network.num_addresses > 1:
+            result = _network_registry_result(server, query)
+            next_server = _network_referral(result)
+        if not next_server:
+            return (
+                _deduplicate_arin_notice(result)
+                if server == "whois.arin.net"
+                else result
+            )
+        server = next_server
+    raise WhoisLookupError("WHOIS registry referral loop")
 
 
 def _query_public_registry(server, query):
@@ -112,7 +151,8 @@ def _query_public_registry(server, query):
     except OSError as error:
         raise WhoisLookupError("WHOIS registry DNS lookup failed") from error
     public_addresses = [
-        address for address in addresses
+        address
+        for address in addresses
         if ipaddress.ip_address(address[4][0]).is_global
     ]
     if not public_addresses:
@@ -130,7 +170,9 @@ def _query_public_registry(server, query):
                 if remaining <= 0:
                     raise WhoisLookupError("WHOIS server timed out")
                 connection.settimeout(remaining)
-                chunk = connection.recv(min(65536, MAX_RESPONSE_BYTES + 1 - len(response)))
+                chunk = connection.recv(
+                    min(65536, MAX_RESPONSE_BYTES + 1 - len(response))
+                )
                 if not chunk:
                     break
                 response.extend(chunk)

@@ -61,6 +61,12 @@ and `tools/config.yaml` accepts private suffixes such as `local`. The old
 registered domain for FQDNs, or the network for IP/CIDR targets, only when opened.
 Unknown/private suffixes have no public domain WHOIS lookup.
 
+Network WHOIS uses the first IP to discover inter-registry transfers (including
+APNIC transfer stubs), then queries the original CIDR at the destination registry.
+ARIN retains its address-based `n` query to avoid ambiguous CIDR searches.
+Only the five known RIR servers are allowed; referral loops are rejected.
+This lookup does not modify CIRCL ASN information.
+
 New CIDRs automatically queue enrichment. Every accepted scan receipt checks each
 associated target and queues a lookup when its data is missing or its last
 successful lookup is **older than 24 hours**. Exactly 24 hours is still fresh.
