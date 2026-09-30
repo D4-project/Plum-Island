@@ -18,16 +18,6 @@
         <li><a id="target-whois-tab" href="#TargetWhois" data-toggle="tab">Whois</a></li>
     {% endif %}
 </ul>
-<script nonce="{{ baselib.get_nonce() }}">
-$(function () {
-  const detailTab = document.querySelector('a[href="#Home"]');
-  if (!detailTab) return;
-  $(detailTab).tab('show');
-  if (window.location.hash) {
-    window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
-  }
-});
-</script>
 <div class="tab-content">
     {% if related_views is defined %}
     {% for view in related_views %}
@@ -582,7 +572,24 @@ async function loadUid(uid, targetId) {
 
 {% endblock content %}
 {% block add_tail_js %}
-<script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+{# Do not load ab_keep_tab.js here: its global lastTab overrides Detail. #}
+<script id="target-default-tab" nonce="{{ baselib.get_nonce() }}">
+(() => {
+  function showDetail() {
+    const detailTab = document.querySelector('a[href="#Home"]');
+    if (!detailTab) return;
+    $(detailTab).tab('show');
+    if (window.location.hash) {
+      window.history.replaceState(window.history.state, document.title,
+        window.location.pathname + window.location.search);
+    }
+  }
+  $(showDetail);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) showDetail();
+  });
+})();
+</script>
 <style nonce="{{ baselib.get_nonce() }}">
   .plum-target-show-panels {
     width: 100%;

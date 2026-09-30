@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Always open target details on arrival, including browser back/forward cache restores; disable the shared last-tab restoration on target detail pages only.
+
 - Follow inter-RIR WHOIS transfers using the network's first IP, then retrieve the original CIDR at the destination registry. Restrict referrals to known RIRs and reject loops.
 
 - Check CIRCL routing data before scheduling CIDRs, using a 24-hour per-target cache. Complete ASN-zero jobs without scanning or exporting results; defer stale/unknown routing on lookup failure and recheck at the next due cycle.
