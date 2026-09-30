@@ -86,8 +86,8 @@ class TargetTypeMigrationTest(unittest.TestCase):
                 [r[1] for r in connection.execute("PRAGMA table_info(targets)")],
             )
 
-    def test_cli_dry_run_backup_and_missing_database(self):
-        """CLI requires a new backup, preserves originals and never creates a DB."""
+    def test_cli_dry_run_apply_and_missing_database(self):
+        """CLI applies without backup options and never creates a missing DB."""
         before = self.path.read_bytes()
         subprocess.run(
             [sys.executable, str(SCRIPT), "--db", str(self.path), "--dry-run"],
@@ -95,27 +95,25 @@ class TargetTypeMigrationTest(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(self.path.read_bytes(), before)
-        backup = Path(self.folder) / "backup.db"
         command = [
             sys.executable,
             str(SCRIPT),
             "--db",
             str(self.path),
-            "--backup",
-            str(backup),
         ]
         subprocess.run(command, check=True, capture_output=True)
-        with sqlite3.connect(backup) as connection:
-            self.assertNotIn(
+        with sqlite3.connect(self.path) as connection:
+            self.assertIn(
                 "is_ip_cidr",
                 [r[1] for r in connection.execute("PRAGMA table_info(targets)")],
             )
             self.assertEqual(
                 connection.execute("SELECT COUNT(*) FROM targets").fetchone()[0], 7
             )
-        self.assertNotEqual(
+        self.assertEqual(
             subprocess.run(command, capture_output=True, check=False).returncode, 0
         )
+        self.assertEqual(list(Path(self.folder).iterdir()), [self.path])
         missing = Path(self.folder) / "missing.db"
         self.assertNotEqual(
             subprocess.run(

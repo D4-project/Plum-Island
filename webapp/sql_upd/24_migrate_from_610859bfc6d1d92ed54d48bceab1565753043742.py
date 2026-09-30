@@ -1,13 +1,12 @@
 """Migration 24: persist Targets.is_ip_cidr without changing stored values.
 
-Stop application writers first. --dry-run uses a memory copy. Applying requires
---backup pointing to a new file; SQLite backup includes committed WAL content.
+Stop application writers first. --dry-run uses a memory copy.
+Backups are managed by the operator, not by this script.
 Invalid target syntax aborts the whole transaction, reporting target IDs only.
 """
 
 # pylint: disable=invalid-name
 import argparse
-import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -56,14 +55,11 @@ def migrate(connection):
 
 
 def main():
-    """Back up, then apply atomically; never create a missing source database."""
+    """Apply atomically; never create a missing source database."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=DB_PATH)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--backup", type=Path)
     args = parser.parse_args()
-    if not args.dry_run and args.backup is None:
-        parser.error("--backup is required when applying the migration")
     mode = "ro" if args.dry_run else "rw"
     with sqlite3.connect(
         f"{args.db.resolve().as_uri()}?mode={mode}", uri=True
@@ -72,17 +68,6 @@ def main():
         if args.dry_run:
             connection = sqlite3.connect(":memory:")
             source.backup(connection)
-        elif args.backup:
-            descriptor = os.open(
-                args.backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
-            )
-            os.close(descriptor)
-            backup = sqlite3.connect(args.backup)
-            try:
-                source.backup(backup)
-            finally:
-                backup.close()
-            print(f"Backup: {args.backup.resolve()}")
         try:
             connection.execute("BEGIN IMMEDIATE")
             summary = migrate(connection)

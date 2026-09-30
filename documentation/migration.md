@@ -74,11 +74,11 @@ the existing requirements first. Use the actual configured SQLite path:
 
 ```bash
 .venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --dry-run
-.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --backup /path/to/new-pre-migration24.db
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db
 ```
 
-`--backup` is mandatory on apply and must name a new file. SQLite's backup API
-includes committed WAL data. Dry-run uses an in-memory copy. Migration adds
+Backups are managed independently by the operator; the script does not create
+or require a backup file. Dry-run uses an in-memory copy. Migration adds
 `is_ip_cidr BOOLEAN NOT NULL DEFAULT 0`, then classifies every existing value
 inside one transaction. The temporary SQL default is not a classifier: application
 inserts and edits always derive the value. Do not run old application writers
