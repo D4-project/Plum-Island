@@ -54,6 +54,13 @@ averages**, not host or AS geolocation. Legacy `as_bgp`, `as_description` and
 `as_country` Python accessors read this shared record; old SQL columns are retained
 only for rollback and are no longer authoritative.
 
+`Targets.is_ip_cidr` is persisted for SQL filtering: `true` for IPv4/IPv6
+addresses or CIDRs, `false` for FQDNs. It is derived from `value` on assignment
+and ORM insert/update, never independently editable in forms or API payloads.
+API read responses expose it. Existing databases require migration 24; fresh
+databases create the non-null column directly. This classification does not
+change normalization, public-IP validation, coverage checks or scan scheduling.
+
 FQDN validation and registered-domain extraction use `pyfaup-rs` offline. This
 handles public suffixes such as `co.uk`; optional `TLDADD` in `webapp/config.py`
 and `tools/config.yaml` accepts private suffixes such as `local`. The old

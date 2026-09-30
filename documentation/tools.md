@@ -510,7 +510,8 @@ Without `--learn`, no target import is performed.
 ## Target imports and network metadata
 
 `import_whois_ranges.py` (single-target API) and `import_fqdns.py` (bulk API) use
-the same server-side target defaults: real UTC insertion timestamp and durable
+the same server-side target defaults: real UTC insertion timestamp, persisted
+`is_ip_cidr` classification derived from the stored value, and durable
 CIDR enrichment queue. No new credentials, client-side CIRCL lookup or timestamp
 arguments are required. Import descriptions remain unchanged. FQDN targets are
 inserted normally with AS enrichment unavailable; the existing optional FQDN

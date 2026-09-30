@@ -29,9 +29,9 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from flask_appbuilder.models.mixins import FileColumn
-from sqlalchemy import func
+from sqlalchemy import event, func
 from sqlalchemy.orm import relationship, object_session, validates
-from .utils.mutils import compute_scan_unit_count
+from .utils.mutils import classify_target_is_ip_cidr, compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
 from .utils.ip2asn import target_type
 
@@ -623,8 +623,7 @@ def ensure_default_collected_headers(session):
 
 
 TAG_RULE_HEADER_RE = re.compile(
-    r"\b(http_header|http_headval)(?:\.[a-z]+)?\s*:\s*"
-    r"([!#$%&'*+\-.^_`|~0-9a-z]+)",
+    r"\b(http_header|http_headval)(?:\.[a-z]+)?\s*:\s*" r"([!#$%&'*+\-.^_`|~0-9a-z]+)",
     re.IGNORECASE,
 )
 TAG_RULE_TAG_COLOR_CLASSES = {
@@ -657,11 +656,14 @@ def headers_required_by_tag_rules(rules):
                     r"\.(?:lk|like|bg|begin)$", "", header_name.strip().lower()
                 )
                 if is_valid_http_header_name(header_name):
-                    required[header_name] = required.get(header_name, False) or field.lower() == "http_headval"
+                    required[header_name] = (
+                        required.get(header_name, False)
+                        or field.lower() == "http_headval"
+                    )
             continue
-        for header_name, collect_value in analyze_header_dependencies(
-            criteria_groups
-        )["exact"].items():
+        for header_name, collect_value in analyze_header_dependencies(criteria_groups)[
+            "exact"
+        ].items():
             required[header_name] = required.get(header_name, False) or collect_value
     return required
 
@@ -704,7 +706,9 @@ def ensure_rule_required_headers(session, compiled_rules=None, commit=True):
     # the header name (for example ``www-authenticate.bg``).  Fold those rows
     # into the canonical header row when the base name is now required.
     for row in session.query(CollectedHeaders).all():
-        malformed = re.match(r"^(.+)\.(?:lk|like|bg|begin)$", str(row.header_name or ""))
+        malformed = re.match(
+            r"^(.+)\.(?:lk|like|bg|begin)$", str(row.header_name or "")
+        )
         if not malformed:
             continue
         canonical_name = malformed.group(1)
@@ -1464,6 +1468,7 @@ class Targets(Model):
     )
     id = Column(Integer, primary_key=True)
     value = Column(String(45), unique=True, nullable=False)  # The CIDR or HOST
+    is_ip_cidr = Column(Boolean, nullable=False)
     description = Column(String(256))  # A facultative descrition
     created_at = Column(DateTime, nullable=False, default=utcnow_naive)
     network_asn = Column(BigInteger, ForeignKey("autonomous_systems.asn"), index=True)
@@ -1586,6 +1591,7 @@ class Targets(Model):
         """
         Maintain the precalculated scan-unit count when target value changes.
         """
+        self.is_ip_cidr = classify_target_is_ip_cidr(value)
         self.scan_unit_count = compute_scan_unit_count(value)
         if value != self.value:
             self.autonomous_system = None
@@ -1634,3 +1640,10 @@ class Targets(Model):
                 return f"{seconds}s"
         else:
             return "∞"
+
+
+@event.listens_for(Targets, "before_insert")
+@event.listens_for(Targets, "before_update")
+def _persist_target_classification(_mapper, _connection, target):
+    """Derived metadata cannot be overridden by constructor assignment order."""
+    target.is_ip_cidr = classify_target_is_ip_cidr(target.value)

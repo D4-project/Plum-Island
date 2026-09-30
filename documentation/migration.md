@@ -61,8 +61,41 @@ What they do:
 - `22`: make tag-rule UUIDs mandatory and unique, while allowing duplicate names
 - `23`: add target insertion timestamps and shared AS/network enrichment metadata;
   follow the history preparation below before running it.
+- `24`: persist IP/CIDR versus FQDN classification; apply after migration 23 using
+  the commands below.
 
 Do not rerun older migrations unless migrating from a version older than `v0.2604.0`.
+
+### Persisted target classification (migration 24)
+
+Stop the application and scheduler before applying; restart only after success.
+The script imports shared classification helpers without starting Flask. Install
+the existing requirements first. Use the actual configured SQLite path:
+
+```bash
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --dry-run
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --backup /path/to/new-pre-migration24.db
+```
+
+`--backup` is mandatory on apply and must name a new file. SQLite's backup API
+includes committed WAL data. Dry-run uses an in-memory copy. Migration adds
+`is_ip_cidr BOOLEAN NOT NULL DEFAULT 0`, then classifies every existing value
+inside one transaction. The temporary SQL default is not a classifier: application
+inserts and edits always derive the value. Do not run old application writers
+after migration or write targets through raw SQL without maintaining this field.
+
+IPv4/IPv6 addresses and CIDRs become `1`; syntactically valid FQDNs become `0`,
+including legacy/private suffixes. Existing private IPs are classified without
+changing import admission rules. Invalid strings abort migration and report IDs
+for operator review; no records are deleted, normalized or renamed. Descriptions,
+associations and scan state remain unchanged. Reruns recompute the same values
+without updating already correct rows. Existing incompatible nullable columns
+are rejected rather than silently accepted.
+
+Recovery: failures roll back the transaction. To roll back a successful migration,
+stop all writers and restore the backup with the previous code, managing WAL/SHM
+files as part of the offline SQLite restore. This discards writes since the backup;
+retain a copy of the current database first if it has received new data.
 
 ### Target network metadata (migration 23)
 

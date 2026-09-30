@@ -28,7 +28,7 @@ from app.models import (
     ScanProfiles,
     TargetScanStates,
 )
-from app.apis import PublicTargetsApi, Api
+from app.apis import PublicTargetsApi, TargetsApi, Api
 from app.utils import ip2asn, network_enrichment as enrichment
 from app.views import TargetsView
 
@@ -178,6 +178,64 @@ class NetworkPersistenceTest(unittest.TestCase):
             session.add(target)
             session.commit()
             return target.id
+
+    def test_type_is_persisted_on_gui_insert_edit_and_override(self):
+        """Model hooks maintain derived type regardless of assignment order."""
+        with app.app_context(), self.factory() as session, mock.patch.object(
+            db, "session", session
+        ):
+            target = Targets(value="8.8.8.8", is_ip_cidr=False)
+            TargetsView().pre_add(target)
+            session.add(target)
+            session.commit()
+            session.refresh(target)
+            self.assertTrue(target.is_ip_cidr)
+            for value, expected in (("example.org", False), ("2606:4700::/32", True)):
+                target.value = value
+                self.assertEqual(target.is_ip_cidr, expected)
+                TargetsView().pre_update(target)
+                session.commit()
+                session.refresh(target)
+                self.assertEqual(target.is_ip_cidr, expected)
+            target.is_ip_cidr = None
+            session.commit()
+            session.refresh(target)
+            self.assertTrue(target.is_ip_cidr)
+            self.assertEqual(
+                session.query(Targets).filter(Targets.is_ip_cidr.is_(True)).count(), 1
+            )
+            for view in (TargetsView, PublicTargetsApi):
+                self.assertNotIn("is_ip_cidr", view.add_columns)
+                self.assertNotIn("is_ip_cidr", view.edit_columns)
+
+    def test_bulk_api_persists_classification_and_rejects_invalid_private(self):
+        """Invoke the bulk implementation with auth wrappers outside test scope."""
+        import inspect  # pylint: disable=import-outside-toplevel
+
+        api = next(
+            item for item in app.appbuilder.baseviews if isinstance(item, TargetsApi)
+        )
+        with app.app_context(), self.factory() as session, mock.patch.object(
+            db, "session", session
+        ):
+            with app.test_request_context(
+                "/",
+                method="POST",
+                json={
+                    "bulk": "9.9.9.18/24\n2606:4700::/32\nexample.org\n10.0.0.1\n999.8.8.8"
+                },
+            ):
+                response = inspect.unwrap(TargetsApi.bulk_import)(api)
+                self.assertEqual(response.status_code, 200)
+            targets = session.query(Targets).order_by(Targets.id).all()
+            self.assertEqual(
+                [(t.value, t.is_ip_cidr) for t in targets],
+                [
+                    ("9.9.9.0/24", True),
+                    ("2606:4700::/32", True),
+                    ("example.org", False),
+                ],
+            )
 
     def refresh(self, target_id, force=False):
         """Refresh against this test's isolated database."""
@@ -376,6 +434,7 @@ class NetworkPersistenceTest(unittest.TestCase):
                 self.assertEqual(response.status_code, 201)
                 self.assertEqual(response.json["result"]["target_type"], "IPv6 CIDR")
                 self.assertTrue(response.json["result"]["network_refresh_pending"])
+                self.assertTrue(response.json["result"]["is_ip_cidr"])
                 self.assertTrue(response.json["result"]["created_at"].endswith("Z"))
             targets = session.query(Targets).order_by(Targets.id).all()
             self.assertEqual(
@@ -383,6 +442,9 @@ class NetworkPersistenceTest(unittest.TestCase):
                 [True, False, True],
             )
             self.assertEqual(targets[-1].description, "Imported by tool")
+            self.assertEqual(
+                [target.is_ip_cidr for target in targets], [True, False, True]
+            )
             self.assertEqual(targets[-1].priority, 3)
             self.assertTrue(all(target.created_at for target in targets))
             lookup.assert_not_called()

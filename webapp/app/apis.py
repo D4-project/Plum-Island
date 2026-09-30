@@ -421,6 +421,7 @@ class PublicTargetsApi(ModelRestApi):
         "scan_unit_count",
         "scanprofiles",
         "created_at",
+        "is_ip_cidr",
         "network_updated_at",
     ]
     show_columns = list_columns
@@ -431,6 +432,7 @@ class PublicTargetsApi(ModelRestApi):
         return {
             "created_at": item.created_at.isoformat() + "Z",
             "target_type": item.target_type,
+            "is_ip_cidr": item.is_ip_cidr,
             "network_refresh_pending": bool(item.network_refresh_pending),
         }
 

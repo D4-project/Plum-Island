@@ -4,12 +4,30 @@ Generic utils library
 
 import uuid
 import ipaddress
+
 try:
-    from .domains import parse_hostname
+    from .domains import is_hostname_syntax, parse_hostname
 except ImportError:
-    from domains import parse_hostname
+    from domains import is_hostname_syntax, parse_hostname
 
 MAX_SCAN_UNIT_COUNT = 2**63 - 1
+
+
+def classify_target_is_ip_cidr(value):
+    """Classify stored syntax, independently of public-IP admission policy.
+
+    Retain legacy/private-suffix hostnames; reject unclassifiable values rather
+    than silently treating corrupt IP strings as FQDNs. Never normalize here.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("Target must be an IP, CIDR or FQDN")
+    try:
+        ipaddress.ip_network(value, strict=False)
+        return True
+    except ValueError:
+        if is_hostname_syntax(value):
+            return False
+        raise ValueError("Target must be an IP, CIDR or FQDN") from None
 
 
 def is_valid_uuid(value):
