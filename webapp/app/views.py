@@ -44,7 +44,7 @@ import requests
 
 from netaddr import IPNetwork
 from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.security import generate_password_hash
 from wtforms import (
     BooleanField,
@@ -896,6 +896,28 @@ class KVSearchView(BaseView):
                 seen.add(candidate)
                 tags.append(candidate)
         return tags
+
+    @classmethod
+    def _collect_tag_catalogue(cls):
+        """Group active SQL rule tags without querying either search backend."""
+        columns = [
+            {"namespace": namespace, "label": label, "tags": []}
+            for namespace, label in (
+                ("proto", "Proto"),
+                ("type", "Type"),
+                ("product", "Products"),
+                ("vendor", "Vendors"),
+                ("vuln", "Vulns"),
+            )
+        ]
+        groups = {column["namespace"]: column["tags"] for column in columns}
+        for tag in sorted(set(cls._collect_rule_tags())):
+            namespace = tag.partition(":")[0]
+            if namespace in groups:
+                groups[namespace].append(
+                    {"label": tag, "term": "tag:" + shlex.quote(tag)}
+                )
+        return columns
 
     @classmethod
     def _collect_tag_suggestion_values(cls, prefix=""):
@@ -2135,8 +2157,7 @@ class KVSearchView(BaseView):
         for ip in ips:
             ip_pipeline.smembers(f"ip:{ip}")
         ip_uids = {
-            ip: sorted(set(uids or []))
-            for ip, uids in zip(ips, ip_pipeline.execute())
+            ip: sorted(set(uids or [])) for ip, uids in zip(ips, ip_pipeline.execute())
         }
         all_uids = sorted({uid for uids in ip_uids.values() for uid in uids})
         if not all_uids:
@@ -2187,9 +2208,7 @@ class KVSearchView(BaseView):
                 "min_seen": min(first_seen_values) if first_seen_values else None,
                 "max_seen": max(last_seen_values) if last_seen_values else None,
             }
-        return jsonify(
-            {"tags_by_ip": tags_by_ip, "timestamps_by_ip": timestamps_by_ip}
-        )
+        return jsonify({"tags_by_ip": tags_by_ip, "timestamps_by_ip": timestamps_by_ip})
 
     @expose("/expand_ips", methods=["POST"])
     @has_access
@@ -2225,9 +2244,7 @@ class KVSearchView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
-        ip_uids = {
-            ip: set(indexer.r.smembers(f"ip:{ip}")) for ip in ips
-        }
+        ip_uids = {ip: set(indexer.r.smembers(f"ip:{ip}")) for ip in ips}
         candidate_uids = sorted({uid for values in ip_uids.values() for uid in values})
         doc_pipeline = indexer.r.pipeline(transaction=False)
         for uid in candidate_uids:
@@ -2248,7 +2265,9 @@ class KVSearchView(BaseView):
             ):
                 eligible.add(uid)
 
-        matching = self._get_matching_uids(indexer, criteria_groups, scoped_uids=eligible)
+        matching = self._get_matching_uids(
+            indexer, criteria_groups, scoped_uids=eligible
+        )
         results = {}
         timestamps = {}
         uid_timestamps = {}
@@ -2261,9 +2280,7 @@ class KVSearchView(BaseView):
         for ip in ips:
             matched_uids = sorted(ip_uids[ip].intersection(matching))
             results[ip] = matched_uids
-            uid_timestamps[ip] = {
-                uid: timestamps_by_uid[uid] for uid in matched_uids
-            }
+            uid_timestamps[ip] = {uid: timestamps_by_uid[uid] for uid in matched_uids}
             timestamps[ip] = {
                 "min_seen": min(
                     (timestamps_by_uid[uid]["first_seen"] for uid in matched_uids),
@@ -2501,9 +2518,18 @@ class KVSearchView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         count_objects = indexer.objects_count()
+        tag_catalogue_error = False
+        try:
+            tag_catalogue = self._collect_tag_catalogue()
+        except (SQLAlchemyError, ValueError):
+            db.session.rollback()
+            tag_catalogue = []
+            tag_catalogue_error = True
         return self.render_template(
             "search_kvrocks.html",
             total_scan_count=count_objects.get("uid_count", 0),
+            tag_catalogue=tag_catalogue,
+            tag_catalogue_error=tag_catalogue_error,
         )
 
 
@@ -3672,14 +3698,14 @@ class TagRulesView(ModelView):
 
     def post_delete(self, item):
         _ = item
-        self._flash_header_reconciliation(
-            ensure_rule_required_headers(db.session)
-        )
+        self._flash_header_reconciliation(ensure_rule_required_headers(db.session))
 
     @staticmethod
     def _flash_header_reconciliation(summary):
         """Explain dynamic header collection changes and conservative cleanup."""
-        enabled = summary.get("enabled_presence", []) + summary.get("enabled_values", [])
+        enabled = summary.get("enabled_presence", []) + summary.get(
+            "enabled_values", []
+        )
         if enabled:
             flash(
                 "Enabled header collection for active tag rules: "
@@ -3709,7 +3735,9 @@ class TagRulesView(ModelView):
 
     def _run_tag_reindex(self, job_id, rule_id, resume_state=None):
         try:
-            tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+            tools_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "tools")
+            )
             if tools_dir not in sys.path:
                 sys.path.insert(0, tools_dir)
             import tag_mgmt
@@ -3717,7 +3745,10 @@ class TagRulesView(ModelView):
 
             def progress(message):
                 self._tag_reindex_state(job_id, message=str(message))
-                match = re.search(r"processed=(\d+);(?: total=\d+;)? updated=(\d+); errors=(\d+)", str(message))
+                match = re.search(
+                    r"processed=(\d+);(?: total=\d+;)? updated=(\d+); errors=(\d+)",
+                    str(message),
+                )
                 if match:
                     self._tag_reindex_state(
                         job_id,
@@ -3782,12 +3813,18 @@ class TagRulesView(ModelView):
     def reindex_start(self):
         """Start one background reindex for all rules or one selected rule."""
         try:
-            tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+            tools_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "tools")
+            )
             if tools_dir not in sys.path:
                 sys.path.insert(0, tools_dir)
             import tag_mgmt
+
             if tag_mgmt.reindex_lock_is_held():
-                return jsonify(error="A tag reindex is already running (CLI or web)"), 409
+                return (
+                    jsonify(error="A tag reindex is already running (CLI or web)"),
+                    409,
+                )
         except ImportError as error:
             logger.exception("Unable to load tag reindex tooling")
             return jsonify(error=str(error)), 500
@@ -3798,7 +3835,10 @@ class TagRulesView(ModelView):
                 rule_id = int(rule_id)
             except (TypeError, ValueError):
                 return jsonify(error="Invalid rule id"), 400
-            if db.session.query(TagRules).filter(TagRules.id == rule_id).one_or_none() is None:
+            if (
+                db.session.query(TagRules).filter(TagRules.id == rule_id).one_or_none()
+                is None
+            ):
                 return jsonify(error="Tag rule not found"), 404
         else:
             rule_id = None
@@ -3814,10 +3854,13 @@ class TagRulesView(ModelView):
             state = TAG_REINDEX_STATES.get(job_id)
         if state is None and job_id == "shared":
             try:
-                tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+                tools_dir = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), "..", "..", "tools")
+                )
                 if tools_dir not in sys.path:
                     sys.path.insert(0, tools_dir)
                 import tag_mgmt
+
                 state = tag_mgmt.read_reindex_status()
             except ImportError:
                 state = None
@@ -3839,12 +3882,19 @@ class TagRulesView(ModelView):
                 job_id, state = active[-1]
                 return jsonify(job_id=job_id, **state)
         try:
-            tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+            tools_dir = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), "..", "..", "tools")
+            )
             if tools_dir not in sys.path:
                 sys.path.insert(0, tools_dir)
             import tag_mgmt
+
             shared = tag_mgmt.read_reindex_status()
-            if shared and shared.get("status") == "running" and _tag_reindex_is_stale(shared):
+            if (
+                shared
+                and shared.get("status") == "running"
+                and _tag_reindex_is_stale(shared)
+            ):
                 # A process killed during reindex releases the flock, but its
                 # JSON status remains running. Restart the idempotent Kvrocks
                 # pass automatically instead of leaving the UI stalled.

@@ -69,6 +69,16 @@ Never change `first_seen` or rebuild indexes merely to optimize reads.
 
 ## Parsing and field matching
 
+The search-page helper toggle is presentation-only. `KVSearchView.search` loads
+`_collect_tag_catalogue` from `_collect_rule_tags` once per page: active SQL rules,
+five namespace groups, normalized/deduplicated/sorted tags. It does not use the
+Kvrocks-backed autocomplete helper or change indexed values. The existing search
+route permission covers the catalogue; no extra endpoint or rule-admin access is
+introduced. SQL failure renders an unavailable message without removing keyword
+help. Jinja escapes labels and query terms; `shlex.quote` preserves literal tag
+values in complete `tag:` terms. Browser toggling issues no requests and does not
+submit or reset the query, dates, result state or pagination.
+
 `parse_query` tokenizes with `shlex`, separates explicit OR groups, then calls
 `_parse_query_group_with_not`, which validates field terms with `parse_query_group`.
 Explicit AND is optional. Repeated fields are stored as lists,

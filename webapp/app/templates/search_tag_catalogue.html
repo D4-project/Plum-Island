@@ -1,0 +1,35 @@
+<table class="kvrocks-table" id="search-tag-table" hidden aria-label="Available rule tags">
+    <thead>
+        <tr>
+            {% for label in ['Proto', 'Type', 'Products', 'Vendors', 'Vulns'] %}
+            <th scope="col">{{ label }}
+                {% if loop.last %}
+                <button type="button" class="search-helper-toggle" data-search-helper-toggle
+                        title="Show keywords" aria-label="Show keywords" aria-controls="search-keyword-table">
+                    <i class="fa fa-exchange" aria-hidden="true"></i>
+                </button>
+                {% endif %}
+            </th>
+            {% endfor %}
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            {% if tag_catalogue_error %}
+            <td colspan="5" role="status">Tags could not be loaded. Reload the page to retry; keyword help remains available.</td>
+            {% else %}
+            {% for column in tag_catalogue %}
+            <td>
+                <ul class="search-tag-list">
+                    {% for tag in column.tags %}
+                    <li><button type="button" data-search-tag-term="{{ tag.term }}">{{ tag.label }}</button></li>
+                    {% else %}
+                    <li>No tags</li>
+                    {% endfor %}
+                </ul>
+            </td>
+            {% endfor %}
+            {% endif %}
+        </tr>
+    </tbody>
+</table>

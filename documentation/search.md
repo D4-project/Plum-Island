@@ -6,6 +6,19 @@ Plum Island stores parsed scan results in Kvrocks indexes. The main search UI us
 
 ## Query syntax
 
+The small swap icon at the right of the keyword table header switches between
+keyword help (the default) and a SQL rule-tag catalogue. Its five columns are
+Proto, Type, Products, Vendors and Vulns. Tags come from active rules, are
+deduplicated and sorted, and need not already occur in indexed scans. Reload the
+page to refresh this catalogue after changing rules.
+
+Every tag is clickable (also Enter/Space): for example `vendor:ovh` appends
+`tag:vendor:ovh` to the current query. Keyword controls still append `keyword:`.
+Neither action submits a search; the swap preserves the query, dates and results.
+The return icon occupies the right side of the tags header. Other tag namespaces
+remain searchable through the normal input/autocomplete. Empty columns display
+`No tags`; a catalogue loading error leaves keyword help available.
+
 Search terms use the form:
 
 ```text

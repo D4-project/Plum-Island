@@ -999,12 +999,16 @@ function appendSearchKeyword(keyword) {
     if (!SEARCH_KEYWORDS.has(keyword)) {
         return;
     }
+    appendSearchTerm(`${keyword}:`);
+}
+
+function appendSearchTerm(term) {
     const input = document.getElementById('query');
     if (!input) {
         return;
     }
     const prefix = input.value && !/\s$/.test(input.value) ? ' ' : '';
-    input.value += `${prefix}${keyword}:`;
+    input.value += `${prefix}${term}`;
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
     input.dispatchEvent(new Event('input', {bubbles: true}));
@@ -1019,6 +1023,20 @@ function bindSearchKeywordHelpers() {
                 event.preventDefault();
                 appendKeyword();
             }
+        });
+    });
+    document.querySelectorAll('[data-search-tag-term]').forEach((tag) => {
+        tag.addEventListener('click', () => appendSearchTerm(tag.dataset.searchTagTerm));
+    });
+    document.querySelectorAll('[data-search-helper-toggle]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const keywords = document.getElementById('search-keyword-table');
+            const tags = document.getElementById('search-tag-table');
+            const showTags = tags.hidden;
+            keywords.hidden = showTags;
+            tags.hidden = !showTags;
+            // The clicked control is now hidden: keep keyboard focus on its counterpart.
+            (showTags ? tags : keywords).querySelector('[data-search-helper-toggle]').focus();
         });
     });
 }
@@ -1852,6 +1870,36 @@ document.addEventListener('DOMContentLoaded', () => {
     cursor: pointer;
     text-decoration: none;
 }
+.search-helper-toggle {
+    float: right;
+    padding: 0 0.25rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+}
+.kvrocks-table[hidden] { display: none; }
+#search-tag-table { table-layout: fixed; }
+#search-tag-table td {
+    vertical-align: top;
+    font-weight: normal;
+    color: #24527a;
+    padding: 0.6rem 0.85rem;
+    border-left: 1px solid rgba(51, 122, 183, 0.25);
+}
+.search-tag-list { list-style: none; padding: 0; margin: 0; }
+.search-tag-list button {
+    border: 0;
+    background: transparent;
+    padding: 0.2rem 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.search-helper-toggle:focus-visible, .search-tag-list button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
 .export-stats {
     display: flex;
     justify-content: space-between;
@@ -2117,7 +2165,7 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 
 <div class="kvrocks-table-wrapper">
-    <table class="kvrocks-table">
+    <table class="kvrocks-table" id="search-keyword-table">
         <thead>
             <tr>
                 <th>Keyword</th>
@@ -2125,7 +2173,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 <th>Description</th>
                 <th>Keyword</th>
                 <th>Modifier</th>
-                <th>Description</th>
+                <th>Description
+                    <button type="button" class="search-helper-toggle" data-search-helper-toggle
+                            title="Show tags" aria-label="Show tags" aria-controls="search-tag-table">
+                        <i class="fa fa-exchange" aria-hidden="true"></i>
+                    </button>
+                </th>
             </tr>
         </thead>
         <tbody>
@@ -2275,6 +2328,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </tr>
         </tbody>
     </table>
+    {% include 'search_tag_catalogue.html' %}
 </div>
 
 {% endblock content %}

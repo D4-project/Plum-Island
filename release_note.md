@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add a header-icon toggle between search keyword help and five columns of clickable active SQL rule tags; preserve queries and search state, refs #229.
+
 - Persist target IP/CIDR versus FQDN classification in the server-managed `is_ip_cidr` field across GUI, API and import paths. Add atomic migration 24 with dry-run and invalid-value checks; backups are operator-managed, refs #189.
 
 - Always open target details on arrival, including browser back/forward cache restores; disable the shared last-tab restoration on target detail pages only.
