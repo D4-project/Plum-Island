@@ -647,6 +647,8 @@ def replace_meili_from_dump(
             interval_ms,
             queue_depth,
         )
+        if result[2] or result[1] != total_count:
+            raise SystemExit("Incomplete Meilisearch import; refusing index swap")
         swap_started = True
         swap_import_index(
             client, index_name, import_index_name, timeout_ms, interval_ms
@@ -779,7 +781,13 @@ def main(argv=None):
             args.meili_replace_mode,
         )
     if not args.skip_kvrocks:
-        rebuild_kvrocks_from_dump(input_dir, batch_size, args.workers, total_count)
+        result = rebuild_kvrocks_from_dump(
+            input_dir, batch_size, args.workers, total_count
+        )
+        if result[2] or result[1] != total_count:
+            raise SystemExit(
+                "Incomplete Kvrocks rebuild; inspect errors before retrying"
+            )
 
     print("Port dump re-import complete", flush=True)
 

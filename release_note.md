@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add a smarthash dump migration tool with date-normalization preflight, disk-backed deduplication, merged observation history, deterministic newest-report selection, dry-run and explicit OUT replacement. Refuse incomplete replacement imports.
+
 - Add a header-icon toggle between search keyword help and five columns of clickable active SQL rule tags; preserve queries and search state, refs #229.
 
 - Persist target IP/CIDR versus FQDN classification in the server-managed `is_ip_cidr` field across GUI, API and import paths. Add atomic migration 24 with dry-run and invalid-value checks; backups are operator-managed, refs #189.

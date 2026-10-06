@@ -41,6 +41,72 @@ The role only grants:
 Use a dedicated Plum user with only the `Feeder` role for automated imports.
 Do not reuse an admin account in tool configuration files.
 
+## Date-only duplicate migration
+
+`migrate_smarthash.py` prepares a new port-scoped dump using the installed
+`nmap2json.smarthash`. It recalculates hashes and UUIDs, merges duplicate history
+with minimum `first_seen` / maximum `last_seen`, and retains the raw report with
+the newest `body.endtime` (source `last_seen` when endtime is absent). Equal-time
+ties use serialized document order for deterministic selection. Other meaningful
+content changes remain separate. Original source files are not modified.
+
+Prerequisites:
+
+- Install the nmap2json revision containing the volatile-date fix in the same
+  environment as the tools. A separate source checkout is not sufficient. The
+  tool checks SMTP, HTTP and RTSP date normalization before processing input.
+- Export the **complete** Meilisearch index, not a filtered subset. Pause scan
+  ingestion/indexing during export and replacement, and deploy the same hashing
+  version on scanners before resuming. The tool cannot establish snapshot
+  completeness or coordinate running scanners.
+- Preserve both observation bounds per old ID: either one JSON object per file
+  with a sibling `.time` file, or `--kvrocks-host SOURCE` for read-only
+  `doc:<old-id>` lookups. JSON arrays require that source Kvrocks lookup.
+  Missing, invalid or reversed bounds abort; scan times do not substitute for
+  missing history. Use a source account restricted to reads where available.
+- Use a new, nonexistent output directory, outside the input tree. Temporary
+  deduplication storage is SQLite on disk, not an application DB. Allow disk
+  space for unique payloads plus the output; `--work-dir` selects its parent.
+  Input is loaded one JSON file at a time, so prefer per-document exports.
+- Backups remain operator-managed; there is no mandatory backup argument.
+
+Simulation (reads source history, writes temporary scratch files only):
+
+```bash
+.venv/bin/python tools/migrate_smarthash.py \
+  --input-dir tools/meili_dump --output-dir tools/meili_dump_rehashed \
+  --kvrocks-host SOURCE_KVROCKS --kvrocks-port 6666 --dry-run
+```
+
+Remove `--dry-run` to prepare files only. Omit `--kvrocks-host` when valid `.time`
+companions are already present. Progress is printed every five seconds during
+input processing, followed by source/port/unique/merged counts. Output includes
+one `.json` and `.time` per new UUID, an audit `uid-map.jsonl`, and a
+`migration.manifest` completion marker written last. A failed preparation must
+not be imported; rerun into a fresh directory after fixing its cause.
+
+To prepare **and replace** OUT Meilisearch/Kvrocks, add `--apply-out` instead of
+`--dry-run`. It calls `reimport_port_dump.py` with Meilisearch swap mode only
+after successful preparation. Targets come from `tools/config.yaml`; check
+`OUT_MEILI_URL`, `OUT_KVROCKS_HOST`, `OUT_KVROCKS_PORT` and `INDEX_NAME` first.
+For an already prepared and reviewed dump, run:
+
+```bash
+.venv/bin/python tools/reimport_port_dump.py \
+  --input-dir tools/meili_dump_rehashed --meili-replace-mode swap --areyousure_yes
+```
+
+**Replacement removes old IDs.** A plain incremental import or Kvrocks-only
+rebuild cannot perform this migration. Meilisearch swap and Kvrocks rebuild are
+not one atomic transaction: keep ingestion paused and retain the prepared dump
+if rebuilding fails, then retry the existing importer. Incomplete Meilisearch
+imports do not swap; incomplete Kvrocks rebuilds exit with failure. Only data in
+the complete input dump can be restored. Source-only Kvrocks UIDs absent from
+Meilisearch require separate recovery before migration.
+
+The legacy `split_meili_dump_by_port.py` does not merge colliding `.time` files;
+use this migration tool for date-only deduplication instead.
+
 ## Tag tools
 
 The YAML rules are maintained in the
