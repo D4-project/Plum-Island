@@ -46,6 +46,30 @@ fqdn_requested.lk:ttrenov.lu port:443
 http_header:cache-control http_headval:x-powered-by.lk:php
 ```
 
+## Saving report queries
+
+Report creation and editing validate the Search query before saving, including
+inactive reports. Validation uses the existing structured-query parser without
+contacting Meilisearch or Kvrocks. A syntactically valid query need not currently
+match any scans, and valid tags need not already exist in a rule or index.
+
+Errors appear on the query field and retain the submitted text; failed edits do
+not replace the saved query or schedule. Use `ip:2001:db8::1` for an address and
+`net:2001:db8::/48` for a network, not a bare IPv6 term. Network prefixes are not
+guessed or corrected. Explicit AND/OR/NOT and implicit AND retain their meaning.
+
+Save-time checks additionally reject empty values, dangling AND operators,
+invalid IP/CIDR values and ports outside 0..65535. IP, net and port modifiers are
+not accepted in reports. Tag syntax and canonicalization come from
+`plum_antibodies.validate_tag`; accepted case/legacy-prefix variants are saved in
+canonical form, with quoted values preserved. Existing parser rules for other
+fields/modifiers remain unchanged. `since:` and `debug` remain supported; report
+date bounds still determine the reporting interval.
+
+No database migration or automatic rewrite of existing reports is performed.
+Execution-time query checks remain in place for preview, manual and scheduled
+reports. Operators must correct previously stored invalid queries themselves.
+
 ## Excluding results with NOT
 
 Use `NOT` before a field term to exclude matching scan documents:

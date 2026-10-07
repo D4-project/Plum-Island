@@ -81,6 +81,7 @@ from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
 from .utils.kvrocks import KVrocksIndexer
 from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
+from .utils.report_query import validate_report_query
 from .utils.network_enrichment import enrichment_due, refresh_target_network
 from .utils.ip_whois import WhoisLookupError, lookup_domain_whois, lookup_network_whois
 from .utils.tagrules import (
@@ -3994,6 +3995,14 @@ class TagRulesView(ModelView):
         )
 
 
+def validate_report_query_field(_form, field):
+    """Attach offline query errors to the existing report form field."""
+    try:
+        field.data = validate_report_query(field.data, KVSearchView())
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+
+
 class ReportsView(ModelView):
     """
     CRUD and manual execution interface for scheduled reports.
@@ -4039,6 +4048,9 @@ class ReportsView(ModelView):
     edit_columns = add_columns
     add_form_extra_fields = {
         "active": BooleanField("Report active", default=False),
+        "query": TextAreaField(
+            "Search query", validators=[validate_report_query_field]
+        ),
         "schedule_type": SelectField(
             "Schedule type",
             choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
@@ -4047,6 +4059,9 @@ class ReportsView(ModelView):
     }
     edit_form_extra_fields = {
         "active": BooleanField("Report active"),
+        "query": TextAreaField(
+            "Search query", validators=[validate_report_query_field]
+        ),
         "schedule_type": SelectField(
             "Schedule type",
             choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
@@ -4074,7 +4089,9 @@ class ReportsView(ModelView):
     }
 
     def _normalize_report_item(self, item):
+        query = validate_report_query(item.query, KVSearchView())
         normalize_report_fields(item)
+        item.query = query
         item.active = bool(item.active)
         item.next_run_at = compute_next_report_run(item)
         return item

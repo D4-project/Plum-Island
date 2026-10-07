@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Validate report queries before add/edit using the existing search parser and shared Plum-Antibodies tag validator; show field errors without querying search backends or changing saved schedules on failure, refs #230.
+
 - Add a smarthash dump migration tool with date-normalization preflight, disk-backed deduplication, merged observation history, deterministic newest-report selection, dry-run and explicit OUT replacement. Refuse incomplete replacement imports.
 
 - Add a header-icon toggle between search keyword help and five columns of clickable active SQL rule tags; preserve queries and search state, refs #229.

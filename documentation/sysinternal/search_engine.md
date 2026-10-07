@@ -69,6 +69,17 @@ Never change `first_seen` or rebuild indexes merely to optimize reads.
 
 ## Parsing and field matching
 
+Report saves call `utils/report_query.validate_report_query` from the query form
+validator and ReportsView pre-add/pre-update hooks. It reuses `parse_query` and
+the since-directive validator without `execute_search` or backend access. It adds
+report-only checks for empty values, malformed explicit AND, typed IP/CIDR/port
+values and rejects modifiers on those three typed fields. Other parser modifier
+acceptance and interactive matching remain unchanged. Tag values use the shared
+Plum-Antibodies validator; canonicalized tag terms are safely re-quoted before
+storage when normalization changes them. No tag-existence lookup is performed.
+Invalid forms retain their text and cannot populate the model; hook validation
+precedes schedule normalization. Existing reports are not migrated automatically.
+
 The search-page helper toggle is presentation-only. `KVSearchView.search` loads
 `_collect_tag_catalogue` from `_collect_rule_tags` once per page: active SQL rules,
 five namespace groups, normalized/deduplicated/sorted tags. It does not use the
