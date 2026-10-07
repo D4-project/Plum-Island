@@ -38,7 +38,7 @@ The query is the business filter. The report interval is the time filter imposed
 
 Reports are generated as Markdown.
 
-The current report body contains:
+The full report (preview and attached PDF) contains:
 
 - top-level `Report for <name>.` heading
 - report summary metadata
@@ -91,7 +91,15 @@ The modal follows the report generation order:
 
 SMTP delivery is controlled by the `REPORT_SMTP_*` settings in `webapp/config.py`.
 If `REPORT_SMTP_HOST` is empty, automatic report delivery is disabled.
-Delivered mail is multipart: Markdown plain text fallback and safe rendered HTML.
+Manual and scheduled deliveries attach the complete report as a PDF, preserving
+its cover, linked index, section page breaks and clickable host links.
+The email body contains only the report title, query, period, matching IP/scan
+counts, Open ports summary and disclaimer, plus a note pointing to the attachment.
+The short body is provided as both Markdown plain text and safe rendered HTML,
+without an index. The full report is not repeated in the email body.
+PDF generation must succeed before SMTP delivery starts; a generation or delivery
+failure does not mark the report as delivered. SMTP relays must allow attachments
+large enough for the full PDF.
 
 `REPORT_PTR_LAST_SEEN_MONTHS` controls how recent a source document must be for its PTR hostname to appear in a report.
 The default is 6 months before the report end time.

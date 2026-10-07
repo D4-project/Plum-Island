@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Attach the complete PDF to manual and scheduled report emails; keep only report metadata, open-port counts, disclaimer and an attachment notice in the email body. Preserve PDF index and links; abort delivery if PDF generation fails.
+
 - Validate report queries before add/edit using the existing search parser and shared Plum-Antibodies tag validator; show field errors without querying search backends or changing saved schedules on failure, refs #230.
 
 - Add a smarthash dump migration tool with date-normalization preflight, disk-backed deduplication, merged observation history, deterministic newest-report selection, dry-run and explicit OUT replacement. Refuse incomplete replacement imports.

@@ -765,8 +765,10 @@ def _report_heading_id(text, heading_ids):
 
 def render_report_markdown_html(  # pylint: disable=too-many-branches,too-many-locals,too-many-statements
     markdown_body,
+    *,
+    include_index=True,
 ):
-    """Render Plum report Markdown subset as escaped HTML with a heading index."""
+    """Render Plum report Markdown as escaped HTML, optionally with an index."""
     lines = []
     headings = []
     paragraphs = []
@@ -849,7 +851,7 @@ def render_report_markdown_html(  # pylint: disable=too-many-branches,too-many-l
     close_paragraph()
     close_lists()
     toc = ""
-    if headings:
+    if headings and include_index:
         toc_items = "".join(
             f'<li class="report-toc-level-{level}"><a href="#{heading_id}">'
             f"{_render_report_inline(title)}</a></li>"
@@ -1174,9 +1176,31 @@ def build_report_markdown(  # pylint: disable=too-many-statements
     return "\n".join(lines)
 
 
+def build_report_email_markdown(markdown_body):
+    """Keep summary, open-port counts and disclaimer in the email body."""
+    sections = {"": [], "Open ports": [], "Disclaimer": []}
+    section = ""
+    for line in str(markdown_body or "").splitlines():
+        heading = REPORT_HEADING_RE.match(line)
+        if heading and len(heading.group(1)) == 2:
+            section = heading.group(2)
+        if section in sections:
+            sections[section].append(line)
+    return "\n\n".join(
+        part
+        for part in (
+            "\n".join(sections[""]).strip(),
+            "\n".join(sections["Open ports"]).strip(),
+            "Full report details are available in the attached PDF.",
+            "\n".join(sections["Disclaimer"]).strip(),
+        )
+        if part
+    )
+
+
 def send_report_markdown(app_config, report, markdown_body):
     """
-    Send one Markdown report through the configured SMTP relay.
+    Send a short report email with the complete PDF through the SMTP relay.
     """
     smtp_host = str(app_config.get("REPORT_SMTP_HOST", "") or "").strip()
     if not smtp_host:
@@ -1201,8 +1225,19 @@ def send_report_markdown(app_config, report, markdown_body):
     message["Subject"] = f"P.L.U.M. report: {report.name}"
     message["From"] = smtp_from
     message["To"] = ", ".join(recipients)
-    message.set_content(markdown_body)
-    message.add_alternative(render_report_markdown_html(markdown_body), subtype="html")
+    email_body = build_report_email_markdown(markdown_body)
+    pdf = generate_report_pdf(report.name, markdown_body)
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", str(report.name)).strip("._")
+    message.set_content(email_body)
+    message.add_alternative(
+        render_report_markdown_html(email_body, include_index=False), subtype="html"
+    )
+    message.add_attachment(
+        pdf,
+        maintype="application",
+        subtype="pdf",
+        filename=f"{filename or 'report'}.pdf",
+    )
 
     smtp_class = smtplib.SMTP_SSL if use_ssl else smtplib.SMTP
     with smtp_class(smtp_host, smtp_port, timeout=30) as smtp:

@@ -346,13 +346,23 @@ class ReportProtocolViewsTest(TestCase):
         self.assertLess(ordered_html.index("Query:"), ordered_html.index("<nav"))
         self.assertLess(ordered_html.index("<nav"), ordered_html.index("Open ports"))
 
+    @patch("app.utils.reports.generate_report_pdf", wraps=generate_report_pdf)
     @patch("app.utils.reports.smtplib.SMTP")
-    def test_email_contains_markdown_and_html_alternative(self, smtp_class):
-        """Report mail retains Markdown fallback alongside escaped HTML."""
+    def test_email_contains_summary_and_full_pdf(self, smtp_class, pdf_generator):
+        """Mail contains only summary sections and attaches the complete PDF."""
         report = SimpleNamespace(
             name="Unsafe <report>", emails_list=lambda: ["analyst@example.test"]
         )
-        markdown = "# Unsafe <report>\n\n## Summary\n\n- `port:443`"
+        markdown = (
+            "# Report for Unsafe <report>.\n\n- Query: `port:443`\n"
+            "- Period: 2026-09-01 to 2026-10-01\n"
+            "- Matching IPs: 1\n- Matching scans: 2\n\n"
+            "## Open ports\n\nPort totals for the report period.\n\n"
+            "- 443: 1 host\n\n## New opened port\n\n- 192.0.2.1\n\n"
+            "## FQDN detected\n\n- example.test (192.0.2.1)\n\n"
+            "## Full report dump\n\n- 192.0.2.1\n\n"
+            "## Disclaimer\n\nThis report is provided as-is."
+        )
         send_report_markdown(
             {"REPORT_SMTP_HOST": "smtp.example.test"}, report, markdown
         )
@@ -361,10 +371,51 @@ class ReportProtocolViewsTest(TestCase):
             0
         ][0]
         self.assertTrue(message.is_multipart())
-        self.assertEqual(message.get_body(("plain",)).get_content().strip(), markdown)
+        self.assertEqual(message.get_content_type(), "multipart/mixed")
+        plain = message.get_body(("plain",)).get_content()
         html = message.get_body(("html",)).get_content()
-        self.assertIn('<h1 id="unsafe-report">Unsafe &lt;report&gt;</h1>', html)
-        self.assertIn('href="#summary"', html)
+        for body in (plain, html):
+            for expected in (
+                "Query:",
+                "port:443",
+                "Period:",
+                "Matching IPs: 1",
+                "Matching scans: 2",
+                "Open ports",
+                "443: 1 host",
+                "Port totals for the report period.",
+                "Disclaimer",
+                "This report is provided as-is.",
+                "available in the attached PDF",
+            ):
+                self.assertIn(expected, body)
+            for excluded in (
+                "Full report dump",
+                "New opened port",
+                "FQDN detected",
+                "192.0.2.1",
+            ):
+                self.assertNotIn(excluded, body)
+        self.assertIn("Unsafe &lt;report&gt;.", html)
+        self.assertNotIn("<nav", html)
+        pdf_generator.assert_called_once_with(report.name, markdown)
+        attachments = list(message.iter_attachments())
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0].get_content_type(), "application/pdf")
+        self.assertEqual(attachments[0].get_filename(), "Unsafe_report.pdf")
+        self.assertTrue(attachments[0].get_payload(decode=True).startswith(b"%PDF-"))
+
+    @patch("app.utils.reports.smtplib.SMTP")
+    @patch(
+        "app.utils.reports.generate_report_pdf", side_effect=ValueError("PDF failed")
+    )
+    def test_pdf_failure_prevents_email_delivery(self, pdf_generator, smtp_class):
+        """Never send a partial report when the full attachment cannot be built."""
+        report = SimpleNamespace(name="Report", emails_list=lambda: ["a@example.test"])
+        with self.assertRaisesRegex(ValueError, "PDF failed"):
+            send_report_markdown({"REPORT_SMTP_HOST": "smtp.example.test"}, report, "")
+        pdf_generator.assert_called_once()
+        smtp_class.assert_not_called()
 
     def test_preview_template_has_print_control_and_rendered_html(self):
         """Completed preview exposes print and PDF download controls."""

@@ -377,8 +377,11 @@ Raw scan documents, including the Meilisearch source documents, never carry `tag
 Reports are configured from the `Reports` model and use the structured Kvrocks query syntax.
 The query is always evaluated inside the report interval. Monthly reports cover one calendar month ending at run time; weekly reports cover seven days ending at run time. `last_run_at` records delivery only and never changes report scope.
 
-Report Markdown is canonical. Preview and email render its safe HTML subset while
-retaining Markdown plain text. Keep the current shape aligned between code and README:
+Report Markdown is canonical. Preview renders its full safe HTML subset.
+Email renders only the title/summary metadata, Open ports and disclaimer as safe
+HTML and Markdown plain text, with a note pointing to the complete attached PDF.
+Generate the full PDF before SMTP delivery; never send a partial report on PDF failure.
+Keep the current full-report shape aligned between code and README:
 
 - top-level report title, summary metadata, and period
 - open port summary
