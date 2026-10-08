@@ -107,6 +107,7 @@ See [Reports documentation](documentation/reports.md) for report configuration, 
 
 - [Installation](documentation/installation.md)
 - [Migration](documentation/migration.md)
+- [Upgrade from v0.2606.0](documentation/migration-v0.2606.0-to-main.md)
 - [Search](documentation/search.md)
 - [Tagging rules](https://github.com/D4-project/Plum-Antibodies/tree/main/tags)
 - [Tag tooling](documentation/tools.md#tag-tools)
