@@ -186,7 +186,7 @@ Run from `tools/` because this script reads `config.yaml` from the current direc
 
 ```bash
 cd tools
-../.venv/bin/python dump_meilidb.py
+../.venv/bin/python dump_meilidb.py --do-export
 cd ..
 ```
 
