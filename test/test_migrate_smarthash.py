@@ -170,6 +170,7 @@ class MigrationTests(unittest.TestCase):
                         str(self.source),
                         "--output-dir",
                         str(self.output),
+                        "--use-time-companions",
                         "--apply-out",
                     ]
                 )
@@ -181,6 +182,7 @@ class MigrationTests(unittest.TestCase):
                     str(self.source),
                     "--output-dir",
                     str(self.output),
+                    "--use-time-companions",
                     "--apply-out",
                 ]
             )
@@ -188,6 +190,35 @@ class MigrationTests(unittest.TestCase):
                 run.call_args.args[0][-2:], ["--meili-replace-mode", "swap"]
             )
             self.assertTrue((self.output / "migration.manifest").is_file())
+
+    def test_cli_uses_configured_in_kvrocks_by_default(self):
+        config_path = self.root / "config.yaml"
+        config_path.write_text(
+            "IN_KVROCKS_HOST: source.example\n"
+            "IN_KVROCKS_PORT: 6670\n"
+            "IN_KVROCKS_PASSWORD: test-password\n"
+            "OUT_KVROCKS_HOST: destination.example\n"
+            "OUT_KVROCKS_PORT: 6680\n",
+            encoding="utf-8",
+        )
+        with (
+            mock.patch.object(migration, "CONFIG_PATH", config_path),
+            mock.patch.object(migration.redis, "Redis") as redis_client,
+            mock.patch.object(migration, "prepare", return_value={}) as prepare,
+        ):
+            migration.main(
+                ["--input-dir", str(self.source), "--output-dir", str(self.output)]
+            )
+        redis_client.assert_called_once_with(
+            host="source.example",
+            port=6670,
+            password="test-password",
+            decode_responses=True,
+            socket_timeout=10,
+            socket_connect_timeout=10,
+        )
+        self.assertIs(prepare.call_args.kwargs["client"], redis_client.return_value)
+        redis_client.return_value.close.assert_called_once()
 
     def test_dry_run_cannot_apply(self):
         with mock.patch.object(migration.subprocess, "run") as run:

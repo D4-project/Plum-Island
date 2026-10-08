@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rehash a complete Meilisearch dump, merging duplicate observation history.
 
-Preparation is offline unless --kvrocks-host supplies read-only source history.
+Preparation reads source history from IN Kvrocks in tools/config.yaml by default.
 Only --apply-out invokes the existing destructive OUT replacement importer.
 """
 
@@ -20,6 +20,9 @@ import time
 
 import redis
 from nmap2json import smarthash
+import yaml
+
+CONFIG_PATH = Path(__file__).resolve().with_name("config.yaml")
 
 try:
     from .split_meili_dump_by_port import port_document_uuid, strip_port_hash
@@ -263,9 +266,16 @@ def main(argv=None):
     )
     parser.add_argument(
         "--kvrocks-host",
-        help="Read source doc:<old-id> history instead of .time companions",
+        help="Override IN_KVROCKS_HOST from tools/config.yaml",
     )
-    parser.add_argument("--kvrocks-port", type=int, default=6666)
+    parser.add_argument(
+        "--kvrocks-port", type=int, help="Override IN_KVROCKS_PORT from tools/config.yaml"
+    )
+    parser.add_argument(
+        "--use-time-companions",
+        action="store_true",
+        help="Read source history from .time files instead of IN Kvrocks",
+    )
     parser.add_argument(
         "--work-dir", help="Parent for temporary disk-backed deduplication DB"
     )
@@ -277,11 +287,30 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.dry_run and args.apply_out:
         parser.error("--dry-run cannot be combined with --apply-out")
+    if args.use_time_companions and (args.kvrocks_host or args.kvrocks_port):
+        parser.error("--use-time-companions cannot be combined with Kvrocks overrides")
     client = None
-    if args.kvrocks_host:
+    if not args.use_time_companions:
+        with CONFIG_PATH.open(encoding="utf-8") as config_file:
+            config = yaml.safe_load(config_file) or {}
+        host = args.kvrocks_host or config.get("IN_KVROCKS_HOST")
+        port = (
+            args.kvrocks_port
+            if args.kvrocks_port is not None
+            else config.get("IN_KVROCKS_PORT")
+        )
+        if not host or not port:
+            parser.error(f"Missing IN_KVROCKS_HOST or IN_KVROCKS_PORT in {CONFIG_PATH}")
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            parser.error(f"Invalid IN_KVROCKS_PORT in {CONFIG_PATH}")
+        if not 1 <= port <= 65535:
+            parser.error(f"Invalid IN_KVROCKS_PORT in {CONFIG_PATH}")
         client = redis.Redis(
-            host=args.kvrocks_host,
-            port=args.kvrocks_port,
+            host=host,
+            port=port,
+            password=config.get("IN_KVROCKS_PASSWORD") or None,
             decode_responses=True,
             socket_timeout=10,
             socket_connect_timeout=10,

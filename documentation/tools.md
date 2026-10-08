@@ -59,9 +59,11 @@ Prerequisites:
   ingestion/indexing during export and replacement, and deploy the same hashing
   version on scanners before resuming. The tool cannot establish snapshot
   completeness or coordinate running scanners.
-- Preserve both observation bounds per old ID: either one JSON object per file
-  with a sibling `.time` file, or `--kvrocks-host SOURCE` for read-only
-  `doc:<old-id>` lookups. JSON arrays require that source Kvrocks lookup.
+- Preserve both observation bounds per old ID: by default, the migration reads
+  `doc:<old-id>` from `IN_KVROCKS_HOST` / `IN_KVROCKS_PORT` in `tools/config.yaml`.
+  `IN_KVROCKS_PASSWORD` is used when set. Alternatively, pass
+  `--use-time-companions` for one JSON object per file with a sibling `.time`
+  file. JSON arrays require source Kvrocks lookup.
   Missing, invalid or reversed bounds abort; scan times do not substitute for
   missing history. Use a source account restricted to reads where available.
 - Use a new, nonexistent output directory, outside the input tree. Temporary
@@ -75,11 +77,11 @@ Simulation (reads source history, writes temporary scratch files only):
 ```bash
 .venv/bin/python tools/migrate_smarthash.py \
   --input-dir tools/meili_dump --output-dir tools/meili_dump_rehashed \
-  --kvrocks-host SOURCE_KVROCKS --kvrocks-port 6666 --dry-run
+  --dry-run
 ```
 
-Remove `--dry-run` to prepare files only. Omit `--kvrocks-host` when valid `.time`
-companions are already present. Progress is printed every five seconds during
+Remove `--dry-run` to prepare files only. Use `--use-time-companions` when valid
+`.time` companions are already present. Progress is printed every five seconds during
 input processing, followed by source/port/unique/merged counts. Output includes
 one `.json` and `.time` per new UUID, an audit `uid-map.jsonl`, and a
 `migration.manifest` completion marker written last. A failed preparation must
