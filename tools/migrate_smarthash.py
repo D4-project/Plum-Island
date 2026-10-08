@@ -76,16 +76,27 @@ def timestamp(value):
 
 def load_history(path, doc, client):
     """Read exact source-ID bounds; incomplete history aborts preparation."""
+    source = f"IN Kvrocks doc:{doc['id']}" if client is not None else str(path.with_suffix(".time"))
     if client is not None:
         data = client.hgetall(f"doc:{doc['id']}")
     else:
         with path.with_suffix(".time").open(encoding="utf-8") as handle:
             data = json.load(handle)
     if not isinstance(data, dict):
-        raise ValueError("Observation history must be an object")
-    first, last = timestamp(data.get("first_seen")), timestamp(data.get("last_seen"))
+        raise ValueError(f"Observation history for {source} must be an object")
+    if not data:
+        raise ValueError(f"No observation history for {source} (source file: {path})")
+    bounds = {}
+    for field in ("first_seen", "last_seen"):
+        try:
+            bounds[field] = timestamp(data.get(field))
+        except ValueError as error:
+            raise ValueError(
+                f"{source} has invalid {field} for {path}: {error}"
+            ) from error
+    first, last = bounds["first_seen"], bounds["last_seen"]
     if first > last:
-        raise ValueError("first_seen exceeds last_seen")
+        raise ValueError(f"{source} has first_seen after last_seen for {path}")
     return first, last
 
 

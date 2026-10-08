@@ -140,6 +140,22 @@ class MigrationTests(unittest.TestCase):
         migration.prepare(self.source, self.output, client=client)
         self.assertEqual(client.mock_calls, [mock.call.hgetall("doc:first")])
 
+    def test_missing_kvrocks_history_identifies_source_document(self):
+        path = self.write(self.document("first", 100))
+        client = mock.Mock()
+        client.hgetall.return_value = {}
+        with self.assertRaisesRegex(ValueError, "IN Kvrocks doc:first.*first.json"):
+            migration.prepare(self.source, self.output, client=client)
+        self.assertFalse(self.output.exists())
+
+    def test_partial_kvrocks_history_identifies_missing_bound(self):
+        self.write(self.document("first", 100))
+        client = mock.Mock()
+        client.hgetall.return_value = {"first_seen": "10"}
+        with self.assertRaisesRegex(ValueError, "doc:first has invalid last_seen"):
+            migration.prepare(self.source, self.output, client=client)
+        self.assertFalse(self.output.exists())
+
     def test_existing_or_nested_output_refused(self):
         self.output.mkdir()
         for output in (self.output, self.source, self.source / "child", self.root):
