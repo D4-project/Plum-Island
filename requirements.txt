@@ -9,7 +9,7 @@ pyfaup-rs>=0.4.9
 idna>=3.0
 pybgpranking2>=2.0.2
 pyipasnhistory>=0.1
-nmap2json
+nmap2json>=2610.01
 rich
 reportlab>=4.0.0
 -e ./webapp/tags
