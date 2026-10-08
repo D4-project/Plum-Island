@@ -32,6 +32,10 @@ class MigrationTests(unittest.TestCase):
         )
         guard.start()
         self.addCleanup(guard.stop)
+        # Direct prepare() calls stay serial unless a test requests parallelism.
+        workers = mock.patch.object(migration, "DEFAULT_WORKERS", 1)
+        workers.start()
+        self.addCleanup(workers.stop)
 
     def document(self, uid, observed, banner="220 stable ESMTP"):
         """Synthetic port-scoped source with stable meaningful content."""
@@ -112,6 +116,31 @@ class MigrationTests(unittest.TestCase):
             ],
             1,
         )
+        self.assertFalse(self.output.exists())
+
+    def test_parallel_hash_matches_serial_dump_and_history(self):
+        self.write(self.document("older", 100), first=1, last=300)
+        self.write(self.document("newer", 200), first=20, last=500)
+        serial = migration.prepare(self.source, self.output, workers=1)
+        parallel_output = self.root / "parallel"
+        parallel = migration.prepare(self.source, parallel_output, workers=2)
+        self.assertEqual(parallel, serial)
+        serial_files = {
+            str(path.relative_to(self.output)): path.read_bytes()
+            for path in self.output.rglob("*")
+            if path.is_file()
+        }
+        parallel_files = {
+            str(path.relative_to(parallel_output)): path.read_bytes()
+            for path in parallel_output.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(parallel_files, serial_files)
+
+    def test_parallel_dry_run_keeps_output_absent(self):
+        self.write(self.document("first", 100))
+        summary = migration.prepare(self.source, self.output, dry_run=True, workers=2)
+        self.assertEqual(summary["source_documents"], 1)
         self.assertFalse(self.output.exists())
 
     def test_incomplete_history_aborts_before_output(self):
@@ -271,6 +300,7 @@ class MigrationTests(unittest.TestCase):
             socket_connect_timeout=10,
         )
         self.assertIs(prepare.call_args.kwargs["client"], redis_client.return_value)
+        self.assertEqual(prepare.call_args.kwargs["workers"], migration.DEFAULT_WORKERS)
         redis_client.return_value.close.assert_called_once()
 
     def test_cli_warns_when_json_dates_replace_missing_history(self):

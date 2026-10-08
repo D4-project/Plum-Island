@@ -6,11 +6,15 @@ Only --apply-out invokes the existing destructive OUT replacement importer.
 """
 
 import argparse
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
 import copy
 from datetime import datetime, timezone
 import ipaddress
 import json
 import math
+import multiprocessing
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -23,6 +27,7 @@ from nmap2json import smarthash
 import yaml
 
 CONFIG_PATH = Path(__file__).resolve().with_name("config.yaml")
+DEFAULT_WORKERS = max(1, (os.cpu_count() or 1) - 1)
 
 try:
     from .split_meili_dump_by_port import port_document_uuid, strip_port_hash
@@ -110,8 +115,8 @@ def load_history(path, doc, client):
     return first, last, fallbacks
 
 
-def port_documents(doc):
-    """Use library hash/established UUIDs without altering raw banner content."""
+def validate_document(doc):
+    """Reject malformed source documents before reading their history."""
     if not isinstance(doc, dict) or not isinstance(doc.get("id"), str) or not doc["id"]:
         raise ValueError("Each source document needs a nonempty string id")
     body = doc.get("body")
@@ -128,6 +133,13 @@ def port_documents(doc):
             raise ValueError("Invalid port object or portid")
         if not 0 <= int(port["portid"]) <= 65535:
             raise ValueError("Port outside 0..65535")
+    return ip
+
+
+def port_documents(doc):
+    """Use library hash/established UUIDs without altering raw banner content."""
+    ip = validate_document(doc)
+    for port in doc["body"]["ports"]:
         hashed = copy.deepcopy(port)
         hashed["hsh256"] = smarthash.port_smart_hash(port, exclude_keys=["hsh256"])
         result = copy.deepcopy(doc)
@@ -136,6 +148,11 @@ def port_documents(doc):
         result["body"]["ports"] = [strip_port_hash(hashed)]
         result["body"]["hsh256"] = hashed["hsh256"]
         yield result
+
+
+def hashed_port_documents(doc):
+    """Process-pool entry point: return one independently hashed source report."""
+    return list(port_documents(doc))
 
 
 def merge_document(connection, doc, first, last):
@@ -188,8 +205,10 @@ def write_dump(connection, output):
             handle.write(json.dumps({"old_uid": old, "new_uid": new}) + "\n")
 
 
-def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None):
+def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None, workers=None):
     """Prepare only; never mutate external databases or existing directories."""
+    if workers is None:
+        workers = DEFAULT_WORKERS
     library = check_library()
     source, output = Path(input_dir).resolve(), Path(output_dir).resolve()
     if not source.is_dir():
@@ -198,6 +217,8 @@ def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None)
         raise ValueError("Input and output directories must not overlap")
     if output.exists():
         raise ValueError("Output directory must not exist; use a fresh path")
+    if workers < 1:
+        raise ValueError("workers must be >= 1")
     summary = {
         "source_documents": 0,
         "port_documents": 0,
@@ -216,37 +237,61 @@ def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None)
                 "CREATE TABLE mapping(old_uid TEXT, new_uid TEXT, PRIMARY KEY(old_uid, new_uid))"
             )
             progress_at = time.monotonic()
-            for path in source.rglob("*.json"):
-                if path.is_symlink():
-                    raise ValueError("Symlink source documents are not supported")
-                docs = read_documents(path)
-                if client is None and len(docs) != 1:
-                    raise ValueError(
-                        "Array dumps require --kvrocks-host for per-ID history"
+
+            def source_documents():
+                for path in source.rglob("*.json"):
+                    if path.is_symlink():
+                        raise ValueError("Symlink source documents are not supported")
+                    docs = read_documents(path)
+                    if client is None and len(docs) != 1:
+                        raise ValueError(
+                            "Array dumps require IN Kvrocks for per-ID history"
+                        )
+                    for doc in docs:
+                        validate_document(doc)
+                        first, last, fallbacks = load_history(path, doc, client)
+                        yield doc, first, last, bool(fallbacks)
+
+            def consume(doc_id, first, last, fallback, migrated_docs):
+                nonlocal progress_at
+                if fallback:
+                    summary["history_fallback_documents"] += 1
+                for migrated in migrated_docs:
+                    merge_document(connection, migrated, first, last)
+                    connection.execute(
+                        "INSERT OR IGNORE INTO mapping VALUES (?, ?)",
+                        (doc_id, migrated["id"]),
                     )
-                for doc in docs:
-                    # Validate shape before looking up its ID in history.
-                    generated = port_documents(doc)
-                    first_doc = next(generated)
-                    first, last, fallbacks = load_history(path, doc, client)
-                    if fallbacks:
-                        summary["history_fallback_documents"] += 1
-                    for migrated in _with_first(first_doc, generated):
-                        merge_document(connection, migrated, first, last)
-                        connection.execute(
-                            "INSERT OR IGNORE INTO mapping VALUES (?, ?)",
-                            (doc["id"], migrated["id"]),
-                        )
-                        summary["port_documents"] += 1
-                    summary["source_documents"] += 1
-                    if summary["source_documents"] % 1000 == 0:
-                        connection.commit()
-                    if time.monotonic() - progress_at >= 5:
-                        print(
-                            f"Progress: source={summary['source_documents']} ports={summary['port_documents']}",
-                            flush=True,
-                        )
-                        progress_at = time.monotonic()
+                    summary["port_documents"] += 1
+                summary["source_documents"] += 1
+                if summary["source_documents"] % 1000 == 0:
+                    connection.commit()
+                if time.monotonic() - progress_at >= 5:
+                    print(
+                        f"Progress: source={summary['source_documents']} ports={summary['port_documents']}",
+                        flush=True,
+                    )
+                    progress_at = time.monotonic()
+
+            if workers == 1:
+                for doc, first, last, fallback in source_documents():
+                    consume(doc["id"], first, last, fallback, hashed_port_documents(doc))
+            else:
+                # Keep at most two reports per worker in flight; only the parent
+                # reads Kvrocks and writes SQLite. Ordered consumption bounds RAM.
+                pending = deque()
+                with ProcessPoolExecutor(
+                    max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+                ) as executor:
+                    for doc, first, last, fallback in source_documents():
+                        future = executor.submit(hashed_port_documents, doc)
+                        pending.append((future, doc["id"], first, last, fallback))
+                        if len(pending) >= workers * 2:
+                            future, doc_id, first, last, fallback = pending.popleft()
+                            consume(doc_id, first, last, fallback, future.result())
+                    while pending:
+                        future, doc_id, first, last, fallback = pending.popleft()
+                        consume(doc_id, first, last, fallback, future.result())
             if not summary["source_documents"]:
                 raise ValueError("No documents found; refusing empty migration")
             connection.commit()
@@ -268,12 +313,6 @@ def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None)
         finally:
             connection.close()
     return summary
-
-
-def _with_first(first, remaining):
-    """Yield the validated first port followed by the rest without buffering."""
-    yield first
-    yield from remaining
 
 
 def main(argv=None):
@@ -304,6 +343,12 @@ def main(argv=None):
         "--work-dir", help="Parent for temporary disk-backed deduplication DB"
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"Hash worker processes (default: CPU count - 1, minimum 1; now {DEFAULT_WORKERS})",
+    )
+    parser.add_argument(
         "--apply-out",
         action="store_true",
         help="DESTRUCTIVE: replace configured OUT Meilisearch and rebuild OUT Kvrocks after preparation",
@@ -313,6 +358,8 @@ def main(argv=None):
         parser.error("--dry-run cannot be combined with --apply-out")
     if args.use_time_companions and (args.kvrocks_host or args.kvrocks_port):
         parser.error("--use-time-companions cannot be combined with Kvrocks overrides")
+    if args.workers < 1:
+        parser.error("--workers must be >= 1")
     client = None
     if not args.use_time_companions:
         with CONFIG_PATH.open(encoding="utf-8") as config_file:
@@ -346,6 +393,7 @@ def main(argv=None):
             dry_run=args.dry_run,
             client=client,
             work_dir=args.work_dir,
+            workers=args.workers,
         )
     finally:
         if client is not None:

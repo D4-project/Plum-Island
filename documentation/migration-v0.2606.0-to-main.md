@@ -96,6 +96,8 @@ Wait for `Total documents exported` and compare it with the source Meilisearch i
 
 Both commands require a new `tools/meili_dump_rehashed` path that does **not** already exist. The dry-run reads IN Kvrocks and reports source, port, unique, and merged counts without creating output. The second command writes one JSON and one `.time` file per new ID, plus `uid-map.jsonl` and a `migration.manifest` marker written last. For large data sets, place temporary SQLite work files on a disk with enough free space using `--work-dir /path/to/scratch-parent`.
 
+Smarthash calculation uses `--workers` processes (default: logical CPU count minus one, minimum one). Use `--workers 1` for serial execution. Kvrocks reads and SQLite merging stay in the parent process; worker submissions are bounded in memory.
+
 ```bash
 .venv/bin/python tools/migrate_smarthash.py \
   --input-dir tools/meili_dump \

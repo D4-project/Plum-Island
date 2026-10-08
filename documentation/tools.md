@@ -85,8 +85,11 @@ Simulation (reads source history, writes temporary scratch files only):
 ```
 
 Remove `--dry-run` to prepare files only. Use `--use-time-companions` when valid
-`.time` companions are already present. Progress is printed every five seconds during
-input processing, followed by source/port/unique/merged counts. Output includes
+`.time` companions are already present. Port hashes run in worker processes;
+`--workers` defaults to one fewer than the logical CPU count (minimum one), and
+`--workers 1` runs serially. The parent process alone reads IN Kvrocks and merges
+results in SQLite, with at most two pending reports per worker. Progress is
+printed every five seconds during input processing, followed by source/port/unique/merged counts. Output includes
 one `.json` and `.time` per new UUID, an audit `uid-map.jsonl`, and a
 `migration.manifest` completion marker written last. A failed preparation must
 not be imported; rerun into a fresh directory after fixing its cause.
