@@ -64,8 +64,12 @@ Prerequisites:
   `IN_KVROCKS_PASSWORD` is used when set. Alternatively, pass
   `--use-time-companions` for one JSON object per file with a sibling `.time`
   file. JSON arrays require source Kvrocks lookup.
-  Missing, invalid or reversed bounds abort; scan times do not substitute for
-  missing history. Use a source account restricted to reads where available.
+  When a Kvrocks bound is absent, the tool uses JSON `body.starttime` for
+  `first_seen` or `body.endtime` for `last_seen` (the other JSON scan time if
+  only one exists) and prints a fallback count. This is scan-time evidence, not
+  recovered historical state. Invalid or reversed bounds still abort. In
+  `--use-time-companions` mode, `.time` bounds remain mandatory. Use a source
+  account restricted to reads where available.
 - Use a new, nonexistent output directory, outside the input tree. Temporary
   deduplication storage is SQLite on disk, not an application DB. Allow disk
   space for unique payloads plus the output; `--work-dir` selects its parent.

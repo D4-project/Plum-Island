@@ -7,11 +7,11 @@ This procedure starts from the [Plum Island `v0.2606.0` release](https://github.
 `v0.2606.0` already stores scan results per port. Do **not** run the IP-to-port split from the older [`v0.2604.0` guide](migration.md). This upgrade has two independent data changes:
 
 1. Apply SQLite migrations `17` through `24` to application metadata, in order. Migration `23` can use retained Kvrocks history to backfill target creation dates.
-2. Rehash the complete Meilisearch result set with the corrected `nmap2json` library. The migration reads each old document's `first_seen` and `last_seen` from source (`IN`) Kvrocks, recomputes port hashes and IDs, merges date-only duplicates, and writes new JSON plus consolidated `.time` files. Reimport replaces the configured destination (`OUT`) Meilisearch index and rebuilds destination Kvrocks with the new IDs and dates.
+2. Rehash the complete Meilisearch result set with the corrected `nmap2json` library. The migration reads each old document's `first_seen` and `last_seen` from source (`IN`) Kvrocks, falls back to JSON scan times for absent bounds, recomputes port hashes and IDs, merges date-only duplicates, and writes new JSON plus consolidated `.time` files. Reimport replaces the configured destination (`OUT`) Meilisearch index and rebuilds destination Kvrocks with the new IDs and dates.
 
 Preparing the rehashed dump does not change either database. `--dry-run` writes no dump. The explicit reimport step replaces `OUT`; it does not change `IN` unless the `IN_*` and `OUT_*` settings point to the same services. Meilisearch replacement and Kvrocks rebuild are **not one transaction**.
 
-This procedure assumes an existing `v0.2606.0` installation, its SQLite database, a complete Meilisearch index, and source Kvrocks observation history. Missing history cannot be reconstructed from the Meilisearch JSON alone. It does not recover documents present only in Kvrocks or coordinate running scanners. Backups, service control, and destination selection belong to the operator.
+This procedure assumes an existing `v0.2606.0` installation, its SQLite database, a complete Meilisearch index, and access to source Kvrocks. Missing historical bounds cannot be reconstructed from Meilisearch JSON: its scan times supply a fallback, which can shorten the recorded observation interval. It does not recover documents present only in Kvrocks or coordinate running scanners. Backups, service control, and destination selection belong to the operator.
 
 ## Procedure
 
@@ -107,7 +107,7 @@ Both commands require a new `tools/meili_dump_rehashed` path that does **not** a
   --output-dir tools/meili_dump_rehashed
 ```
 
-The merge keeps the minimum source `first_seen` and maximum source `last_seen`. The retained report payload is the newest by `body.endtime`, falling back to source `last_seen`; ties are deterministic. Meaningful content differences remain separate. Check the reported counts, inspect sample `uid-map.jsonl` entries and `.time` files, and verify `migration.manifest` says `complete`. Do not import a partial output directory; restart preparation with a fresh path after a failure.
+The merge keeps the minimum available `first_seen` and maximum available `last_seen`. If Kvrocks lacks a bound, JSON `body.starttime` or `body.endtime` supplies it; the summary reports `history_fallback_documents` and prints a warning. The retained report payload is the newest by `body.endtime`, falling back to source `last_seen`; ties are deterministic. Meaningful content differences remain separate. Check the reported counts, inspect sample `uid-map.jsonl` entries and `.time` files, and verify `migration.manifest` says `complete`. Do not import a partial output directory; restart preparation with a fresh path after a failure.
 
 ### 7. Test and replace OUT
 

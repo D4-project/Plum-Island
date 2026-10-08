@@ -75,7 +75,7 @@ def timestamp(value):
 
 
 def load_history(path, doc, client):
-    """Read exact source-ID bounds; incomplete history aborts preparation."""
+    """Read source history, using report scan times for missing Kvrocks bounds."""
     source = f"IN Kvrocks doc:{doc['id']}" if client is not None else str(path.with_suffix(".time"))
     if client is not None:
         data = client.hgetall(f"doc:{doc['id']}")
@@ -84,20 +84,30 @@ def load_history(path, doc, client):
             data = json.load(handle)
     if not isinstance(data, dict):
         raise ValueError(f"Observation history for {source} must be an object")
-    if not data:
+    if not data and client is None:
         raise ValueError(f"No observation history for {source} (source file: {path})")
     bounds = {}
-    for field in ("first_seen", "last_seen"):
+    fallbacks = {}
+    for field, report_field in (("first_seen", "starttime"), ("last_seen", "endtime")):
+        value = data.get(field)
+        if client is not None and value in (None, ""):
+            value = doc["body"].get(report_field)
+            if value in (None, ""):
+                other_field = "endtime" if report_field == "starttime" else "starttime"
+                value = doc["body"].get(other_field)
+                report_field = other_field
+            fallbacks[field] = report_field
         try:
-            bounds[field] = timestamp(data.get(field))
+            bounds[field] = timestamp(value)
         except ValueError as error:
+            origin = f" (JSON body.{fallbacks[field]} fallback)" if field in fallbacks else ""
             raise ValueError(
-                f"{source} has invalid {field} for {path}: {error}"
+                f"{source} has invalid {field} for {path}{origin}: {error}"
             ) from error
     first, last = bounds["first_seen"], bounds["last_seen"]
     if first > last:
         raise ValueError(f"{source} has first_seen after last_seen for {path}")
-    return first, last
+    return first, last, fallbacks
 
 
 def port_documents(doc):
@@ -193,6 +203,7 @@ def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None)
         "port_documents": 0,
         "unique_documents": 0,
         "merged_documents": 0,
+        "history_fallback_documents": 0,
     }
     with tempfile.TemporaryDirectory(prefix="plum-rehash-", dir=work_dir) as scratch:
         connection = sqlite3.connect(str(Path(scratch) / "work.sqlite"))
@@ -217,7 +228,9 @@ def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None)
                     # Validate shape before looking up its ID in history.
                     generated = port_documents(doc)
                     first_doc = next(generated)
-                    first, last = load_history(path, doc, client)
+                    first, last, fallbacks = load_history(path, doc, client)
+                    if fallbacks:
+                        summary["history_fallback_documents"] += 1
                     for migrated in _with_first(first_doc, generated):
                         merge_document(connection, migrated, first, last)
                         connection.execute(
@@ -337,6 +350,13 @@ def main(argv=None):
     finally:
         if client is not None:
             client.close()
+    if summary["history_fallback_documents"]:
+        print(
+            "WARNING: JSON scan dates replaced missing IN Kvrocks history for "
+            f"{summary['history_fallback_documents']} source documents",
+            file=sys.stderr,
+            flush=True,
+        )
     print(json.dumps(summary, sort_keys=True), flush=True)
     if args.apply_out:
         subprocess.run(

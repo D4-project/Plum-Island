@@ -2,12 +2,14 @@
 
 import copy
 import importlib
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from contextlib import redirect_stderr
 from unittest import mock
 
 from tools import migrate_smarthash as migration
@@ -37,6 +39,7 @@ class MigrationTests(unittest.TestCase):
             "id": uid,
             "ip": "2001:db8::1",
             "body": {
+                "starttime": observed - 1,
                 "endtime": observed,
                 "ports": [
                     {
@@ -140,19 +143,51 @@ class MigrationTests(unittest.TestCase):
         migration.prepare(self.source, self.output, client=client)
         self.assertEqual(client.mock_calls, [mock.call.hgetall("doc:first")])
 
-    def test_missing_kvrocks_history_identifies_source_document(self):
-        path = self.write(self.document("first", 100))
+    def test_missing_kvrocks_history_uses_json_scan_times(self):
+        self.write(self.document("first", 100))
         client = mock.Mock()
         client.hgetall.return_value = {}
-        with self.assertRaisesRegex(ValueError, "IN Kvrocks doc:first.*first.json"):
-            migration.prepare(self.source, self.output, client=client)
-        self.assertFalse(self.output.exists())
+        summary = migration.prepare(self.source, self.output, client=client)
+        self.assertEqual(summary["history_fallback_documents"], 1)
+        companion = next(self.output.rglob("*.time"))
+        self.assertEqual(
+            json.loads(companion.read_text()),
+            {"first_seen": 99, "last_seen": 100},
+        )
 
-    def test_partial_kvrocks_history_identifies_missing_bound(self):
+    def test_partial_kvrocks_history_uses_only_missing_json_bound(self):
         self.write(self.document("first", 100))
         client = mock.Mock()
         client.hgetall.return_value = {"first_seen": "10"}
-        with self.assertRaisesRegex(ValueError, "doc:first has invalid last_seen"):
+        summary = migration.prepare(self.source, self.output, client=client)
+        self.assertEqual(summary["history_fallback_documents"], 1)
+        companion = next(self.output.rglob("*.time"))
+        self.assertEqual(
+            json.loads(companion.read_text()),
+            {"first_seen": 10, "last_seen": 100},
+        )
+
+    def test_json_starttime_can_supply_both_missing_bounds(self):
+        doc = self.document("first", 100)
+        del doc["body"]["endtime"]
+        self.write(doc)
+        client = mock.Mock()
+        client.hgetall.return_value = {}
+        migration.prepare(self.source, self.output, client=client)
+        companion = next(self.output.rglob("*.time"))
+        self.assertEqual(
+            json.loads(companion.read_text()),
+            {"first_seen": 99, "last_seen": 99},
+        )
+
+    def test_no_kvrocks_or_json_dates_still_aborts(self):
+        doc = self.document("first", 100)
+        del doc["body"]["starttime"]
+        del doc["body"]["endtime"]
+        self.write(doc)
+        client = mock.Mock()
+        client.hgetall.return_value = {}
+        with self.assertRaisesRegex(ValueError, "JSON body.endtime fallback"):
             migration.prepare(self.source, self.output, client=client)
         self.assertFalse(self.output.exists())
 
@@ -220,7 +255,9 @@ class MigrationTests(unittest.TestCase):
         with (
             mock.patch.object(migration, "CONFIG_PATH", config_path),
             mock.patch.object(migration.redis, "Redis") as redis_client,
-            mock.patch.object(migration, "prepare", return_value={}) as prepare,
+            mock.patch.object(
+                migration, "prepare", return_value={"history_fallback_documents": 0}
+            ) as prepare,
         ):
             migration.main(
                 ["--input-dir", str(self.source), "--output-dir", str(self.output)]
@@ -235,6 +272,27 @@ class MigrationTests(unittest.TestCase):
         )
         self.assertIs(prepare.call_args.kwargs["client"], redis_client.return_value)
         redis_client.return_value.close.assert_called_once()
+
+    def test_cli_warns_when_json_dates_replace_missing_history(self):
+        config_path = self.root / "config.yaml"
+        config_path.write_text(
+            "IN_KVROCKS_HOST: source.example\nIN_KVROCKS_PORT: 6670\n",
+            encoding="utf-8",
+        )
+        warning = io.StringIO()
+        with (
+            mock.patch.object(migration, "CONFIG_PATH", config_path),
+            mock.patch.object(migration.redis, "Redis"),
+            mock.patch.object(
+                migration, "prepare", return_value={"history_fallback_documents": 2}
+            ),
+            redirect_stderr(warning),
+        ):
+            migration.main(
+                ["--input-dir", str(self.source), "--output-dir", str(self.output)]
+            )
+        self.assertIn("WARNING: JSON scan dates", warning.getvalue())
+        self.assertIn("2 source documents", warning.getvalue())
 
     def test_dry_run_cannot_apply(self):
         with mock.patch.object(migration.subprocess, "run") as run:
