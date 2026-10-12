@@ -31,12 +31,14 @@ when indexed reports exist but none have `last_seen` in the selected window.
 Access uses the `can_get` permission on `InfoIpApi`; the default Read Only
 role includes it after `tools/initial_setup.py --roles-only` synchronizes roles.
 
-New reports index the protocol automatically. For reports indexed before this
-field existed, run `.venv/bin/python tools/backfill_port_protocol.py --dry-run`,
-then `.venv/bin/python tools/backfill_port_protocol.py`. The command reads
+New reports index the protocol automatically. For older reports, InfoIP fetches
+only missing protocols for the requested IP from Meilisearch and caches them in
+Kvrocks. If Meilisearch is unavailable, `protocol` is `null`. To populate the
+entire existing index in advance, run
+`.venv/bin/python tools/backfill_port_protocol.py --dry-run`, then
+`.venv/bin/python tools/backfill_port_protocol.py`. The command reads
 Meilisearch via `IN_MEILI_*` and updates only the `port_protocol` index in
-`OUT_KVROCKS_*` from `tools/config.yaml`. Until a report is backfilled,
-`protocol` is `null` rather than an assumed TCP value.
+`OUT_KVROCKS_*` from `tools/config.yaml`.
 
 ## Query syntax
 

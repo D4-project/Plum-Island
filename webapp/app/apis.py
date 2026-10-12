@@ -17,6 +17,7 @@ import ipaddress
 import os
 import json
 import logging
+import meilisearch
 import re
 import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
@@ -43,6 +44,7 @@ from .models import (
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
 from .utils.kvrocks import KVrocksIndexer
+from .utils.result_parser import port_protocol_values
 from .utils.tagrules import normalize_tags
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
 from .utils.scan_cycles import reconcile_scanprofile_cycle
@@ -1827,6 +1829,7 @@ class InfoIpApi(BaseApi):
     route_base = "/api/v1/infoip"
     openapi_spec_tag = "IP Scan Summary API"
     DEFAULT_DAYS = 30
+    PROTOCOL_BATCH_SIZE = 200
 
     @staticmethod
     def _two_years_before(value):
@@ -1900,6 +1903,39 @@ class InfoIpApi(BaseApi):
         return from_date, to_date
 
     @staticmethod
+    def _protocols_from_meili(indexer, uids):
+        """Resolve only missing per-report protocols and cache valid pairs."""
+        if not uids:
+            return {}
+        client = meilisearch.Client(
+            db.app.config.get("MEILI_DATABASE_URI"),
+            db.app.config.get("MEILI_KEY"),
+            timeout=5,
+        )
+        index = client.index("plum")
+        resolved = {}
+        for offset in range(0, len(uids), InfoIpApi.PROTOCOL_BATCH_SIZE):
+            batch = uids[offset : offset + InfoIpApi.PROTOCOL_BATCH_SIZE]
+            try:
+                page = index.get_documents(
+                    {"ids": batch, "fields": ["id", "body.ports"], "limit": len(batch)}
+                )
+            except meilisearch.errors.MeilisearchError as error:
+                logger.warning("InfoIP protocol lookup failed: %s", error)
+                break
+            docs = []
+            for result in page.results:
+                raw_doc = dict(result)
+                pairs = port_protocol_values(raw_doc)
+                if pairs:
+                    uid = str(raw_doc["id"])
+                    resolved[uid] = set(pairs)
+                    docs.append({"uid": uid, "port_protocol": pairs})
+            if docs:
+                indexer.replace_field_values_batch("port_protocol", docs)
+        return resolved
+
+    @staticmethod
     def _protocol_ports(ports, pairs):
         """Match indexed protocol pairs with port numbers; retain legacy gaps."""
         numbered_ports = {
@@ -1934,11 +1970,19 @@ class InfoIpApi(BaseApi):
             pipeline.smembers(f"port_protocols:{uid}")
             pipeline.smembers(f"tags:{uid}")
         values = pipeline.execute()
+        missing = [
+            uid
+            for uid, ports, pairs in zip(selected, values[::3], values[1::3])
+            if ports and not pairs
+        ]
+        resolved = InfoIpApi._protocols_from_meili(indexer, missing)
         port_data = {}
         for uid, ports, pairs, tags in zip(
             selected, values[::3], values[1::3], values[2::3]
         ):
-            for port, protocol in InfoIpApi._protocol_ports(ports, pairs):
+            for port, protocol in InfoIpApi._protocol_ports(
+                ports, pairs or resolved.get(uid, set())
+            ):
                 entry = port_data.setdefault(
                     (port, protocol),
                     {
@@ -1987,8 +2031,8 @@ class InfoIpApi(BaseApi):
             Per-port last_seen is the latest positive observation in the window;
             min_date is the earliest Kvrocks first_seen among selected HSH reports
             containing that port, and may predate the requested window.
-            Legacy reports without a protocol index return protocol null until
-            their protocol field is backfilled from Meilisearch.
+            Legacy reports lacking protocol indexes are resolved from Meilisearch
+            for this IP and cached in Kvrocks. If unavailable, protocol is null.
             No continuous openness between scans is implied.
             Default window is the last 30 days. Lookback cannot exceed two years.
           parameters:

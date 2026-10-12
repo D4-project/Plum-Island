@@ -2,7 +2,7 @@
 
 ## Since Last release Changes.
 
-- Include TCP/UDP protocol in each InfoIP port entry; index protocol/port pairs in Kvrocks and provide `tools/backfill_port_protocol.py` for existing reports.
+- Include TCP/UDP protocol in each InfoIP port entry; index protocol/port pairs in Kvrocks, resolve older reports on demand from Meilisearch, and provide `tools/backfill_port_protocol.py` for bulk backfill.
 
 - Add per-port `min_date` to InfoIP: earliest Kvrocks `first_seen` among HSH reports selected by the requested time window.
 

@@ -1,8 +1,9 @@
 """IP summary API: bounded dates, indexed values, protection and Swagger."""
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from test.test_kvrocks_search import make_indexer
 
 from werkzeug.datastructures import MultiDict
@@ -168,11 +169,48 @@ class InfoIpApiTest(unittest.TestCase):
     def test_legacy_report_keeps_unknown_protocol(self):
         """Do not call an unindexed legacy UDP observation TCP."""
         indexer = make_indexer({"ports:legacy": {"53"}, "tags:legacy": {"proto:dns"}})
-        rows = InfoIpApi._ports_with_tags(
-            indexer, ["legacy"], {"legacy": {"first_seen": 1, "last_seen": 2}}
-        )
+        with patch.object(InfoIpApi, "_protocols_from_meili", return_value={}):
+            rows = InfoIpApi._ports_with_tags(
+                indexer, ["legacy"], {"legacy": {"first_seen": 1, "last_seen": 2}}
+            )
         self.assertEqual(rows[0]["port"], 53)
         self.assertIsNone(rows[0]["protocol"])
+
+    def test_legacy_report_resolves_protocol_for_this_ip(self):
+        """A missing per-UID protocol index is fetched for selected UIDs only."""
+        indexer = make_indexer({"ports:legacy": {"53"}, "tags:legacy": {"proto:dns"}})
+        with patch.object(
+            InfoIpApi,
+            "_protocols_from_meili",
+            return_value={"legacy": {"udp/53"}},
+        ) as lookup:
+            rows = InfoIpApi._ports_with_tags(
+                indexer, ["legacy"], {"legacy": {"first_seen": 1, "last_seen": 2}}
+            )
+        lookup.assert_called_once_with(indexer, ["legacy"])
+        self.assertEqual(rows[0]["protocol"], "udp")
+
+    def test_protocol_lookup_fetches_missing_uids_and_caches(self):
+        """Fetch only requested raw fields; cache resolved pairs per UID."""
+        indexer = MagicMock()
+        client = MagicMock()
+        client.index.return_value.get_documents.return_value = SimpleNamespace(
+            results=[
+                {
+                    "id": "legacy",
+                    "body": {"ports": [{"portid": "53", "protocol": "udp"}]},
+                }
+            ]
+        )
+        with patch("app.apis.meilisearch.Client", return_value=client):
+            resolved = InfoIpApi._protocols_from_meili(indexer, ["legacy"])
+        self.assertEqual(resolved, {"legacy": {"udp/53"}})
+        client.index.return_value.get_documents.assert_called_once_with(
+            {"ids": ["legacy"], "fields": ["id", "body.ports"], "limit": 1}
+        )
+        indexer.replace_field_values_batch.assert_called_once_with(
+            "port_protocol", [{"uid": "legacy", "port_protocol": ["udp/53"]}]
+        )
 
     def test_invalid_ip_cidr_and_missing_auth(self):
         """Reject CIDRs and malformed IPs after auth, without backend reads."""
