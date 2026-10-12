@@ -159,6 +159,7 @@ class KVrocksIndexer:
             "tag",
             # "url_path",
             "port",
+            "port_protocol",
             # "protocol",
             "http_title",
             "http_favicon_path",

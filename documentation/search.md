@@ -10,7 +10,7 @@ Plum Island stores parsed scan results in Kvrocks indexes. The main search UI us
 that returns distinct open ports and their co-observed tags for indexed scan
 reports of one public IPv4 or IPv6 address. CIDR ranges are rejected with `400`.
 It reads the compact Kvrocks indexes.
-Each port entry has `port`, `tags`, `min_date`, and `last_seen` fields. A tag is associated
+Each port entry has `port`, `protocol` (`tcp` or `udp`), `tags`, `min_date`, and `last_seen` fields. TCP and UDP on the same numbered port have separate entries. A tag is associated
 with a port when both occurred in the same scan report; tags are computed for the whole report,
 so they do not necessarily describe that port's service. Results are historical
 observations within the selected window, not a claim that each port is open now.
@@ -30,6 +30,13 @@ The API returns `404` when the IP has never been indexed and an empty `ports` li
 when indexed reports exist but none have `last_seen` in the selected window.
 Access uses the `can_get` permission on `InfoIpApi`; the default Read Only
 role includes it after `tools/initial_setup.py --roles-only` synchronizes roles.
+
+New reports index the protocol automatically. For reports indexed before this
+field existed, run `.venv/bin/python tools/backfill_port_protocol.py --dry-run`,
+then `.venv/bin/python tools/backfill_port_protocol.py`. The command reads
+Meilisearch via `IN_MEILI_*` and updates only the `port_protocol` index in
+`OUT_KVROCKS_*` from `tools/config.yaml`. Until a report is backfilled,
+`protocol` is `null` rather than an assumed TCP value.
 
 ## Query syntax
 

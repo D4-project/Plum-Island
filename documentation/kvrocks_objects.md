@@ -95,6 +95,7 @@ Current generic fields:
 | `tld` | yes | yes | pyfaup public suffix (may contain multiple labels, e.g. `co.uk`) |
 | `tag` | yes | no | Computed tags, e.g. `product:gitlab` |
 | `port` | yes | no | Open port as string |
+| `port_protocol` | yes | no | Open protocol/port pair, e.g. `tcp/443` or `udp/53`; used by InfoIP |
 | `http_title` | yes | yes | HTML title |
 | `http_favicon_path` | yes | yes | Favicon path/source |
 | `http_favicon_mmhash` | yes | no | Favicon MurmurHash/mmh3 value |

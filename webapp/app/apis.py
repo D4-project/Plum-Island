@@ -1900,6 +1900,30 @@ class InfoIpApi(BaseApi):
         return from_date, to_date
 
     @staticmethod
+    def _protocol_ports(ports, pairs):
+        """Match indexed protocol pairs with port numbers; retain legacy gaps."""
+        numbered_ports = {
+            int(port)
+            for port in ports
+            if str(port).isdigit() and 0 <= int(port) <= 65535
+        }
+        protocol_ports = set()
+        for pair in pairs:
+            protocol, separator, port = str(pair).partition("/")
+            if (
+                separator
+                and protocol in ("tcp", "udp")
+                and port.isdigit()
+                and int(port) in numbered_ports
+            ):
+                protocol_ports.add((int(port), protocol))
+        protocol_ports.update(
+            (port, None)
+            for port in numbered_ports - {port for port, _ in protocol_ports}
+        )
+        return protocol_ports
+
+    @staticmethod
     def _ports_with_tags(indexer, selected, timestamps):
         """Collect per-port tags and seen bounds from selected HSH reports."""
         if not selected:
@@ -1907,30 +1931,33 @@ class InfoIpApi(BaseApi):
         pipeline = indexer.r.pipeline(transaction=False)
         for uid in selected:
             pipeline.smembers(f"ports:{uid}")
+            pipeline.smembers(f"port_protocols:{uid}")
             pipeline.smembers(f"tags:{uid}")
         values = pipeline.execute()
         port_data = {}
-        for uid, ports, tags in zip(selected, values[::2], values[1::2]):
-            for port in ports:
-                if str(port).isdigit() and 0 <= int(port) <= 65535:
-                    entry = port_data.setdefault(
-                        int(port),
-                        {
-                            "tags": set(),
-                            "min_date": timestamps[uid]["first_seen"],
-                            "last_seen": timestamps[uid]["last_seen"],
-                        },
-                    )
-                    entry["tags"].update(tags)
-                    entry["min_date"] = min(
-                        entry["min_date"], timestamps[uid]["first_seen"]
-                    )
-                    entry["last_seen"] = max(
-                        entry["last_seen"], timestamps[uid]["last_seen"]
-                    )
+        for uid, ports, pairs, tags in zip(
+            selected, values[::3], values[1::3], values[2::3]
+        ):
+            for port, protocol in InfoIpApi._protocol_ports(ports, pairs):
+                entry = port_data.setdefault(
+                    (port, protocol),
+                    {
+                        "tags": set(),
+                        "min_date": timestamps[uid]["first_seen"],
+                        "last_seen": timestamps[uid]["last_seen"],
+                    },
+                )
+                entry["tags"].update(tags)
+                entry["min_date"] = min(
+                    entry["min_date"], timestamps[uid]["first_seen"]
+                )
+                entry["last_seen"] = max(
+                    entry["last_seen"], timestamps[uid]["last_seen"]
+                )
         return [
             {
                 "port": port,
+                "protocol": protocol,
                 "tags": sorted(normalize_tags(data["tags"]), key=str.lower),
                 "min_date": datetime.fromtimestamp(data["min_date"], timezone.utc)
                 .isoformat()
@@ -1939,7 +1966,9 @@ class InfoIpApi(BaseApi):
                 .isoformat()
                 .replace("+00:00", "Z"),
             }
-            for port, data in sorted(port_data.items())
+            for (port, protocol), data in sorted(
+                port_data.items(), key=lambda item: (item[0][0], item[0][1] or "")
+            )
         ]
 
     @expose("/<path:ip>", methods=["GET"])
@@ -1952,12 +1981,14 @@ class InfoIpApi(BaseApi):
           summary: Get open ports and tags observed for an IP.
           description: |
             Aggregate indexed scan reports whose last_seen is inside the selected
-            UTC window. Each port lists tags from reports where that
+            UTC window. Each protocol/port pair lists tags from reports where that
             port was observed; tags are computed for whole reports, so this does
             not establish that a tag describes that port's service.
             Per-port last_seen is the latest positive observation in the window;
             min_date is the earliest Kvrocks first_seen among selected HSH reports
             containing that port, and may predate the requested window.
+            Legacy reports without a protocol index return protocol null until
+            their protocol field is backfilled from Meilisearch.
             No continuous openness between scans is implied.
             Default window is the last 30 days. Lookback cannot exceed two years.
           parameters:
@@ -2011,6 +2042,10 @@ class InfoIpApi(BaseApi):
                               properties:
                                 port:
                                   type: integer
+                                protocol:
+                                  type: string
+                                  nullable: true
+                                  enum: [tcp, udp]
                                 tags:
                                   type: array
                                   items:

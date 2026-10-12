@@ -20,6 +20,7 @@ For now far from performance issues anyway.
 
 import ipaddress
 import re
+
 try:
     from .domains import parse_hostname
 except ImportError:
@@ -307,8 +308,7 @@ def serialize_certificate_name(name):
         values = _certificate_values(name.get(source_key))
         if values:
             pairs.extend(
-                f"{output_key}={_escape_certificate_value(value)}"
-                for value in values
+                f"{output_key}={_escape_certificate_value(value)}" for value in values
             )
         consumed.add(source_key)
 
@@ -368,15 +368,30 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
 
     if tag_rules is not None:
         indexed_doc.pop("tag", None)
-        computed_tags = apply_tag_rules_to_document(
-            indexed_doc, tag_rules=tag_rules
-        )
+        computed_tags = apply_tag_rules_to_document(indexed_doc, tag_rules=tag_rules)
         if has_tls_certificate(raw_doc) and "proto:tls" not in computed_tags:
             computed_tags.append("proto:tls")
         if computed_tags:
             indexed_doc["tag"] = computed_tags
 
+    indexed_doc["port_protocol"] = port_protocol_values(raw_doc)
     return indexed_doc
+
+
+def port_protocol_values(raw_doc):
+    """Return valid protocol/port pairs from a raw scan document."""
+    values = set()
+    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+        protocol = port.get("protocol")
+        portid = port.get("portid")
+        if (
+            isinstance(protocol, str)
+            and protocol.lower() in ("tcp", "udp")
+            and str(portid).isdigit()
+            and 0 <= int(portid) <= 65535
+        ):
+            values.add(f"{protocol.lower()}/{int(portid)}")
+    return sorted(values)
 
 
 def get_body(data, target):

@@ -12,13 +12,34 @@ from result_parser import (  # pylint: disable=wrong-import-position
     has_indexed_tls_certificate,
     parse_json,
     prepare_kvrocks_document,
+    port_protocol_values,
 )
-
 
 PARSER_CONFIG = {
     "TLDADD": [],
     "HTTP_HEADER_COLLECTION": {},
 }
+
+
+class PortProtocolTest(TestCase):
+    """Preserve protocol as part of indexed port identity."""
+
+    def test_protocol_port_pairs(self):
+        """Keep TCP and UDP separate and reject malformed pairs."""
+        raw = {
+            "body": {
+                "ports": [
+                    {"portid": "53", "protocol": "TCP"},
+                    {"portid": 53, "protocol": "udp"},
+                    {"portid": "53", "protocol": "tcp"},
+                    {"portid": "bad", "protocol": "tcp"},
+                    {"portid": "22"},
+                ]
+            }
+        }
+        self.assertEqual(port_protocol_values(raw), ["tcp/53", "udp/53"])
+        indexed = prepare_kvrocks_document(raw, {"uid": "one"})
+        self.assertEqual(indexed["port_protocol"], ["tcp/53", "udp/53"])
 
 
 def build_document():
@@ -69,9 +90,7 @@ class FullCertificateIndexTest(TestCase):
         self.assertTrue(has_indexed_tls_certificate(indexed))
         self.assertEqual(parsed["x509_issuer"], ["Dahua Device NVR CA"])
         self.assertEqual(parsed["x509_subject"], ["camera.example.org"])
-        self.assertEqual(
-            indexed["x509_issuer_cn"], ["Dahua Device NVR CA"]
-        )
+        self.assertEqual(indexed["x509_issuer_cn"], ["Dahua Device NVR CA"])
         self.assertEqual(
             indexed["x509_issuer"],
             ["CN=Dahua Device NVR CA, O=Zhejiang Dahua Technology Co.\\,Ltd., C=CN"],

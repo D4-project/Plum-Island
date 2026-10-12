@@ -29,6 +29,7 @@ INDEX_FIELDS = [
     "tld",
     "tag",
     "port",
+    "port_protocol",
     "http_title",
     "http_favicon_path",
     "http_favicon_mmhash",

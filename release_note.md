@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Include TCP/UDP protocol in each InfoIP port entry; index protocol/port pairs in Kvrocks and provide `tools/backfill_port_protocol.py` for existing reports.
+
 - Add per-port `min_date` to InfoIP: earliest Kvrocks `first_seen` among HSH reports selected by the requested time window.
 
 - Add a protected Swagger InfoIP API at `/api/v1/infoip/<ip>` for one public IPv4 or IPv6 address (CIDR rejected), returning per-port tags and UTC `last_seen`. The default window is 30 days, with `days` or `start`/`stop` controls and a two-year lookback cap. Synchronize Read Only permissions with `tools/initial_setup.py --roles-only`.

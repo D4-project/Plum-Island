@@ -73,8 +73,10 @@ class InfoIpApiTest(unittest.TestCase):
                 "ports:old": {"25"},
                 "tags:old": {"proto:smtp"},
                 "ports:a": {"80", "443"},
+                "port_protocols:a": {"tcp/80", "tcp/443"},
                 "tags:a": {"proto:http"},
                 "ports:b": {"443", "22", "bad", "65536"},
+                "port_protocols:b": {"tcp/443", "udp/443", "tcp/22"},
                 "tags:b": {"vendor:example", "tag:proto:http"},
                 "ports:future": {"53"},
                 "tags:future": {"proto:dns"},
@@ -112,20 +114,30 @@ class InfoIpApiTest(unittest.TestCase):
             [
                 {
                     "port": 22,
+                    "protocol": "tcp",
                     "tags": ["proto:http", "vendor:example"],
                     "min_date": "2026-10-12T12:00:00Z",
                     "last_seen": "2026-10-12T12:00:00Z",
                 },
                 {
                     "port": 80,
+                    "protocol": "tcp",
                     "tags": ["proto:http"],
                     "min_date": "2026-09-12T11:43:20Z",
                     "last_seen": "2026-09-12T12:00:01Z",
                 },
                 {
                     "port": 443,
+                    "protocol": "tcp",
                     "tags": ["proto:http", "vendor:example"],
                     "min_date": "2026-09-12T11:43:20Z",
+                    "last_seen": "2026-10-12T12:00:00Z",
+                },
+                {
+                    "port": 443,
+                    "protocol": "udp",
+                    "tags": ["proto:http", "vendor:example"],
+                    "min_date": "2026-10-12T12:00:00Z",
                     "last_seen": "2026-10-12T12:00:00Z",
                 },
             ],
@@ -152,6 +164,15 @@ class InfoIpApiTest(unittest.TestCase):
             response = client.get("/api/v1/infoip/8.8.8.8")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["result"]["ports"], [])
+
+    def test_legacy_report_keeps_unknown_protocol(self):
+        """Do not call an unindexed legacy UDP observation TCP."""
+        indexer = make_indexer({"ports:legacy": {"53"}, "tags:legacy": {"proto:dns"}})
+        rows = InfoIpApi._ports_with_tags(
+            indexer, ["legacy"], {"legacy": {"first_seen": 1, "last_seen": 2}}
+        )
+        self.assertEqual(rows[0]["port"], 53)
+        self.assertIsNone(rows[0]["protocol"])
 
     def test_invalid_ip_cidr_and_missing_auth(self):
         """Reject CIDRs and malformed IPs after auth, without backend reads."""
@@ -196,4 +217,5 @@ class InfoIpApiTest(unittest.TestCase):
         ]["properties"]["result"]["properties"]["ports"]["items"]
         self.assertIn("last_seen", port_schema["properties"])
         self.assertIn("min_date", port_schema["properties"])
+        self.assertIn("protocol", port_schema["properties"])
         self.assertNotIn("first_seen", port_schema["properties"])
