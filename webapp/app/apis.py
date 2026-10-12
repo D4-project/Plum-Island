@@ -11,10 +11,13 @@ This module contains all code related to API's.
 # pylint: disable=too-many-lines
 
 import base64
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 import hashlib
+import ipaddress
 import os
 import json
 import logging
+import re
 import time
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi
@@ -39,6 +42,8 @@ from .models import (
 )
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
+from .utils.kvrocks import KVrocksIndexer
+from .utils.tagrules import normalize_tags
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
 from .utils.scan_cycles import reconcile_scanprofile_cycle
 from .utils.network_enrichment import request_network_refresh
@@ -1816,8 +1821,223 @@ class PortsApi(BaseApi):
         return self.response(200, message=f"Port '{label}' deleted")
 
 
+class IpPortsTagsApi(BaseApi):
+    """Read indexed open ports and co-observed tags for one IP."""
+
+    route_base = "/api/v1/ips"
+    openapi_spec_tag = "IP Scan Summary API"
+    DEFAULT_DAYS = 30
+
+    @staticmethod
+    def _two_years_before(value):
+        """Return the same UTC instant two calendar years earlier."""
+        try:
+            return value.replace(year=value.year - 2)
+        except ValueError:  # February 29 in a leap year.
+            return value.replace(year=value.year - 2, day=28)
+
+    @staticmethod
+    def _parse_boundary(value, end_of_day=False):
+        """Accept an ISO date or timezone-aware ISO datetime."""
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            boundary = datetime_time.max if end_of_day else datetime_time.min
+            return datetime.combine(
+                date.fromisoformat(value), boundary, tzinfo=timezone.utc
+            )
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("Datetime must include a timezone")
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
+    def _explicit_window(cls, start, stop, now):
+        """Parse paired ISO boundaries, including a whole date-only stop day."""
+        if not start or not stop:
+            raise ValueError("Both start and stop are required")
+        try:
+            from_date = cls._parse_boundary(start)
+            to_date = cls._parse_boundary(stop, end_of_day=True)
+        except ValueError as error:
+            raise ValueError("Use ISO dates or timezone-aware ISO datetimes") from error
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", stop) and to_date.date() == now.date():
+            to_date = now
+        return from_date, to_date
+
+    @classmethod
+    def _days_window(cls, days, now):
+        """Parse a rolling number of days."""
+        if days is None:
+            period_days = cls.DEFAULT_DAYS
+        elif not re.fullmatch(r"[1-9]\d*", days) or len(days) > 3:
+            raise ValueError("days must be a positive integer up to two years")
+        else:
+            period_days = int(days)
+        if period_days > 731:
+            raise ValueError("The maximum lookback is two years")
+        return now - timedelta(days=period_days), now
+
+    @classmethod
+    def _resolve_window(cls, args, now=None):
+        """Resolve days or start/stop within the latest two calendar years."""
+        now = now or datetime.now(timezone.utc)
+        days = args.get("days")
+        start = args.get("start")
+        stop = args.get("stop")
+        if any(len(args.getlist(key)) > 1 for key in ("days", "start", "stop")):
+            raise ValueError("Specify each time parameter only once")
+        if days is not None and (start is not None or stop is not None):
+            raise ValueError("Use either days or start and stop")
+        if start is not None or stop is not None:
+            from_date, to_date = cls._explicit_window(start, stop, now)
+        else:
+            from_date, to_date = cls._days_window(days, now)
+        if from_date > to_date:
+            raise ValueError("start must be before stop")
+        if to_date > now:
+            raise ValueError("stop cannot be in the future")
+        if from_date < cls._two_years_before(now):
+            raise ValueError("The maximum lookback is two years")
+        return from_date, to_date
+
+    @staticmethod
+    def _ports_with_tags(indexer, selected):
+        """Collect tags co-observed with each open port in selected reports."""
+        if not selected:
+            return []
+        pipeline = indexer.r.pipeline(transaction=False)
+        for uid in selected:
+            pipeline.smembers(f"ports:{uid}")
+            pipeline.smembers(f"tags:{uid}")
+        values = pipeline.execute()
+        port_tags = {}
+        for ports, tags in zip(values[::2], values[1::2]):
+            for port in ports:
+                if str(port).isdigit() and 0 <= int(port) <= 65535:
+                    port_tags.setdefault(int(port), set()).update(tags)
+        return [
+            {"port": port, "tags": sorted(normalize_tags(tags), key=str.lower)}
+            for port, tags in sorted(port_tags.items())
+        ]
+
+    @expose("/<string:ip>/ports-tags", methods=["GET"])
+    @protect()
+    @safe
+    def get(self, ip):
+        """
+        ---
+        get:
+          summary: Get open ports and tags observed for an IP.
+          description: |
+            Aggregate indexed scan reports whose observation interval overlaps
+            the selected UTC window. Each port lists tags from reports where that
+            port was observed; tags are computed for whole reports, so this does
+            not establish that a tag describes that port's service.
+            Default window is the last 30 days. Lookback cannot exceed two years.
+          parameters:
+            - in: path
+              name: ip
+              required: true
+              schema:
+                type: string
+              description: Public IPv4 or IPv6 address.
+            - in: query
+              name: days
+              schema:
+                type: integer
+                minimum: 1
+                maximum: 731
+                default: 30
+              description: Rolling days before now; mutually exclusive with start/stop.
+            - in: query
+              name: start
+              schema:
+                type: string
+              description: UTC ISO date or timezone-aware datetime; requires stop.
+            - in: query
+              name: stop
+              schema:
+                type: string
+              description: UTC ISO date or timezone-aware datetime; requires start.
+          responses:
+            "200":
+              description: Distinct open ports with tags co-observed in their reports.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          ip:
+                            type: string
+                          start:
+                            type: string
+                            format: date-time
+                          stop:
+                            type: string
+                            format: date-time
+                          ports:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                port:
+                                  type: integer
+                                tags:
+                                  type: array
+                                  items:
+                                    type: string
+                          report_count:
+                            type: integer
+            "400":
+              description: Invalid IP or time parameters.
+            "404":
+              description: IP has no indexed reports.
+            "401":
+              description: Authentication required.
+            "403":
+              description: Permission denied.
+        """
+        if not is_valid_ip(ip):
+            return self.response_400(message="Invalid public IP address")
+        try:
+            from_date, to_date = self._resolve_window(request.args)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        normalized_ip = str(ipaddress.ip_address(ip))
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        timestamps = indexer.get_timestamp_for_ip(normalized_ip)
+        uids = [uid for uid in timestamps if uid not in ("min_seen", "max_seen")]
+        if not uids:
+            return self.response_404()
+
+        selected = sorted(
+            uid
+            for uid in uids
+            if timestamps[uid].get("first_seen") is not None
+            and timestamps[uid].get("last_seen") is not None
+            and timestamps[uid]["first_seen"] <= int(to_date.timestamp())
+            and timestamps[uid]["last_seen"] >= int(from_date.timestamp())
+        )
+        return self.response(
+            200,
+            result={
+                "ip": normalized_ip,
+                "start": from_date.isoformat().replace("+00:00", "Z"),
+                "stop": to_date.isoformat().replace("+00:00", "Z"),
+                "ports": self._ports_with_tags(indexer, selected),
+                "report_count": len(selected),
+            },
+        )
+
+
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
 appbuilder.add_api(NsesApi)
 appbuilder.add_api(PortsApi)
+appbuilder.add_api(IpPortsTagsApi)

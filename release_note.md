@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Add a protected Swagger IP ports/tags summary API with a 30-day default window, `days` or `start`/`stop` controls, and a two-year lookback cap.
+
 - Restore Read Only access to Search Scans, Token Search and Stats, including search helper requests; hide and revoke Bulk Import access for that role. Apply the updated role with `tools/initial_setup.py --roles-only`.
 
 - Restore Read Only access to the IP detail WHOIS tab and show clear errors for non-JSON responses; synchronize the updated role with `tools/initial_setup.py --roles-only`, closes #233.

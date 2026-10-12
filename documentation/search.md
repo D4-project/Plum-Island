@@ -4,6 +4,25 @@ Contributor reference: [search engine internals and change contract](sysinternal
 
 Plum Island stores parsed scan results in Kvrocks indexes. The main search UI uses these indexes to find matching scan documents and then loads full result details from Meilisearch when needed.
 
+## IP ports and tags API
+
+`GET /api/v1/ips/<ip>/ports-tags` is a protected, Swagger-documented endpoint
+that returns distinct open ports and their co-observed tags for indexed scan
+reports of one public IPv4 or IPv6 address. It reads the compact Kvrocks indexes.
+Each port entry has `port` and `tags` fields. A tag is associated with a port when
+both occurred in the same scan report; tags are computed for the whole report,
+so they do not necessarily describe that port's service. Results are historical
+observations within the selected window, not a claim that each port is open now.
+
+The default window is the rolling last 30 days. Use `?days=90` or pass both
+`?start=2026-09-01&stop=2026-09-30`. Dates use UTC; timezone-aware ISO datetimes
+also work. `days` cannot be combined with `start`/`stop`. The earliest permitted
+start is two calendar years before the request, and future stop times are rejected.
+The API returns `404` when the IP has never been indexed and an empty `ports` list
+when indexed reports exist but none overlap the selected window.
+Access uses the `can_get` permission on `IpPortsTagsApi`; the default Read Only
+role includes it after `tools/initial_setup.py --roles-only` synchronizes roles.
+
 ## Query syntax
 
 The small swap icon at the right of the keyword table header switches between
