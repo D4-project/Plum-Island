@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Restore Read Only access to the IP detail WHOIS tab and show clear errors for non-JSON responses; synchronize the updated role with `tools/initial_setup.py --roles-only`, closes #233.
+
 - Attach the complete PDF to manual and scheduled report emails; keep only report metadata, open-port counts, disclaimer and an attachment notice in the email body. Preserve PDF index and links; abort delivery if PDF generation fails.
 
 - Validate report queries before add/edit using the existing search parser and shared Plum-Antibodies tag validator; show field errors without querying search backends or changing saved schedules on failure, refs #230.

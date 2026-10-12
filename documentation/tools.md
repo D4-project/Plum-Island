@@ -163,6 +163,10 @@ The default role file creates a `Read Only` role from `webapp/security_roles/rea
 The file is intentionally plain YAML so permissions can be maintained without editing Python code.
 Use `--roles-only` during deployments to synchronize role permissions in an existing database
 without reseeding ports, headers, tag rules, NSE scripts, or scan profiles.
+After deploying a change to `webapp/security_roles/read_only.yaml`, run
+`.venv/bin/python tools/initial_setup.py --roles-only` from the repository root
+to apply it to existing Read Only users. Use the deployment's Python environment
+path if it differs from `.venv`.
 
 Imported NSE files are copied into the Flask upload folder and stored in the DB with their filename and SHA-256 hash.
 If a script with the same filename already exists, it is updated only when the content hash changed.

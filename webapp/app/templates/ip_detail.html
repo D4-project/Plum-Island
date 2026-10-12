@@ -661,8 +661,16 @@
                 credentials: 'same-origin',
                 headers: { Accept: 'application/json' }
             });
+            const isJson = (response.headers.get('content-type') || '').toLowerCase().includes('json');
+            if (!response.ok) {
+                const fallback = response.status === 401 || response.status === 403
+                    ? 'WHOIS access denied or session expired.'
+                    : `WHOIS lookup failed (${response.status}).`;
+                const data = isJson ? await response.json() : null;
+                throw new Error(data?.error || fallback);
+            }
+            if (!isJson) throw new Error('WHOIS returned an unexpected response. Sign in and retry.');
             const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'WHOIS lookup failed.');
             loading.style.display = 'none';
             result.style.display = 'block';
             result.textContent = data.result || 'No WHOIS record returned.';
