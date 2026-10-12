@@ -10,11 +10,14 @@ Plum Island stores parsed scan results in Kvrocks indexes. The main search UI us
 that returns distinct open ports and their co-observed tags for indexed scan
 reports of one public IPv4 or IPv6 address. CIDR ranges are rejected with `400`.
 It reads the compact Kvrocks indexes.
-Each port entry has `port`, `tags`, and `last_seen` fields. A tag is associated
+Each port entry has `port`, `tags`, `min_date`, and `last_seen` fields. A tag is associated
 with a port when both occurred in the same scan report; tags are computed for the whole report,
 so they do not necessarily describe that port's service. Results are historical
 observations within the selected window, not a claim that each port is open now.
 `last_seen` is the latest UTC open-port observation in the selected window.
+`min_date` is the earliest UTC `first_seen` stored in Kvrocks among selected HSH
+report IDs containing that port. It can be earlier than the requested window;
+it does not imply the port stayed open continuously.
 Only reports whose `last_seen` falls within that window are selected. A gap
 between scans does not imply continuous openness; older observations of the same
 report ID are not individually dated by this index.
@@ -24,8 +27,8 @@ The default window is the rolling last 30 days. Use `?days=90` or pass both
 also work. `days` cannot be combined with `start`/`stop`. The earliest permitted
 start is two calendar years before the request, and future stop times are rejected.
 The API returns `404` when the IP has never been indexed and an empty `ports` list
-when indexed reports exist but none overlap the selected window.
-Access uses the `can_get` permission on `IpPortsTagsApi`; the default Read Only
+when indexed reports exist but none have `last_seen` in the selected window.
+Access uses the `can_get` permission on `InfoIpApi`; the default Read Only
 role includes it after `tools/initial_setup.py --roles-only` synchronizes roles.
 
 ## Query syntax

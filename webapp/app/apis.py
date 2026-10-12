@@ -1901,7 +1901,7 @@ class InfoIpApi(BaseApi):
 
     @staticmethod
     def _ports_with_tags(indexer, selected, timestamps):
-        """Collect per-port tags and latest observation from selected reports."""
+        """Collect per-port tags and seen bounds from selected HSH reports."""
         if not selected:
             return []
         pipeline = indexer.r.pipeline(transaction=False)
@@ -1917,10 +1917,14 @@ class InfoIpApi(BaseApi):
                         int(port),
                         {
                             "tags": set(),
+                            "min_date": timestamps[uid]["first_seen"],
                             "last_seen": timestamps[uid]["last_seen"],
                         },
                     )
                     entry["tags"].update(tags)
+                    entry["min_date"] = min(
+                        entry["min_date"], timestamps[uid]["first_seen"]
+                    )
                     entry["last_seen"] = max(
                         entry["last_seen"], timestamps[uid]["last_seen"]
                     )
@@ -1928,6 +1932,9 @@ class InfoIpApi(BaseApi):
             {
                 "port": port,
                 "tags": sorted(normalize_tags(data["tags"]), key=str.lower),
+                "min_date": datetime.fromtimestamp(data["min_date"], timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
                 "last_seen": datetime.fromtimestamp(data["last_seen"], timezone.utc)
                 .isoformat()
                 .replace("+00:00", "Z"),
@@ -1949,7 +1956,9 @@ class InfoIpApi(BaseApi):
             port was observed; tags are computed for whole reports, so this does
             not establish that a tag describes that port's service.
             Per-port last_seen is the latest positive observation in the window;
-            no continuous openness between scans is implied.
+            min_date is the earliest Kvrocks first_seen among selected HSH reports
+            containing that port, and may predate the requested window.
+            No continuous openness between scans is implied.
             Default window is the last 30 days. Lookback cannot exceed two years.
           parameters:
             - in: path
@@ -2006,6 +2015,9 @@ class InfoIpApi(BaseApi):
                                   type: array
                                   items:
                                     type: string
+                                min_date:
+                                  type: string
+                                  format: date-time
                                 last_seen:
                                   type: string
                                   format: date-time
