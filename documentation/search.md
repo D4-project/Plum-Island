@@ -10,12 +10,12 @@ Plum Island stores parsed scan results in Kvrocks indexes. The main search UI us
 that returns distinct open ports and their co-observed tags for indexed scan
 reports of one public IPv4 or IPv6 address. CIDR ranges are rejected with `400`.
 It reads the compact Kvrocks indexes.
-Each port entry has `port`, `protocol` (`tcp` or `udp`), `tags`, `min_date`, and `last_seen` fields. TCP and UDP on the same numbered port have separate entries. A tag is associated
+Each port entry has `port`, `protocol` (`tcp` or `udp`), `tags`, `first_seen`, and `last_seen` fields. TCP and UDP on the same numbered port have separate entries. A tag is associated
 with a port when both occurred in the same scan report; tags are computed for the whole report,
 so they do not necessarily describe that port's service. Results are historical
 observations within the selected window, not a claim that each port is open now.
 `last_seen` is the latest UTC open-port observation in the selected window.
-`min_date` is the earliest UTC `first_seen` stored in Kvrocks among selected HSH
+`first_seen` is the earliest UTC `first_seen` stored in Kvrocks among selected HSH
 report IDs containing that port. It can be earlier than the requested window;
 it does not imply the port stayed open continuously.
 Only reports whose `last_seen` falls within that window are selected. A gap

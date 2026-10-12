@@ -117,28 +117,28 @@ class InfoIpApiTest(unittest.TestCase):
                     "port": 22,
                     "protocol": "tcp",
                     "tags": ["proto:http", "vendor:example"],
-                    "min_date": "2026-10-12T12:00:00Z",
+                    "first_seen": "2026-10-12T12:00:00Z",
                     "last_seen": "2026-10-12T12:00:00Z",
                 },
                 {
                     "port": 80,
                     "protocol": "tcp",
                     "tags": ["proto:http"],
-                    "min_date": "2026-09-12T11:43:20Z",
+                    "first_seen": "2026-09-12T11:43:20Z",
                     "last_seen": "2026-09-12T12:00:01Z",
                 },
                 {
                     "port": 443,
                     "protocol": "tcp",
                     "tags": ["proto:http", "vendor:example"],
-                    "min_date": "2026-09-12T11:43:20Z",
+                    "first_seen": "2026-09-12T11:43:20Z",
                     "last_seen": "2026-10-12T12:00:00Z",
                 },
                 {
                     "port": 443,
                     "protocol": "udp",
                     "tags": ["proto:http", "vendor:example"],
-                    "min_date": "2026-10-12T12:00:00Z",
+                    "first_seen": "2026-10-12T12:00:00Z",
                     "last_seen": "2026-10-12T12:00:00Z",
                 },
             ],
@@ -254,6 +254,6 @@ class InfoIpApiTest(unittest.TestCase):
             "schema"
         ]["properties"]["result"]["properties"]["ports"]["items"]
         self.assertIn("last_seen", port_schema["properties"])
-        self.assertIn("min_date", port_schema["properties"])
+        self.assertIn("first_seen", port_schema["properties"])
         self.assertIn("protocol", port_schema["properties"])
-        self.assertNotIn("first_seen", port_schema["properties"])
+        self.assertNotIn("min_date", port_schema["properties"])

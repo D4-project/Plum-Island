@@ -17,9 +17,9 @@ import ipaddress
 import os
 import json
 import logging
-import meilisearch
 import re
 import time
+import meilisearch
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi
 from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, protect
@@ -1987,13 +1987,13 @@ class InfoIpApi(BaseApi):
                     (port, protocol),
                     {
                         "tags": set(),
-                        "min_date": timestamps[uid]["first_seen"],
+                        "first_seen": timestamps[uid]["first_seen"],
                         "last_seen": timestamps[uid]["last_seen"],
                     },
                 )
                 entry["tags"].update(tags)
-                entry["min_date"] = min(
-                    entry["min_date"], timestamps[uid]["first_seen"]
+                entry["first_seen"] = min(
+                    entry["first_seen"], timestamps[uid]["first_seen"]
                 )
                 entry["last_seen"] = max(
                     entry["last_seen"], timestamps[uid]["last_seen"]
@@ -2003,7 +2003,7 @@ class InfoIpApi(BaseApi):
                 "port": port,
                 "protocol": protocol,
                 "tags": sorted(normalize_tags(data["tags"]), key=str.lower),
-                "min_date": datetime.fromtimestamp(data["min_date"], timezone.utc)
+                "first_seen": datetime.fromtimestamp(data["first_seen"], timezone.utc)
                 .isoformat()
                 .replace("+00:00", "Z"),
                 "last_seen": datetime.fromtimestamp(data["last_seen"], timezone.utc)
@@ -2029,7 +2029,7 @@ class InfoIpApi(BaseApi):
             port was observed; tags are computed for whole reports, so this does
             not establish that a tag describes that port's service.
             Per-port last_seen is the latest positive observation in the window;
-            min_date is the earliest Kvrocks first_seen among selected HSH reports
+            first_seen is the earliest Kvrocks first_seen among selected HSH reports
             containing that port, and may predate the requested window.
             Legacy reports lacking protocol indexes are resolved from Meilisearch
             for this IP and cached in Kvrocks. If unavailable, protocol is null.
@@ -2094,7 +2094,7 @@ class InfoIpApi(BaseApi):
                                   type: array
                                   items:
                                     type: string
-                                min_date:
+                                first_seen:
                                   type: string
                                   format: date-time
                                 last_seen:
