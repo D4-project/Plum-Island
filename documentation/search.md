@@ -4,11 +4,12 @@ Contributor reference: [search engine internals and change contract](sysinternal
 
 Plum Island stores parsed scan results in Kvrocks indexes. The main search UI uses these indexes to find matching scan documents and then loads full result details from Meilisearch when needed.
 
-## IP Quick API
+## InfoIP API
 
-`GET /api/v1/ip-quick/<ip>` is a protected, Swagger-documented endpoint
+`GET /api/v1/infoip/<ip>` is a protected, Swagger-documented endpoint
 that returns distinct open ports and their co-observed tags for indexed scan
-reports of one public IPv4 or IPv6 address. It reads the compact Kvrocks indexes.
+reports of one public IPv4 or IPv6 address. CIDR ranges are rejected with `400`.
+It reads the compact Kvrocks indexes.
 Each port entry has `port`, `tags`, and `last_seen` fields. A tag is associated
 with a port when both occurred in the same scan report; tags are computed for the whole report,
 so they do not necessarily describe that port's service. Results are historical

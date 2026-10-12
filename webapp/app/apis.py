@@ -1821,10 +1821,10 @@ class PortsApi(BaseApi):
         return self.response(200, message=f"Port '{label}' deleted")
 
 
-class IpQuickApi(BaseApi):
+class InfoIpApi(BaseApi):
     """Read indexed open ports and co-observed tags for one IP."""
 
-    route_base = "/api/v1/ip-quick"
+    route_base = "/api/v1/infoip"
     openapi_spec_tag = "IP Scan Summary API"
     DEFAULT_DAYS = 30
 
@@ -1935,7 +1935,7 @@ class IpQuickApi(BaseApi):
             for port, data in sorted(port_data.items())
         ]
 
-    @expose("/<string:ip>", methods=["GET"])
+    @expose("/<path:ip>", methods=["GET"])
     @protect()
     @safe
     def get(self, ip):
@@ -1957,7 +1957,7 @@ class IpQuickApi(BaseApi):
               required: true
               schema:
                 type: string
-              description: Public IPv4 or IPv6 address.
+              description: One public IPv4 or IPv6 address; CIDR ranges are rejected.
             - in: query
               name: days
               schema:
@@ -2021,7 +2021,9 @@ class IpQuickApi(BaseApi):
               description: Permission denied.
         """
         if not is_valid_ip(ip):
-            return self.response_400(message="Invalid public IP address")
+            return self.response_400(
+                message="Invalid public IP address; CIDR ranges are not accepted"
+            )
         try:
             from_date, to_date = self._resolve_window(request.args)
         except ValueError as error:
@@ -2061,4 +2063,4 @@ appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
 appbuilder.add_api(NsesApi)
 appbuilder.add_api(PortsApi)
-appbuilder.add_api(IpQuickApi)
+appbuilder.add_api(InfoIpApi)

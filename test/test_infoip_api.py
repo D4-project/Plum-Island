@@ -8,12 +8,12 @@ from test.test_kvrocks_search import make_indexer
 from werkzeug.datastructures import MultiDict
 
 from app import app, appbuilder
-from app.apis import IpQuickApi
+from app.apis import InfoIpApi
 
 NOW = datetime(2026, 10, 12, 12, 0, tzinfo=timezone.utc)
 
 
-class IpQuickApiTest(unittest.TestCase):
+class InfoIpApiTest(unittest.TestCase):
     """Exercise the registered API without live Kvrocks or JWT service."""
 
     # Unit tests intentionally exercise the window parser independently.
@@ -33,13 +33,13 @@ class IpQuickApiTest(unittest.TestCase):
 
     def test_default_days_and_explicit_window(self):
         """Defaults to 30 days; date-only stop covers that UTC day."""
-        start, stop = IpQuickApi._resolve_window(MultiDict(), now=NOW)
+        start, stop = InfoIpApi._resolve_window(MultiDict(), now=NOW)
         self.assertEqual((start, stop), (NOW - timedelta(days=30), NOW))
 
-        start, stop = IpQuickApi._resolve_window(MultiDict([("days", "90")]), now=NOW)
+        start, stop = InfoIpApi._resolve_window(MultiDict([("days", "90")]), now=NOW)
         self.assertEqual((start, stop), (NOW - timedelta(days=90), NOW))
 
-        start, stop = IpQuickApi._resolve_window(
+        start, stop = InfoIpApi._resolve_window(
             MultiDict([("start", "2026-09-01"), ("stop", "2026-09-30")]),
             now=NOW,
         )
@@ -61,7 +61,7 @@ class IpQuickApiTest(unittest.TestCase):
         )
         for params in cases:
             with self.subTest(params=params), self.assertRaises(ValueError):
-                IpQuickApi._resolve_window(MultiDict(params), now=NOW)
+                InfoIpApi._resolve_window(MultiDict(params), now=NOW)
 
     def test_aggregates_only_reports_last_seen_in_window(self):
         """Exclude old, future and interval-spanning reports without a recent scan."""
@@ -98,11 +98,11 @@ class IpQuickApiTest(unittest.TestCase):
         with patches[0], patches[1], patches[2], patch(
             "app.apis.KVrocksIndexer", return_value=indexer
         ), patch.object(
-            IpQuickApi,
+            InfoIpApi,
             "_resolve_window",
             return_value=(NOW - timedelta(days=30), NOW),
         ):
-            response = app.test_client().get("/api/v1/ip-quick/8.8.8.8")
+            response = app.test_client().get("/api/v1/infoip/8.8.8.8")
 
         self.assertEqual(response.status_code, 200)
         result = response.json["result"]
@@ -140,28 +140,39 @@ class IpQuickApiTest(unittest.TestCase):
         with patches[0], patches[1], patches[2], patch(
             "app.apis.KVrocksIndexer", return_value=indexer
         ), patch.object(
-            IpQuickApi,
+            InfoIpApi,
             "_resolve_window",
             return_value=(NOW - timedelta(days=30), NOW),
         ):
             client = app.test_client()
-            self.assertEqual(client.get("/api/v1/ip-quick/1.1.1.1").status_code, 404)
-            response = client.get("/api/v1/ip-quick/8.8.8.8")
+            self.assertEqual(client.get("/api/v1/infoip/1.1.1.1").status_code, 404)
+            response = client.get("/api/v1/infoip/8.8.8.8")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["result"]["ports"], [])
 
-    def test_invalid_ip_and_missing_auth(self):
-        """Input is validated after FAB authentication, without backend reads."""
+    def test_invalid_ip_cidr_and_missing_auth(self):
+        """Reject CIDRs and malformed IPs after auth, without backend reads."""
         self.assertIn(
-            app.test_client().get("/api/v1/ip-quick/8.8.8.8").status_code,
+            app.test_client().get("/api/v1/infoip/8.8.8.8").status_code,
             (401, 403),
         )
         patches = self._authorized()
         with patches[0], patches[1], patches[2], patch(
             "app.apis.KVrocksIndexer"
         ) as indexer:
-            response = app.test_client().get("/api/v1/ip-quick/not-an-ip")
-        self.assertEqual(response.status_code, 400)
+            client = app.test_client()
+            for ip in (
+                "not-an-ip",
+                "8.8.8.8,1.1.1.1",
+                "8.8.8.8/24",
+                "2001:4860:4860::8888/128",
+            ):
+                with self.subTest(ip=ip):
+                    response = client.get(f"/api/v1/infoip/{ip}")
+                    self.assertEqual(response.status_code, 400)
+                    self.assertIn(
+                        "CIDR ranges are not accepted", response.json["message"]
+                    )
         indexer.assert_not_called()
 
     def test_route_is_in_openapi_spec(self):
@@ -169,7 +180,7 @@ class IpQuickApiTest(unittest.TestCase):
         with patch.object(appbuilder.sm, "has_access", return_value=True):
             response = app.test_client().get("/api/v1/_openapi")
         self.assertEqual(response.status_code, 200)
-        endpoint = response.json["paths"]["/api/v1/ip-quick/{ip}"]["get"]
+        endpoint = response.json["paths"]["/api/v1/infoip/{ip}"]["get"]
         self.assertEqual(
             endpoint["summary"], "Get open ports and tags observed for an IP."
         )
