@@ -105,6 +105,14 @@ def parse_args(argv=None):
         help="Do not rebuild OUT Kvrocks; only replace OUT Meilisearch.",
     )
     parser.add_argument(
+        "--allow-history-loss",
+        action="store_true",
+        help=(
+            "Allow missing/invalid .time companions when rebuilding Kvrocks. "
+            "Affected reports fall back to JSON scan dates and lose historical bounds."
+        ),
+    )
+    parser.add_argument(
         "--areyousure_yes",
         action="store_true",
         help=(
@@ -253,40 +261,92 @@ def format_progress(count, total_count):
     return f"{count}/{total_count} ({percentage:.1f}%) todo={todo}"
 
 
-def load_time_snapshot(input_dir):
+def dump_document_uid(json_file):
+    """Read the UID used by the parser, rather than assuming the filename."""
+    try:
+        with open(json_file, encoding="utf-8") as json_handle:
+            document = json.load(json_handle)
+        uid = document.get("id") if isinstance(document, dict) else None
+        if (
+            isinstance(uid, bool)
+            or not isinstance(uid, (str, int))
+            or not str(uid).strip()
+        ):
+            raise ValueError("expected one JSON document with a nonempty id")
+        return uid
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"Invalid dump document {json_file}: {error}") from error
+
+
+def complete_seen_range(data):
+    """Require both finite, nonnegative bounds; never invent a missing bound."""
+    if not isinstance(data, dict):
+        raise ValueError("expected a timestamp object")
+    bounds = []
+    for name in ("first_seen", "last_seen"):
+        value = data.get(name)
+        if isinstance(value, bool):
+            raise ValueError(f"invalid {name}")
+        normalized = index_kvrocks.KVrocksIndexer.normalize_timestamp(value)
+        if normalized is None:
+            raise ValueError(f"missing or invalid {name}")
+        bounds.append(normalized)
+    if bounds[0] > bounds[1]:
+        raise ValueError("first_seen is later than last_seen")
+    return bounds[0], bounds[1]
+
+
+def load_time_snapshot(input_dir, allow_history_loss=False):
     """
-    Load .time companion files into index_kvrocks seen_snapshot shape.
+    Validate all dump history before replacement; retain it for the rebuild.
     """
     snapshot = {}
     missing = 0
     invalid = 0
+    examples = []
 
     for json_file in iter_json_files(input_dir):
+        uid = dump_document_uid(json_file)
         time_file = json_file.with_suffix(".time")
         if not time_file.is_file():
             missing += 1
+            if len(examples) < 3:
+                examples.append(str(time_file))
             continue
 
         try:
             with open(time_file, "r", encoding="utf-8") as time_handle:
                 data = json.load(time_handle)
-            first_seen, last_seen = index_kvrocks.KVrocksIndexer.normalize_seen_range(
-                data.get("first_seen"), data.get("last_seen")
-            )
-        except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            first_seen, last_seen = complete_seen_range(data)
+        except (OSError, TypeError, ValueError, OverflowError):
             invalid += 1
+            if len(examples) < 3:
+                examples.append(str(time_file))
             continue
 
-        if first_seen is None or last_seen is None:
-            invalid += 1
-            continue
-        snapshot[json_file.stem] = (first_seen, last_seen)
+        previous = snapshot.get(uid, (first_seen, last_seen))
+        snapshot[uid] = (min(previous[0], first_seen), max(previous[1], last_seen))
 
     print(
         "Loaded .time companions: "
         f"usable={len(snapshot)} missing={missing} invalid={invalid}",
         flush=True,
     )
+    if missing or invalid:
+        message = (
+            f"Incomplete dump history: missing={missing} invalid={invalid}. "
+            f"Examples: {', '.join(examples)}."
+        )
+        if not allow_history_loss:
+            raise SystemExit(
+                f"{message} Refusing replacement. Restore complete .time companions "
+                "or explicitly use --allow-history-loss to fall back to JSON scan dates."
+            )
+        print(
+            f"[WARN] {message} --allow-history-loss enabled: historical bounds may be lost.",
+            file=sys.stderr,
+            flush=True,
+        )
     return snapshot
 
 
@@ -683,7 +743,9 @@ def prepare_index_kvrocks_runtime():
     )
 
 
-def rebuild_kvrocks_from_dump(input_dir, batch_size, workers, total_count):
+def rebuild_kvrocks_from_dump(
+    input_dir, batch_size, workers, total_count, seen_snapshot=None
+):
     """
     Rebuild OUT Kvrocks from port-scoped dump and .time companions.
     """
@@ -698,7 +760,8 @@ def rebuild_kvrocks_from_dump(input_dir, batch_size, workers, total_count):
         index_kvrocks.KVROCKS_HOST,
         index_kvrocks.KVROCKS_PORT,
     )
-    seen_snapshot = load_time_snapshot(input_dir)
+    if seen_snapshot is None:
+        seen_snapshot = load_time_snapshot(input_dir)
 
     index_kvrocks.rebuild_kvrocks(indexer, include_tags=True)
     deleted_doc_keys = index_kvrocks.delete_keys_by_pattern(indexer.r, "doc:*")
@@ -768,8 +831,12 @@ def main(argv=None):
         skip_kvrocks=args.skip_kvrocks,
     )
 
+    seen_snapshot = None
     if not args.skip_kvrocks:
         prepare_index_kvrocks_runtime()
+        seen_snapshot = load_time_snapshot(
+            input_dir, allow_history_loss=args.allow_history_loss
+        )
     if not args.skip_meili:
         replace_meili_from_dump(
             input_dir,
@@ -782,7 +849,11 @@ def main(argv=None):
         )
     if not args.skip_kvrocks:
         result = rebuild_kvrocks_from_dump(
-            input_dir, batch_size, args.workers, total_count
+            input_dir,
+            batch_size,
+            args.workers,
+            total_count,
+            seen_snapshot=seen_snapshot,
         )
         if result[2] or result[1] != total_count:
             raise SystemExit(

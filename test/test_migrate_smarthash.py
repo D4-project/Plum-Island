@@ -413,12 +413,7 @@ class ImportSafetyTests(unittest.TestCase):
             doc, error = docs[0]
             self.assertIsNone(error)
             self.assertNotIn(doc["id"], ("old-a", "old-b"))
-            normalizer = SimpleNamespace(
-                normalize_seen_range=lambda first, last: (
-                    migration.timestamp(first),
-                    migration.timestamp(last),
-                )
-            )
+            normalizer = SimpleNamespace(normalize_timestamp=migration.timestamp)
             with mock.patch.object(
                 importer.index_kvrocks, "KVrocksIndexer", normalizer
             ):
@@ -437,6 +432,7 @@ class ImportSafetyTests(unittest.TestCase):
                 validate_out_targets=mock.Mock(),
                 print_out_targets=mock.Mock(),
                 prepare_index_kvrocks_runtime=mock.Mock(),
+                load_time_snapshot=mock.Mock(return_value={"doc": (1, 2)}),
                 rebuild_kvrocks_from_dump=mock.Mock(return_value=(1, 0, 1)),
             ):
                 with self.assertRaisesRegex(SystemExit, "Incomplete Kvrocks"):

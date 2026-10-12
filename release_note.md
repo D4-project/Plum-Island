@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Validate complete dump history before replacing Meilisearch or Kvrocks in `reimport_port_dump.py`; missing/invalid `.time` companions require explicit `--allow-history-loss`. Preserve validated dates by document ID and clarify standard rebuild history preservation, refs #140.
+
 - Include TCP/UDP protocol in each InfoIP port entry; index protocol/port pairs in Kvrocks, resolve older reports on demand from Meilisearch, and provide `tools/backfill_port_protocol.py` for bulk backfill.
 
 - Add per-port `first_seen` to InfoIP: earliest Kvrocks observation among HSH reports selected by the requested time window.
