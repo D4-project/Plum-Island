@@ -113,6 +113,19 @@ imports do not swap; incomplete Kvrocks rebuilds exit with failure. Only data in
 the complete input dump can be restored. Source-only Kvrocks UIDs absent from
 Meilisearch require separate recovery before migration.
 
+Before modifying either backend, the importer validates every `.time` companion
+when Kvrocks is being rebuilt. Both `first_seen` and `last_seen` must be valid,
+nonnegative timestamps, with `first_seen <= last_seen`. Missing, partial, malformed
+or non-finite bounds abort the import. The snapshot uses each JSON document's ID,
+not its filename, and merges bounds if several files have the same ID. Keep the
+dump unchanged throughout the operation; the validated snapshot is reused after
+Meilisearch replacement.
+
+`--allow-history-loss` explicitly allows unavailable/invalid history and prints a
+warning. Affected reports use JSON scan dates, which cannot restore accumulated
+historical bounds. `--areyousure_yes` alone does not bypass the history check.
+`--skip-kvrocks` leaves Kvrocks history untouched and does not require `.time` files.
+
 The legacy `split_meili_dump_by_port.py` does not merge colliding `.time` files;
 use this migration tool for date-only deduplication instead.
 
@@ -372,7 +385,9 @@ During reimport, it preserves:
 - earliest known `first_seen`
 - latest known `last_seen`
 
-This protects timestamps for documents that are present in the rebuild source. If a document exists only in Kvrocks and is missing from the dump or Meilisearch source, it will not be recreated after a rebuild.
+This protects timestamps for documents that are present in the rebuild source.
+For UIDs absent from that source, the metadata hash remains but rebuilt search
+indexes are not restored.
 
 For extra safety before a full clean rebuild, export `first_seen` to CSV, rebuild, then import the CSV:
 

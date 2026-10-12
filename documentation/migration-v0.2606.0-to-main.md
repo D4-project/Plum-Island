@@ -122,7 +122,13 @@ First run a complete reimport against disposable OUT Meilisearch and Kvrocks. Co
   --areyousure_yes
 ```
 
-The importer loads a temporary Meilisearch index, swaps it into `INDEX_NAME` after a complete import, and removes the previous index. It then clears known Plum Kvrocks indexes and all `doc:*` keys in OUT, reparses the prepared documents, and rebuilds keys under the new IDs using the `.time` companions. IN remains untouched when it is separate from OUT. External references to old IDs outside these two backends are not rewritten.
+Before either backend is modified, the importer validates and loads complete
+`first_seen`/`last_seen` pairs from every `.time` companion. Missing or invalid
+history aborts this migration; restore the prepared companions before retrying.
+The general-purpose `--allow-history-loss` override deliberately waives this
+protection and should not be used for a migration that must preserve history.
+
+The importer loads a temporary Meilisearch index, swaps it into `INDEX_NAME` after a complete import, and removes the previous index. It then clears known Plum Kvrocks indexes and all `doc:*` keys in OUT, reparses the prepared documents, and rebuilds keys under the new IDs using the validated history snapshot. IN remains untouched when it is separate from OUT. External references to old IDs outside these two backends are not rewritten.
 
 Meilisearch swap and Kvrocks rebuild are not atomic. If Kvrocks rebuild fails after the swap, keep ingestion stopped and retry from the **same complete prepared dump** after investigating the error. Do not use an incremental import: it leaves old IDs behind.
 

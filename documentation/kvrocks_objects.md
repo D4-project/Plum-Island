@@ -205,7 +205,6 @@ last_seen_index
 Deleted pattern keys:
 
 ```text
-doc:*
 uid:*
 ip:*
 {field}:*
@@ -214,7 +213,19 @@ ip:*
 
 for every generic field listed above. Without `--retag`, `tag:*` and `tags:*` are skipped so existing tag indexes are preserved. With `--retag`, tag keys are deleted and rebuilt from the parsed active Tag Rules.
 
-Before deleting `doc:*`, the rebuild takes an in-memory snapshot of existing `first_seen` and `last_seen` values. During reimport, it preserves the earliest known `first_seen` and latest known `last_seen`.
+The standard rebuild preserves `doc:{uid}` hashes in place. During reimport,
+`add_documents_batch()` reads each existing hash and merges the earliest known
+`first_seen` and latest known `last_seen`, then rebuilds their sorted-set indexes.
+No global in-memory timestamp snapshot is needed. Metadata hashes for UIDs absent
+from the rebuild source remain, but their rebuilt search indexes are not restored.
+
+`tools/reimport_port_dump.py` is a different, full-replacement operation: it
+deletes `doc:*` and restores history from the dump's `.time` companions. Before
+replacing either backend, it requires complete valid `first_seen` and `last_seen`
+for every input document. Missing or invalid companions abort the import unless
+`--allow-history-loss` explicitly permits fallback to JSON scan dates. The loaded
+history is associated with JSON document IDs and reused during the rebuild.
+`--skip-kvrocks` does not require these companions because it leaves Kvrocks intact.
 
 During indexing, progress output includes processed/indexed counts, the total document count when known, and a percentage. `--rebuild-from-meili` gets the total from Meilisearch; dump-based imports count JSON files in the input directory. Parsing uses multiprocessing by default with CPU count minus one worker; `--workers 1` disables multiprocessing.
 

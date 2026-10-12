@@ -67,6 +67,12 @@ field requires coordinated parser output, index keyword registration, parser
 acceptance and user documentation; existing data may then require reindexing.
 Never change `first_seen` or rebuild indexes merely to optimize reads.
 
+Standard `index_kvrocks.py` rebuilds preserve `doc:{uid}` hashes and merge their
+bounds while rebuilding search indexes. Full replacement with
+`reimport_port_dump.py` instead removes those hashes: it validates dump `.time`
+history before either backend is modified, then restores that loaded history
+under the JSON document IDs. See [rebuild behavior](../kvrocks_objects.md#rebuild-behavior).
+
 ## Parsing and field matching
 
 Report saves call `utils/report_query.validate_report_query` from the query form
