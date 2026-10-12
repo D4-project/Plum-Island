@@ -45,11 +45,11 @@ permissions:
 - can file get on JobsView
 - menu access on Jobs
 - menu access on Status
+- menu access on Stats
 - can put on PublicTargetsApi
 - can info on PublicTargetsApi
 - can post on PublicTargetsApi
 - can get on PublicTargetsApi
-- menu access on Bulk Import
 - can add on ScanprofilesView
 - can show on ScanprofilesView
 - can download on ScanprofilesView
@@ -68,7 +68,7 @@ permissions:
 - can download on PortsView
 - can list on PortsView
 - menu access on Ports
-- menu access on Search
+- menu access on Search Scans
 - menu access on Analytics
 - menu access on Token Search
 - menu access on Header Search
@@ -76,11 +76,18 @@ permissions:
 - mulresolvehwois on TargetsView
 - can refresh network on TargetsView
 - can whois on TargetsView
-- can bulk import on TargetsApi
+- can search on MeiliSearchView
+- can query on MeiliSearchView
+- can getuid on MeiliSearchView
+- can index on StatsView
+- can search on KVSearchView
 - can export full status on KVSearchView
 - can export full start on KVSearchView
 - can tags on KVSearchView
 - can query on KVSearchView
+- can expand ips on KVSearchView
+- can tag suggest on KVSearchView
+- can header suggest on KVSearchView
 - can export on KVSearchView
 - can export full download on KVSearchView
 - can scanprofiles remote on TargetsView

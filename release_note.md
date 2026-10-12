@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Restore Read Only access to Search Scans, Token Search and Stats, including search helper requests; hide and revoke Bulk Import access for that role. Apply the updated role with `tools/initial_setup.py --roles-only`.
+
 - Restore Read Only access to the IP detail WHOIS tab and show clear errors for non-JSON responses; synchronize the updated role with `tools/initial_setup.py --roles-only`, closes #233.
 
 - Attach the complete PDF to manual and scheduled report emails; keep only report metadata, open-port counts, disclaimer and an attachment notice in the email body. Preserve PDF index and links; abort delivery if PDF generation fails.
