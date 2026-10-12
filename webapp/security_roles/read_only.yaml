@@ -79,7 +79,7 @@ permissions:
 - can search on MeiliSearchView
 - can query on MeiliSearchView
 - can getuid on MeiliSearchView
-- can get on IpPortsTagsApi
+- can get on IpQuickApi
 - can index on StatsView
 - can search on KVSearchView
 - can export full status on KVSearchView

@@ -4,15 +4,19 @@ Contributor reference: [search engine internals and change contract](sysinternal
 
 Plum Island stores parsed scan results in Kvrocks indexes. The main search UI uses these indexes to find matching scan documents and then loads full result details from Meilisearch when needed.
 
-## IP ports and tags API
+## IP Quick API
 
-`GET /api/v1/ips/<ip>/ports-tags` is a protected, Swagger-documented endpoint
+`GET /api/v1/ip-quick/<ip>` is a protected, Swagger-documented endpoint
 that returns distinct open ports and their co-observed tags for indexed scan
 reports of one public IPv4 or IPv6 address. It reads the compact Kvrocks indexes.
-Each port entry has `port` and `tags` fields. A tag is associated with a port when
-both occurred in the same scan report; tags are computed for the whole report,
+Each port entry has `port`, `tags`, and `last_seen` fields. A tag is associated
+with a port when both occurred in the same scan report; tags are computed for the whole report,
 so they do not necessarily describe that port's service. Results are historical
 observations within the selected window, not a claim that each port is open now.
+`last_seen` is the latest UTC open-port observation in the selected window.
+Only reports whose `last_seen` falls within that window are selected. A gap
+between scans does not imply continuous openness; older observations of the same
+report ID are not individually dated by this index.
 
 The default window is the rolling last 30 days. Use `?days=90` or pass both
 `?start=2026-09-01&stop=2026-09-30`. Dates use UTC; timezone-aware ISO datetimes

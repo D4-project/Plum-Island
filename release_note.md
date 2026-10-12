@@ -2,6 +2,8 @@
 
 ## Since Last release Changes.
 
+- Rename the IP ports/tags API to `/api/v1/ip-quick/<ip>` and include each port's latest UTC `last_seen` within the requested window.
+
 - Add a protected Swagger IP ports/tags summary API with a 30-day default window, `days` or `start`/`stop` controls, and a two-year lookback cap.
 
 - Restore Read Only access to Search Scans, Token Search and Stats, including search helper requests; hide and revoke Bulk Import access for that role. Apply the updated role with `tools/initial_setup.py --roles-only`.

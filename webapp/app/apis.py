@@ -1821,10 +1821,10 @@ class PortsApi(BaseApi):
         return self.response(200, message=f"Port '{label}' deleted")
 
 
-class IpPortsTagsApi(BaseApi):
+class IpQuickApi(BaseApi):
     """Read indexed open ports and co-observed tags for one IP."""
 
-    route_base = "/api/v1/ips"
+    route_base = "/api/v1/ip-quick"
     openapi_spec_tag = "IP Scan Summary API"
     DEFAULT_DAYS = 30
 
@@ -1900,8 +1900,8 @@ class IpPortsTagsApi(BaseApi):
         return from_date, to_date
 
     @staticmethod
-    def _ports_with_tags(indexer, selected):
-        """Collect tags co-observed with each open port in selected reports."""
+    def _ports_with_tags(indexer, selected, timestamps):
+        """Collect per-port tags and latest observation from selected reports."""
         if not selected:
             return []
         pipeline = indexer.r.pipeline(transaction=False)
@@ -1909,17 +1909,33 @@ class IpPortsTagsApi(BaseApi):
             pipeline.smembers(f"ports:{uid}")
             pipeline.smembers(f"tags:{uid}")
         values = pipeline.execute()
-        port_tags = {}
-        for ports, tags in zip(values[::2], values[1::2]):
+        port_data = {}
+        for uid, ports, tags in zip(selected, values[::2], values[1::2]):
             for port in ports:
                 if str(port).isdigit() and 0 <= int(port) <= 65535:
-                    port_tags.setdefault(int(port), set()).update(tags)
+                    entry = port_data.setdefault(
+                        int(port),
+                        {
+                            "tags": set(),
+                            "last_seen": timestamps[uid]["last_seen"],
+                        },
+                    )
+                    entry["tags"].update(tags)
+                    entry["last_seen"] = max(
+                        entry["last_seen"], timestamps[uid]["last_seen"]
+                    )
         return [
-            {"port": port, "tags": sorted(normalize_tags(tags), key=str.lower)}
-            for port, tags in sorted(port_tags.items())
+            {
+                "port": port,
+                "tags": sorted(normalize_tags(data["tags"]), key=str.lower),
+                "last_seen": datetime.fromtimestamp(data["last_seen"], timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+            for port, data in sorted(port_data.items())
         ]
 
-    @expose("/<string:ip>/ports-tags", methods=["GET"])
+    @expose("/<string:ip>", methods=["GET"])
     @protect()
     @safe
     def get(self, ip):
@@ -1928,10 +1944,12 @@ class IpPortsTagsApi(BaseApi):
         get:
           summary: Get open ports and tags observed for an IP.
           description: |
-            Aggregate indexed scan reports whose observation interval overlaps
-            the selected UTC window. Each port lists tags from reports where that
+            Aggregate indexed scan reports whose last_seen is inside the selected
+            UTC window. Each port lists tags from reports where that
             port was observed; tags are computed for whole reports, so this does
             not establish that a tag describes that port's service.
+            Per-port last_seen is the latest positive observation in the window;
+            no continuous openness between scans is implied.
             Default window is the last 30 days. Lookback cannot exceed two years.
           parameters:
             - in: path
@@ -1988,6 +2006,9 @@ class IpPortsTagsApi(BaseApi):
                                   type: array
                                   items:
                                     type: string
+                                last_seen:
+                                  type: string
+                                  format: date-time
                           report_count:
                             type: integer
             "400":
@@ -2015,13 +2036,13 @@ class IpPortsTagsApi(BaseApi):
         if not uids:
             return self.response_404()
 
+        start_ts = int(from_date.timestamp())
+        stop_ts = int(to_date.timestamp())
         selected = sorted(
             uid
             for uid in uids
-            if timestamps[uid].get("first_seen") is not None
-            and timestamps[uid].get("last_seen") is not None
-            and timestamps[uid]["first_seen"] <= int(to_date.timestamp())
-            and timestamps[uid]["last_seen"] >= int(from_date.timestamp())
+            if timestamps[uid].get("last_seen") is not None
+            and start_ts <= timestamps[uid]["last_seen"] <= stop_ts
         )
         return self.response(
             200,
@@ -2029,7 +2050,7 @@ class IpPortsTagsApi(BaseApi):
                 "ip": normalized_ip,
                 "start": from_date.isoformat().replace("+00:00", "Z"),
                 "stop": to_date.isoformat().replace("+00:00", "Z"),
-                "ports": self._ports_with_tags(indexer, selected),
+                "ports": self._ports_with_tags(indexer, selected, timestamps),
                 "report_count": len(selected),
             },
         )
@@ -2040,4 +2061,4 @@ appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
 appbuilder.add_api(NsesApi)
 appbuilder.add_api(PortsApi)
-appbuilder.add_api(IpPortsTagsApi)
+appbuilder.add_api(IpQuickApi)
