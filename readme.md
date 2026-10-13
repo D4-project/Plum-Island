@@ -61,6 +61,11 @@ The search index supports fields such as:
 `fqdn`, `host`, and `domain` include normalized hostnames found in TLS certificate DNS SAN and subject CN data. Rebuild or reimport the Kvrocks index to apply parser improvements to existing scans.
 - `tag`
 
+Certificate searches distinguish common names (`x509_issuer_cn`,
+`x509_subject_cn`) from available serialized DN attributes (`x509_issuer`,
+`x509_subject`). Existing installations must coordinate saved-query conversion
+and index rebuilding; see the [certificate upgrade guide](migration_full_cert.md).
+
 Example:
 
 ```text
@@ -79,11 +84,16 @@ per-page performance diagnostics without changing search criteria.
 ## Tagging
 
 Tag rules are stored as YAML definitions and can also be managed from the web UI.
-Each rule contains a description, a search query, a list of tags, and a version timestamp.
+Each rule contains a mandatory canonical `uuid` and `name`, a description, a
+search query, a list of tags, and a version timestamp. UUID is the unique rule
+identity; display names may repeat and come from YAML, not the filename. Use a
+new UUID for a new rule and retain it when updating that rule.
 
 Example:
 
 ```yaml
+uuid: 5673172d-c76e-4d25-b1fd-4ab3851c6167
+name: hashicorp-vault-example
 description: HashiCorp Vault
 query: http_favicon_mmhash:747250914 AND http_title.bg:Vault
 tags:
@@ -99,15 +109,16 @@ the [Plum Island tools documentation](documentation/tools.md).
 ## Reports
 
 Reports use the same structured search syntax as the interactive search page.
-They generate Markdown summaries for a reporting interval and can be previewed, run manually, or sent on a schedule.
+They generate reports for a reporting interval and can be previewed, downloaded as PDF, run manually, or sent on a schedule. Email contains a short summary with the complete PDF attached.
 
-See [Reports documentation](documentation/reports.md) for report configuration, interval handling, Markdown content, and SMTP delivery.
+See [Reports documentation](documentation/reports.md) for setup, query semantics, UTC schedules, report content, SMTP sender and TLS configuration, PDF attachments, and troubleshooting.
 
 ## Documentation
 
 - [Installation](documentation/installation.md)
 - [Migration](documentation/migration.md)
 - [Upgrade from v0.2606.0](documentation/migration-v0.2606.0-to-main.md)
+- [Certificate CN/DN upgrade](migration_full_cert.md)
 - [Search](documentation/search.md)
 - [Tagging rules](https://github.com/D4-project/Plum-Antibodies/tree/main/tags)
 - [Tag tooling](documentation/tools.md#tag-tools)

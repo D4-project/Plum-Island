@@ -36,13 +36,16 @@ KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
 PASSIVE_USER = ""
 PASSIVE_PWD = ""
 
-# Monthly Markdown report delivery.
+# Weekly/monthly reports: short email summary plus complete PDF attachment.
+# See documentation/reports.md. Restart the application after configuration changes.
 # Leave REPORT_SMTP_HOST empty to disable report email sending.
 REPORT_SMTP_HOST = ""
 REPORT_SMTP_PORT = 25
 REPORT_SMTP_USER = ""
 REPORT_SMTP_PASSWORD = ""
+# Sender fallback: REPORT_SMTP_USER, then plum-reports@localhost.
 REPORT_SMTP_FROM = ""
+# STARTTLS and implicit TLS respectively; configure the matching port explicitly.
 REPORT_SMTP_USE_TLS = False
 REPORT_SMTP_USE_SSL = False
 

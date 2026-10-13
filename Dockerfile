@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /plum
 
 COPY requirements.txt .
+# requirements.txt installs Plum-Antibodies as an editable local package.
+COPY webapp/tags/ ./webapp/tags/
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY webapp/ ./webapp/

@@ -2,6 +2,10 @@
 
 ## Since Last release Changes.
 
+- Align installation, Docker/SMTP setup, migration ordering, examples, tool commands and contributor contracts with current code; document scheduler deployment limitations and correct local dependency copy order in Docker, refs #235–#248.
+
+- Document the certificate-search compatibility change: indexed `x509_issuer` / `x509_subject` contain available DN attributes; legacy commonName queries move to `_cn` fields. Convert SQL queries with `tools/migrate_full_cert.py` before rebuilding with retagging or full replacement import; see `migration_full_cert.md` for limitations, validation and rollback.
+
 - Validate complete dump history before replacing Meilisearch or Kvrocks in `reimport_port_dump.py`; missing/invalid `.time` companions require explicit `--allow-history-loss`. Preserve validated dates by document ID and clarify standard rebuild history preservation, refs #140.
 
 - Include TCP/UDP protocol in each InfoIP port entry; index protocol/port pairs in Kvrocks, resolve older reports on demand from Meilisearch, and provide `tools/backfill_port_protocol.py` for bulk backfill.

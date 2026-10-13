@@ -82,6 +82,12 @@ The dedicated `network_enrichment` scheduler job consumes this durable queue at
 resolved or enriched by this feature. Editing the target value clears old network
 metadata and schedules a new lookup only if the new value is a CIDR/IP.
 
+Opening `/targetsview/show/<id>` also checks missing/stale CIDR AS information
+and calls the same refresh helper before rendering. Fresh information, including
+ASN `0`, is reused. This automatic detail-view refresh is not a forced refresh:
+leases/backoff still apply. A failed or busy refresh displays saved data and a
+warning. WHOIS remains a separate, on-demand tab lookup.
+
 Requests use `https://ip.circl.lu/geolookup/<network-address>`: only the first
 address of the CIDR, including IPv6. The ASN-bearing response entry determines the
 AS for the entire CIDR, even if other addresses belong to another AS.

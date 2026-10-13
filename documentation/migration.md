@@ -29,6 +29,8 @@ If possible, test the full procedure on a copy of production first.
 git fetch origin
 git checkout main
 git pull --ff-only
+git submodule sync --recursive
+git submodule update --init --recursive
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
@@ -43,6 +45,7 @@ From `v0.2604.0` to current `main`, apply only these SQL update scripts, in orde
 .venv/bin/python webapp/sql_upd/15_migrate_from_173795d186ee69c8abca1ce75d5bb0ff749b55a0.py
 .venv/bin/python webapp/sql_upd/16_migrate_from_28501acb1bc77d15ea1dc5f9c41684d40daecf10.py
 .venv/bin/python webapp/sql_upd/17_migrate_from_d7c3198bc3b3a7d6cf0ae39860fd1cfb58c1a4e3.py
+.venv/bin/python webapp/sql_upd/18_migrate_from_89b4c246af69e340fa8ac66290c936506b23a638.py
 .venv/bin/python webapp/sql_upd/19_migrate_from_b3b36001115d22b839ce630562bbf83ed0f166c0.py
 .venv/bin/python webapp/sql_upd/20_migrate_from_1a77f9638812f6d238b5a7f26aace1f45ae06e2e.py
 .venv/bin/python webapp/sql_upd/21_migrate_from_c1ef29af4ac597787b67d99982f9baade1817222.py
@@ -55,6 +58,7 @@ What they do:
 - `15`: add default HTTP header collection config
 - `16`: add scan-unit counters for scan profile progress
 - `17`: add the narrow `Feeder` API role for target import tools
+- `18`: add Kong headers to the collected-header table
 - `19`: add optional Nmap parameters to scan profiles and queued jobs
 - `20`: bound running scan-profile cycles by target ID without resetting jobs
 - `21`: persist in-flight Meilisearch export tasks across scheduler ticks
@@ -65,37 +69,6 @@ What they do:
   the commands below.
 
 Do not rerun older migrations unless migrating from a version older than `v0.2604.0`.
-
-### Persisted target classification (migration 24)
-
-Stop the application and scheduler before applying; restart only after success.
-The script imports shared classification helpers without starting Flask. Install
-the existing requirements first. Use the actual configured SQLite path:
-
-```bash
-.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --dry-run
-.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db
-```
-
-Backups are managed independently by the operator; the script does not create
-or require a backup file. Dry-run uses an in-memory copy. Migration adds
-`is_ip_cidr BOOLEAN NOT NULL DEFAULT 0`, then classifies every existing value
-inside one transaction. The temporary SQL default is not a classifier: application
-inserts and edits always derive the value. Do not run old application writers
-after migration or write targets through raw SQL without maintaining this field.
-
-IPv4/IPv6 addresses and CIDRs become `1`; syntactically valid FQDNs become `0`,
-including legacy/private suffixes. Existing private IPs are classified without
-changing import admission rules. Invalid strings abort migration and report IDs
-for operator review; no records are deleted, normalized or renamed. Descriptions,
-associations and scan state remain unchanged. Reruns recompute the same values
-without updating already correct rows. Existing incompatible nullable columns
-are rejected rather than silently accepted.
-
-Recovery: failures roll back the transaction. To roll back a successful migration,
-stop all writers and restore the backup with the previous code, managing WAL/SHM
-files as part of the offline SQLite restore. This discards writes since the backup;
-retain a copy of the current database first if it has received new data.
 
 ### Target network metadata (migration 23)
 
@@ -135,13 +108,52 @@ scan receipt or manual refresh; migration does not enqueue a fleet-wide lookup.
 Descriptions, target IDs, jobs and scan states are retained. The old AS SQL columns
 remain rollback-only; the new application reads the shared table instead.
 
-Restart Plum after migration and synchronize configured roles with the setup
-loader (or grant `can_refresh_network` on `TargetsView` to authorized custom roles).
+Keep Plum stopped through migration 24, query conversion and index replacement.
+The seed step below synchronizes configured roles (or grant `can_refresh_network`
+on `TargetsView` to equivalent authorized custom roles).
 For rollback, stop Plum and restore the **matching pre-migration DB backup and
 application revision**. Account for scans received since that backup before any
 restore; do not drop the new table while running the updated application.
 
+### Persisted target classification (migration 24)
+
+Keep the application and scheduler stopped until the complete upgrade is validated.
+The script imports shared classification helpers without starting Flask. Install
+the existing requirements first. Use the actual configured SQLite path:
+
+```bash
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --dry-run
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db
+```
+
+Backups are managed independently by the operator; the script does not create
+or require a backup file. Dry-run uses an in-memory copy. Migration adds
+`is_ip_cidr BOOLEAN NOT NULL DEFAULT 0`, then classifies every existing value
+inside one transaction. The temporary SQL default is not a classifier: application
+inserts and edits always derive the value. Do not run old application writers
+after migration or write targets through raw SQL without maintaining this field.
+
+IPv4/IPv6 addresses and CIDRs become `1`; syntactically valid FQDNs become `0`,
+including legacy/private suffixes. Existing private IPs are classified without
+changing import admission rules. Invalid strings abort migration and report IDs
+for operator review; no records are deleted, normalized or renamed. Descriptions,
+associations and scan state remain unchanged. Reruns recompute the same values
+without updating already correct rows. Existing incompatible nullable columns
+are rejected rather than silently accepted.
+
+Recovery: failures roll back the transaction. To roll back a successful migration,
+stop all writers and restore the backup with the previous code, managing WAL/SHM
+files as part of the offline SQLite restore. This discards writes since the backup;
+retain a copy of the current database first if it has received new data.
+
 ## 4. Refresh seed data
+
+Before importing bundled rules, complete the SQL-only query conversion in the
+[certificate CN/DN upgrade](../migration_full_cert.md#2-deploy-code-and-convert-sql-queries).
+Use an empty `--yaml-dir` so the tool does not edit Antibodies. Review the dry-run
+and converted custom rules/report queries, and confirm the deployed YAML rules
+have matching CN/DN semantics. This is a query-data migration, not a new numbered
+schema migration. Do not start writers yet.
 
 Run the initial setup loader to ensure current roles, TCP ports, header collection, tag rules, NSE scripts, and the default banner scan profile exist:
 
@@ -156,7 +168,8 @@ This imports current YAML tag rules from `webapp/tags/tags/`, clones/updates `ht
 Prepare `tools/config.yaml`:
 
 ```bash
-cp tools/config.yaml.sample tools/config.yaml
+# Only create a config if one does not already exist; review existing endpoints.
+test -f tools/config.yaml || cp tools/config.yaml.sample tools/config.yaml
 ```
 
 Edit at least:
@@ -230,6 +243,13 @@ Default behavior:
 - recompute tags from active DB tag rules
 - restore timestamps from `.time` companion files
 
+The current importer also prepares certificate CN/DN fields and recomputes tags
+using the converted SQL rules. No second certificate-only rebuild is needed
+after this full import. If replacing neither backend, follow the separate
+certificate rebuild procedure instead. Before replacing either backend, the
+importer requires valid `.time` bounds unless history loss is explicitly accepted;
+do not treat `--areyousure_yes` as permission to discard history.
+
 Useful options:
 
 ```bash
@@ -256,5 +276,10 @@ Start Plum Island again, then check:
 - structured search works for `http_header:content-type`
 - structured search works for `tag:proto:ssh` when matching data exists
 - IP detail page still opens for known scanned IPs
+- CN searches use `x509_issuer_cn` / `x509_subject_cn`; DN attribute searches use
+  `x509_issuer` / `x509_subject`; representative custom rules and reports still match
+
+Follow the certificate guide's UID/timestamp checks and rollback requirements
+as well. Do not resume agents/indexing until all validation succeeds.
 
 If validation fails, stop services and restore the SQLite, Meilisearch, and Kvrocks backups before retrying.

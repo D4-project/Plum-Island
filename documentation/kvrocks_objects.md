@@ -106,17 +106,23 @@ Current generic fields:
 | `http_header` | yes | yes | Configured HTTP header name presence |
 | `http_headval` | yes | value only | Configured HTTP header value stored as `header:value` |
 | `http_server` | yes | yes | HTTP Server header |
-| `x509_issuer` | yes | yes | TLS issuer |
+| `x509_issuer` | yes | yes | Serialized issuer DN when structured attributes are available |
 | `x509_issuer_cn` | yes | yes | TLS issuer common name |
 | `x509_md5` | yes | no | TLS certificate MD5 |
 | `x509_sha1` | yes | no | TLS certificate SHA-1 |
 | `x509_sha256` | yes | no | TLS certificate SHA-256 |
-| `x509_subject` | yes | yes | TLS subject |
+| `x509_subject` | yes | yes | Serialized subject DN when structured attributes are available |
 | `x509_subject_cn` | yes | yes | TLS subject common name |
 | `x509_san` | yes | yes | TLS SAN values |
 | `banner` | yes | yes | Service banner |
 
 `http_header` and `http_headval` are populated only from the configured `collected_headers` rows. Header names and values are lowercased before ingestion. `http_headval` keeps the header name exact and applies prefix/substring matching only to the value through queries such as `http_headval:x-powered-by.lk:php`.
+
+The certificate CN/DN split is applied by `prepare_kvrocks_document()` after
+`parse_json()`, before indexing. Existing CN-only rules/report queries and old
+indexes need a coordinated [certificate migration](../migration_full_cert.md).
+Raw Meilisearch documents remain unchanged. Without structured DN attributes,
+the parsed fallback value is retained; a rebuild cannot recover absent source data.
 
 ## Tag-specific updates
 

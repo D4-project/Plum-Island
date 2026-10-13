@@ -4,10 +4,14 @@
 
 This procedure starts from the [Plum Island `v0.2606.0` release](https://github.com/D4-project/Plum-Island/releases/tag/v0.2606.0) and targets `main` as documented on 2026-10-08 (base commit `7ed78fa`, plus the migration CLI change accompanying this guide). `main` is not a versioned release; check the commit being deployed and review later migrations if it has moved beyond this guide.
 
-`v0.2606.0` already stores scan results per port. Do **not** run the IP-to-port split from the older [`v0.2604.0` guide](migration.md). This upgrade has two independent data changes:
+`v0.2606.0` already stores scan results per port. Do **not** run the IP-to-port split from the older [`v0.2604.0` guide](migration.md). This upgrade has three coordinated data changes:
 
 1. Apply SQLite migrations `17` through `24` to application metadata, in order. Migration `23` can use retained Kvrocks history to backfill target creation dates.
 2. Rehash the complete Meilisearch result set with the corrected `nmap2json` library. The migration reads each old document's `first_seen` and `last_seen` from source (`IN`) Kvrocks, falls back to JSON scan times for absent bounds, recomputes port hashes and IDs, merges date-only duplicates, and writes new JSON plus consolidated `.time` files. Reimport replaces the configured destination (`OUT`) Meilisearch index and rebuilds destination Kvrocks with the new IDs and dates.
+3. Convert legacy certificate CN queries in SQL rules/reports to explicit `_cn`
+   fields before reimporting. The rebuilt index uses `x509_issuer` and
+   `x509_subject` for available DN attributes. See the
+   [certificate upgrade contract and limitations](../migration_full_cert.md).
 
 Preparing the rehashed dump does not change either database. `--dry-run` writes no dump. The explicit reimport step replaces `OUT`; it does not change `IN` unless the `IN_*` and `OUT_*` settings point to the same services. Meilisearch replacement and Kvrocks rebuild are **not one transaction**.
 
@@ -73,6 +77,14 @@ Migration `24` classifies stored targets as IP/CIDR or FQDN. Its dry-run reports
 .venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db
 ```
 
+Before refreshing seeds, follow the
+[SQL-only certificate query conversion](../migration_full_cert.md#2-deploy-code-and-convert-sql-queries):
+use the actual application DB and an empty `--yaml-dir`, inspect the dry-run,
+apply once, and verify converted queries and the `full_cert_fields_v1` marker.
+Do not edit the Antibodies checkout with this migration. Review deployed YAML
+semantics before importing them; preserve local rule customizations. Keep writers
+stopped until the index also uses the new fields.
+
 Then refresh seed roles, header collection, rules, ports, and NSE scripts:
 
 ```bash
@@ -130,6 +142,11 @@ protection and should not be used for a migration that must preserve history.
 
 The importer loads a temporary Meilisearch index, swaps it into `INDEX_NAME` after a complete import, and removes the previous index. It then clears known Plum Kvrocks indexes and all `doc:*` keys in OUT, reparses the prepared documents, and rebuilds keys under the new IDs using the validated history snapshot. IN remains untouched when it is separate from OUT. External references to old IDs outside these two backends are not rewritten.
 
+This full import also runs `prepare_kvrocks_document()` and tag recomputation,
+populating certificate CN/DN fields from raw scan data. The SQL conversion must
+already be complete. A second certificate-only rebuild is unnecessary after
+this import; a tag-only reindex would not replace it.
+
 Meilisearch swap and Kvrocks rebuild are not atomic. If Kvrocks rebuild fails after the swap, keep ingestion stopped and retry from the **same complete prepared dump** after investigating the error. Do not use an incremental import: it leaves old IDs behind.
 
 ### 8. Verify and resume
@@ -137,5 +154,9 @@ Meilisearch swap and Kvrocks rebuild are not atomic. If Kvrocks rebuild fails af
 Compare OUT Meilisearch document count with `unique_documents` in `migration.manifest`. Compare OUT Kvrocks `doc:*` count and `all_uids` with that count. For sample merged IDs from `uid-map.jsonl`, compare `doc:<new-id>.first_seen` and `.last_seen` with the prepared `.time` file; confirm old IDs no longer exist in OUT. Check representative search, IP detail, and tag results. Confirm the web app and scheduler start without schema errors.
 
 Only after those checks, restart agents using the corrected hashing version and resume ingestion. If validation fails, stop writers and restore the matching SQLite, Meilisearch, and Kvrocks backups; restoring one backend alone may leave IDs inconsistent.
+
+Also validate CN/DN searches, tags and saved report queries as described in the
+certificate guide. On rollback restore matching SQL query/marker state and rules
+alongside the old index and code; reverting only the code is not sufficient.
 
 For tool options and backend behavior, see [Tools: date-only duplicate migration](tools.md#date-only-duplicate-migration) and the [smarthash TODO](../tools/TODO-smarthash.md). The full disposable round trip and a real production recovery remain unverified in that TODO; this guide describes the intended sequence, not a completed production run.

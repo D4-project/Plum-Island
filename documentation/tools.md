@@ -131,6 +131,13 @@ use this migration tool for date-only deduplication instead.
 
 ## Tag tools
 
+For existing CN-based certificate rules/report queries, first follow the
+[certificate migration](../migration_full_cert.md). `tools/migrate_full_cert.py`
+converts SQL queries with a durable marker; use an empty `--yaml-dir` for SQL-only
+operation. Review its limitations before applying. Then rebuild certificate
+fields with retagging (or use the full replacement import in the upgrade guide).
+A tag-only reindex cannot reconstruct missing CN/DN fields.
+
 The YAML rules are maintained in the
 [Plum-Antibodies repository](https://github.com/D4-project/Plum-Antibodies),
 with their format and version policy documented in its
@@ -280,7 +287,7 @@ It is useful as an example for exact, prefix, substring, IP, network, and port c
 Parse one Meilisearch JSON document and print the parsed structure with computed tags.
 
 ```bash
-.venv/bin/python tools/test_parse.py meili_dump/a/<uid>.json
+.venv/bin/python test/test_parse.py tools/meili_dump/a/<uid>.json
 ```
 
 ## Indexing tools
@@ -460,12 +467,6 @@ Only `uid` and `first_seen` are required for import.
 The import updates `doc:{uid}.first_seen` and `first_seen_index`.
 It does not overwrite `last_seen`.
 The tool prints the expected total first, then progress every 1000 processed records.
-
-### `index_meili.py`
-
-Import JSON documents from `meili_dump/` into Meilisearch.
-This is a low-level recovery helper with hardcoded connection defaults in the script.
-Review the script before use.
 
 ## Target and FQDN tools
 

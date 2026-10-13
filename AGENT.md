@@ -71,7 +71,7 @@ When you need to understand actual product behavior, prioritize:
 
 - `setup.sh`: first-run installer. Creates `.venv`, installs `requirements.txt`, creates the Flask-AppBuilder admin user, then runs `tools/initial_setup.py`.
 - `tools/initial_setup.py`: initial DB/data bootstrap. Seeds roles, TCP ports, HTTP header collection, bundled YAML tag rules, NSE scripts from `D4-project/Plum-Rules-NSE`, and the default all-target banner scan profile.
-- `webapp/run.py`: local dev launcher, runs Flask on `0.0.0.0:5001` with `debug=True`.
+- `webapp/run.py`: tracked demo launcher, runs Flask on `0.0.0.0:5000` with `debug=True`, matching Compose. A local port override (for example 5001) is not the shipped default. See the production limitations in `documentation/installation.md`.
 - `webapp/app/__init__.py`: creates Flask, SQLAlchemy, AppBuilder, loads views/APIs, and starts the scheduler only in the Werkzeug main process.
 - `webapp/app/views.py`: GUI views, search pages, bulk target import, and job result file display.
 - `webapp/app/apis.py`: bot-facing API plus target bulk import API.
@@ -114,7 +114,7 @@ Fresh setup creates an all-target `Default banner scan` profile for TCP ports `2
 
 ### Effective runtime flow
 
-1. Scheduler selects active, non-working targets whose `last_scan` is empty or older than `SCAN_DELAY`.
+1. Scheduler selects eligible `target_scan_states` per active applicable profile, using `ScanProfiles.scan_cycle_minutes`, not global `SCAN_DELAY` or `Targets.last_scan`. Never-scanned and expired states are selected separately. Current-cycle `max_target_id` bounds membership; states completed since `cycle.started_at` are not rescheduled within that cycle. Target-level timestamps/working flags are aggregates, not the per-profile scheduling source.
 2. CIDRs are split into scan jobs of up to 256 IPs. In practice, the system builds jobs no larger than `/24` worth of IPv4 addresses. FQDNs are batched with the same 256-item ceiling.
 3. A bot calls `/bot_api/beacon` to register/update liveness.
 4. A bot calls `/bot_api/getjob` and receives a queued job plus the profile-specific `nmap_ports` and `nmap_nse` payload. NSE bodies are only transferred when the agent cache hash differs.
@@ -122,6 +122,12 @@ Fresh setup creates an all-target `Default banner scan` profile for TCP ports `2
 6. The result is stored under `JSON_FOLDER/<first-uid-char>/<job_uid>.json`.
 7. Scheduler exports finished, non-exported jobs to Meilisearch and Kvrocks.
 8. Old exported jobs are purged by `JOB_SCAVENGE`.
+
+Before queuing a CIDR scan, the scheduler checks CIRCL routing information using
+the 24-hour target cache. ASN `0` completes the job/state without a scanner or
+result export; cycle progress advances normally. Missing/stale routing data that
+cannot be refreshed defers scheduling, rather than counting as completion.
+See [scheduling and routing](documentation/scanning.md) for the complete contract.
 
 ### Job priority contract
 
@@ -291,7 +297,7 @@ Do not interpret unit tests or diagnostic command counts as performance validati
 - `webapp/app/templates/search_kvrocks.html`
 - `readme.md`
 
-The search syntax exposed in the UI and README must stay aligned with the fields actually produced by `parse_json()` and indexed by `KVrocksIndexer.add_documents_batch()`.
+The search syntax exposed in the UI and README must stay aligned with the fields produced by `parse_json()` followed by `prepare_kvrocks_document()` and indexed by `KVrocksIndexer.add_documents_batch()`.
 
 For the structured search page specifically, keep these moving parts aligned:
 
@@ -367,6 +373,19 @@ It extracts these searchable fields:
 - `x509_subject`
 - `x509_san`
 - `banner`
+
+Index writers use `parse_json(raw_doc, config, tag_rules=...)` then
+`prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=...)`. Skip documents
+when the public parser returns `None`. Preparation copies the parsed dictionary;
+it does not modify raw scan JSON or the public parser's CN-only contract.
+The indexed copy adds `x509_issuer_cn`, `x509_subject_cn` and `port_protocol`
+(`tcp/443`, `udp/53`, etc.; InfoIP metadata, not a structured-search keyword).
+When available, structured certificate attributes replace `x509_issuer` and
+`x509_subject` with serialized DNs; without a constructed DN the parsed value
+is retained. With supplied rules, preparation recomputes tags against this copy.
+Both scheduler export and the Kvrocks importer use this stage. Tag-only reindex
+reads existing indexed fields and cannot replace a full certificate rebuild.
+See [certificate migration](migration_full_cert.md) and the search internals guide.
 
 Raw scan documents, including the Meilisearch source documents, never carry `tag` or `tags` fields. Tags are computed from DB-backed tag rules while parsing for the Kvrocks index. Canonical stored tag values use `<namespace>:<value>` such as `product:openssh` or `proto:ssh`; Kvrocks query/index keys use `tag:<namespace>:<value>` and `tags:<uid>`. Do not add Meilisearch fallbacks for tags or merge "pre-existing document tags" into computed tags.
 
@@ -462,8 +481,8 @@ Also keep the split of responsibilities clear:
 
 The README-level search contract currently includes:
 
-- exact fields such as `ip`, `net`, `port`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`, `x509_md5`, `x509_sha1`, `x509_sha256`
-- prefix or substring search on fields such as `fqdn`, `fqdn_requested`, `host`, `domain`, `tld`, `tag`, `http_title`, `http_cookiename`, `http_etag`, `http_server`, `http_favicon_path`, `banner`, `x509_issuer`, `x509_subject`, `x509_san`
+- exact fields such as `ip`, `net`, `port`, `tag`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`, `x509_md5`, `x509_sha1`, `x509_sha256`
+- prefix or substring search on fields such as `fqdn`, `fqdn_requested`, `domain_requested`, `host`, `domain`, `tld`, `http_title`, `http_cookiename`, `http_etag`, `http_server`, `http_favicon_path`, `banner`, `x509_issuer`, `x509_issuer_cn`, `x509_subject`, `x509_subject_cn`, `x509_san`
 - abbreviated modifiers `lk` for `like` and `bg` for `begin`
 - implicit `AND` inside one query group
 - explicit `OR` between query groups

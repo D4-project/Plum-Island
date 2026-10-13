@@ -37,18 +37,29 @@ Island and its Plum-Antibodies tag rules from the repository root with:
 
 This updates the application repository and fetches the latest Plum-Antibodies
 YAML tag rules into `webapp/tags/`, even when they are newer than the submodule
-commit pinned by Plum Island. It does not import rules, reindex tags, access
-Kvrocks, recreate the application database, or change configuration.
+commit pinned by Plum Island. It then uses `.venv/bin/python
+tools/initial_setup.py --roles-only` to synchronize configured security roles in
+SQL, so this is not a read-only repository update. Preserve local changes first;
+the script requires the existing virtual environment. It does not import tag
+rules, reindex tags, recreate the database or rewrite configuration, and is not
+a replacement for the version-specific migration guide or dependency updates.
 
 ## Step 1 — Add a target
 
 1. Navigate to `Config > Targets`.
 2. Click `+` to open the new target form.
-3. Set the `CIDR / Host` field to an address range or hostname you are authorized to scan (e.g. `192.168.1.0/24` or an internal hostname).
+3. Set `CIDR / Host` to your own authorized public IP/CIDR or a hostname resolving to your authorized public service. Replace this description with your actual target; do not scan a third party's example address.
 4. Select a **Scan Profile**. The `Default banner scan` profile is available out of the box and scans TCP ports `22`, `80`, and `443` with `banner.nse`.
 5. Save the record.
 
 Plum Island will make jobs available for active `Target x ScanProfile` combinations when the scheduler runs. You can watch queued and completed jobs under `Status > Job Status`.
+
+Use a routed public target for this end-to-end example. Private/non-external scan
+results are skipped by the result parser and will not demonstrate indexed search;
+ASN-zero CIDRs are completed without scanning. A hostname with a private suffix
+requires that suffix in `TLDADD` (for example `local`), but this only permits
+hostname parsing: it does not make a private address eligible for indexing or
+enable public-domain WHOIS for that suffix.
 
 ## Step 2 — Create an agent API key
 

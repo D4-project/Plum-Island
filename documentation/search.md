@@ -171,16 +171,24 @@ No modifier means exact match. `like` without any scope reducer may slow down th
 | `http_favicon_md5` | | Favicon MD5 hash |
 | `http_favicon_sha256` | | Favicon SHA-256 hash |
 | `banner` | `like`, `begin` | Service banner |
-| `x509_issuer` | `like`, `begin` | TLS certificate issuer |
+| `x509_issuer` | `like`, `begin` | Serialized TLS issuer DN when structured attributes are available |
 | `x509_issuer_cn` | `like`, `begin` | TLS certificate issuer common name |
 | `x509_md5` | | TLS certificate MD5 hash |
 | `x509_sha1` | | TLS certificate SHA-1 hash |
 | `x509_sha256` | | TLS certificate SHA-256 hash |
-| `x509_subject` | `like`, `begin` | TLS certificate subject |
+| `x509_subject` | `like`, `begin` | Serialized TLS subject DN when structured attributes are available |
 | `x509_subject_cn` | `like`, `begin` | TLS certificate subject common name |
 | `x509_san` | `like`, `begin` | TLS certificate subject alternative names |
 
 Certificate-derived `fqdn`, `host`, and `domain` values require rebuilding/reimporting the Kvrocks index for scans collected before the parser change.
+
+Certificate name compatibility: older indexes used `x509_issuer` and
+`x509_subject` for commonName only. CN searches now use `x509_issuer_cn` and
+`x509_subject_cn`; DN attribute searches can use, for example,
+`x509_issuer.lk:"O=Example"`. Old SQL rules/report queries must be converted
+before rebuilding fields. See the [certificate upgrade guide](../migration_full_cert.md).
+DNs reflect available Nmap dictionaries, not canonical certificate identities;
+where no DN can be constructed, preparation retains the parsed fallback value.
 
 ## HTTP header search
 

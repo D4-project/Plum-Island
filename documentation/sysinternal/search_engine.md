@@ -15,7 +15,8 @@ Function names below are navigation anchors; line numbers drift as code changes.
 
 | Component | Responsibility |
 | --- | --- |
-| [result_parser.py](../../webapp/app/utils/result_parser.py), `parse_json` | Produce UID, IP, timestamps and parsed field values; compute tags |
+| [result_parser.py](../../webapp/app/utils/result_parser.py), `parse_json` | Public parser: produce UID, IP, timestamps and base fields; historical certificate-name fields remain CNs |
+| Same module, `prepare_kvrocks_document` | Enrich a parsed copy with certificate CN/DN fields and protocol/port pairs; recompute tags when rules are supplied |
 | [kvrocks.py](../../webapp/app/utils/kvrocks.py), `KVrocksIndexer` | Write/read reverse indexes; return matching UID sets and metadata |
 | [views.py](../../webapp/app/views.py), `KVSearchView` | Parse queries, evaluate OR groups, select time scopes, group by IP, paginate and export |
 | [search_kvrocks.html](../../webapp/app/templates/search_kvrocks.html) | Collect dates, fetch adaptive pages, render IPs, request history/tags |
@@ -40,6 +41,32 @@ flowchart TD
 Meilisearch stores full scan documents and serves the separate Token Search UI.
 Kvrocks stores the structured search indexes. SQLite stores application state and
 rule definitions. Do not route structured filters through Meilisearch as a fallback.
+
+### Preparing the indexed document
+
+The scheduler and `tools/index_kvrocks.py` use this sequence:
+
+```text
+raw port document -> parse_json -> prepare_kvrocks_document -> add_documents_batch
+```
+
+`parse_json()` can return `None` for non-external IPs; callers skip those documents.
+It retains the public parser's historical CN values in `x509_issuer` and
+`x509_subject`. `prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=...)`
+copies the parsed dictionary; raw Meilisearch JSON and public parser output are
+not rewritten. The prepared copy adds `x509_issuer_cn` / `x509_subject_cn`,
+replaces the historical fields with serialized DNs when structured attributes
+exist, and adds `port_protocol` values such as `tcp/443` for InfoIP. When no DN
+can be constructed, existing parsed values are retained; do not assume every
+legacy value is a complete DN.
+
+When `tag_rules` is supplied, preparation discards previously computed tags,
+evaluates those rules against the enriched copy and preserves TLS classification.
+The indexer lowercases values and merges timestamp bounds. The tag-only reindex
+instead reads existing Kvrocks fields: it cannot manufacture missing certificate
+attributes. New index writers must use the preparation step, not just the public
+parser. See the [certificate migration](../../migration_full_cert.md) before
+rebuilding old indexes or converting existing rules/report queries.
 
 The unit of matching is a document UID, not an IP. Group by IP only after evaluating
 the query. Two different UIDs for the same IP must not jointly satisfy an AND query.
@@ -472,7 +499,7 @@ These are existing observations, not new desired semantics.
 
 | Topic | Current behavior / implication |
 | --- | --- |
-| `not` / `nt` | User docs describe exact exclusion. Generic Kvrocks modifier loops currently select no keys for these suffixes; in-memory tag matching implements exclusion. Example: nginx and apache UIDs, `http_server.not:nginx`, returns empty from the scoped indexer. A performance change must not silently introduce negation semantics. |
+| `not` / `nt` | User docs warn that these are legacy suffixes and recommend standalone NOT. Generic Kvrocks modifier loops currently select no keys for these suffixes; in-memory tag matching implements exclusion. Example: nginx and apache UIDs, `http_server.not:nginx`, returns empty from the scoped indexer. A performance change must not silently introduce negation semantics. |
 | Dates | Full search uses interval overlap; page discovery uses `last_seen` windows. A UID first seen before the range and last seen after it can match export but be absent from page discovery. Preserve both paths in an optimization; any unification needs an explicit behavior change. |
 | Allowed modifiers | The user field table is narrower than generic parser acceptance; `tag` is explicitly exact-only in the current parser. Do not tighten validation incidentally. |
 | IP/network and special fallbacks | Some branches differ from the general AND description above. Characterize them before changing seeds or evaluation order. |

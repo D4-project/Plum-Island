@@ -175,6 +175,12 @@ Meilisearch has no source document for them.
 
 ## Rebuild Kvrocks from Meilisearch
 
+Before rebuilding a legacy certificate index, convert CN-based SQL rule/report
+queries using the [certificate upgrade procedure](../migration_full_cert.md).
+Current preparation writes distinct CN/DN fields; rebuilding with unconverted
+rules can change detection results. Recovery and query migration are separate
+operations; this guide does not automatically convert saved queries.
+
 ### When to rebuild
 
 Use a direct rebuild when Meilisearch contains the complete authoritative
