@@ -71,7 +71,7 @@ When you need to understand actual product behavior, prioritize:
 
 - `setup.sh`: first-run installer. Creates `.venv`, installs `requirements.txt`, creates the Flask-AppBuilder admin user, then runs `tools/initial_setup.py`.
 - `tools/initial_setup.py`: initial DB/data bootstrap. Seeds roles, TCP ports, HTTP header collection, bundled YAML tag rules, NSE scripts from `D4-project/Plum-Rules-NSE`, and the default all-target banner scan profile.
-- `webapp/run.py`: local dev launcher, runs Flask on `0.0.0.0:5001` with `debug=True`.
+- `webapp/run.py`: local dev launcher, runs Flask on `0.0.0.0:5000` with `debug=True`.
 - `webapp/app/__init__.py`: creates Flask, SQLAlchemy, AppBuilder, loads views/APIs, and starts the scheduler only in the Werkzeug main process.
 - `webapp/app/views.py`: GUI views, search pages, bulk target import, and job result file display.
 - `webapp/app/apis.py`: bot-facing API plus target bulk import API.
