@@ -14,37 +14,21 @@ It assigns scan jobs to distributed agents, collects their results, stores scan 
 
 The project is designed for repeated monitoring rather than one-shot scans: targets can be linked to scan profiles, jobs are queued by priority, results are kept over time, and reports can summarize what changed during a period.
 
+![IP detail view with requested hostname selection, port timelines and scan results](documentation/media/ip_detail.png)
+
 ## Main features
 
 - Distributed scan orchestration with agents and server-side job queues.
-- Optional direct-run application logs can be enabled in `webapp/config.py`; logs rotate daily as `./log/agent-YYMMDD.log` with configurable retention.
-- Active unfinished scan jobs are requeued by the scheduler after two hours;
-  late agent results are rejected when ownership has changed.
 - Target and scan profile management.
 - Per-profile scan tracking for each target.
 - Indexed search over IPs, networks, ports, DNS names, HTTP metadata, favicons, TLS certificates, banners, and computed tags.
 - Structured query syntax with exact, prefix, substring, `AND`, `OR`, and date-range filtering.
+- Active unfinished scan jobs are requeued by the scheduler after two hours;
+  late agent results are rejected when ownership has changed.
 - Tag rules that automatically add tags to matching scan documents.
 - Favicon-based tagging using MD5, SHA-256, and mmhash indicators.
 - Scheduled Markdown reports from the same search syntax used by the UI.
 - CSV/JSON export workflows for search results.
-
-### Application logs
-
-Enable persistent direct-run logs in `webapp/config.py`:
-
-```python
-LOG_ENABLED = True
-LOG_LEVEL = "INFO"
-LOG_DIR = "./log"
-LOG_ROTATION_DAYS = 1
-LOG_RETENTION_DAYS = 90
-```
-
-The application creates the directory and writes date-named files such as
-`./log/agent-260722.log`. It switches files at local midnight even when the
-application remains running. Generated logs are ignored by Git and removed
-after the configured retention period.
 
 ## Search options
 

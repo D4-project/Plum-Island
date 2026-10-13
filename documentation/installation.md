@@ -75,6 +75,23 @@ cd webapp
 python run.py
 ```
 
+### Application logs
+
+Enable persistent direct-run logs in `webapp/config.py`:
+
+```python
+LOG_ENABLED = True
+LOG_LEVEL = "INFO"
+LOG_DIR = "./log"
+LOG_ROTATION_DAYS = 1
+LOG_RETENTION_DAYS = 90
+```
+
+The application creates the directory and writes date-named files such as
+`./log/agent-260722.log`. It switches files at local midnight even when the
+application remains running. Generated logs are ignored by Git and removed
+after the configured retention period.
+
 ## Docker
 
 ### Requirements
