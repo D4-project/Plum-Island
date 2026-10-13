@@ -130,7 +130,7 @@ scheduler interval; a failed forced refresh does not invalidate still-fresh data
 Insertion and scan receipt never depend on a successful CIRCL response.
 
 For existing installations apply migration 23 before starting this code; see
-[migration instructions](migration.md#target-network-metadata-migration-23).
+[migration instructions](migration-v0.2604.0-to-v0.2610.0.md#target-network-metadata-migration-23).
 
 ## Scan-profile cycle boundaries
 

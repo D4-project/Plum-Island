@@ -332,7 +332,9 @@ Every migration in `webapp/sql_upd/` must be named exactly
   migration commit. Resolve it with `git rev-parse <source-revision>`; for a new
   change based on the current checkout, use `git rev-parse HEAD` before committing.
 - No abbreviated SHA, descriptive suffix, or description-only filename. Put the
-  migration purpose in its module docstring and `documentation/migration.md`.
+  migration purpose in its module docstring and the applicable versioned guide
+  linked from `documentation/migration.md`. Keep that index's source/destination
+  versions explicit; local `/Plan/` notes are not release documentation.
 - When correcting a filename, update every reference in tests, documentation and
   scripts. A rename does not authorize running the migration.
 - Before finishing, run `test/test_sql_migration_names.py` and the affected

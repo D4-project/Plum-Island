@@ -615,5 +615,5 @@ resolution mode is unrelated and retains its behavior.
 Network failures do not roll back imports. Automatic lookups run in Plum's
 dedicated scheduler job; the target's detail button and list action force a
 lookup immediately. See [target metadata](scanning.md#target-metadata-and-network-information)
-and [migration 23](migration.md#target-network-metadata-migration-23) for history
+and [migration 23](migration-v0.2604.0-to-v0.2610.0.md#target-network-metadata-migration-23) for history
 backfill, permissions and recovery.

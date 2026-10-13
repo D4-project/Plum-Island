@@ -65,7 +65,7 @@ Leave it disabled if you do not have CIRCL Passive DNS credentials; the IP detai
 
 Review `webapp/config.py` and adapt it to your environment.
 
-For upgrades from `v0.2604.0`, follow the [migration guide](migration.md). For `v0.2606.0`, use the [dedicated upgrade guide](migration-v0.2606.0-to-main.md) instead of running a fresh setup against production data.
+For upgrades to `v0.2610.0`, choose the [migration guide matching your installed version](migration.md): separate procedures cover `v0.2604.0` and `v0.2606.0`. Do not run a fresh setup against production data in place of a migration.
 
 For a local demo run:
 

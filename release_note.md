@@ -1,228 +1,199 @@
-# Plum Island - Master
-
-## Since Last release Changes.
-
-- Defer IP Informations enrichment until its tab is opened, load IP metadata and Passive DNS independently with centered spinners, and display IP/AS cards side by side on wide screens.
-
-- Load IP detail scan reports by requested hostname on demand, with direct hostname links, page-memory caching, browser-history navigation and stale-response protection; preserve cached report selections and scope summary metadata to the selected group, refs #231.
-
-- Show Passive DNS in one timeline panel with `Rdata (RRType)` rows, first/last-seen markers and a shared PDNS time scale, reusing the IP port timeline renderer.
-
-- Replace IP detail date tabs with interactive SVG timelines in each port header: shared time scale, first/last-seen ranges, hover/focus enlargement and latest-result selection, preserving hostname filtering and report-specific web links.
-
-- Align installation, Docker/SMTP setup, migration ordering, examples, tool commands and contributor contracts with current code; document scheduler deployment limitations and correct local dependency copy order in Docker, refs #235–#248.
-
-- Document the certificate-search compatibility change: indexed `x509_issuer` / `x509_subject` contain available DN attributes; legacy commonName queries move to `_cn` fields. Convert SQL queries with `tools/migrate_full_cert.py` before rebuilding with retagging or full replacement import; see `migration_full_cert.md` for limitations, validation and rollback.
-
-- Validate complete dump history before replacing Meilisearch or Kvrocks in `reimport_port_dump.py`; missing/invalid `.time` companions require explicit `--allow-history-loss`. Preserve validated dates by document ID and clarify standard rebuild history preservation, refs #140.
-
-- Include TCP/UDP protocol in each InfoIP port entry; index protocol/port pairs in Kvrocks, resolve older reports on demand from Meilisearch, and provide `tools/backfill_port_protocol.py` for bulk backfill.
-
-- Add per-port `first_seen` to InfoIP: earliest Kvrocks observation among HSH reports selected by the requested time window.
-
-- Add a protected Swagger InfoIP API at `/api/v1/infoip/<ip>` for one public IPv4 or IPv6 address (CIDR rejected), returning per-port tags and UTC `last_seen`. The default window is 30 days, with `days` or `start`/`stop` controls and a two-year lookback cap. Synchronize Read Only permissions with `tools/initial_setup.py --roles-only`.
-
-- Restore Read Only access to Search Scans, Token Search and Stats, including search helper requests; hide and revoke Bulk Import access for that role. Apply the updated role with `tools/initial_setup.py --roles-only`.
-
-- Restore Read Only access to the IP detail WHOIS tab and show clear errors for non-JSON responses; synchronize the updated role with `tools/initial_setup.py --roles-only`, closes #233.
-
-- Attach the complete PDF to manual and scheduled report emails; keep only report metadata, open-port counts, disclaimer and an attachment notice in the email body. Preserve PDF index and links; abort delivery if PDF generation fails.
-
-- Validate report queries before add/edit using the existing search parser and shared Plum-Antibodies tag validator; show field errors without querying search backends or changing saved schedules on failure, refs #230.
-
-- Add a smarthash dump migration tool with date-normalization preflight, disk-backed deduplication, merged observation history, deterministic newest-report selection, dry-run and explicit OUT replacement. Refuse incomplete replacement imports.
-
-- Add a header-icon toggle between search keyword help and five columns of clickable active SQL rule tags; preserve queries and search state, refs #229.
-
-- Persist target IP/CIDR versus FQDN classification in the server-managed `is_ip_cidr` field across GUI, API and import paths. Add atomic migration 24 with dry-run and invalid-value checks; backups are operator-managed, refs #189.
-
-- Always open target details on arrival, including browser back/forward cache restores; disable the shared last-tab restoration on target detail pages only.
-
-- Follow inter-RIR WHOIS transfers using the network's first IP, then retrieve the original CIDR at the destination registry. Restrict referrals to known RIRs and reject loops.
-
-- Check CIRCL routing data before scheduling CIDRs, using a 24-hour per-target cache. Complete ASN-zero jobs without scanning or exporting results; defer stale/unknown routing on lookup failure and recheck at the next due cycle.
-
-### Recent updates (2026-09-17 to 2026-09-25)
-
-- Remove Read Only user creation/edit permissions and synchronize role YAML during bare-metal and Docker deployments, closes #228.
-
-- Replace ad-hoc domain parsing with `pyfaup`, including FQDN WHOIS domain extraction.
-
-- Log scanner-result ingestion and export counts for operational monitoring.
-
-- Add target insertion timestamps, CIDR/FQDN types and shared AS metadata from CIRCL, with queued 24-hour automatic enrichment, permission-protected forced refreshes and migration 23 history backfill, refs #227.
-
-- Remove Kubernetes headers from global default collection; active Kubernetes rules now enable their required headers dynamically.
-
-- Detect Kubernetes from `kubernetes.default` certificate SANs, including `svc` and `cluster.local` variants, without forcing an HTTP protocol tag.
-
-- Use ARIN's non-ambiguous network lookup syntax and remove duplicated trailing legal notices from WHOIS responses.
-
-- Display `CIDR not announced` when CIRCL returns ASN `0` for a network target.
-
-- Accept CIRCL ASN `0` as a valid unannounced range and stop retrying fresh network data indefinitely.
-
-- Treat CIRCL's literal `iso_code: "None"` as an unknown country so unannounced CIDR lookups can complete and retain their 24-hour freshness.
-
-- Refresh tag rules from the latest Plum-Antibodies revision during repository updates.
-
-- Add clickable structured-search keywords that append to the search bar.
-
-- Restore aggregate tag display on IP detail pages and allow duplicate tags during retagging.
-
-- Centralize tag syntax validation through Plum-Antibodies for UI and import paths.
-
-- Retag parsed and indexed TLS certificate results with the `proto:tls` classification.
-
-- Remove technology-specific YAML detection tests from Plum-Island; retain generic parser, tag-engine and header-collection coverage.
-- Normalize migration 22/23 filenames to the full source-SHA convention; document and test the naming requirement.
-
-- Stop requeuing targets already scanned in a running cycle when their rescan delay expires; allow existing jobs to drain and show `finalizing` for running cycles at 100%, without a database migration.
-
-- Show the number of unique ports configured across scan profiles in Stats.
-
-- Align Target Show results with structured search: shared asynchronous tag badges, exact displayed scan-date scope, and IP/info-icon navigation behavior, closes #220.
-
-- Detect SMTP from ESMTP greeting banners, closes #212.
-
-- Detect Postfix and Ubuntu from SMTP ESMTP banners, closes #213.
-
-- Detect Exim from SMTP ESMTP banners, closes #215.
-
-- Tag Dovecot greeting banners with POP3, closes #216.
-
-- Add IMAP protocol detection from capability greeting banners, closes #217.
-
-- Extend INSTAR camera detection with reported favicon MD5 and SHA-256 fingerprints, closes #211.
-
-- Extend MixVoip detection with favicon mmhash, MD5, and SHA-256 fingerprints, closes #224.
-
-- Add Gandi domain-parking favicon detection, closes #222.
-
-- Add OVH domain-parking favicon detection, closes #223.
-
-- Correct Sophos VPN favicon SHA-256 and use VPN Portal title-prefix detection, closes #221.
-
-- Add non-empty protocol and domain-sorted FQDN report views; preserve Passive DNS last-seen timestamps, closes #219.
-
-- Render report Markdown safely as HTML in preview and multipart email, with a printable anchored index, refs #218.
-
-- Show IP detail web links only for observations tagged `proto:http`; choose HTTPS from port-local SSL/TLS evidence, retain the scanned port, and follow the selected history tab and hostname.
-
-- Add case-insensitive standalone `NOT` exclusions to structured search, exports and matching IP history, with per-UID semantics and OR-group isolation; support negated document predicates in tag rules.
-
-- Restrict search timestamp metadata reads to matching UIDs within each IP's membership set; preserve full IP detail history, date semantics, ordering and pagination.
-
-- Add opt-in `debug` search diagnostics with per-stage timings, Kvrocks command/reply counters and a downloadable browser report; preserve matching and pagination.
-
-- Document production search measurements and remaining latency limits; remove the debug activation hint from the search page while keeping the directive available.
-
-- Revert the #161 search batching experiment after a reported 348.930 s versus 42.986 s regression; retain functional search tests and document performance-validation limits.
-
-- Fix MySQL tag-rule import by using the supported `banner.lk` query field.
-
-- Extend FRITZ!Box detection with HTTP title and TLS SAN signals, closes #206.
-
-- Add Nginx HTTP Server-header and default-title detection, closes #208.
-
-- Add GUI reindex controls to the tag-rules list (all rules or one selected rule), live progress/status polling, and a shared file lock so CLI and GUI reindexes cannot overlap.
-
-- Display deduplicated tags asynchronously beside IPs in KVrocks search results using batched Kvrocks lookups for every UID belonging to each IP within the requested time range; grant the read-only role access to the tag lookup route.
-
-- Expand each first-page search IP asynchronously with all matching UIDs in the requested range, without slowing the initial 100-IP search.
-
-- Classify generic webmail detections with `type:webmail` instead of `product:webmail`.
-
-- Refresh the tag reindex progress denominator while new scan UIDs arrive, preventing processed counts from exceeding the displayed total.
-
-- Persist asynchronous Meilisearch export tasks across scheduler ticks, isolate backend maintenance from scan orchestration, yield immediately after submission so indexing cannot block scan-job generation, enforce Meilisearch-before-Kvrocks ordering, and add a resumable raw-JSON recovery tool with task progress for Kvrocks-only documents.
-
-- Bound queue generation to short 256-state commits so scan-result reception can interleave, reconcile cycles per profile instead of globally, defer expensive cycle-history pruning outside queue generation and result reception, search for missing runtime states without holding SQLite's writer lock, and split /16 targets directly into /24 jobs without per-address expansion.
-
-- Log queue-generation progress per profile and committed batch, including CIDR/FQDN job counts, scheduled states, queue fill, cycle boundaries, and tick totals.
-
-- Avoid full due-state sorts during queue generation by selecting never-scanned and expired states through separate index-ordered queries.
-
-- Add an independent five-minute queue-generation watchdog that reports the exact active stage when orchestration is stuck and summarizes repeated completed ticks with zero output.
-
-- Extend TeamCity detection with the `TeamCity-Node-Id` header and an additional favicon MD5 fingerprint, closes #194. Header collection is now derived from fields referenced by active YAML tag rules; existing indexed documents require a Kvrocks rebuild with retagging after enabling the rule. To roll back, restore the previous TeamCity YAML rule and rebuild tag indexes; unrelated indexed fields are unchanged.
-
-- Add Cisco Switch detection from the reported MMH3 and favicon MD5 fingerprints, closes #159.
-
-- Add ScreenConnect detection from the `ScreenConnect/` HTTP server banner, closes #193.
-
-- Bound scan-profile cycles by target ID and expose completion blockers, closes #196.
-
-- Add SonicWall Secure Mobile Access server detection and tagging, closes #191.
-
-- Add NordVPN detection for `nordvpn.com` on port 8443, closes #197.
-
-- Add generic SAP detection signals while preserving product-specific favicon rules, closes #198.
-
-- Add BVPN certificate detection and VPN tagging, closes #199.
-
-- Extend OPNsense detection with server, certificate, title, and favicon fingerprints, closes #200.
-
-- Add Lighttpd server detection, closes #201.
-
-- Add Pterodactyl detection from title and favicon fingerprints, closes #202.
-
-- Split Apache and Debian detection for the reported HTTP server banner (`Apache/` and `(Debian)`), closes #203.
-
-- Extend Dahua detection with camera classification, favicon fingerprints, and certificate issuer matching, closes #204.
-
-- Add Apache JMeter Dashboard detection from title and favicon fingerprints, closes #205.
-
-- Add a dedicated SimpleHTTP rule with the `lang:python` tag.
-
-- Add Sucuri Website Firewall detection, closes #121.
-
-- Add optional date-named application logs with reliable daily midnight rotation and configurable retention, closes #192.
-
-- Requeue unfinished agent jobs after two hours with scheduler watchdog recovery, closes #190.
-
-- Synchronize queued job profile snapshots in bounded scheduler batches after profile edits.
-
-- Add optional scan-profile Nmap parameters, job snapshots, bot API payload support, safe validation, migration, and documentation, closes #188.
-
-- Tooling and target import:
-  - Add `tools/import_whois_ranges.py` to download RIR WHOIS sources, extract matching country/word IPv4 ranges, reduce covered CIDRs, and import targets through the Plum API.
-  - Add `tools/range_import.yaml.sample` and ignore local WHOIS import config/cache/log files.
-  - Add the least-privilege `Feeder` API role for automated target imports, with install and migration support.
-  - Block target creation when an existing wider CIDR already covers the candidate target across GUI, GUI bulk import, and API import paths.
-  - Add daily rotating logs and Rich console logging for WHOIS range and last-FQDN tooling.
-  - Extend `tools/last_fqdns.py` with `--learn` to resolve Passive DNS-observed FQDNs and import only configured domain/TLD regex matches that resolve.
-  - Add last-FQDN resolution progress logs, per-FQDN debug resolution output, and newly created Plum target count.
-  - Fix `KVrocksIndexer` constructor arguments at scheduler startup, closes #148.
-  - Fix `tag_mgmt.py` flush-tag key corruption, zero-selector handling, datetime sentinel, and interrupted import STOP_REQUESTED reset, closes #150.
-  - Clean up interrupted Meilisearch import indexes.
-- Webapp fixes and hardening:
-  - Add bot API support for releasing interrupted agent jobs, closes #180.
-  - Add authenticated REST CRUD API for scan port management with OpenAPI documentation, closes #174.
-  - Add authenticated REST CRUD API for NSE script management with OpenAPI documentation, closes #172.
-  - Add incremental target scan-result loading with search timing and a load-more control, closes #182.
-  - Skip non-external IP scan results during parsing to avoid localhost/private DB pollution, closes #120.
-  - Limit bot status editing to the `active` flag so agents can be suspended, closes #124.
-  - Write bot job result files before marking jobs finished, closes #162.
-  - Harden `/bot_api/sndjob` result parsing failures.
-  - Align `webapp/run.py` port with `docker-compose.yml`, closes #164.
-  - Complete template XSS hardening by building dynamic target/search/detail HTML with DOM APIs and escaping dynamic values, closes #151.
-  - Index normalized TLS certificate SAN and subject CN hostnames into `fqdn`, `host`, and `domain` search fields, closes #186.
-  - Add Plesk detection from `X-Powered-By: PleskLin`, closes #187.
-  - Add OpenResty Server header detection, closes #185.
-  - Add Gitea title detection, closes #184.
-  - Add Wyse Management Suite title detection, closes #183.
-  - Add Ivanti favicon detection, closes #181.
-- Docker and deployment:
-  - Add `plum_net` external Docker network for Plum-Agent connectivity, closes #165.
-  - Rename Docker Compose services with the `plum-` prefix, closes #166.
-  - Use the `plum-webapp` service name in agent connectivity documentation.
-  - Persist NSE uploads across container rebuilds, closes #168.
-- Documentation:
-  - Add getting started documentation, closes #170.
-  - Document the Feeder role, WHOIS range import, and Passive DNS FQDN learning workflow.
-
-
+# Plum Island - 20 Years Hack.lu Release - v0.2610.0
+
+Release in preparation — not yet published. The changes below describe what
+v0.2610.0 brings compared with v0.2606.0. Release date and Git tag will be set
+when the release is published.
+
+## Highlights
+
+- Expanded technology detection and UUID-based tag rules, with shared validation,
+  rule-driven HTTP header collection and GUI reindex controls.
+- Redesigned IP exploration: interactive port and Passive DNS timelines,
+  on-demand hostname reports and asynchronous enrichment.
+- Complete PDF reports with clickable navigation, attached to concise report emails.
+- Clickable search keywords and tag catalogues, standalone `NOT` exclusions,
+  richer certificate search and a protected InfoIP API.
+- Target insertion dates, network/AS enrichment, WHOIS and routing-aware scheduling.
+- Date-insensitive scan deduplication and history-preserving migration tooling.
+
+## Tags and technology detection
+
+- Tag rules now use a mandatory unique UUID. Names come from YAML and may repeat;
+  imports and updates identify rules by UUID rather than filename or display name.
+- Tag syntax validation is shared with Plum-Antibodies across the UI and import
+  paths. Repository updates refresh the Antibodies rules.
+- The tag-rules UI provides reindex actions for all rules or one selected rule,
+  with live progress and a shared CLI/GUI lock. IP search results load deduplicated
+  tag badges asynchronously.
+- Active YAML rules determine which HTTP headers must be collected. Kubernetes
+  headers no longer belong to the global default collection. Its certificate SAN
+  detection covers `kubernetes.default`, `kubernetes.default.svc` and
+  `kubernetes.default.svc.cluster.local`, without implying HTTP.
+- TLS observations receive `proto:tls`; generic webmail uses `type:webmail`.
+- Expanded web/application detection: Nginx (#208), OpenResty (#185), Lighttpd
+  (#201), SimpleHTTP, TeamCity (#194), ScreenConnect (#193), Gitea (#184),
+  Wyse Management Suite (#183), Plesk (#187), SAP (#198), Pterodactyl (#202),
+  Apache JMeter (#205), and separate Apache/Debian banner signals (#203).
+- Expanded network/security detection: FRITZ!Box (#206), Cisco Switch (#159),
+  SonicWall Secure Mobile Access (#191), NordVPN (#197), BVPN (#199), OPNsense
+  (#200), Sucuri (#121) and Ivanti (#181).
+- Expanded camera, telephony and parking fingerprints: Dahua (#204), INSTAR
+  (#211), MixVoip (#224), Gandi (#222) and OVH (#223).
+- Mail detection covers SMTP/ESMTP (#212), Postfix/Ubuntu (#213), Exim (#215),
+  Dovecot POP3 (#216) and IMAP capability greetings (#217).
+
+## Visual exploration and IP details
+
+- Interactive SVG timelines replace the per-port date tabs. Each port shows
+  first/last-seen ranges and clickable end points; the newest report is selected
+  initially. All ports share the visible hostname group's time scale.
+- Passive DNS uses one timeline panel with `Rdata (RRType)` rows, a shared date
+  axis and first/last-seen markers.
+- Requested-hostname reports load on demand and remain cached in page memory.
+  Direct hostname links, browser back/forward and cached report selections are
+  supported; obsolete responses never replace the active selection (#231).
+- IP summary counts, tags and dates describe the selected hostname group.
+  Web links follow the active observation, require `proto:http`, retain the
+  scanned port and use HTTPS only with port-local TLS evidence.
+- The Informations tab loads IP metadata and Passive DNS independently when opened,
+  with centered loading indicators. IP and AS information appear in equal-height,
+  side-by-side cards on wide screens. WHOIS uses the same loading feedback.
+- Target results load incrementally with timing and a load-more control (#182),
+  shared tag badges and consistent IP/detail navigation (#220).
+- Stats includes the number of unique ports configured across scan profiles.
+
+## Reports and PDF delivery
+
+- Report previews render safe HTML with an anchored index and print support (#218).
+- PDFs include a cover, an index on page 2, section page breaks and clickable
+  internal links to the full host dump.
+- Manual and scheduled emails attach the complete PDF. The body contains only
+  report metadata, open-port host counts, an attachment notice and the disclaimer.
+  PDF generation must succeed before email delivery.
+- Reports group newly opened ports by port, list detected FQDNs with associated
+  IPs, and separate additional Passive DNS names with last-seen timestamps.
+  Non-empty service sections cover web, mail and remote access (#219).
+- Report queries are validated when saved, using the existing search parser and
+  shared tag validator. Invalid queries produce field errors without changing
+  the saved schedule or querying search backends (#230).
+
+## Search and APIs
+
+- Search keywords append directly to the query bar. A header toggle switches
+  between syntax help and five clickable SQL-backed tag columns: protocols,
+  types, products, vendors and vulnerabilities (#229).
+- Case-insensitive standalone `NOT` excludes matching scan UIDs within each OR
+  group. Interactive search, exports, matching history and tag rules support it.
+- Certificate searches distinguish full issuer/subject DNs from explicit
+  `x509_issuer_cn` and `x509_subject_cn` fields. Normalized certificate SAN/CN
+  hostnames also populate FQDN, host and domain search fields (#186).
+- Domain extraction uses offline `pyfaup` suffix data, including FQDN-to-domain
+  extraction for WHOIS, instead of ad-hoc label splitting and online TLD loading.
+- Search history expansion and tag loading run asynchronously; timestamp reads
+  are scoped to matching UIDs.
+- A protected Swagger InfoIP endpoint at `/api/v1/infoip/<ip>` returns per-port
+  tags, TCP/UDP protocol, first-seen and last-seen timestamps for one public IPv4
+  or IPv6 address. It defaults to 30 days and supports a two-year lookback cap.
+  CIDRs are rejected; this does not add IPv6 scanning support.
+- Authenticated REST CRUD APIs manage ports (#174) and NSE scripts (#172).
+
+## Targets and scan orchestration
+
+- Targets have insertion timestamps, explicit IP/CIDR or FQDN classification and
+  shared AS/network metadata from CIRCL. Migration backfills insertion dates
+  from available scan history, using migration time when none exists (#227, #189).
+- CIDR network data uses a 24-hour cache; authorized manual refreshes bypass it.
+  FQDNs do not receive CIDR AS metadata.
+- Target and IP views offer WHOIS. FQDN lookups use the extracted registrable
+  domain; network lookups follow inter-RIR transfers to retrieve the CIDR record.
+- Before scheduling a CIDR, routing information is checked through the CIRCL cache.
+  ASN `0` means `CIDR not announced`: the scan state completes without scanning
+  or exporting a result. Failed refreshes of stale/unknown routing data defer work.
+- Scan-profile cycles have bounded target membership and visible completion
+  blockers (#196). Queue generation uses short, bounded commits and index-ordered
+  due-state queries to reduce SQLite contention.
+- Optional per-profile Nmap parameters are validated, snapshotted into jobs and
+  sent to agents (#188). Queued snapshots synchronize after profile edits.
+- Meilisearch export tasks persist across scheduler ticks; waiting for indexing
+  no longer blocks job generation. Kvrocks export follows successful Meilisearch work.
+- Queue/result counts, per-stage progress and an independent queue watchdog improve
+  operational visibility. Unfinished agent jobs are requeued after two hours
+  (#190); agents can explicitly release interrupted jobs (#180).
+
+## Installation, tools and operations
+
+- Fresh setup labels TCP ports with known local service names and seeds eight
+  default NSE scripts: HTTP headers/title, certificate, SSH host key, ALPN,
+  banner, Modbus and hash-based favicon collection. Missing defaults fall back
+  to bundled scripts; `http-favicon.nse` is excluded.
+- WHOIS range import downloads RIR data, filters country/word matches, reduces
+  covered CIDRs and imports through the least-privilege Feeder API role.
+  Existing wider CIDRs prevent redundant target creation.
+- Passive DNS FQDN learning resolves configured domain/TLD matches before import.
+  Import tools expose progress and rotating logs.
+- Smarthash migration normalizes volatile dates, merges date-only duplicates and
+  observation bounds, and retains the newest payload deterministically. It offers
+  dry-run, disk-backed deduplication and explicit destination replacement.
+- Full reimport validates history companions before replacing indexes. Missing or
+  invalid history requires explicit acceptance of history loss (#140).
+- Recovery tooling can resume raw-JSON reintegration for Kvrocks-only documents;
+  protocol backfill supports older InfoIP data.
+- Application logs optionally rotate daily with configurable retention (#192).
+  Search performance diagnostics are documented in the
+  [search guide](documentation/search.md#performance-diagnostics).
+- Docker uses `plum-` service names and an external `plum_net` for agent
+  connectivity (#165, #166), with persistent NSE uploads (#168).
+- Installation, migration, SMTP, tool and contributor documentation is aligned
+  with the implementation (#235–#248); getting-started guidance covers first use
+  (#170). YAML technology-detection tests belong to Plum-Antibodies, while generic
+  parser and tag-engine coverage remains here.
+
+## Upgrade notes
+
+Choose the [migration guide for your installed version](documentation/migration.md).
+Do not apply the legacy IP-to-port split to an installation already using per-port
+documents. Backups and stopping writers remain the operator's responsibility.
+
+- Apply the SQL migrations required by the source version, including UUID rule
+  identity, target network metadata and target classification.
+- Convert saved certificate CN queries before importing updated rules and rebuilding
+  indexes; see the [certificate migration](migration_full_cert.md). A tag-only
+  reindex cannot populate the new certificate fields.
+- Existing results need a Kvrocks rebuild with retagging to gain newly collected
+  rule-dependent headers, including TeamCity's `TeamCity-Node-Id`. Restoring the
+  previous rule and rebuilding tags provides the corresponding rollback.
+- Update scanner `nmap2json` dependencies before resuming scans after smarthash
+  migration. Full round-trip and production recovery validation remain operator
+  prerequisites; these notes do not claim they have been completed.
+- Synchronize configured roles with `tools/initial_setup.py --roles-only`.
+  Bare-metal and Docker deployments also synchronize role definitions.
+
+## Bug fixes and hardening
+
+- **Scheduling and ingestion:** prevent already completed targets from being
+  rescheduled within the same running cycle; show `finalizing` while remaining
+  jobs drain. Write result files before marking jobs finished (#162), handle
+  malformed submissions, and fix scheduler Kvrocks initialization (#148).
+- **Network information and WHOIS:** accept ASN `0` and unknown-country
+  responses as valid unannounced results instead of retrying indefinitely.
+  Use unambiguous ARIN syntax, remove duplicated legal notices, follow transfers
+  only to known RIRs and reject referral loops. Target pages open on Details,
+  including after browser-history restoration.
+- **Tags:** tolerate repeated tags during retagging, restore aggregate IP tag
+  display, correct MySQL's query field, distinguish POP3 `+OK` from IMAP `* OK`
+  greetings, and correct Sophos VPN fingerprint/title matching (#221).
+  Repair tag flush/selector/interruption handling (#150) and refresh progress
+  totals as new scan UIDs arrive.
+- **Search and indexes:** clean up interrupted import indexes and reject partial
+  replacement dumps. Revert the regressing #161 batching experiment; no production
+  speedup is claimed from functional tests or diagnostic counters alone.
+- **Access control:** remove Read Only user creation/edit permissions (#228) and
+  Bulk Import access, while restoring permitted search, Stats, InfoIP and WHOIS
+  helper access (#233). Bot status editing is limited to the active flag (#124).
+- **Rendering and parsing:** escape dynamic target/search/detail content (#151)
+  and skip non-external scan IPs to avoid private/localhost index pollution (#120).
+- **Deployment:** align the tracked launcher port with Compose (#164), correct
+  Docker dependency copy order, and enforce full-source-SHA migration filenames.
 
 # Plum Island - Searing Spring Release - v0.2606.0
 

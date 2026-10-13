@@ -1,10 +1,10 @@
-# Upgrade from `v0.2606.0` to current `main`
+# Migration from `v0.2606.0` to `v0.2610.0`
 
 ## Overview
 
-This procedure starts from the [Plum Island `v0.2606.0` release](https://github.com/D4-project/Plum-Island/releases/tag/v0.2606.0) and targets `main` as documented on 2026-10-08 (base commit `7ed78fa`, plus the migration CLI change accompanying this guide). `main` is not a versioned release; check the commit being deployed and review later migrations if it has moved beyond this guide.
+This procedure starts from the [Plum Island `v0.2606.0` release](https://github.com/D4-project/Plum-Island/releases/tag/v0.2606.0) and targets **Plum Island - 20 Years Hack.lu Release - v0.2610.0**. The destination release is in preparation, not yet published. See the [migration index](migration.md) to choose the guide for your installed version.
 
-`v0.2606.0` already stores scan results per port. Do **not** run the IP-to-port split from the older [`v0.2604.0` guide](migration.md). This upgrade has three coordinated data changes:
+`v0.2606.0` already stores scan results per port. Do **not** run the IP-to-port split from the [`v0.2604.0` guide](migration-v0.2604.0-to-v0.2610.0.md). This upgrade has three coordinated data changes:
 
 1. Apply SQLite migrations `17` through `24` to application metadata, in order. Migration `23` can use retained Kvrocks history to backfill target creation dates.
 2. Rehash the complete Meilisearch result set with the corrected `nmap2json` library. The migration reads each old document's `first_seen` and `last_seen` from source (`IN`) Kvrocks, falls back to JSON scan times for absent bounds, recomputes port hashes and IDs, merges date-only duplicates, and writes new JSON plus consolidated `.time` files. Reimport replaces the configured destination (`OUT`) Meilisearch index and rebuilds destination Kvrocks with the new IDs and dates.
@@ -27,12 +27,14 @@ Take restorable backups of the SQLite database (including any WAL state), Meilis
 
 ### 2. Update code and dependencies
 
-From the Plum-Island repository root, update to the intended `main` commit and its tag-rule submodule. Preserve local configuration and changes before pulling; `git pull --ff-only` refuses a divergent branch.
+From the Plum-Island repository root, update to the release revision and its
+tag-rule submodule. Preserve local configuration and changes first. The commands
+below target the release tag **after publication**. Until then, use a reviewed
+preparation commit SHA in place of `v0.2610.0`; the release tag does not yet exist.
 
 ```bash
-git fetch origin
-git checkout main
-git pull --ff-only
+git fetch origin --tags
+git checkout --detach v0.2610.0
 git submodule sync --recursive
 git submodule update --init --recursive
 .venv/bin/python -m pip install -r requirements.txt
@@ -68,7 +70,7 @@ Migration `23` adds target insertion timestamps and shared network metadata. It 
 .venv/bin/python webapp/sql_upd/23_migrate_from_4eb42ebc9bf251ffc5a563554967d1450d678df2.py --db webapp/app.db --history-csv /path/to/target-history.csv
 ```
 
-`first_seen_csv.py` reads `IN_KVROCKS_*` from `tools/config.yaml`; its current connection code does not pass `IN_KVROCKS_PASSWORD`, so verify source access before relying on this command. If no CSV is available, omit `--history-csv` from **both** migration `23` commands and review the dry-run's `fallback_now` count. Purged history cannot be recovered. See [migration 23 details](migration.md#target-network-metadata-migration-23) for how IP/CIDR and FQDN history is matched.
+`first_seen_csv.py` reads `IN_KVROCKS_*` from `tools/config.yaml`; its current connection code does not pass `IN_KVROCKS_PASSWORD`, so verify source access before relying on this command. If no CSV is available, omit `--history-csv` from **both** migration `23` commands and review the dry-run's `fallback_now` count. Purged history cannot be recovered. See [migration 23 details](migration-v0.2604.0-to-v0.2610.0.md#target-network-metadata-migration-23) for how IP/CIDR and FQDN history is matched.
 
 Migration `24` classifies stored targets as IP/CIDR or FQDN. Its dry-run reports invalid values without changing the database; resolve any reported IDs before applying it:
 
@@ -159,4 +161,4 @@ Also validate CN/DN searches, tags and saved report queries as described in the
 certificate guide. On rollback restore matching SQL query/marker state and rules
 alongside the old index and code; reverting only the code is not sufficient.
 
-For tool options and backend behavior, see [Tools: date-only duplicate migration](tools.md#date-only-duplicate-migration) and the [smarthash TODO](../tools/TODO-smarthash.md). The full disposable round trip and a real production recovery remain unverified in that TODO; this guide describes the intended sequence, not a completed production run.
+For tool options and backend behavior, see [Tools: date-only duplicate migration](tools.md#date-only-duplicate-migration). A full disposable round trip and a real production recovery remain unverified; this guide describes the intended sequence, not a completed production run. Validate on disposable destinations before replacing production indexes.

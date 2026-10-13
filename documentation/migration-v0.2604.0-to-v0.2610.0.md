@@ -1,0 +1,294 @@
+# Migration from `v0.2604.0` to `v0.2610.0`
+
+This guide upgrades a `v0.2604.0` Plum Island instance, with IP-scoped scan
+documents, to **Plum Island - 20 Years Hack.lu Release - v0.2610.0**.
+The destination release is in preparation, not yet published.
+
+Already on `v0.2606.0`? Use the
+[v0.2606.0 → v0.2610.0 guide](migration-v0.2606.0-to-v0.2610.0.md) instead.
+See the [migration index](migration.md) for the source-version decision table.
+
+Stop the web application, scheduler, and agents before starting. Do not run scans while migrating.
+
+## 1. Back up data
+
+Back up SQLite first:
+
+```bash
+cp webapp/app.db "webapp/app.db.backup.$(date +%Y%m%d-%H%M%S)"
+cp webapp/app.db-wal "webapp/app.db-wal.backup.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+cp webapp/app.db-shm "webapp/app.db-shm.backup.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+```
+
+Also back up external indexes before destructive reimport:
+
+- Meilisearch data directory or snapshot
+- Kvrocks/RocksDB data directory or snapshot
+- `tools/config.yaml`
+- `webapp/config.py`
+
+If possible, test the full procedure on a copy of production first.
+
+## 2. Update code and dependencies
+
+Preserve local configuration and changes first. The commands below target the
+release tag **after publication**. Until then, use a reviewed preparation commit
+SHA in place of `v0.2610.0`; the release tag does not yet exist.
+
+```bash
+git fetch origin --tags
+git checkout --detach v0.2610.0
+git submodule sync --recursive
+git submodule update --init --recursive
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+## 3. Apply SQL migrations
+
+`v0.2604.0` already contains migrations `01` to `13`.
+From `v0.2604.0` to `v0.2610.0`, apply only these SQL update scripts, in order:
+
+```bash
+.venv/bin/python webapp/sql_upd/14_migrate_from_fb0572514a77717f6d9ad6cd05db6768be82178a.py
+.venv/bin/python webapp/sql_upd/15_migrate_from_173795d186ee69c8abca1ce75d5bb0ff749b55a0.py
+.venv/bin/python webapp/sql_upd/16_migrate_from_28501acb1bc77d15ea1dc5f9c41684d40daecf10.py
+.venv/bin/python webapp/sql_upd/17_migrate_from_d7c3198bc3b3a7d6cf0ae39860fd1cfb58c1a4e3.py
+.venv/bin/python webapp/sql_upd/18_migrate_from_89b4c246af69e340fa8ac66290c936506b23a638.py
+.venv/bin/python webapp/sql_upd/19_migrate_from_b3b36001115d22b839ce630562bbf83ed0f166c0.py
+.venv/bin/python webapp/sql_upd/20_migrate_from_1a77f9638812f6d238b5a7f26aace1f45ae06e2e.py
+.venv/bin/python webapp/sql_upd/21_migrate_from_c1ef29af4ac597787b67d99982f9baade1817222.py
+.venv/bin/python webapp/sql_upd/22_migrate_from_e1e711f41e9239b02bdba58dc4a9a5588d89619e.py
+```
+
+What they do:
+
+- `14`: add scan profile cycle tracking tables/columns
+- `15`: add default HTTP header collection config
+- `16`: add scan-unit counters for scan profile progress
+- `17`: add the narrow `Feeder` API role for target import tools
+- `18`: add Kong headers to the collected-header table
+- `19`: add optional Nmap parameters to scan profiles and queued jobs
+- `20`: bound running scan-profile cycles by target ID without resetting jobs
+- `21`: persist in-flight Meilisearch export tasks across scheduler ticks
+- `22`: make tag-rule UUIDs mandatory and unique, while allowing duplicate names
+- `23`: add target insertion timestamps and shared AS/network enrichment metadata;
+  follow the history preparation below before running it.
+- `24`: persist IP/CIDR versus FQDN classification; apply after migration 23 using
+  the commands below.
+
+Do not rerun older migrations unless migrating from a version older than `v0.2604.0`.
+
+### Target network metadata (migration 23)
+
+Stop the web app/scheduler and back up SQLite. Do not start the updated models
+against an unmigrated database. First prepare available historical scan data:
+SQL retains only surviving jobs and recent per-target/profile scan timestamps;
+older jobs/raw files may have been purged. The migration uses the earliest
+surviving **completed job scan start** (end time if start is missing), target and
+profile scan timestamps, and optional retained history CSV. Job creation time is
+not a scan timestamp.
+
+Use `tools/first_seen_csv.py --export /path/to/history.csv` with the appropriate
+read-only source configuration to include historical Kvrocks `first_seen` values.
+The migration reads that CSV locally; it never writes to Kvrocks or Meilisearch.
+The existing export's `ip,first_seen` fields match hosts to containing CIDRs.
+For FQDN history, provide an additional `target,first_seen` CSV column pair where
+`target` is the exact stored FQDN; IP history is not attributed to FQDNs by DNS.
+When available, populate that explicit column from retained scan/requested-target
+history before migrating. Other columns in the export are ignored.
+
+```bash
+.venv/bin/python webapp/sql_upd/23_migrate_from_4eb42ebc9bf251ffc5a563554967d1450d678df2.py --db /path/to/app.db --history-csv /path/to/history.csv --dry-run
+.venv/bin/python webapp/sql_upd/23_migrate_from_4eb42ebc9bf251ffc5a563554967d1450d678df2.py --db /path/to/app.db --history-csv /path/to/history.csv
+```
+
+Omit `--history-csv` only when SQL history is sufficient or its limitations are
+accepted. Dates use the oldest **available** evidence; missing purged history
+cannot be reconstructed. Targets with no available scan evidence receive the
+same migration execution time (`now()`), reported as `fallback_now`. Review the
+dry-run counts before proceeding. Dry-run migrates an in-memory backup and leaves
+the source DB untouched. Reruns preserve populated insertion dates; supply history
+on the initial run. New targets get their real insertion time thereafter.
+
+Legacy AS values are copied to the shared table for CIDRs only. They are not
+marked as a successful CIRCL lookup. Existing targets are enriched at their next
+scan receipt or manual refresh; migration does not enqueue a fleet-wide lookup.
+Descriptions, target IDs, jobs and scan states are retained. The old AS SQL columns
+remain rollback-only; the new application reads the shared table instead.
+
+Keep Plum stopped through migration 24, query conversion and index replacement.
+The seed step below synchronizes configured roles (or grant `can_refresh_network`
+on `TargetsView` to equivalent authorized custom roles).
+For rollback, stop Plum and restore the **matching pre-migration DB backup and
+application revision**. Account for scans received since that backup before any
+restore; do not drop the new table while running the updated application.
+
+### Persisted target classification (migration 24)
+
+Keep the application and scheduler stopped until the complete upgrade is validated.
+The script imports shared classification helpers without starting Flask. Install
+the existing requirements first. Use the actual configured SQLite path:
+
+```bash
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db --dry-run
+.venv/bin/python webapp/sql_upd/24_migrate_from_610859bfc6d1d92ed54d48bceab1565753043742.py --db webapp/app.db
+```
+
+Backups are managed independently by the operator; the script does not create
+or require a backup file. Dry-run uses an in-memory copy. Migration adds
+`is_ip_cidr BOOLEAN NOT NULL DEFAULT 0`, then classifies every existing value
+inside one transaction. The temporary SQL default is not a classifier: application
+inserts and edits always derive the value. Do not run old application writers
+after migration or write targets through raw SQL without maintaining this field.
+
+IPv4/IPv6 addresses and CIDRs become `1`; syntactically valid FQDNs become `0`,
+including legacy/private suffixes. Existing private IPs are classified without
+changing import admission rules. Invalid strings abort migration and report IDs
+for operator review; no records are deleted, normalized or renamed. Descriptions,
+associations and scan state remain unchanged. Reruns recompute the same values
+without updating already correct rows. Existing incompatible nullable columns
+are rejected rather than silently accepted.
+
+Recovery: failures roll back the transaction. To roll back a successful migration,
+stop all writers and restore the backup with the previous code, managing WAL/SHM
+files as part of the offline SQLite restore. This discards writes since the backup;
+retain a copy of the current database first if it has received new data.
+
+## 4. Refresh seed data
+
+Before importing bundled rules, complete the SQL-only query conversion in the
+[certificate CN/DN upgrade](../migration_full_cert.md#2-deploy-code-and-convert-sql-queries).
+Use an empty `--yaml-dir` so the tool does not edit Antibodies. Review the dry-run
+and converted custom rules/report queries, and confirm the deployed YAML rules
+have matching CN/DN semantics. This is a query-data migration, not a new numbered
+schema migration. Do not start writers yet.
+
+Run the initial setup loader to ensure current roles, TCP ports, header collection, tag rules, NSE scripts, and the default banner scan profile exist:
+
+```bash
+.venv/bin/python tools/initial_setup.py
+```
+
+This imports YAML tag rules from `webapp/tags/tags/`, clones/updates `https://github.com/D4-project/Plum-Rules-NSE`, imports NSE scripts, and creates the all-target `Default banner scan` profile for ports `22`, `80`, and `443` with the [eight default NSE scripts](tools.md#initial_setuppy).
+
+## 5. Configure tool migration targets
+
+Prepare `tools/config.yaml`:
+
+```bash
+# Only create a config if one does not already exist; review existing endpoints.
+test -f tools/config.yaml || cp tools/config.yaml.sample tools/config.yaml
+```
+
+Edit at least:
+
+```yaml
+IN_MEILI_URL: "http://old-or-current-meili:7700"
+IN_MEILI_API_KEY: "..."
+OUT_MEILI_URL: "http://target-meili:7700"
+OUT_MEILI_API_KEY: "..."
+INDEX_NAME: "plum"
+
+IN_KVROCKS_HOST: "old-or-current-kvrocks"
+IN_KVROCKS_PORT: 6666
+OUT_KVROCKS_HOST: "target-kvrocks"
+OUT_KVROCKS_PORT: 6666
+```
+
+For an in-place migration, `IN_*` and `OUT_*` usually point to the same services.
+
+## 6. Migrate IP documents to port documents
+
+`v0.2610.0` stores one Meilisearch document per IP/port observation instead of one IP document containing all ports.
+
+### 6.1 Dump current IP-scoped Meilisearch documents
+
+Run from `tools/` because this script reads `config.yaml` from the current directory:
+
+```bash
+cd tools
+../.venv/bin/python dump_meilidb.py --do-export
+cd ..
+```
+
+Output:
+
+```text
+tools/meili_dump/
+```
+
+### 6.2 Split dump into port-scoped documents
+
+```bash
+.venv/bin/python tools/split_meili_dump_by_port.py \
+  --input-dir tools/meili_dump \
+  --output-dir tools/meili_dump_port
+```
+
+This creates:
+
+```text
+tools/meili_dump_port/
+```
+
+It also writes `.time` companion files from `IN_KVROCKS_*` when possible, preserving old `first_seen` / `last_seen` timestamps.
+
+### 6.3 Reimport port-scoped dump
+
+Warning: this is destructive for `OUT_MEILI_*` and `OUT_KVROCKS_*`.
+
+```bash
+.venv/bin/python tools/reimport_port_dump.py \
+  --input-dir tools/meili_dump_port \
+  --areyousure_yes
+```
+
+Default behavior:
+
+- import port-scoped documents into a temporary Meilisearch index
+- atomically swap it into `INDEX_NAME`
+- rebuild OUT Kvrocks from the port-scoped documents
+- recompute tags from active DB tag rules
+- restore timestamps from `.time` companion files
+
+The current importer also prepares certificate CN/DN fields and recomputes tags
+using the converted SQL rules. No second certificate-only rebuild is needed
+after this full import. If replacing neither backend, follow the separate
+certificate rebuild procedure instead. Before replacing either backend, the
+importer requires valid `.time` bounds unless history loss is explicitly accepted;
+do not treat `--areyousure_yes` as permission to discard history.
+
+Useful options:
+
+```bash
+# slower, simpler parsing path
+.venv/bin/python tools/reimport_port_dump.py --input-dir tools/meili_dump_port --workers 1 --areyousure_yes
+
+# only rebuild Kvrocks from already imported port documents
+.venv/bin/python tools/reimport_port_dump.py --input-dir tools/meili_dump_port --skip-meili --areyousure_yes
+
+# only replace Meilisearch, skip Kvrocks rebuild
+.venv/bin/python tools/reimport_port_dump.py --input-dir tools/meili_dump_port --skip-kvrocks --areyousure_yes
+```
+
+## 7. Validate
+
+Start Plum Island again, then check:
+
+- web UI starts without DB errors
+- `Config -> Scan Profiles` contains `Default banner scan`
+- `Config -> Header Collection` contains default HTTP headers
+- `Config -> Tag Rules` contains imported rules
+- `Config -> Nse Scripts` contains imported NSE scripts
+- structured search works for `port:443`
+- structured search works for `http_header:content-type`
+- structured search works for `tag:proto:ssh` when matching data exists
+- IP detail page still opens for known scanned IPs
+- CN searches use `x509_issuer_cn` / `x509_subject_cn`; DN attribute searches use
+  `x509_issuer` / `x509_subject`; representative custom rules and reports still match
+
+Follow the certificate guide's UID/timestamp checks and rollback requirements
+as well. Do not resume agents/indexing until all validation succeeds.
+
+If validation fails, stop services and restore the SQLite, Meilisearch, and Kvrocks backups before retrying.

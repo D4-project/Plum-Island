@@ -64,9 +64,6 @@ each OR group requires a positive term, and exclusion applies per scan UID.
 
 See [Search documentation](documentation/search.md) for the full field list, modifiers, examples, and date-range behavior.
 
-Append `debug` (for example `http_server.lk:apache debug`) to inspect and download
-per-page performance diagnostics without changing search criteria.
-
 ## Tagging
 
 Tag rules are stored as YAML definitions and can also be managed from the web UI.
@@ -103,8 +100,7 @@ See [Reports documentation](documentation/reports.md) for setup, query semantics
 
 - [v0.2610.0 release notes (in preparation)](release_note.md)
 - [Installation](documentation/installation.md)
-- [Migration](documentation/migration.md)
-- [Upgrade from v0.2606.0](documentation/migration-v0.2606.0-to-main.md)
+- [Migration to v0.2610.0 — choose your installed version](documentation/migration.md)
 - [Certificate CN/DN upgrade](migration_full_cert.md)
 - [Search](documentation/search.md)
 - [Tagging rules](https://github.com/D4-project/Plum-Antibodies/tree/main/tags)
