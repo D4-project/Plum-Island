@@ -2,6 +2,10 @@
 
 ## Since Last release Changes.
 
+- Defer IP Informations enrichment until its tab is opened, load IP metadata and Passive DNS independently with centered spinners, and display IP/AS cards side by side on wide screens.
+
+- Load IP detail scan reports by requested hostname on demand, with direct hostname links, page-memory caching, browser-history navigation and stale-response protection; preserve cached report selections and scope summary metadata to the selected group, refs #231.
+
 - Show Passive DNS in one timeline panel with `Rdata (RRType)` rows, first/last-seen markers and a shared PDNS time scale, reusing the IP port timeline renderer.
 
 - Replace IP detail date tabs with interactive SVG timelines in each port header: shared time scale, first/last-seen ranges, hover/focus enlargement and latest-result selection, preserving hostname filtering and report-specific web links.

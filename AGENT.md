@@ -241,7 +241,9 @@ Its current contract is:
 - the most recent matching observation is selected by default; timeline points select reports with mouse or keyboard, with all points and periods kept on one line even when close together; unknown dates remain accessible separately
 - a `Requested Hostname` dropdown is rendered before the port cards
 - the dropdown always includes `IP only` first, then all `fqdn_requested` values for that IP in alphabetical order
-- selecting a hostname filters the visible observations client-side without reloading the page
+- hostname choices come from Kvrocks `fqdn_requesteds:<uid>` metadata; only the selected group's full documents are fetched from Meilisearch, including on direct `?hostname=` links (no hostname means IP-only)
+- changing hostname fetches an HTML fragment through the same protected `detail` route, updates the URL and caches loaded groups in page memory; late responses never replace the current selection, and back/forward restores cached groups
+- scan counts, port counts, tags and first/last-seen metadata describe the selected group; the virtual-host count describes the complete hostname catalogue
 - a port's web link requires `proto:http` on the active observation's UID; SSL/TLS evidence on that port selects HTTPS, otherwise HTTP
 - web links retain the scanned port and selected hostname/IP, and update when the active timeline observation or hostname changes
 - the `Informations` tab is separate and is used for external enrichment such as CIRCL geolookup and passive DNS

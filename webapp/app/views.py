@@ -2754,7 +2754,7 @@ class IPDetailView(BaseView):
     @has_access
     def detail(self, ip):
         """
-        Render a fully expanded detail page for one IP.
+        Render only the selected requested-hostname group for one IP.
         """
         if not is_valid_ip(ip):
             return make_response("Invalid IP", 400)
@@ -2764,6 +2764,22 @@ class IPDetailView(BaseView):
         )
         ip_timestamps = indexer.get_timestamp_for_ip(ip)
         uids = [uid for uid in ip_timestamps if uid not in ("min_seen", "max_seen")]
+        hostnames_by_uid = indexer.get_requested_hostnames_for_uids(uids)
+        requested_hostnames = {
+            hostname for names in hostnames_by_uid.values() for hostname in names
+        }
+        selected_hostname = (request.args.get("hostname") or "").strip().lower()
+        if selected_hostname and selected_hostname not in requested_hostnames:
+            return make_response("Unknown requested hostname for this IP", 404)
+        uids = [
+            uid
+            for uid in uids
+            if (
+                selected_hostname in hostnames_by_uid.get(uid, [])
+                if selected_hostname
+                else not hostnames_by_uid.get(uid)
+            )
+        ]
         sorted_uids = sorted(
             uids,
             key=lambda uid: (
@@ -2776,9 +2792,7 @@ class IPDetailView(BaseView):
         port_groups = {}
         unmapped_documents = []
         warnings = []
-        requested_hostnames = set()
         ip_tags = set()
-        has_ip_only_filter = False
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
             uid_tags = set()
@@ -2818,8 +2832,7 @@ class IPDetailView(BaseView):
                     continue
                 hostname = str(hostname_entry.get("name") or "").strip()
                 if hostname:
-                    requested_hostnames.add(hostname)
-                    user_hostnames.append(hostname)
+                    user_hostnames.append(hostname.lower())
             ports = body.get("ports") or []
             if not ports:
                 unmapped_documents.append(
@@ -2875,8 +2888,6 @@ class IPDetailView(BaseView):
                         "web_scheme": port_web_scheme(port, uid_tags),
                     }
                 )
-                if not user_hostnames:
-                    has_ip_only_filter = True
         port_cards = []
         for group in port_groups.values():
             group["service_names"] = sorted(group["service_names"])
@@ -2887,20 +2898,37 @@ class IPDetailView(BaseView):
             port_cards.append(group)
         port_cards.sort(key=self._port_group_sort_key)
 
-        return self.render_template(
+        first_dates = [
+            ip_timestamps[uid].get("first_seen")
+            for uid in sorted_uids
+            if ip_timestamps[uid].get("first_seen") is not None
+        ]
+        last_dates = [
+            ip_timestamps[uid].get("last_seen")
+            for uid in sorted_uids
+            if ip_timestamps[uid].get("last_seen") is not None
+        ]
+        fragment = request.args.get("fragment") == "1"
+        html = self.render_template(
             "ip_detail.html",
+            fragment=fragment,
+            selected_hostname=selected_hostname,
             ip=ip,
             total_documents=len(sorted_uids),
             total_ports=len(port_cards),
-            first_seen=(self._safe_timestamp_to_display(ip_timestamps.get("min_seen"))),
-            last_seen=(self._safe_timestamp_to_display(ip_timestamps.get("max_seen"))),
+            first_seen=self._safe_timestamp_to_display(min(first_dates, default=None)),
+            last_seen=self._safe_timestamp_to_display(max(last_dates, default=None)),
             port_cards=port_cards,
             unmapped_documents=unmapped_documents,
-            has_ip_only_filter=has_ip_only_filter,
             requested_hostnames=sorted(requested_hostnames, key=str.lower),
             ip_tags=sorted(ip_tags, key=str.lower),
             warnings=warnings,
         )
+        if fragment:
+            response = jsonify(hostname=selected_hostname, html=html)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return html
 
 
 class BulkImportForm(FlaskForm):

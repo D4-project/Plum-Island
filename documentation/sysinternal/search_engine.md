@@ -342,6 +342,31 @@ behavior and resource checks.
 
 ## IP detail web links
 
+`IPDetailView.detail` reads IP timestamp metadata and pipelined
+`fqdn_requesteds:<uid>` values to discover every requested-hostname choice. It
+selects the group's UIDs before loading full Meilisearch documents or tags.
+No hostname means IP-only (empty requested-hostname set); unknown nonempty
+hostnames return 404. The existing Kvrocks metadata contract is required: no
+full-document fallback, index writes, or SQL migration are introduced.
+Full IP metadata is still read, and all documents of the selected group are
+loaded; this is not per-port pagination or a change to search matching.
+
+`?fragment=1` on the same `@has_access`-protected route returns JSON containing
+the selected hostname and the auto-escaped summary/scan blocks from the static
+IP detail template, with `Cache-Control: no-store`. It introduces no new FAB
+permission. Counts, tags and first/last seen are group-scoped; hostname choices
+and virtual-host count remain IP-wide. Missing selected documents retain warnings.
+
+`ip_hostname_groups.js` retains detached rendered groups in page memory and
+shares in-flight requests per hostname. A generation check prevents stale
+successes/errors from changing the selection, while successful late responses
+remain reusable. Changes push the hostname into the URL; popstate reuses cached
+groups. Failed loads are retryable, requests time out after 60 seconds, and a
+reload refreshes the page-lifetime cache. Cached report selection is preserved.
+Timeline observers are disconnected on swaps and recreated only for the mounted
+group. WHOIS/PDNS state is not replaced. Tests measure selected-document reads
+and race behavior, not representative live-backend performance.
+
 IP detail web links use `utils/ip_links.py`, `port_web_scheme(port, tags)`, when
 `IPDetailView.detail` builds each observation. Read `proto:http` from normalized
 Kvrocks UID tags, never from raw Meilisearch document fields or a union of tags

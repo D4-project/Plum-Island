@@ -1,4 +1,4 @@
-{% extends "appbuilder/base.html" %}
+{% extends "ip_detail_fragment_base.html" if fragment else "appbuilder/base.html" %}
 {% import 'appbuilder/general/lib.html' as lib %}
 
 {% macro render_ip_tag(tag) -%}
@@ -12,6 +12,10 @@
 {%- endmacro %}
 
 {% block content %}
+{% if fragment %}
+{{ self.scan_summary() }}
+{{ self.scan_group() }}
+{% else %}
 {{ lib.panel_begin(title, "IP Detail") }}
 
 <style>
@@ -33,6 +37,14 @@
     flex-wrap: wrap;
     gap: 0.6rem;
 }
+.ip-detail-heading {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: 0.6rem;
+}
+#ip-scan-summary:not([hidden]) { display: contents; }
+.ip-detail-heading .ip-detail-meta { flex-basis: 100%; }
 .ip-detail-tags {
     display: inline-flex;
     align-items: center;
@@ -295,8 +307,18 @@
 .ip-info-panel {
     margin-top: 1rem;
 }
-.ip-info-entry + .ip-info-entry {
-    margin-top: 1rem;
+#ip-info-results {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.2rem;
+}
+.ip-info-entry {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+@media (max-width: 767px) {
+    #ip-info-results { grid-template-columns: 1fr; }
 }
 .ip-info-title {
     font-weight: 600;
@@ -304,6 +326,7 @@
     margin-bottom: 0.35rem;
 }
 .ip-info-box {
+    flex: 1;
     background: #f7f7f9;
     border: 1px solid #e1e4e8;
     border-radius: 4px;
@@ -384,15 +407,46 @@
 .ip-filter-empty {
     margin-bottom: 1rem;
 }
+#scan-group-status[data-state="loading"],
+.ip-section-loading {
+    min-height: 40vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.2rem;
+    color: #536b80;
+}
+.ip-section-loading { min-height: 20vh; }
+#scan-group-status[data-state="loading"]::before,
+.ip-section-loading::before {
+    content: "";
+    width: 42px;
+    height: 42px;
+    border: 4px solid #e2e9f0;
+    border-top-color: #337ab7;
+    border-radius: 50%;
+    animation: ip-scan-loading 0.8s linear infinite;
+}
+@keyframes ip-scan-loading {
+    to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    #scan-group-status[data-state="loading"]::before,
+    .ip-section-loading::before { animation: none; }
+}
 </style>
 
 <div class="ip-detail-toolbar">
-    <div>
+    <div class="ip-detail-heading">
         <div class="ip-detail-title-row">
             <h2 class="ip-detail-title">{{ ip }}</h2>
             <button type="button" id="ip-copy-button" class="ip-quick-link" title="Copy IP" aria-label="Copy IP">
                 <i class="fa-regular fa-copy" aria-hidden="true"></i>
             </button>
+        </div>
+        {% block scan_summary %}
+        <div id="ip-scan-summary">
             {% if ip_tags %}
             <div class="ip-detail-tags" aria-label="Tags">
                 {% for tag in ip_tags %}
@@ -400,7 +454,6 @@
                 {% endfor %}
             </div>
             {% endif %}
-        </div>
         <div class="ip-detail-meta">
             {{ total_documents }} scan{% if total_documents != 1 %}s{% endif %}
             | {{ total_ports }} port{% if total_ports != 1 %}s{% endif %}
@@ -410,6 +463,8 @@
                 | Last seen: {{ last_seen or "N/A" }}
             {% endif %}
         </div>
+        </div>
+        {% endblock scan_summary %}
     </div>
     <div>
         <a class="btn btn-default" href="/kvsearchview/search" onclick="goBackToPreviousPage(event)" title="Back">
@@ -441,14 +496,16 @@
 <div class="ip-scan-filter">
     <label for="scan-hostname-filter">Requested Hostname</label>
     <select id="scan-hostname-filter" class="form-control">
-        {% if has_ip_only_filter %}
-        <option value="__ip_only__">IP only</option>
-        {% endif %}
+        <option value="__ip_only__"{% if not selected_hostname %} selected{% endif %}>IP only</option>
         {% for hostname in requested_hostnames %}
-        <option value="{{ hostname }}">{{ hostname }}</option>
+        <option value="{{ hostname }}"{% if hostname == selected_hostname %} selected{% endif %}>{{ hostname }}</option>
         {% endfor %}
     </select>
 </div>
+<div id="scan-group-status" role="status" aria-live="polite"></div>
+<div id="scan-group-container">
+{% block scan_group %}
+<div id="ip-scan-group">
 {% if warnings %}
 <div class="alert alert-warning" role="alert">
     <strong>{{ warnings|length }} warning{% if warnings|length > 1 %}s{% endif %}</strong>
@@ -462,7 +519,7 @@
 
 {% if not port_cards and not unmapped_documents %}
 <div class="alert alert-info" role="alert">
-    No document found for this IP.
+    No document found for this selection.
 </div>
 {% endif %}
 
@@ -652,23 +709,26 @@
 {% endif %}
 
 </div>
+{% endblock scan_group %}
+</div>
+</div>
 <div role="tabpanel" class="tab-pane" id="ip-informations">
     <div class="ip-info-panel">
-        <div id="ip-info-loading" class="text-muted">Loading...</div>
+        <div id="ip-info-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading IP information…</div>
         <div id="ip-info-error" class="alert alert-warning" role="alert" style="display: none;"></div>
         <div id="ip-info-results"></div>
     </div>
     <div class="ip-pdns-panel">
         <div class="ip-pdns-title">Passive DNS</div>
         <div class="ip-pdns-box">
-            <div id="ip-pdns-loading" class="text-muted">Loading...</div>
+            <div id="ip-pdns-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading Passive DNS…</div>
             <div id="ip-pdns-error" class="alert alert-warning" role="alert" style="display: none; margin-bottom: 0;"></div>
             <div id="ip-pdns-results"></div>
         </div>
     </div>
 </div>
 <div role="tabpanel" class="tab-pane" id="ip-whois">
-    <div id="ip-whois-loading" class="text-muted" role="status" aria-live="polite">Select this tab to query the registry.</div>
+    <div id="ip-whois-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Querying WHOIS registry…</div>
     <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
     <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>
 </div>
@@ -687,7 +747,7 @@
         if (started) return;
         started = true;
         loading.textContent = 'Querying WHOIS registry...';
-        loading.style.display = 'block';
+        loading.style.display = '';
         error.style.display = 'none';
         try {
             const response = await fetch(endpoint, {
@@ -718,6 +778,7 @@
 
 <script src="{{ url_for('static', filename='js/ip_port_timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_hostname_groups.js') }}"></script>
 <script>
 (function () {
     const ip = {{ ip | tojson }};
@@ -728,6 +789,7 @@
     const pdnsErrorEl = document.getElementById('ip-pdns-error');
     const pdnsResultsEl = document.getElementById('ip-pdns-results');
     let pdnsTimelines = null;
+    let informationStarted = false;
 
     function goBackToPreviousPage(event) {
         if (window.history.length > 1) {
@@ -793,7 +855,13 @@
         return wrapper;
     }
 
-    fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
+    function loadInformation() {
+        if (informationStarted) return;
+        informationStarted = true;
+        loadingEl.style.display = '';
+        pdnsLoadingEl.style.display = '';
+        // Independent requests: Passive DNS must not delay IP information.
+        fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
         .then((response) => {
             if (!response.ok) {
                 throw new Error(`Lookup failed (${response.status})`);
@@ -844,6 +912,7 @@
             pdnsErrorEl.textContent = error.message;
             pdnsErrorEl.style.display = 'block';
         });
+    }
 
     function copyIpToClipboard(value, triggerEl) {
         const markCopied = () => {
@@ -1027,24 +1096,38 @@
     }
 
     const hostnameFilter = document.getElementById('scan-hostname-filter');
-    const portTimelines = window.PlumPortTimeline
+    let portTimelines = window.PlumPortTimeline
         ? window.PlumPortTimeline.mount(document) : null;
     if (window.jQuery) {
         window.jQuery('a[href="#ip-informations"]').on('shown.bs.tab', function () {
+            loadInformation();
             if (pdnsTimelines) pdnsTimelines.refresh();
         });
-        window.jQuery('.ip-port-tabs a[data-toggle="tab"]').on('shown.bs.tab', function () {
+        window.jQuery(document).on('shown.bs.tab', '.ip-port-tabs a[data-toggle="tab"]', function () {
             updatePortSiteLink(this.closest('.ip-port-card'));
             if (portTimelines) portTimelines.sync();
         });
     }
     if (hostnameFilter) {
         selectRequestedHostnameFromUrl(hostnameFilter);
-        hostnameFilter.addEventListener('change', updatePortFilter);
         updatePortFilter();
+        window.PlumHostnameGroups.mount({
+            select: hostnameFilter,
+            container: document.getElementById('scan-group-container'),
+            status: document.getElementById('scan-group-status'),
+            beforeSwap: function () {
+                if (portTimelines) portTimelines.destroy();
+            },
+            afterSwap: function () {
+                portTimelines = window.PlumPortTimeline
+                    ? window.PlumPortTimeline.mount(document) : null;
+                document.querySelectorAll('.ip-port-card').forEach(updatePortSiteLink);
+            }
+        });
     }
 })();
 </script>
 
 {{ lib.panel_end() }}
+{% endif %}
 {% endblock content %}

@@ -239,7 +239,7 @@ are displayed or the range is exhausted. Each response waits for its window's
 query evaluation and metadata reads to finish.
 Timestamp metadata is read only for matching UIDs belonging to each candidate IP;
 unrelated historical documents are excluded before those reads. IP detail pages
-retain their full history.
+retain history within the selected requested-hostname group.
 Exports run on the full filtered result set, not only on the currently visible results.
 
 The **Results of last scans** panel on a target detail page uses the target's
@@ -249,6 +249,29 @@ the structured search. Selecting an IP opens its IP detail page; its info icon
 expands the matching scan results.
 
 ## IP detail web links
+
+The Requested Hostname selector loads only that hostname's reports; opening a
+`/ip/<ip>?hostname=example.org` link selects that group on the server before
+fetching full documents. Without `hostname`, the page shows IP-only reports.
+All hostname choices come from the compact Kvrocks index, not from loading all
+Meilisearch documents. An unknown hostname returns 404 rather than displaying
+unrelated reports. Incomplete hostname indexes need reindexing; the view does
+not automatically rebuild them or fetch every full document as a fallback.
+
+Switching groups updates the shareable URL without reloading the page. Already
+loaded groups remain in page memory, including their selected observations;
+Back/Forward and revisiting a hostname reuse them without another request.
+Late replies can populate the cache but never overwrite a newer selection.
+Loading failures offer Retry. Reload the page to refresh cached scan data.
+Scan/port counts, tags and first/last-seen metadata follow the selected group;
+the virtual-host count covers all hostname choices. WHOIS and Passive DNS remain
+independent. No browser-persistent scan cache is created.
+
+The Informations tab starts IP enrichment and Passive DNS only on its first
+opening. Both requests run independently with centered loading spinners, so IP
+information can appear while Passive DNS is still loading. Returning to the tab
+reuses those results. IP and AS information appear side by side on wide screens,
+stacking on small screens.
 
 On `/ip/<ip>`, a port's open-web-service button appears when the active scan
 observation has the indexed tag `proto:http`. Service names alone do not enable
@@ -273,13 +296,14 @@ share the earliest/latest observation bounds for the selected requested hostname
 (or IP-only results). Changing the filter recomputes these bounds; hidden
 hostnames do not stretch the timeline. All points and periods stay on one line,
 and a single distinct date gets a centered 150-day window (about five months).
-Points may be close together or overlap. The latest matching result is selected initially and after changing the
-hostname. Click a point, or focus it and press Enter/Space, to show its report.
+Points may be close together or overlap. The latest matching result is selected
+when a group is first loaded; revisiting a cached group preserves its selection.
+Click a point, or focus it and press Enter/Space, to show its report.
 Points enlarge on hover/focus; the hover tooltip shows only the exact UTC
 `last_seen` date. Timeline tooltips use `YYYY-MM-DD HH:mm:ss` in UTC, without
 milliseconds. Results without usable
 dates remain available through separate buttons. No extra requests are made by
-the timeline; this does not implement on-demand document loading.
+the timeline; hostname changes fetch uncached groups on demand.
 
 ## Passive DNS timeline
 

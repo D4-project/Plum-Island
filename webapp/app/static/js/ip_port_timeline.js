@@ -184,10 +184,11 @@
                 options.gridHost.replaceChildren(grid);
             }
         }
+        let widthObserver = null;
         if (root.ResizeObserver) {
             // Watch width changes only: rendering may change a timeline's height.
             const widths = new Map();
-            const widthObserver = new root.ResizeObserver(entries => {
+            widthObserver = new root.ResizeObserver(entries => {
                 let changed = false;
                 entries.forEach(entry => {
                     const old = widths.get(entry.target);
@@ -199,7 +200,12 @@
             cards.forEach(entry => widthObserver.observe(entry.host));
         } else if (root.addEventListener) root.addEventListener('resize', refresh);
         refresh();
-        return {refresh, sync};
+        function destroy() {
+            if (widthObserver) widthObserver.disconnect();
+            else if (root.removeEventListener) root.removeEventListener('resize', refresh);
+            controls.clear();
+        }
+        return {refresh, sync, destroy};
     }
     const api = {timestamp, interval, bounds, layout, mount};
     root.PlumPortTimeline = api;
