@@ -2860,6 +2860,8 @@ class IPDetailView(BaseView):
                         "first_seen": first_seen,
                         "last_seen": last_seen,
                         "tab_label": last_seen or first_seen or uid,
+                        "first_seen_epoch": uid_timestamps.get("first_seen"),
+                        "last_seen_epoch": uid_timestamps.get("last_seen"),
                         "timestamp_sort": uid_timestamps.get("last_seen")
                         or uid_timestamps.get("first_seen")
                         or 0,

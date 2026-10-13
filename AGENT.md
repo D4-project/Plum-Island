@@ -237,13 +237,13 @@ The structured search page links each IP to `/ip/<ip>`. That page is not a raw d
 Its current contract is:
 
 - the `Scans Results` tab aggregates observations by port
-- each port card contains timestamp tabs ordered oldest on the left and newest on the right
-- the most recent timestamp tab is selected by default
+- each port header contains an SVG timeline: points at last_seen, ranges from first_seen to last_seen, sharing the visible observation time domain across ports for the selected hostname (or IP-only); changing the filter recomputes these bounds
+- the most recent matching observation is selected by default; timeline points select reports with mouse or keyboard, with all points and periods kept on one line even when close together; unknown dates remain accessible separately
 - a `Requested Hostname` dropdown is rendered before the port cards
 - the dropdown always includes `IP only` first, then all `fqdn_requested` values for that IP in alphabetical order
 - selecting a hostname filters the visible observations client-side without reloading the page
 - a port's web link requires `proto:http` on the active observation's UID; SSL/TLS evidence on that port selects HTTPS, otherwise HTTP
-- web links retain the scanned port and selected hostname/IP, and update when the active history tab or hostname changes
+- web links retain the scanned port and selected hostname/IP, and update when the active timeline observation or hostname changes
 - the `Informations` tab is separate and is used for external enrichment such as CIRCL geolookup and passive DNS
 
 If you change how `body.hostnames` is parsed or indexed, verify both structured search and `/ip/<ip>` together. The IP detail page now depends on the same `type == "user"` hostname semantics as `fqdn_requested`.

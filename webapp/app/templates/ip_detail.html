@@ -149,6 +149,20 @@
     margin-bottom: 1rem;
     border-bottom: 1px solid #ddd;
 }
+.ip-port-card.timeline-ready .ip-port-tabs { display: none; }
+.ip-port-timeline { margin-top: 8px; }
+.ip-port-timeline svg { display: block; width: 100%; }
+.ip-timeline-axis { stroke: #cbd5dc; stroke-width: 1; }
+.ip-timeline-label { fill: #586c7a; font: 11px sans-serif; }
+.ip-timeline-range { stroke: #138496; stroke-width: 2; }
+.ip-timeline-point { cursor: pointer; outline: none; }
+.ip-timeline-dot { fill: #138496; stroke: #f5f5f5; stroke-width: 2; r: 5px; transition: r 120ms ease, fill 120ms ease; }
+.ip-timeline-point:hover .ip-timeline-dot,
+.ip-timeline-point:focus .ip-timeline-dot { r: 8px; fill: #23527c; }
+.ip-timeline-point[aria-pressed="true"] .ip-timeline-dot { fill: #23527c; stroke: #23527c; stroke-width: 3; }
+.ip-timeline-point:focus .ip-timeline-hit { stroke: #23527c; stroke-dasharray: 2 2; }
+.ip-timeline-undated { font-size: 12px; margin-right: 6px; }
+@media (prefers-reduced-motion: reduce) { .ip-timeline-dot { transition: none; } }
 .ip-port-tabs > li {
     float: none;
     margin-bottom: -1px;
@@ -323,23 +337,39 @@
     border-radius: 4px;
     padding: 0.8rem 0.9rem;
 }
+.ip-pdns-timeline-row {
+    display: grid;
+    grid-template-columns: minmax(10rem, 25%) minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    position: relative;
+    z-index: 1;
+}
+#ip-pdns-results { position: relative; }
+.ip-pdns-shared-grid { position: absolute; pointer-events: none; z-index: 0; }
+.ip-pdns-timeline-row .ip-port-timeline { margin-top: 0; }
+.ip-pdns-timeline-row svg { overflow: visible; }
+.ip-pdns-timeline-row .ip-timeline-dot { r: 6px; }
+.ip-pdns-timeline-row .ip-timeline-point:hover .ip-timeline-dot,
+.ip-pdns-timeline-row .ip-timeline-point:focus .ip-timeline-dot { r: 9px; }
+.ip-pdns-timeline-row .ip-timeline-label { font-size: 10px; }
+.ip-pdns-record-label {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    color: #337ab7;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+}
+.ip-pdns-timeline-row.active .ip-pdns-record-label { font-weight: bold; }
+@media (max-width: 600px) {
+    .ip-pdns-timeline-row { grid-template-columns: minmax(7rem, 30%) minmax(0, 1fr); gap: 6px; }
+}
 .ip-pdns-row + .ip-pdns-row {
     margin-top: 0.9rem;
     padding-top: 0.9rem;
     border-top: 1px solid #e6e9ed;
-}
-.ip-pdns-grid {
-    display: grid;
-    grid-template-columns: minmax(8rem, 10rem) 1fr;
-    gap: 0.4rem 0.8rem;
-}
-.ip-pdns-label {
-    font-weight: 600;
-    color: #2f3a44;
-}
-.ip-pdns-value {
-    color: #4d5963;
-    word-break: break-word;
 }
 .ip-scan-filter {
     margin: 1rem 0 1.25rem;
@@ -472,8 +502,9 @@
             </div>
         </div>
         <div class="ip-port-summary">
-            {{ port_card.observation_count }} IP observation{% if port_card.observation_count != 1 %}s{% endif %}
+            <span class="ip-port-observation-count">{{ port_card.observation_count }} observation{% if port_card.observation_count != 1 %}s{% endif %}</span>
         </div>
+        <div class="ip-port-timeline" aria-label="Observation history for {{ port_card.protocol | upper }}/{{ port_card.portid }}"></div>
     </div>
     <div class="panel-body">
         <ul class="nav nav-tabs ip-port-tabs" role="tablist">
@@ -482,6 +513,8 @@
                 role="presentation"
                 class="{% if loop.last %}active{% endif %}"
                 data-user-hostnames='{{ observation.user_hostnames | tojson }}'
+                data-first-seen="{{ observation.first_seen_epoch if observation.first_seen_epoch is not none else '' }}"
+                data-last-seen="{{ observation.last_seen_epoch if observation.last_seen_epoch is not none else '' }}"
             >
                 <a
                     href="#port-{{ port_idx }}-{{ loop.index0 }}"
@@ -683,6 +716,8 @@
 })();
 </script>
 
+<script src="{{ url_for('static', filename='js/ip_port_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
 <script>
 (function () {
     const ip = {{ ip | tojson }};
@@ -692,6 +727,7 @@
     const pdnsLoadingEl = document.getElementById('ip-pdns-loading');
     const pdnsErrorEl = document.getElementById('ip-pdns-error');
     const pdnsResultsEl = document.getElementById('ip-pdns-results');
+    let pdnsTimelines = null;
 
     function goBackToPreviousPage(event) {
         if (window.history.length > 1) {
@@ -757,53 +793,6 @@
         return wrapper;
     }
 
-    function appendPdnsRow(container, label, value) {
-        if (value === null || value === undefined || value === '') {
-            return;
-        }
-        const labelEl = document.createElement('div');
-        labelEl.className = 'ip-pdns-label';
-        labelEl.textContent = label;
-
-        const valueEl = document.createElement('div');
-        valueEl.className = 'ip-pdns-value';
-        valueEl.textContent = String(value);
-
-        container.appendChild(labelEl);
-        container.appendChild(valueEl);
-    }
-
-    function formatShortDate(value) {
-        if (!value) {
-            return '';
-        }
-        const date = new Date(Number(value) * 1000);
-        if (Number.isNaN(date.getTime())) {
-            return String(value);
-        }
-        const day = String(date.getUTCDate()).padStart(2, '0');
-        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-        const year = String(date.getUTCFullYear()).slice(-2);
-        return `${day}/${month}/${year}`;
-    }
-
-    function renderPdnsRecord(record) {
-        const row = document.createElement('div');
-        row.className = 'ip-pdns-row';
-
-        const grid = document.createElement('div');
-        grid.className = 'ip-pdns-grid';
-
-        appendPdnsRow(grid, 'RRType', record.rrtype);
-        appendPdnsRow(grid, 'RData', record.rdata);
-        appendPdnsRow(grid, 'Count', record.count);
-        appendPdnsRow(grid, 'First Seen', formatShortDate(record.time_first));
-        appendPdnsRow(grid, 'Last Seen', formatShortDate(record.time_last));
-
-        row.appendChild(grid);
-        return row;
-    }
-
     fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
         .then((response) => {
             if (!response.ok) {
@@ -848,9 +837,7 @@
                 pdnsResultsEl.innerHTML = '<div class="text-muted">No Passive DNS data returned.</div>';
                 return;
             }
-            records.forEach((record) => {
-                pdnsResultsEl.appendChild(renderPdnsRecord(record));
-            });
+            pdnsTimelines = window.PlumPdnsTimeline.mount(document, pdnsResultsEl, records);
         })
         .catch((error) => {
             pdnsLoadingEl.style.display = 'none';
@@ -976,6 +963,7 @@
             let firstVisiblePane = null;
             let lastVisibleTab = null;
             let lastVisiblePane = null;
+            let visibleObservations = 0;
 
             tabs.forEach((tab, index) => {
                 const pane = panes[index];
@@ -990,6 +978,7 @@
                     pane.classList.remove('active');
                 }
                 if (visible) {
+                    visibleObservations += 1;
                     if (!firstVisibleTab) {
                         firstVisibleTab = tab;
                         firstVisiblePane = pane;
@@ -1000,6 +989,10 @@
             });
 
             const hasVisible = Boolean(lastVisibleTab && lastVisiblePane);
+            const count = card.querySelector('.ip-port-observation-count');
+            if (count) {
+                count.textContent = `${visibleObservations} observation${visibleObservations === 1 ? '' : 's'}`;
+            }
             card.style.display = hasVisible ? '' : 'none';
             if (hasVisible) {
                 visibleCards += 1;
@@ -1015,6 +1008,7 @@
                 : 'No scan result matches the selected hostname.';
             emptyState.style.display = visibleCards ? 'none' : '';
         }
+        if (portTimelines) portTimelines.refresh();
     }
 
     function selectRequestedHostnameFromUrl(select) {
@@ -1033,9 +1027,15 @@
     }
 
     const hostnameFilter = document.getElementById('scan-hostname-filter');
+    const portTimelines = window.PlumPortTimeline
+        ? window.PlumPortTimeline.mount(document) : null;
     if (window.jQuery) {
+        window.jQuery('a[href="#ip-informations"]').on('shown.bs.tab', function () {
+            if (pdnsTimelines) pdnsTimelines.refresh();
+        });
         window.jQuery('.ip-port-tabs a[data-toggle="tab"]').on('shown.bs.tab', function () {
             updatePortSiteLink(this.closest('.ip-port-card'));
+            if (portTimelines) portTimelines.sync();
         });
     }
     if (hostnameFilter) {

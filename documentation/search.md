@@ -260,7 +260,39 @@ The destination keeps the actual scanned port: HTTP on 8080 opens
 `http://IP:8080`, HTTPS on 8443 opens `https://IP:8443`. Default HTTP/80 and
 HTTPS/443 ports are omitted from the URL. The Requested Hostname selection is
 used as the destination when selected, otherwise the IP is used. Switching a
-history tab or hostname updates the button for the newly active observation.
+timeline selection or hostname updates the button for the newly active observation.
+
+Each port's grey header includes an interactive observation timeline. A point
+marks a result's `last_seen`; a line extends from `first_seen` when the dates
+differ. A vertical tick extending equally above and below the horizontal line
+marks `first_seen` for a period with different start/end dates; hovering the tick
+shows that start date. Equal dates produce only a point, without a tick.
+Each port's observation count follows the selected hostname (or IP-only filter).
+These periods do not prove continuous service availability. All ports
+share the earliest/latest observation bounds for the selected requested hostname
+(or IP-only results). Changing the filter recomputes these bounds; hidden
+hostnames do not stretch the timeline. All points and periods stay on one line,
+and a single distinct date gets a centered 150-day window (about five months).
+Points may be close together or overlap. The latest matching result is selected initially and after changing the
+hostname. Click a point, or focus it and press Enter/Space, to show its report.
+Points enlarge on hover/focus; the hover tooltip shows only the exact UTC
+`last_seen` date. Timeline tooltips use `YYYY-MM-DD HH:mm:ss` in UTC, without
+milliseconds. Results without usable
+dates remain available through separate buttons. No extra requests are made by
+the timeline; this does not implement on-demand document loading.
+
+## Passive DNS timeline
+
+On the IP detail **Informations** tab, Passive DNS uses the same timeline
+renderer in a single panel. Each record has a `Rdata (RRType)` label and a
+`time_first` to `time_last` line, with a point at the end. All PDNS rows share
+one date axis at the top and a continuous vertical grid. Their own time scale
+is independent of scan ports and the requested-hostname
+filter. Equal dates show only a point; a single distinct date uses the centered
+150-day window. Hover dates use the same UTC format. RRName and count remain
+available in the label tooltip. The most recently observed record is highlighted
+initially; clicking a label or point highlights that row. Missing dates remain
+explicit rather than being replaced by the current date.
 
 ## Performance diagnostics
 

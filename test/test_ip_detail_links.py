@@ -153,6 +153,25 @@ class IpDetailLinksTest(unittest.TestCase):
         self.assertEqual(
             context["ip_tags"], ["product:nginx", "proto:http", "vendor:nginx"]
         )
+        self.assertEqual(
+            [item["last_seen_epoch"] for item in cards["8443"]["observations"]],
+            [200, 300],
+        )
+        self.assertEqual(cards["8443"]["observations"][0]["first_seen_epoch"], 200)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js required for timeline checks")
+    def test_port_timelines(self):
+        """Exercise shared-scale layout and DOM interactions without backends."""
+        subprocess.run(
+            [
+                shutil.which("node"),
+                str(Path(__file__).with_name("ip_port_timeline_ui.js")),
+            ],
+            check=True,
+            timeout=20,
+            capture_output=True,
+            text=True,
+        )
 
     @unittest.skipUnless(shutil.which("node"), "Node.js required for IP link checks")
     def test_browser_links(self):

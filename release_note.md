@@ -2,6 +2,10 @@
 
 ## Since Last release Changes.
 
+- Show Passive DNS in one timeline panel with `Rdata (RRType)` rows, first/last-seen markers and a shared PDNS time scale, reusing the IP port timeline renderer.
+
+- Replace IP detail date tabs with interactive SVG timelines in each port header: shared time scale, first/last-seen ranges, hover/focus enlargement and latest-result selection, preserving hostname filtering and report-specific web links.
+
 - Align installation, Docker/SMTP setup, migration ordering, examples, tool commands and contributor contracts with current code; document scheduler deployment limitations and correct local dependency copy order in Docker, refs #235–#248.
 
 - Document the certificate-search compatibility change: indexed `x509_issuer` / `x509_subject` contain available DN attributes; legacy commonName queries move to `_cn` fields. Convert SQL queries with `tools/migrate_full_cert.py` before rebuilding with retagging or full replacement import; see `migration_full_cert.md` for limitations, validation and rollback.
