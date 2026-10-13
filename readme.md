@@ -1,11 +1,11 @@
 <div align="center">
-  <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_logo.png" style="width:25%;" />
+  <img alt="d4-Plum-Island" src="documentation/media/plum_logo.png" style="width:25%;" />
 
 <h1>Proactive Land Uncovering & Monitoring</h1>
-  <img alt="d4-Plum-Island overview" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_overview.png" />
+  <img alt="d4-Plum-Island overview" src="documentation/media/plum_overview.png" />
 </div>
 
-<p align="center"><em>Beta version</em></p>
+<p align="center"><strong>Plum Island - 20 Years Hack.lu Release - v0.2610.0</strong><br /><em>Release in preparation — not yet published</em></p>
 
 ## Description
 
@@ -60,6 +60,8 @@ Exclude matching scans with `NOT`, for example
 `tag:type:router AND NOT tag:vendor:mikrotik`. Operators are case-insensitive;
 each OR group requires a positive term, and exclusion applies per scan UID.
 
+![Filtered scan search results with tags and supported search keywords](documentation/media/search_filters.png)
+
 See [Search documentation](documentation/search.md) for the full field list, modifiers, examples, and date-range behavior.
 
 Append `debug` (for example `http_server.lk:apache debug`) to inspect and download
@@ -99,6 +101,7 @@ See [Reports documentation](documentation/reports.md) for setup, query semantics
 
 ## Documentation
 
+- [v0.2610.0 release notes (in preparation)](release_note.md)
 - [Installation](documentation/installation.md)
 - [Migration](documentation/migration.md)
 - [Upgrade from v0.2606.0](documentation/migration-v0.2606.0-to-main.md)
@@ -147,7 +150,7 @@ The setup script creates a local Python virtual environment, installs `requireme
 - HTTP header tagging collection
 - YAML tag rules from `webapp/tags/tags/`
 - NSE scripts from `https://github.com/D4-project/Plum-Rules-NSE`
-- all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
+- all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with the [default NSE scripts](documentation/tools.md#initial_setuppy)
 
 To refresh an existing clone, run `./updisland.sh` from the Plum-Island root.
 It updates Plum-Island and the Plum-Antibodies tag-rules submodule.
