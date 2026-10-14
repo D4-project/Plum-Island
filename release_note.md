@@ -48,6 +48,8 @@ The changes below describe what v0.2610.0 brings compared with v0.2606.0.
 
 ## Visual exploration and IP details
 
+![IP detail view with requested hostname selection, port timelines and scan results](documentation/media/ip_detail.png)
+
 - Interactive SVG timelines replace the per-port date tabs. Each port shows
   first/last-seen ranges and clickable end points; the newest report is selected
   initially. All ports share the visible hostname group's time scale.
@@ -85,6 +87,8 @@ The changes below describe what v0.2610.0 brings compared with v0.2606.0.
   the saved schedule or querying search backends (#230).
 
 ## Search and APIs
+
+![Filtered scan search results with tags and supported search keywords](documentation/media/search_filters.png)
 
 - Search keywords append directly to the query bar. A header toggle switches
   between syntax help and five clickable SQL-backed tag columns: protocols,
