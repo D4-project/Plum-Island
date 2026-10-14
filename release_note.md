@@ -41,6 +41,11 @@ when the release is published.
   (#211), MixVoip (#224), Gandi (#222) and OVH (#223).
 - Mail detection covers SMTP/ESMTP (#212), Postfix/Ubuntu (#213), Exim (#215),
   Dovecot POP3 (#216) and IMAP capability greetings (#217).
+- The bundled Antibodies revision includes additional MISP, Laravel, Polylang,
+  WordPress, Drupal, Passbolt, Home Assistant, FRITZ!Repeater, Reolink,
+  Danfoss StoreView, One Identity Safeguard and Ivanti Connect Secure signals.
+  Proxy and hosting header detection covers Google, Fly.io, Varnish and Caddy,
+  with refined Nginx default-installation, SonicWall SMA and OpenVPN rules.
 
 ## Visual exploration and IP details
 
