@@ -110,7 +110,7 @@ If a test cannot run because it needs external services or local data, state tha
 - `ApiKeys`: bot authentication secrets.
 - `ScanProfiles`, `Ports`, `Nses`: scan definition data model. Jobs are dispatched with profile-specific ports and NSE scripts.
 
-Fresh setup creates an all-target `Default banner scan` profile for TCP ports `22`, `80`, and `443` with `banner.nse`. It also seeds all TCP ports, the default HTTP header tagging collection, YAML tag rules, and controller-managed NSE scripts.
+Fresh setup creates an all-target `Default banner scan` profile for TCP ports `22`, `80`, and `443` with `http-headers.nse`, `http-title.nse`, `ssl-cert.nse`, `ssh-hostkey.nse`, `tls-alpn.nse`, `banner.nse`, `modbus.nse` and `http-mm-sha-favicon.nse` (not `http-favicon.nse`). NSE imports prefer Plum-Rules-NSE, with bundled `nse/` files filling missing default names. It also seeds all TCP ports, using conventional `/etc/services` names when available without overwriting existing names, the default HTTP header tagging collection, YAML tag rules, and controller-managed NSE scripts.
 
 ### Effective runtime flow
 

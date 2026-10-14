@@ -152,11 +152,17 @@ Load initial database content after the Flask database has been created.
 It performs these actions:
 
 - create/update security roles from `webapp/security_roles/*.yaml`
-- create the default TCP protocol and TCP ports
+- create the default TCP protocol and TCP ports, using conventional names from `/etc/services` when available (for example `TCP/655 (tinc)`); unknown ports retain `TCP/<number>` and existing names are not overwritten
 - create the default HTTP header tagging collection from `webapp/app/models.py`
 - import YAML tag rules from `webapp/tags/tags/` into the application database
-- clone/update `https://github.com/D4-project/Plum-Rules-NSE` into `external/Plum-Rules-NSE` and import every `.nse` file into the `nses` table
-- create an all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
+- clone/update `https://github.com/D4-project/Plum-Rules-NSE` into `external/Plum-Rules-NSE` and import every `.nse` file into the `nses` table; default scripts absent from that repository are imported from the bundled `nse/` directory
+- create an all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `http-headers.nse`, `http-title.nse`, `ssl-cert.nse`, `ssh-hostkey.nse`, `tls-alpn.nse`, `banner.nse`, `modbus.nse` and `http-mm-sha-favicon.nse` (`http-favicon.nse` is not selected)
+
+Service labels are conventional port assignments, not detected services; `/ip`
+displays service names reported by Nmap. A missing `/etc/services` file does not
+prevent setup. Rerunning profile seeding synchronizes the named default profile's
+ports and scripts to these defaults; use `--skip-profiles` to preserve edits.
+Missing required NSE scripts abort profile creation with their names.
 
 Manual run:
 

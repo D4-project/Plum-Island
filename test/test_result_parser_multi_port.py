@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regression test for per-port parser result accumulation.
+Regression test for per-port parser result accumulation in the standard suite.
 """
 
 import sys

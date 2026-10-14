@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regression tests for IP to ASN helpers.
+Regression tests for IP to ASN helpers, included in the standard test suite.
 """
 
 import os

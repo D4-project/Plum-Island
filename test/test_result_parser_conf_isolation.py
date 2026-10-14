@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regression test for concurrent result_parser config isolation.
+Regression test for concurrent result_parser config isolation in the standard suite.
 """
 
 from concurrent.futures import ThreadPoolExecutor

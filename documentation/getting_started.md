@@ -49,7 +49,7 @@ a replacement for the version-specific migration guide or dependency updates.
 1. Navigate to `Config > Targets`.
 2. Click `+` to open the new target form.
 3. Set `CIDR / Host` to your own authorized public IP/CIDR or a hostname resolving to your authorized public service. Replace this description with your actual target; do not scan a third party's example address.
-4. Select a **Scan Profile**. The `Default banner scan` profile is available out of the box and scans TCP ports `22`, `80`, and `443` with `banner.nse`.
+4. Select a **Scan Profile**. The `Default banner scan` profile is available out of the box and scans TCP ports `22`, `80`, and `443` with the [default NSE scripts](tools.md#initial_setuppy).
 5. Save the record.
 
 Plum Island will make jobs available for active `Target x ScanProfile` combinations when the scheduler runs. You can watch queued and completed jobs under `Status > Job Status`.

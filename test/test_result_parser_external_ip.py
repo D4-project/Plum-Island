@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regression tests for parser IP filtering.
+Regression tests for parser IP filtering, included in the standard test suite.
 """
 
 import sys
