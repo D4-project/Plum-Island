@@ -5,7 +5,7 @@
   <img alt="d4-Plum-Island overview" src="documentation/media/plum_overview.png" />
 </div>
 
-<p align="center"><strong>Plum Island - 20 Years Hack.lu Release - v0.2610.0</strong><br /><em>Release in preparation — not yet published</em></p>
+<p align="center"><strong>Plum Island - 20 Years Hack.lu Release - v0.2610.0</strong><br /><em>Released on 2026-10-14</em></p>
 
 ## Description
 
@@ -98,8 +98,9 @@ See [Reports documentation](documentation/reports.md) for setup, query semantics
 
 ## Documentation
 
-- [v0.2610.0 release notes (in preparation)](release_note.md)
+- [v0.2610.0 release notes](release_note.md)
 - [Installation](documentation/installation.md)
+- [Network requirements and data flows](documentation/network.md)
 - [Migration to v0.2610.0 — choose your installed version](documentation/migration.md)
 - [Certificate CN/DN upgrade](migration_full_cert.md)
 - [Search](documentation/search.md)

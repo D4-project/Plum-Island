@@ -1,7 +1,7 @@
 # System internals
 
 Documentation for **Plum Island - 20 Years Hack.lu Release - v0.2610.0**
-(in preparation, not yet published). See the [project README](../../readme.md)
+(released on 2026-10-14). See the [project README](../../readme.md)
 and [release notes](../../release_note.md).
 
 Implementation guides for contributors and coding agents. Read the relevant guide

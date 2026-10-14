@@ -1,8 +1,7 @@
 # Plum Island - 20 Years Hack.lu Release - v0.2610.0
 
-Release in preparation — not yet published. The changes below describe what
-v0.2610.0 brings compared with v0.2606.0. Release date and Git tag will be set
-when the release is published.
+Released on **2026-10-14**. Git tag: **v0.2610.0**.
+The changes below describe what v0.2610.0 brings compared with v0.2606.0.
 
 ## Highlights
 
@@ -155,6 +154,9 @@ when the release is published.
   with the implementation (#235–#248); getting-started guidance covers first use
   (#170). YAML technology-detection tests belong to Plum-Antibodies, while generic
   parser and tag-engine coverage remains here.
+- A [network requirements guide](documentation/network.md) documents incoming
+  and outgoing connections, backend ports and external dependencies, with an
+  ASCII topology covering Island, scanners and browsers.
 
 ## Upgrade notes
 
@@ -171,8 +173,7 @@ documents. Backups and stopping writers remain the operator's responsibility.
   rule-dependent headers, including TeamCity's `TeamCity-Node-Id`. Restoring the
   previous rule and rebuilding tags provides the corresponding rollback.
 - Update scanner `nmap2json` dependencies before resuming scans after smarthash
-  migration. Full round-trip and production recovery validation remain operator
-  prerequisites; these notes do not claim they have been completed.
+  migration.
 - Synchronize configured roles with `tools/initial_setup.py --roles-only`.
   Bare-metal and Docker deployments also synchronize role definitions.
 

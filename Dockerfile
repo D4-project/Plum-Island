@@ -1,6 +1,6 @@
 FROM python:3.13-slim
 
-LABEL org.opencontainers.image.version="unreleased" \
+LABEL org.opencontainers.image.version="v0.2610.0" \
       org.opencontainers.image.source="https://github.com/D4-project/Plum-Island" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 

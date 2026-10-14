@@ -2,7 +2,7 @@
 
 ## Overview
 
-This procedure starts from the [Plum Island `v0.2606.0` release](https://github.com/D4-project/Plum-Island/releases/tag/v0.2606.0) and targets **Plum Island - 20 Years Hack.lu Release - v0.2610.0**. The destination release is in preparation, not yet published. See the [migration index](migration.md) to choose the guide for your installed version.
+This procedure starts from the [Plum Island `v0.2606.0` release](https://github.com/D4-project/Plum-Island/releases/tag/v0.2606.0) and targets **Plum Island - 20 Years Hack.lu Release - v0.2610.0**, released on 2026-10-14. See the [migration index](migration.md) to choose the guide for your installed version.
 
 `v0.2606.0` already stores scan results per port. Do **not** run the IP-to-port split from the [`v0.2604.0` guide](migration-v0.2604.0-to-v0.2610.0.md). This upgrade has three coordinated data changes:
 
@@ -29,8 +29,7 @@ Take restorable backups of the SQLite database (including any WAL state), Meilis
 
 From the Plum-Island repository root, update to the release revision and its
 tag-rule submodule. Preserve local configuration and changes first. The commands
-below target the release tag **after publication**. Until then, use a reviewed
-preparation commit SHA in place of `v0.2610.0`; the release tag does not yet exist.
+below target the published `v0.2610.0` release tag.
 
 ```bash
 git fetch origin --tags

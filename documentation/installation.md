@@ -9,6 +9,10 @@
 
 Before starting the setup, make sure Meilisearch and Kvrocks are running and reachable from the web application.
 
+See [Network requirements and data flows](network.md) for the ASCII topology,
+incoming/outgoing connections, backend ports, scanner connectivity, CIRCL
+enrichment, DNS, WHOIS, SMTP and installation-only dependencies.
+
 ## Setup
 
 Clone the repository and run the setup script:

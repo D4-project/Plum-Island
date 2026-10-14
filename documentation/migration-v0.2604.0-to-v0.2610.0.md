@@ -2,7 +2,7 @@
 
 This guide upgrades a `v0.2604.0` Plum Island instance, with IP-scoped scan
 documents, to **Plum Island - 20 Years Hack.lu Release - v0.2610.0**.
-The destination release is in preparation, not yet published.
+The destination release was published on 2026-10-14.
 
 Already on `v0.2606.0`? Use the
 [v0.2606.0 → v0.2610.0 guide](migration-v0.2606.0-to-v0.2610.0.md) instead.
@@ -32,8 +32,7 @@ If possible, test the full procedure on a copy of production first.
 ## 2. Update code and dependencies
 
 Preserve local configuration and changes first. The commands below target the
-release tag **after publication**. Until then, use a reviewed preparation commit
-SHA in place of `v0.2610.0`; the release tag does not yet exist.
+published `v0.2610.0` release tag.
 
 ```bash
 git fetch origin --tags

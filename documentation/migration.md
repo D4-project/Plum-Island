@@ -1,7 +1,7 @@
 # Migration guides
 
 Target release: **Plum Island - 20 Years Hack.lu Release - v0.2610.0**
-(in preparation, not yet published).
+(released on 2026-10-14).
 
 Choose the guide matching the **installed source version**, not the version you
 want to install. The procedures below are alternative entry points, not two
@@ -19,8 +19,7 @@ guides to run consecutively.
   scan data. Backups are operator-managed, not created by SQL migration scripts.
 - Test on disposable copies. Meilisearch replacement and Kvrocks rebuilding are
   not a single transaction.
-- The versioned guides use the `v0.2610.0` tag only **after publication**. During
-  preparation, substitute an explicitly reviewed commit SHA and record it.
+- The versioned guides use the published `v0.2610.0` tag and its pinned submodule.
 - If the installation already includes some changes from `main`, inspect its
   actual schema and index format before choosing steps; do not blindly replay
   all migrations. Installations older than `v0.2604.0` are not covered here.
