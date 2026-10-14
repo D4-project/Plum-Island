@@ -182,9 +182,68 @@ assert.equal(pdnsRows(container)[2].children[1].children[1].textContent, 'Unknow
 assert.equal(pdnsRow.children[1].children[0].getAttribute('height'), '36');
 assert.equal(pdnsRow.children[1].children[0].children.some(x => x.getAttribute('class') === 'ip-timeline-label'), false);
 assert.equal(container.children[0].children[1].children[0].children.length, 5); // dates only once
+const progressCell = container.children[0].children[0];
+assert.equal(progressCell.id, 'ip-pdns-resolve-progress');
+assert.equal(progressCell.getAttribute('role'), 'status');
+assert.equal(progressCell.getAttribute('aria-live'), 'polite');
+assert.equal(progressCell.getAttribute('hidden'), null);
+progressCell.textContent = 'Resolved 5/5';
+assert.equal(container.children[0].children.length, 2); // counter and dates share one row
 assert.equal(container.children[1].children[0].children.length, 5); // continuous grid
 const singleton = new Element();
 pdns.mount(doc, singleton, [{rdata: 'single.example.org', rrtype: 'A', time_first: 50, time_last: 50}]);
 assert.equal(pdnsPoints(pdnsRows(singleton)[0])[0].children[1].getAttribute('cx'), '414');
 assert.equal(pdnsRows(singleton)[0].children[1].children[0].children.some(x => x.getAttribute('class') === 'ip-timeline-start-hit'), false);
 console.log('Passive DNS: Rdata/type, common independent scale, selection, escaping and singleton OK');
+
+const liveContainer = new Element();
+const liveController = pdns.mount(doc, liveContainer, [
+    {rdata: 'one.example.org', rrtype: 'A', time_first: 10, time_last: 30,
+        resolve_hostname: 'one.example.org', resolve_token: 'token1'},
+    {rdata: 'one.example.org', rrtype: 'A', time_first: 20, time_last: 40,
+        resolve_hostname: 'one.example.org', resolve_token: 'token1'},
+    {rdata: 'unknown.example.org', rrtype: 'A', time_first: 20, time_last: '',
+        resolve_hostname: 'unknown.example.org', resolve_token: 'token2'},
+    {rdata: 'v6.example.org', rrtype: 'AAAA', time_first: 10, time_last: 30},
+]);
+assert.equal(liveController.targets.length, 2); // duplicate name, not duplicate requests
+const liveRows = pdnsRows(liveContainer);
+const livePoints = row => row.children[1].children[0].children.filter(x => x.getAttribute('class') === 'ip-pdns-live-point');
+const liveLines = row => row.children[1].children[0].children.filter(x => x.getAttribute('class') === 'ip-pdns-live-range');
+liveController.setResult('one.example.org', {status: 'matched', checked_at: 100});
+assert.equal(livePoints(liveRows[0]).length, 1);
+assert.equal(livePoints(liveRows[1]).length, 1);
+assert.equal(livePoints(liveRows[3]).length, 0);
+assert.equal(liveRows[0].children[0].children[0].textContent, '');
+assert.equal(livePoints(liveRows[0])[0].children[0].textContent, '1970-01-01 00:01:40');
+livePoints(liveRows[0])[0].events.focus();
+const liveTooltip = liveRows[0].children[1].children[0].children.find(x => x.getAttribute('class') === 'ip-timeline-tooltip');
+assert.equal(liveTooltip.getAttribute('visibility'), 'visible');
+assert.equal(liveTooltip.children[1].textContent, '1970-01-01 00:01:40');
+livePoints(liveRows[0])[0].events.blur();
+assert.equal(liveTooltip.getAttribute('visibility'), 'hidden');
+assert.equal(livePoints(liveRows[0])[0].children[1].getAttribute('cx'), '814');
+assert.equal(liveLines(liveRows[0])[0].getAttribute('x1'), pdnsPoints(liveRows[0])[0].children[1].getAttribute('cx'));
+const liveSvg = liveRows[0].children[1].children[0];
+assert.ok(liveSvg.children.indexOf(liveLines(liveRows[0])[0]) < liveSvg.children.indexOf(pdnsPoints(liveRows[0])[0]));
+assert.ok(liveSvg.children.indexOf(liveLines(liveRows[0])[0]) < liveSvg.children.indexOf(livePoints(liveRows[0])[0]));
+pdnsPoints(liveRows[0])[0].events.pointerenter();
+assert.equal(liveTooltip.children[1].textContent, timeline.formatDate(30));
+assert.equal(liveTooltip.getAttribute('visibility'), 'visible');
+assert.equal(pdnsPoints(liveRows[0])[0].children[0].textContent, timeline.formatDate(30));
+assert.equal(livePoints(liveRows[0])[0].children[0].textContent, timeline.formatDate(100));
+pdnsPoints(liveRows[0])[0].events.pointerleave();
+assert.equal(liveTooltip.getAttribute('visibility'), 'hidden');
+assert.equal(liveRows[0].getAttribute('data-last-seen'), '30'); // preserved historical end
+assert.equal(pdnsPoints(liveRows[0]).length, 1); // historical point retained
+liveController.setResult('one.example.org', {status: 'matched', checked_at: 110});
+assert.equal(livePoints(liveRows[0]).length, 1); // no accumulating overlays
+liveController.setResult('unknown.example.org', {status: 'matched', checked_at: 120});
+assert.equal(livePoints(liveRows[2]).length, 1);
+assert.equal(liveLines(liveRows[2]).length, 0); // never invent a last-seen connector
+liveController.setResult('one.example.org', {status: 'mismatch', checked_at: 130});
+assert.equal(livePoints(liveRows[0]).length, 0);
+assert.equal(livePoints(liveRows[1]).length, 0);
+liveController.setResult('unknown.example.org', {status: 'pending'});
+assert.equal(livePoints(liveRows[2]).length, 0);
+console.log('Active DNS overlay: shared axis, original history, duplicate rows and replacement OK');

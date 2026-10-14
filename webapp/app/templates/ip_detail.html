@@ -350,9 +350,22 @@
     margin-top: 1.5rem;
 }
 .ip-pdns-title {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
     font-weight: 600;
     color: #2f3a44;
     margin-bottom: 0.35rem;
+}
+#ip-pdns-resolve-progress {
+    height: 24px;
+    line-height: 24px;
+    font-size: 10px;
+    font-weight: normal;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .ip-pdns-box {
     background: #f7f7f9;
@@ -394,6 +407,13 @@
     padding-top: 0.9rem;
     border-top: 1px solid #e6e9ed;
 }
+.ip-pdns-resolution-status { display: block; font-size: 10px; color: #596773; }
+.ip-pdns-live-range { stroke: #c62828; stroke-width: 2; stroke-dasharray: 4 3; }
+.ip-pdns-live-dot { fill: #c62828; }
+.ip-pdns-live-point { cursor: pointer; }
+.ip-pdns-live-point:hover .ip-pdns-live-dot,
+.ip-pdns-live-point:focus .ip-pdns-live-dot { r: 9px; }
+#ip-pdns-resolve[aria-busy="true"] i { animation: ip-scan-loading 1s linear infinite; }
 .ip-scan-filter {
     margin: 1rem 0 1.25rem;
     max-width: 24rem;
@@ -432,6 +452,7 @@
     to { transform: rotate(360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
+    #ip-pdns-resolve[aria-busy="true"] i,
     #scan-group-status[data-state="loading"]::before,
     .ip-section-loading::before { animation: none; }
 }
@@ -719,7 +740,14 @@
         <div id="ip-info-results"></div>
     </div>
     <div class="ip-pdns-panel">
-        <div class="ip-pdns-title">Passive DNS</div>
+        <div class="ip-pdns-title"><span>Passive DNS</span>
+            {% if appbuilder.sm.has_access('can_resolve_passive_dns', 'IPDetailView') %}
+            <button id="ip-pdns-resolve" type="button" class="btn btn-default btn-xs" title="Resolve" aria-label="Resolve" disabled
+                data-endpoint="{{ url_for('IPDetailView.resolve_passive_dns', ip=ip) }}" data-csrf="{{ csrf_token() }}">
+                <i class="fa fa-refresh" aria-hidden="true"></i> Active DNS
+            </button>
+            {% endif %}
+        </div>
         <div class="ip-pdns-box">
             <div id="ip-pdns-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading Passive DNS…</div>
             <div id="ip-pdns-error" class="alert alert-warning" role="alert" style="display: none; margin-bottom: 0;"></div>
@@ -778,6 +806,7 @@
 
 <script src="{{ url_for('static', filename='js/ip_port_timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_pdns_resolve.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_hostname_groups.js') }}"></script>
 <script>
 (function () {
@@ -789,6 +818,8 @@
     const pdnsErrorEl = document.getElementById('ip-pdns-error');
     const pdnsResultsEl = document.getElementById('ip-pdns-results');
     let pdnsTimelines = null;
+    let pdnsResolver = null;
+    window.addEventListener('pagehide', () => { if (pdnsResolver) pdnsResolver.cancel(); });
     let informationStarted = false;
 
     function goBackToPreviousPage(event) {
@@ -906,6 +937,12 @@
                 return;
             }
             pdnsTimelines = window.PlumPdnsTimeline.mount(document, pdnsResultsEl, records);
+            const resolveButton = document.getElementById('ip-pdns-resolve');
+            if (resolveButton) {
+                pdnsResolver = window.PlumPdnsResolve.mount(resolveButton,
+                    document.getElementById('ip-pdns-resolve-progress'), pdnsTimelines,
+                    resolveButton.dataset.endpoint, resolveButton.dataset.csrf);
+            }
         })
         .catch((error) => {
             pdnsLoadingEl.style.display = 'none';

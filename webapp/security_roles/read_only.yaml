@@ -105,4 +105,5 @@ permissions:
 - can index on IPDetailView
 - can whois lookup on IPDetailView
 - can passive dns on IPDetailView
+- can resolve passive dns on IPDetailView
 - can geolookup on IPDetailView

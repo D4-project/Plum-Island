@@ -15,10 +15,17 @@
         return {start: start === null || (end !== null && start > end) ? end : start,
             end: end === null ? start : end};
     }
+    function formatDate(value) {
+        const seconds = timestamp(value);
+        return seconds === null ? 'N/A'
+            : new Date(seconds * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    }
     function bounds(items) {
         let min = Infinity, max = -Infinity;
         items.forEach(item => {
             if (item.range) { min = Math.min(min, item.range.start); max = Math.max(max, item.range.end); }
+            const live = timestamp(item.verifiedAt);
+            if (live !== null) { min = Math.min(min, live); max = Math.max(max, live); }
         });
         if (Number.isFinite(min) && min === max) {
             // A lone date gets five approximate months, centered on its point.
@@ -82,17 +89,26 @@
                     svg.appendChild(text);
                 }
                 const startMarks = [];
+                const pointMarks = [];
                 const tooltip = node('g', {visibility: 'hidden', 'pointer-events': 'none', class: 'ip-timeline-tooltip'});
                 tooltip.appendChild(node('rect', {width: 218, height: 24, rx: 3, fill: '#263746'}));
                 const tooltipText = node('text', {x: 8, y: 16, fill: '#fff', 'font-size': 11, 'font-family': 'sans-serif'});
                 tooltip.appendChild(tooltipText);
+                function bindTooltip(element, label, x) {
+                    const show = () => {
+                        tooltipText.textContent = label;
+                        tooltip.setAttribute('transform', `translate(${Math.max(0, Math.min(x - 109, width - 218))}, ${options.compact ? -12 : 1})`);
+                        tooltip.setAttribute('visibility', 'visible');
+                    };
+                    const hide = () => tooltip.setAttribute('visibility', 'hidden');
+                    element.addEventListener('pointerenter', show);
+                    element.addEventListener('pointerleave', hide);
+                    element.addEventListener('focus', show);
+                    element.addEventListener('blur', hide);
+                }
                 positions.forEach(({item, start, end}) => {
                     const y = options.compact ? 18 : 38;
-                    const dateLabel = attribute => {
-                        const value = timestamp(item.tab.getAttribute(attribute));
-                        return value === null ? 'N/A'
-                            : new Date(value * 1000).toISOString().slice(0, 19).replace('T', ' ');
-                    };
+                    const dateLabel = attribute => formatDate(item.tab.getAttribute(attribute));
                     const label = `First seen: ${dateLabel('data-first-seen')} | Last seen: ${dateLabel('data-last-seen')}`;
                     if (start !== end && timestamp(item.tab.getAttribute('data-first-seen')) !== null) {
                         const mark = node('line', {x1: start, x2: start, y1: y - 6, y2: y + 6,
@@ -103,16 +119,7 @@
                             stroke: 'transparent', 'stroke-width': 10, 'pointer-events': 'stroke',
                             class: 'ip-timeline-start-hit', tabindex: 0, role: 'button',
                             'aria-label': `First seen: ${dateLabel('data-first-seen')}`});
-                        const showStart = () => {
-                            tooltipText.textContent = dateLabel('data-first-seen');
-                            tooltip.setAttribute('transform', `translate(${Math.max(0, Math.min(start - 109, width - 218))}, ${options.compact ? -12 : 1})`);
-                            tooltip.setAttribute('visibility', 'visible');
-                        };
-                        const hideStart = () => tooltip.setAttribute('visibility', 'hidden');
-                        hit.addEventListener('pointerenter', showStart);
-                        hit.addEventListener('pointerleave', hideStart);
-                        hit.addEventListener('focus', showStart);
-                        hit.addEventListener('blur', hideStart);
+                        bindTooltip(hit, dateLabel('data-first-seen'), start);
                         hit.addEventListener('click', () => { item.link.click(); sync(); });
                         hit.addEventListener('keydown', event => {
                             if (event.key === 'Enter' || event.key === ' ') {
@@ -127,6 +134,7 @@
                     point.appendChild(node('title', {}, dateLabel('data-last-seen')));
                     point.appendChild(node('circle', {cx: end, cy: y, r: 13, fill: 'transparent', class: 'ip-timeline-hit'}));
                     point.appendChild(node('circle', {cx: end, cy: y, r: 5, class: 'ip-timeline-dot'}));
+                    bindTooltip(point, dateLabel('data-last-seen'), end);
                     point.addEventListener('click', () => { item.link.click(); sync(); });
                     point.addEventListener('keydown', event => {
                         if (event.key === 'Enter' || event.key === ' ') {
@@ -134,8 +142,38 @@
                         }
                     });
                     controls.set(point, item.tab);
-                    svg.appendChild(point);
+                    pointMarks.push(point);
                 });
+                // Live DNS is an overlay, never a replacement for passive history.
+                visible.forEach(item => {
+                    const verifiedAt = timestamp(item.verifiedAt);
+                    if (verifiedAt === null) return;
+                    const last = timestamp(item.tab.getAttribute('data-last-seen'));
+                    const range = {start: last !== null && last <= verifiedAt ? last : verifiedAt, end: verifiedAt};
+                    const position = layout([{range}], domain, width)[0];
+                    const y = options.compact ? 18 : 38;
+                    if (position.start !== position.end) {
+                        svg.appendChild(node('line', {x1: position.start, x2: position.end, y1: y, y2: y,
+                            class: 'ip-pdns-live-range'}));
+                    }
+                    const label = formatDate(verifiedAt);
+                    const point = node('g', {class: 'ip-pdns-live-point', tabindex: 0, role: 'button',
+                        'aria-label': label, 'aria-controls': item.link.getAttribute('aria-controls')});
+                    point.appendChild(node('title', {}, label));
+                    point.appendChild(node('circle', {cx: position.end, cy: y, r: 13, fill: 'transparent'}));
+                    point.appendChild(node('circle', {cx: position.end, cy: y, r: 6, class: 'ip-pdns-live-dot'}));
+                    bindTooltip(point, label, position.end);
+                    point.addEventListener('click', () => { item.link.click(); sync(); });
+                    point.addEventListener('keydown', event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault(); item.link.click(); sync();
+                        }
+                    });
+                    controls.set(point, item.tab);
+                    pointMarks.push(point);
+                });
+                // Paint all connectors behind both historical and live points.
+                pointMarks.forEach(point => svg.appendChild(point));
                 // Keep start ticks hoverable above the enlarged point hit areas.
                 startMarks.forEach(mark => svg.appendChild(mark));
                 svg.appendChild(tooltip);
@@ -207,7 +245,7 @@
         }
         return {refresh, sync, destroy};
     }
-    const api = {timestamp, interval, bounds, layout, mount};
+    const api = {timestamp, interval, formatDate, bounds, layout, mount};
     root.PlumPortTimeline = api;
     if (typeof module !== 'undefined') module.exports = api;
 })(typeof window === 'undefined' ? globalThis : window);

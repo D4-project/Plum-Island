@@ -318,6 +318,50 @@ available in the label tooltip. The most recently observed record is highlighted
 initially; clicking a label or point highlights that row. Missing dates remain
 explicit rather than being replaced by the current date.
 
+### Active DNS verification
+
+The heading keeps **Passive DNS** on the left and a refresh-icon **Active DNS**
+button on the right (tooltip: **Resolve**). Click it to check whether the displayed
+IPv4 still appears in the current A answers for each eligible PDNS hostname.
+No active DNS requests run merely by opening the tab. Names are deduplicated;
+non-A records and IPv6 views are not actively verified by this control.
+The progress counter occupies the top-left cell of the grey timeline panel,
+alongside the date axis. Its space stays reserved even before the first check.
+
+Checks run asynchronously through the server's configured DNS resolver using
+`dnspython`. Successful matches add a **red point at the verification time**, with a dashed connector
+from the existing last-seen point, on the same row. The common PDNS scale expands
+to include verification timestamps; port timelines are unaffected. Hover shows
+the UTC verification time. The connector does **not** prove uninterrupted
+resolution between the historical observation and the live check.
+
+Historical points and stored `time_first`/`time_last` remain unchanged. Without a
+known last-seen date, a matching result gets a point but no invented connector.
+Results are kept only in page memory, not written to SQL, Kvrocks, Meilisearch or
+CIRCL. Repeating a check replaces the previous live overlay.
+
+Each row distinguishes a match, different address, NXDOMAIN/no A answer, timeout
+and resolver failure. Resolver errors are not evidence that a name has stopped
+resolving. Busy/error rows can be retried with the button. Empty or disabled PDNS
+and records without a usable hostname/IP association leave the button disabled.
+
+Operational defaults are four browser requests and four active DNS lookups per
+web process, a five-second DNS lifetime, and a fifteen-second browser request
+deadline. These are conservative bounds, not measured production throughput
+targets. They are defined in `utils/pdns_resolve.py` and `static/js/ip_pdns_resolve.js`.
+Resolution uses absolute hostnames without local search suffixes and does not
+contact the returned IPs. Results reflect the backend resolver's view and cache,
+not necessarily every public resolver or authoritative server.
+
+The new route requires `can_resolve_passive_dns` on `IPDetailView`, plus CSRF
+validation and a signed authorization for a hostname from the displayed PDNS.
+Authorizations expire after one hour; reload the page if the row tooltip reports
+an expired token. Install updated `requirements.txt` and synchronize roles with
+`tools/initial_setup.py --roles-only` (also run by the update script and Docker
+entrypoint). Custom roles need the new permission explicitly; no SQL schema
+migration is required. Removing that permission disables access for that role
+without touching stored history.
+
 ## Performance diagnostics
 
 Add the standalone keyword `debug` to a structured search:

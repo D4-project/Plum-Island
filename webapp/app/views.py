@@ -84,6 +84,7 @@ from .utils.search_debug import profile_search_page
 from .utils.report_query import validate_report_query
 from .utils.network_enrichment import enrichment_due, refresh_target_network
 from .utils.ip_whois import WhoisLookupError, lookup_domain_whois, lookup_network_whois
+from .utils.pdns_resolve import add_resolve_tokens, verify_resolve_token, resolve_a
 from .utils.tagrules import (
     compile_tag_rule_definition,
     normalize_tags,
@@ -2721,7 +2722,47 @@ class IPDetailView(BaseView):
             return jsonify({"error": "Passive DNS lookup failed"}), 502
 
         records = self._parse_pdns_ndjson(response.text)
-        return jsonify(records)
+        payload = add_resolve_tokens(
+            records, str(ipaddress.ip_address(ip)), app.secret_key
+        )
+        result = jsonify(payload)
+        result.headers["Cache-Control"] = "no-store"
+        return result
+
+    @expose("/pdns/resolve/<string:ip>", methods=["POST"])
+    @has_access
+    def resolve_passive_dns(self, ip):
+        """Verify one signed PDNS hostname without modifying observation history."""
+        try:
+            address = str(ipaddress.IPv4Address(ip))
+        except ipaddress.AddressValueError:
+            return jsonify(error="Live A verification requires an IPv4 address"), 400
+        try:
+            validate_csrf(request.headers.get("X-CSRFToken"))
+        except ValidationError:
+            return jsonify(error="Invalid CSRF token; reload this page"), 400
+        # Bound streamed bodies too, even when Content-Length is absent.
+        raw_payload = request.stream.read(4097)
+        if max(len(raw_payload), request.content_length or 0) > 4096:
+            return jsonify(error="Resolution request too large"), 413
+        try:
+            payload = json.loads(raw_payload) if request.is_json else None
+        except (ValueError, UnicodeError):
+            payload = None
+        if not isinstance(payload, dict):
+            return jsonify(error="Expected a JSON resolution request"), 400
+        try:
+            hostname = verify_resolve_token(
+                payload.get("token"), address, app.secret_key
+            )
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+        result = resolve_a(hostname, address)
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        if result["status"] == "busy":
+            response.status_code = 429
+        return response
 
     @expose("/geolookup/<string:ip>")
     @has_access

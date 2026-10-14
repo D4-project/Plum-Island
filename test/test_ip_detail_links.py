@@ -239,6 +239,10 @@ class IpDetailLinksTest(unittest.TestCase):
         environment.globals.update(
             baselib=SimpleNamespace(get_nonce=lambda: ""),
             url_for=lambda *_args, **_kwargs: "/unused",
+            csrf_token=lambda: "csrf-test",
+            appbuilder=SimpleNamespace(
+                sm=SimpleNamespace(has_access=lambda *_args: True)
+            ),
         )
         values = {
             "ip": "2001:db8::1",
@@ -259,6 +263,16 @@ class IpDetailLinksTest(unittest.TestCase):
         self.assertNotIn("<script", fragment)
         self.assertNotIn('id="ip-whois"', fragment)
         full = template.render(fragment=False, **values)
+        self.assertIn('id="ip-pdns-resolve"', full)
+        self.assertIn('title="Resolve"', full)
+        self.assertIn("Active DNS", full)
+        # Progress is created in the timeline's axis row, not below the button.
+        self.assertNotIn('id="ip-pdns-resolve-progress"', full)
+        self.assertIn("#ip-pdns-resolve-progress {\n    height: 24px;", full)
+        environment.globals["appbuilder"].sm.has_access = lambda *_args: False
+        self.assertNotIn(
+            'id="ip-pdns-resolve"', template.render(fragment=False, **values)
+        )
         self.assertEqual(full.count('id="ip-scan-group"'), 1)
         self.assertEqual(full.count('id="ip-scan-summary"'), 1)
         self.assertIn('value="example.org" selected', full)

@@ -49,6 +49,9 @@ when the release is published.
   initially. All ports share the visible hostname group's time scale.
 - Passive DNS uses one timeline panel with `Rdata (RRType)` rows, a shared date
   axis and first/last-seen markers.
+- An **Active DNS** button beside the Passive DNS heading verifies A hostnames
+  asynchronously. Matching IPs gain a red verification point connected to the historical
+  last seen, without changing stored observation dates (#252).
 - Requested-hostname reports load on demand and remain cached in page memory.
   Direct hostname links, browser back/forward and cached report selections are
   supported; obsolete responses never replace the active selection (#231).
