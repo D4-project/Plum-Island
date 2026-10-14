@@ -71,6 +71,8 @@ The changes below describe what v0.2610.0 brings compared with v0.2606.0.
   shared tag badges and consistent IP/detail navigation (#220).
 - Stats includes the number of unique ports configured across scan profiles.
 
+![IP and AS information with Passive DNS timelines and red Active DNS verification points](documentation/media/passive_active_dns.png)
+
 ## Reports and PDF delivery
 
 - Report previews render safe HTML with an anchored index and print support (#218).
