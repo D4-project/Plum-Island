@@ -223,6 +223,9 @@ The structured search page is the more operational one:
 - it uses an adaptive backward scan by `last_seen`: start at 1 day, grow to 2/4/8/... days when empty, then fall back to 1 day once hits are found
 - it can export the matching IP list, full matching JSON set, and resolved CSV
   (`ip`, `last seen`, `ptr`, `pdns`); all use full overlap scope, not visible rows
+- resolved CSV PTR names come only from matching stored scan documents, never
+  live reverse-DNS lookups; PDNS enrichment uses the configured CIRCL API and
+  locally filters observation intervals against the same resolved search dates
 
 So the split is:
 

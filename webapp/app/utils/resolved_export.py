@@ -4,16 +4,14 @@ import csv
 from datetime import datetime, timezone
 import ipaddress
 import json
+import math
 import time
 
-import dns.exception
-import dns.resolver
-import dns.reversename
 import requests
 
 from .pdns_resolve import normalize_hostname
+from .reports import collect_report_ptr_fqdns
 
-DNS_TIMEOUT = 5.0
 PDNS_TIMEOUT = 15.0
 PDNS_MAX_BYTES = 8 * 1024 * 1024
 CSV_HEADER = ("ip", "last seen", "ptr", "pdns")
@@ -41,25 +39,6 @@ def last_seen_text(value):
         return ""
 
 
-def lookup_ptr(ip):
-    """Use the configured DNS resolver, absolute reverse name, finite lifetime."""
-    address = str(ipaddress.ip_address(ip))
-    try:
-        answer = dns.resolver.Resolver().resolve(
-            dns.reversename.from_address(address),
-            "PTR",
-            lifetime=DNS_TIMEOUT,
-            search=False,
-        )
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-        return []
-    except (dns.exception.DNSException, OSError) as error:
-        raise LookupError("PTR lookup failed or timed out") from error
-    return sorted(
-        {name for item in answer if (name := normalize_hostname(item.target.to_text()))}
-    )
-
-
 def pdns_hostname(record, address):
     """Accept forward/inverse A or AAAA records only for the exported IP."""
     if not isinstance(record, dict):
@@ -77,7 +56,27 @@ def pdns_hostname(record, address):
     return None
 
 
-def lookup_pdns(ip, username, password):
+def pdns_in_time_range(record, time_range):
+    """Require a valid observation interval overlapping the search, inclusively."""
+    if not isinstance(record, dict):
+        return False
+    values = (record.get("time_first"), record.get("time_last"))
+    if any(isinstance(value, bool) for value in values):
+        return False
+    try:
+        first, last = (float(value) for value in values)
+    except (ValueError, TypeError, OverflowError):
+        return False
+    return (
+        math.isfinite(first)
+        and math.isfinite(last)
+        and 0 < first <= last
+        and first <= time_range["to_ts"]
+        and last >= time_range["from_ts"]
+    )
+
+
+def lookup_pdns(ip, username, password, time_range):
     """Read existing CIRCL records only; never follow redirects or active queries."""
     address = ipaddress.ip_address(ip)
     deadline = time.monotonic() + PDNS_TIMEOUT
@@ -108,7 +107,10 @@ def lookup_pdns(ip, username, password):
     try:
         for line in payload.decode("utf-8").splitlines():
             if line.strip():
-                name = pdns_hostname(json.loads(line), address)
+                record = json.loads(line)
+                if not pdns_in_time_range(record, time_range):
+                    continue
+                name = pdns_hostname(record, address)
                 if name:
                     names.add(name)
     except (ValueError, UnicodeError) as error:
@@ -116,8 +118,10 @@ def lookup_pdns(ip, username, password):
     return sorted(names)
 
 
-def write_resolved_csv(output, results, config, progress, warning):
+def write_resolved_csv(output, results, config, progress, warning, *, document_loader):
     """One row per matching IP, not per UID; failed lookups never drop an IP."""
+    # Explicit I/O callbacks keep storage, progress and warnings independently testable.
+    # pylint: disable=too-many-arguments
     writer = csv.writer(output)
     writer.writerow(CSV_HEADER)
     username = str(config.get("PASSIVE_USER") or "").strip()
@@ -135,23 +139,22 @@ def write_resolved_csv(output, results, config, progress, warning):
     )
     for done, ip in enumerate(ips, 1):
         names = []
-        ptrs = []
-        try:
-            ptrs = lookup_ptr(ip)
-        except LookupError as error:
-            warning(f"{ip}: {error}")
+        ptrs = collect_report_ptr_fqdns(document_loader, {ip: results["results"][ip]})[
+            ip
+        ]
         if username and password:
             try:
-                names = lookup_pdns(ip, username, password)
+                names = lookup_pdns(ip, username, password, results["time_range"])
             except LookupError as error:
                 warning(f"{ip}: {error}")
-        last_seen = results.get("timestamps", {}).get(ip, {}).get("max_seen")
         writer.writerow(
             [
                 csv_cell(value)
                 for value in (
                     ip,
-                    last_seen_text(last_seen),
+                    last_seen_text(
+                        results.get("timestamps", {}).get(ip, {}).get("max_seen")
+                    ),
                     ",".join(ptrs),
                     ",".join(names),
                 )

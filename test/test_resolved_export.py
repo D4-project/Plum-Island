@@ -12,7 +12,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-import dns.exception
 import dns.resolver
 from itsdangerous import URLSafeTimedSerializer
 import requests
@@ -27,11 +26,13 @@ from tools.initial_setup import load_role_definition, normalize_permission_label
 ROOT = Path(__file__).resolve().parents[1]
 IP = "192.0.2.10"
 V6 = "2001:db8::1"
+TIME_RANGE = {"from_ts": 100, "to_ts": 300}
 
 
 def results_fixture():
     return {
         "status": True,
+        "time_range": TIME_RANGE,
         "results": {V6: ["v6"], IP: ["old", "new"], "192.0.2.2": ["other"]},
         "timestamps": {IP: {"max_seen": 1789396987}, V6: {"max_seen": None}},
     }
@@ -52,18 +53,24 @@ class ResolvedCsvTest(unittest.TestCase):
 
     def test_csv_columns_last_seen_dedup_and_csv_escaping(self):
         output, warnings, progress = io.StringIO(newline=""), [], []
+        loader = Mock(
+            return_value={
+                "body": {"hostnames": [{"type": "PTR", "name": "ptr.example.org"}]}
+            }
+        )
         with patch.object(
-            resolved, "lookup_ptr", return_value=["ptr.example.org"]
-        ), patch.object(
             resolved, "lookup_pdns", return_value=["one.example.org", "two.example.org"]
-        ):
+        ) as pdns:
             resolved.write_resolved_csv(
                 output,
                 results_fixture(),
                 {"PASSIVE_USER": "test", "PASSIVE_PWD": "secret"},
                 progress.append,
                 warnings.append,
+                document_loader=loader,
             )
+        for call in pdns.call_args_list:
+            self.assertEqual(call.args[3], TIME_RANGE)
         rows = list(csv.reader(io.StringIO(output.getvalue())))
         self.assertEqual(rows[0], ["ip", "last seen", "ptr", "pdns"])
         self.assertEqual([row[0] for row in rows[1:]], ["192.0.2.2", IP, V6])
@@ -100,24 +107,51 @@ class ResolvedCsvTest(unittest.TestCase):
         self.assertEqual(resolved.last_seen_text(float("inf")), "")
         self.assertEqual(resolved.last_seen_text(0), "1970-01-01 00:00:00")
 
-    def test_ptr_ipv6_absolute_lookup_and_failures(self):
-        item = SimpleNamespace(
-            target=SimpleNamespace(to_text=lambda: "PTR.Example.org.")
+    def test_ptr_only_from_matching_scan_documents_without_dns(self):
+        documents = {
+            "old": {
+                "body": {
+                    "hostnames": [
+                        {"type": "PTR", "name": "Old.Example.org."},
+                        {"type": "user", "name": "requested.example.org"},
+                        {"name": "generic.example.org"},
+                        "invalid",
+                    ]
+                }
+            },
+            "new": {
+                "body": {
+                    "hostnames": [
+                        {"type": "ptr", "hostname": "new.example.org"},
+                        {"type": "PTR", "name": "old.example.org"},
+                        {"type": "PTR", "name": IP},
+                    ]
+                }
+            },
+            "v6": {"body": {"hostnames": [{"type": "PTR", "name": "v6.example.org"}]}},
+            "other": None,
+            "outside-search": {
+                "body": {"hostnames": [{"type": "PTR", "name": "excluded.example.org"}]}
+            },
+        }
+        loader = Mock(side_effect=documents.__getitem__)
+        output = io.StringIO(newline="")
+        with patch.object(dns.resolver, "Resolver") as resolver, patch.object(
+            resolved, "lookup_pdns"
+        ) as pdns:
+            resolved.write_resolved_csv(
+                output, results_fixture(), {}, Mock(), Mock(), document_loader=loader
+            )
+        resolver.assert_not_called()
+        pdns.assert_not_called()
+        self.assertEqual(
+            {call.args[0] for call in loader.call_args_list},
+            {"old", "new", "v6", "other"},
         )
-        with patch.object(resolved.dns.resolver, "Resolver") as factory:
-            factory.return_value.resolve.return_value = [item, item]
-            self.assertEqual(resolved.lookup_ptr(V6), ["ptr.example.org"])
-            args, kwargs = factory.return_value.resolve.call_args
-            self.assertTrue(args[0].to_text().endswith("ip6.arpa."))
-            self.assertEqual(args[1], "PTR")
-            self.assertFalse(kwargs["search"])
-            self.assertEqual(kwargs["lifetime"], 5)
-            for error in (dns.resolver.NoAnswer(), dns.resolver.NXDOMAIN()):
-                factory.return_value.resolve.side_effect = error
-                self.assertEqual(resolved.lookup_ptr(IP), [])
-            factory.return_value.resolve.side_effect = dns.exception.Timeout()
-            with self.assertRaises(LookupError):
-                resolved.lookup_ptr(IP)
+        rows = list(csv.reader(io.StringIO(output.getvalue())))
+        self.assertEqual(rows[1][2], "")
+        self.assertEqual(rows[2][2], "new.example.org,old.example.org")
+        self.assertEqual(rows[3][2], "v6.example.org")
 
     def test_pdns_orientation_families_and_unrelated_records(self):
         for ip, kind in ((IP, "A"), (V6, "AAAA")):
@@ -136,10 +170,14 @@ class ResolvedCsvTest(unittest.TestCase):
                 response = get.return_value.__enter__.return_value
                 response.status_code = 200
                 response.iter_content.return_value = [
-                    "\n".join(json.dumps(r) for r in records).encode()
+                    "\n".join(
+                        json.dumps(dict(r, time_first=100, time_last=300))
+                        for r in records
+                    ).encode()
                 ]
                 self.assertEqual(
-                    resolved.lookup_pdns(ip, "user", "password"), ["host.example.org"]
+                    resolved.lookup_pdns(ip, "user", "password", TIME_RANGE),
+                    ["host.example.org"],
                 )
                 kwargs = get.call_args.kwargs
                 self.assertFalse(kwargs["allow_redirects"])
@@ -150,7 +188,7 @@ class ResolvedCsvTest(unittest.TestCase):
         with patch.object(resolved.requests, "get") as get:
             get.side_effect = requests.Timeout("private upstream details")
             with self.assertRaisesRegex(LookupError, "timed out"):
-                resolved.lookup_pdns(IP, "user", "secret")
+                resolved.lookup_pdns(IP, "user", "secret", TIME_RANGE)
             get.side_effect = None
             response = get.return_value.__enter__.return_value
             for status, body in (
@@ -164,23 +202,76 @@ class ResolvedCsvTest(unittest.TestCase):
                 with patch.object(resolved, "PDNS_MAX_BYTES", 20), self.assertRaises(
                     LookupError
                 ):
-                    resolved.lookup_pdns(IP, "user", "secret")
+                    resolved.lookup_pdns(IP, "user", "secret", TIME_RANGE)
 
-    def test_missing_credentials_and_failed_dns_preserve_rows(self):
+    def test_pdns_search_time_overlap_inclusive_and_invalid_dates(self):
+        intervals = [
+            ("before", 1, 99),
+            ("after", 301, 400),
+            ("inside", 150, 200),
+            ("spanning", 50, 400),
+            ("start", 50, 100),
+            ("end", 300, 400),
+            ("unknown", None, None),
+            ("missing-first", None, 200),
+            ("reversed", 200, 100),
+            ("invalid", "bad", 200),
+            ("nan", "nan", 200),
+            ("infinite", 100, "inf"),
+            ("boolean", True, 200),
+            ("negative", -100, 200),
+        ]
+        for ip, kind in ((IP, "A"), (V6, "AAAA")):
+            records = [
+                {
+                    "rrname": ip,
+                    "rdata": name + ".example.org",
+                    "rrtype": kind,
+                    "time_first": first,
+                    "time_last": last,
+                }
+                for name, first, last in intervals
+            ]
+            with patch.object(resolved.requests, "get") as get:
+                response = get.return_value.__enter__.return_value
+                response.status_code = 200
+                response.iter_content.return_value = [
+                    "\n".join(json.dumps(r) for r in records).encode()
+                ]
+                self.assertEqual(
+                    resolved.lookup_pdns(ip, "user", "secret", TIME_RANGE),
+                    [
+                        "end.example.org",
+                        "inside.example.org",
+                        "spanning.example.org",
+                        "start.example.org",
+                    ],
+                )
+        self.assertTrue(
+            resolved.pdns_in_time_range(
+                {"time_first": "100", "time_last": "300"}, TIME_RANGE
+            )
+        )
+        self.assertFalse(resolved.pdns_in_time_range([], TIME_RANGE))
+
+    def test_missing_credentials_and_missing_documents_preserve_rows(self):
         for config in ({}, {"PASSIVE_USER": "user"}):
             warnings, progress = [], []
             output = io.StringIO(newline="")
-            with patch.object(
-                resolved, "lookup_ptr", side_effect=LookupError("PTR failed")
-            ), patch.object(resolved, "lookup_pdns") as pdns:
+            with patch.object(resolved, "lookup_pdns") as pdns:
                 resolved.write_resolved_csv(
-                    output, results_fixture(), config, progress.append, warnings.append
+                    output,
+                    results_fixture(),
+                    config,
+                    progress.append,
+                    warnings.append,
+                    document_loader=Mock(return_value=None),
                 )
             pdns.assert_not_called()
             rows = list(csv.reader(io.StringIO(output.getvalue())))
             self.assertEqual(len(rows), 4)
             self.assertTrue(all(row[2:] == ["", ""] for row in rows[1:]))
-            self.assertEqual(len(warnings), 4)
+            self.assertEqual(len(warnings), 1)
 
 
 class ResolvedExportRoutesTest(unittest.TestCase):
@@ -264,6 +355,34 @@ class ResolvedExportRoutesTest(unittest.TestCase):
             self.assertEqual(self.start().status_code, 503)
             thread.assert_not_called()
 
+    def test_document_read_failure_aborts_and_cleans_partial_csv(self):
+        with tempfile.TemporaryDirectory(
+            prefix="resolved-test-"
+        ) as folder, patch.object(
+            appbuilder.sm, "has_access", return_value=True
+        ), patch.object(
+            views.threading, "Thread"
+        ):
+            job_id = self.start().json["job_id"]
+            with patch.object(
+                views.KVSearchView, "execute_search", return_value=results_fixture()
+            ), patch.object(
+                views.KVSearchView, "_get_export_jobs_folder", return_value=folder
+            ), patch.object(
+                views.client, "index"
+            ), patch.object(
+                views.KVSearchView,
+                "load_meili_document",
+                side_effect=RuntimeError("private backend details"),
+            ), patch.dict(
+                app.config, PASSIVE_USER="", PASSIVE_PWD=""
+            ):
+                views.KVSearchView._run_resolved_export_job(job_id)
+            self.assertEqual(self.states[job_id]["status"], "error")
+            self.assertNotIn("private", self.states[job_id]["error"])
+            self.assertEqual(list(Path(folder).iterdir()), [])
+            self.slots.release.assert_called_once()
+
     def test_worker_download_ownership_types_and_failed_search(self):
         with tempfile.TemporaryDirectory(
             prefix="resolved-test-"
@@ -278,14 +397,40 @@ class ResolvedExportRoutesTest(unittest.TestCase):
             ) as search, patch.object(
                 views.KVSearchView, "_get_export_jobs_folder", return_value=folder
             ), patch.object(
-                resolved, "lookup_ptr", return_value=["ptr.example.org"]
-            ), patch.dict(
+                views.client, "index"
+            ) as index, patch.object(
+                views.KVSearchView,
+                "load_meili_document",
+                side_effect=lambda _index, uid: (
+                    (None, "document_not_found", "ignored")
+                    if uid == "other"
+                    else (
+                        {
+                            "body": {
+                                "hostnames": [
+                                    {"type": "PTR", "name": "ptr.example.org"}
+                                ]
+                            }
+                        },
+                        None,
+                        None,
+                    )
+                ),
+            ) as loader, patch.object(
+                dns.resolver, "Resolver"
+            ) as resolver, patch.dict(
                 app.config, PASSIVE_USER="", PASSIVE_PWD=""
             ):
                 views.KVSearchView._run_resolved_export_job(job_id)
             search.assert_called_once_with(self.payload["q"], 100, 300)
+            index.assert_called_once_with("plum")
+            self.assertEqual(
+                {call.args[1] for call in loader.call_args_list},
+                {"old", "new", "v6", "other"},
+            )
+            resolver.assert_not_called()
             self.assertEqual(self.states[job_id]["processed_uids"], 3)
-            self.assertEqual(self.states[job_id]["warning_count"], 1)
+            self.assertEqual(self.states[job_id]["warning_count"], 2)
             self.slots.release.assert_called_once()
             response = self.client.get(
                 "/kvsearchview/export_resolved_download",
@@ -295,6 +440,9 @@ class ResolvedExportRoutesTest(unittest.TestCase):
             self.assertEqual(
                 len(list(csv.reader(io.StringIO(response.data.decode())))), 4
             )
+            rows = list(csv.reader(io.StringIO(response.data.decode())))
+            self.assertEqual(rows[1][2], "")
+            self.assertEqual(rows[2][2], "ptr.example.org")
             self.assertIn("resolved_ips.csv", response.headers["Content-Disposition"])
             response.close()
             for suffix in ("status", "download"):

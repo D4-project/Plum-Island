@@ -286,13 +286,19 @@ ip,last seen,ptr,pdns
 
 - `last seen` is the latest indexed scan observation among the query's matching
   documents, formatted as `YYYY-MM-DD HH:mm:ss` in UTC. Missing dates stay empty.
-- `ptr` contains current reverse-DNS answers from the controller's configured
-  resolver, not historical PTR names from scan JSON. Multiple answers share one
-  comma-separated cell. IPv4 and IPv6 are supported.
+- `ptr` contains stored `body.hostnames` entries with `type: PTR` from the
+  matching scan documents in Meilisearch. No reverse-DNS query is performed.
+  Names are normalized, deduplicated and sorted in one comma-separated cell;
+  requested/generic hostnames and scans outside the search are excluded.
+  IPv4 and IPv6 are supported. No stored PTR means an empty cell.
 - `pdns` contains deduplicated, sorted hostnames from CIRCL A/AAAA records tied to
-  that IP. Search dates select the exported IPs/scans, not PDNS observation dates;
-  all available PDNS history returned by the service is considered. These names
-  are not actively resolved or proof of a current association.
+  that IP. Plum filters the returned records using the same resolved search dates
+  (including `since`): `time_first <= to_ts` and `time_last >= from_ts`, inclusive.
+  Records with missing, invalid or reversed observation dates are excluded.
+  The [CIRCL API](https://www.circl.lu/services/passive-dns/) documents no temporal
+  request filter, so filtering happens locally, not through invented API parameters.
+  An overlapping observation interval is not proof of continuous activity.
+  These names are not actively resolved or proof of a current association.
 
 The export covers the full search with its selected dates, using interval-overlap
 semantics like other full exports; it is not limited to the visible page.
@@ -301,16 +307,19 @@ spreadsheet formula prefixes are neutralized.
 
 Configure `PASSIVE_USER` and `PASSIVE_PWD` for CIRCL Passive DNS. If missing,
 PTR/date export still works with empty PDNS cells and an explicit warning.
-NXDOMAIN/no PTR answer produces an empty PTR cell. Timeouts, upstream errors,
+Missing scan documents produce a warning; available matching documents still
+contribute their PTR names. Meilisearch read failures stop the export rather
+than silently omitting stored data. PDNS timeouts, upstream errors,
 invalid responses or oversized PDNS responses produce warnings and empty affected
 cells, never a missing IP row. The modal stays open when warnings need review.
 
-Workers resolve sequentially per export, with at most two resolved exports per
-web process and one active export per account. DNS lifetime is five seconds;
-PDNS uses connect/read timeouts of 5/15 seconds and an 8 MiB response limit.
+Workers read scans and enrich sequentially per export, with at most two resolved
+exports per web process and one active export per account. PDNS uses connect/read
+timeouts of 5/15 seconds and an 8 MiB response limit.
 An oversized response is rejected, not silently truncated to a hostname limit.
-Only fixed CIRCL HTTPS requests and DNS PTR queries are made; no scanned web
-service is contacted. Large exports can take time.
+Only stored Meilisearch documents and fixed CIRCL HTTPS requests are used;
+no DNS PTR lookup or connection to a scanned service is made. Large exports can
+take time.
 
 Start/status/download routes require their own FAB permissions plus export
 ownership; start also requires CSRF. Synchronize the bundled Read Only role using

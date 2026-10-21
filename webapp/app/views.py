@@ -1482,6 +1482,17 @@ class KVSearchView(BaseView):
                     return
                 total = len(results["results"])
                 KVSearchView._set_job_state(job_id, total_uids=total, processed_uids=0)
+                index = client.index("plum")
+
+                def load_document(uid):
+                    document, warning, _ = KVSearchView.load_meili_document(index, uid)
+                    if warning:
+                        KVSearchView._add_job_warning(
+                            job_id,
+                            "A matching scan document is missing; its stored PTR names are unavailable.",
+                        )
+                    return document
+
                 file_path = os.path.join(
                     KVSearchView._get_export_jobs_folder(), f"{job_id}.csv"
                 )
@@ -1497,6 +1508,7 @@ class KVSearchView(BaseView):
                         warning=lambda message: KVSearchView._add_job_warning(
                             job_id, message
                         ),
+                        document_loader=load_document,
                     )
                 os.replace(tmp_path, file_path)
                 tmp_path = None

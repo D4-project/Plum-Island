@@ -323,10 +323,16 @@ currently rendered page. Full JSON exports fetch documents from Meilisearch.
 
 Resolved CSV exports also call `execute_search` for the full overlap scope.
 `_run_resolved_export_job` passes matching IPs and `timestamps[ip].max_seen` to
-`utils/resolved_export.py`; it does not fetch Meilisearch documents or alter
-indexes. The four CSV columns are `ip`, `last seen` (UTC), `ptr` (current DNS),
-and `pdns` (deduplicated CIRCL A/AAAA names associated with the IP). Enrichment
-dates are independent from the scan-selection interval. PDNS credentials, fixed
+`utils/resolved_export.py`, with a loader for matching Meilisearch documents.
+`collect_report_ptr_fqdns` reads only their `body.hostnames` PTR entries;
+no reverse-DNS query, extra age cutoff, or index write occurs. Missing documents
+produce warnings; other Meilisearch read errors stop the export.
+The four CSV columns are `ip`, `last seen` (UTC), `ptr` (stored scan PTR names),
+and `pdns` (deduplicated CIRCL A/AAAA names associated with the IP). PDNS records
+must overlap the exact resolved search interval (`time_first <= to_ts` and
+`time_last >= from_ts`, inclusive), using `results.time_range`, including `since`.
+Missing/invalid/reversed PDNS dates are excluded. Filtering is local because
+the CIRCL API does not document temporal request parameters. PDNS credentials, fixed
 upstream URL, disabled active queries, redirect refusal, response-size/read-time
 bounds and CSV injection protection live in this helper. Lookup failures retain
 rows and use the existing bounded job warnings/progress UI.

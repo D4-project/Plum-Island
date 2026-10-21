@@ -1,7 +1,8 @@
 # Unreleased
 
 - Structured search adds an asynchronous resolved CSV export: IP, last scan seen
-  (UTC), current PTR and associated Passive DNS names. Includes IPv6, lookup
+  (UTC), PTR names from matching stored scans (no reverse-DNS query) and
+  associated Passive DNS names filtered to the same search period. Includes IPv6, lookup
   warnings, protected owner-bound downloads and spreadsheet-safe CSV cells.
 
 - Search supports single-level parentheses with shared report/tag-rule validation
