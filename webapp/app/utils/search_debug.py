@@ -1,15 +1,19 @@
 """Opt-in, request-local search measurements; never retain keys or result data."""
 
-import shlex
 import time
 from contextlib import ExitStack
 from functools import wraps
+
+try:
+    from .search_query import tokenize_query
+except ImportError:
+    from search_query import tokenize_query
 
 
 def debug_requested(query):
     """Recognize a standalone directive, leaving quoted field values untouched."""
     try:
-        return any(part.lower() == "debug" for part in shlex.split(query or ""))
+        return any(token.value.lower() == "debug" for token in tokenize_query(query))
     except ValueError:
         return False  # The query parser reports malformed quoting.
 
@@ -31,7 +35,7 @@ def profile_search_page(function):
     return measured
 
 
-class SearchDiagnostics:
+class SearchDiagnostics:  # pylint: disable=too-many-instance-attributes
     """Measure application stages and client calls without changing their order."""
 
     def __init__(self, cleanup):
@@ -41,6 +45,7 @@ class SearchDiagnostics:
         self.stages = {}
         self.counts = {}
         self.window = {}
+        self.planner = {}
         self.kvrocks = {
             "commands": {},
             "direct_ms": 0.0,
@@ -135,5 +140,6 @@ class SearchDiagnostics:
             "stages_ms": self.stages,
             "counts": self.counts,
             "window": self.window,
+            "planner": self.planner,
             "kvrocks": self.kvrocks,
         }

@@ -12,8 +12,10 @@ from plum_antibodies import validate_tags
 
 try:
     from .mutils import lowercase_dict
+    from .search_query import Expression, iter_criteria, map_criteria
 except ImportError:
     from mutils import lowercase_dict
+    from search_query import Expression, iter_criteria, map_criteria
 
 logger = logging.getLogger("flask_appbuilder")
 
@@ -50,7 +52,7 @@ def analyze_header_dependencies(criteria_groups):
     """Analyze compiled criteria for exact and ambiguous HTTP header needs."""
     exact = {}
     ambiguous = []
-    for criteria in criteria_groups or []:
+    for criteria in iter_criteria(criteria_groups):
         for field, values in (criteria or {}).items():
             base, _, modifier = str(field).lower().removeprefix("!").partition(".")
             if base not in ("http_header", "http_headval"):
@@ -180,7 +182,7 @@ def validate_search_query(query):
     criteria_groups, status, msg_error = KVSearchView().parse_query(query)
     if not status:
         raise ValueError(msg_error or "Invalid search query")
-    return [lowercase_dict(group) for group in criteria_groups]
+    return map_criteria(criteria_groups, lowercase_dict)
 
 
 def compile_tag_rule_definition(name, description, query, tags):
@@ -283,6 +285,16 @@ def document_matches_criteria_groups(document, criteria_groups):
     """
     Return True when one OR group fully matches the parsed document.
     """
+    if isinstance(criteria_groups, Expression):
+        if criteria_groups.kind == "criteria":
+            return document_matches_criteria_groups(
+                document, [criteria_groups.criteria()]
+            )
+        matches = (
+            document_matches_criteria_groups(document, child)
+            for child in criteria_groups.children
+        )
+        return all(matches) if criteria_groups.kind == "all" else any(matches)
     for criteria in criteria_groups or []:
         group_matches = True
         for field, values in criteria.items():

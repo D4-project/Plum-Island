@@ -22,7 +22,7 @@ The project is designed for repeated monitoring rather than one-shot scans: targ
 - Target and scan profile management.
 - Per-profile scan tracking for each target.
 - Indexed search over IPs, networks, ports, DNS names, HTTP metadata, favicons, TLS certificates, banners, and computed tags.
-- Structured query syntax with exact, prefix, substring, `AND`, `OR`, and date-range filtering.
+- Structured query syntax with exact, prefix, substring, `AND`, `OR`, single-level parentheses, and date-range filtering.
 - Active unfinished scan jobs are requeued by the scheduler after two hours;
   late agent results are rejected when ownership has changed.
 - Tag rules that automatically add tags to matching scan documents.
@@ -58,7 +58,15 @@ domain.begin:"circl.lu" port:443 http_server.lk:nginx
 
 Exclude matching scans with `NOT`, for example
 `tag:type:router AND NOT tag:vendor:mikrotik`. Operators are case-insensitive;
-each OR group requires a positive term, and exclusion applies per scan UID.
+each OR path requires a positive bound, and exclusion applies per scan UID.
+
+Share filters across alternatives with one level of parentheses:
+
+```text
+(domain_requested:circl.lu OR net:185.194.93.0/24 OR net:185.194.94.0/24) AND tag:lang:php
+```
+
+Nested groups and `NOT (group)` are not supported.
 
 ![Filtered scan search results with tags and supported search keywords](documentation/media/search_filters.png)
 

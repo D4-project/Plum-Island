@@ -17,6 +17,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "webapp/app/utils"))
 from kvrocks import KVrocksIndexer  # pylint: disable=wrong-import-position
+from search_query import compile_query  # pylint: disable=wrong-import-position
+from search_plan import CandidatePlanner  # pylint: disable=wrong-import-position
 from search_debug import (  # pylint: disable=wrong-import-position
     debug_requested,
     profile_search_page,
@@ -40,6 +42,9 @@ class MemoryPipeline:
     def smembers(self, key):
         self.commands.append(("set", key))
 
+    def scard(self, key):
+        self.commands.append(("count", key))
+
     def get(self, key):
         self.commands.append(("string", key))
 
@@ -52,6 +57,8 @@ class MemoryPipeline:
         for kind, key in self.commands:
             if kind == "set":
                 result = set(self.client.sets.get(key, set()))
+            elif kind == "count":
+                result = len(self.client.sets.get(key, set()))
             elif kind == "hash":
                 result = dict(self.client.hashes.get(key, {}))
             else:
@@ -63,7 +70,12 @@ class MemoryPipeline:
     @property
     def command_stack(self):
         """Expose redis-py's queued-command shape for diagnostics."""
-        names = {"set": "SMEMBERS", "string": "GET", "hash": "HGETALL"}
+        names = {
+            "set": "SMEMBERS",
+            "string": "GET",
+            "hash": "HGETALL",
+            "count": "SCARD",
+        }
         return [((names[kind], key), {}) for kind, key in self.commands]
 
 
@@ -365,7 +377,6 @@ def isolated_search_view(indexer):
         if isinstance(node, ast.ClassDef) and node.name == "KVSearchView"
     )
     names = {
-        "split_query_groups",
         "parse_query_group",
         "_parse_query_group_with_not",
         "parse_query",
@@ -388,6 +399,8 @@ def isolated_search_view(indexer):
         "time": time,
         "shlex": shlex,
         "profile_search_page": profile_search_page,
+        "compile_query": compile_query,
+        "CandidatePlanner": CandidatePlanner,
         "logger": logging.getLogger(__name__),
         "KVrocksIndexer": lambda *_args: indexer,
         "db": SimpleNamespace(

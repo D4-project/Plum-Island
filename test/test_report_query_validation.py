@@ -13,6 +13,7 @@ from wtforms import Form
 from app.models import Reports
 from app.views import KVSearchView, ReportsView
 from app.utils import report_query
+from app.utils.tagrules import validate_search_query, document_matches_criteria_groups
 
 
 class ReportQueryValidationTest(unittest.TestCase):
@@ -44,6 +45,9 @@ class ReportQueryValidationTest(unittest.TestCase):
             "http_server.lk:nginx since:3 debug",
             "tag:product:valid-but-not-present",
             "tag:proto:ssh tag:proto:ssh",
+            "(domain_requested:circl.lu or net:185.194.93.0/24) tag:lang:php",
+            "(port:80 OR port:443) (http_server:nginx OR http_server:apache)",
+            '(http_title:"server (edge)" OR ip:2001:db8::1) since:3 debug',
         ]
         for query in queries:
             with self.subTest(query=query):
@@ -90,6 +94,12 @@ class ReportQueryValidationTest(unittest.TestCase):
             "port:443 since:0",
             "port:443 since:abc",
             "port:443 since:1 since:2",
+            "((port:80))",
+            "(port:80 OR)",
+            "(port:80 OR port:65536)",
+            "(net:192.0.2.0/33 OR port:80)",
+            '(port:443 NOT tag:"product:bad tag")',
+            "(port:80) since:1 since:2",
         ]
         for query in queries:
             with self.subTest(query=query), self.assertRaises(ValueError):
@@ -124,6 +134,35 @@ class ReportQueryValidationTest(unittest.TestCase):
             self.assertFalse(form.validate())
             self.assertIn("a02", form.query.errors[0])
             self.assertEqual(form.query.data, "a02:6f00:c8::/48")
+
+    def test_grouped_tag_canonicalization_keeps_syntax_and_literals(self):
+        """Normalization must not quote syntax parentheses or unquote literals."""
+        query = '(tag:Product:Nginx OR tag:Product:Apache) NOT tag:Vendor:Example http_title:"(edge)"'
+        canonical = self.validate(query)
+        self.assertEqual(
+            canonical,
+            '( tag:product:nginx OR tag:product:apache ) NOT tag:vendor:example http_title:"(edge)"',
+        )
+        self.assertTrue(self.parser.parse_query(canonical)[1])
+        self.assertEqual(self.validate(canonical), canonical)
+
+    def test_rule_compiler_shares_grouped_parser_and_normalization(self):
+        """Actual rule-import path accepts the same tree, with lowercase leaves."""
+        compiled = validate_search_query(
+            "(HTTP_SERVER:NGINX OR HTTP_SERVER:APACHE) PORT:443"
+        )
+        self.assertTrue(
+            document_matches_criteria_groups(
+                {"http_server": ["nginx"], "port": [443]}, compiled
+            )
+        )
+        self.assertFalse(
+            document_matches_criteria_groups(
+                {"http_server": ["nginx"], "port": [80]}, compiled
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "Nested parentheses"):
+            validate_search_query("((port:443))")
 
     def test_add_edit_persistence_and_failed_edit(self):
         """Save valid data in disposable SQL; invalid forms leave saved data intact."""

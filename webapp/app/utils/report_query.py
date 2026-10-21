@@ -5,6 +5,8 @@ import shlex
 
 from plum_antibodies import TagValidationError, validate_tag
 
+from .search_query import iter_criteria, tokenize_query
+
 
 def _validate_value(field, value):
     """Validate typed predicates without checking whether they match data."""
@@ -33,36 +35,11 @@ def _validate_value(field, value):
         raise ValueError(f"Invalid {field} value {value!r}: {error}") from error
 
 
-def _validate_and_placement(tokens):
-    """Reject dangling explicit AND tokens the search parser otherwise drops."""
-    predicates = [
-        token
-        for token in tokens
-        if token.lower() != "debug" and not token.lower().startswith("since:")
-    ]
-    for position, token in enumerate(predicates):
-        if token.upper() == "AND":
-            before = predicates[position - 1].upper() if position else ""
-            after = (
-                predicates[position + 1].upper()
-                if position + 1 < len(predicates)
-                else ""
-            )
-            if (
-                not before
-                or before in {"AND", "OR", "NOT"}
-                or not after
-                or after in {"AND", "OR"}
-            ):
-                raise ValueError("AND must join two search terms")
-
-
 def validate_report_query(query, parser):
     """Return a valid query, canonicalizing tags only; perform no backend I/O.
 
     ``parser`` is the existing KVSearchView parser, not a second query grammar.
-    The extra checks reject empty/ill-typed predicates and dangling AND tokens
-    which the interactive parser historically accepts.
+    The extra checks reject empty/ill-typed predicates. Boolean grammar is shared.
     """
     query = str(query or "").strip()
     groups, status, error = parser.parse_query(
@@ -77,11 +54,10 @@ def validate_report_query(query, parser):
     _, status, error = parser._extract_since_days(query)
     if not status:
         raise ValueError(error)
-    tokens = shlex.split(query)
-    _validate_and_placement(tokens)
-    if not groups or any(not group for group in groups):
+    tokens = tokenize_query(query)
+    if not groups or any(not group for group in iter_criteria(groups)):
         raise ValueError("Each OR group requires a search term")
-    for group in groups:
+    for group in iter_criteria(groups):
         for field, values in group.items():
             for value in values:
                 _validate_value(field, value)
@@ -91,9 +67,10 @@ def validate_report_query(query, parser):
     normalized = []
     changed = False
     for token in tokens:
-        if token.lower().startswith("tag:"):
-            replacement = "tag:" + validate_tag(token.split(":", 1)[1])
-            changed |= replacement != token
-            token = replacement
-        normalized.append(token)
-    return shlex.join(normalized) if changed else query
+        raw = token.raw
+        if token.kind == "TERM" and token.value.lower().startswith("tag:"):
+            replacement = "tag:" + validate_tag(token.value.split(":", 1)[1])
+            changed |= replacement != token.value
+            raw = shlex.quote(replacement)
+        normalized.append(raw)
+    return " ".join(normalized) if changed else query

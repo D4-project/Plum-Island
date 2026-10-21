@@ -123,10 +123,17 @@ help. Jinja escapes labels and query terms; `shlex.quote` preserves literal tag
 values in complete `tag:` terms. Browser toggling issues no requests and does not
 submit or reset the query, dates, result state or pagination.
 
-`parse_query` tokenizes with `shlex`, separates explicit OR groups, then calls
-`_parse_query_group_with_not`, which validates field terms with `parse_query_group`.
-Explicit AND is optional. Repeated fields are stored as lists,
-not overwritten. Parenthesized Boolean expressions are not implemented.
+`parse_query` delegates to `utils/search_query.py`: a quote-aware tokenizer splits
+unquoted parentheses, with `shlex` decoding literal tokens. The compiler calls
+`_parse_query_group_with_not` and the existing field validator `parse_query_group`.
+Explicit AND is optional and binds more tightly than OR. One grouping level is
+supported; sibling groups are allowed, nesting and `NOT (group)` are rejected.
+Literal parentheses must be quoted or escaped. Invalid/dangling AND is now rejected
+in search as well as report forms. Repeated fields remain lists, not overwritten.
+Flat queries retain their list-of-dictionaries representation. Grouped queries use
+immutable `Expression` nodes (`all`, `any`, `criteria`), not distributed OR products.
+`iter_criteria` traverses leaves for report validation and header dependencies;
+`map_criteria` normalizes leaves. Tag matching evaluates the same Boolean tree.
 
 Examples after parsing:
 
@@ -155,14 +162,15 @@ is available in the index; batching cannot recover uncollected values.
 
 ### Standalone NOT
 
-`NOT` binds to the next field term only, case-insensitively. An OR group requires
-at least one positive term, avoiding an implicit all-document universe. Missing
+`NOT` binds to the next field term only, case-insensitively. Every OR path requires
+a positive bound, which may be outside a parenthesized group, avoiding an implicit
+all-document universe. Missing
 operands, repeated NOT, NOT before AND/OR, and negated debug/since directives are
 rejected. Validate before directive/AND removal so the operand cannot silently
-shift. Parenthesized expressions are not supported. Legacy `.not`/`.nt` behavior
+shift. Legacy `.not`/`.nt` behavior
 is preserved; those suffixes cannot be combined with standalone NOT.
 
-Compiled groups keep their flat field-to-list structure. A leading `!` is an
+Criteria leaves keep their flat field-to-list structure. A leading `!` is an
 internal marker on a negated field, never a user-facing field or index key:
 
 ```text
@@ -170,13 +178,87 @@ tag:type:router and not tag:vendor:mikrotik
 => [{"tag": ["type:router"], "!tag": ["vendor:mikrotik"]}]
 ```
 
-`_get_matching_uids` evaluates the positive criteria through the existing scoped
-or unscoped path. For each negative value, it evaluates the ordinary positive
-field predicate through `get_uids_by_criteria_scoped`, restricted to remaining
-group UIDs, then subtracts that result. Repeated negative values exclude their
-union; they must not be merged into one positive AND predicate. Empty positive
-results skip exclusion reads. Union the completed groups only after exclusions.
-Do not pass `!` fields directly into the indexer or reorder positive predicates.
+`_get_matching_uids` delegates to `CandidatePlanner` (`utils/search_plan.py`).
+Positive bounds run before exclusions. Negative terms subtract their individual
+matching UID sets from remaining candidates; repeated negative values exclude
+their union. Empty candidate results skip exclusion reads. `!` fields never reach
+the indexer directly. OR branches are unioned only after their exclusions.
+
+### Candidate planning (#254)
+
+The read-only, request-local planner consumes both legacy groups and expression
+trees. It flattens/deduplicates associative operations and factors common AND terms
+out of OR branches; it never distributes groups into a Cartesian product. The
+grouped example `(domain_requested:circl.lu OR net:185.194.93.0/24) tag:lang:php`
+and its expanded form evaluate the shared PHP predicate once.
+
+Planning reads existing `SCARD {field}:{value}` counts, once per distinct usable
+key. Multiple counts use a nontransactional pipeline; no extra index, persistent
+counter, write, migration or reindex is introduced. All costs, including this
+pipeline, belong to the request and appear in `debug` command totals. Exact terms
+have global count estimates; `/16`–`/24` CIDRs use their indexed scope, narrower
+CIDRs use the `/24` parent count as an upper bound, broader networks and modifiers
+have unknown estimates. AND estimates use the smallest known positive count;
+OR sums estimates only when all are known (overlap can overestimate).
+Counts only select evaluation order, never skip a matching predicate solely
+because its count was zero. Concurrent index changes retain existing non-snapshot
+semantics. A backend failure propagates instead of producing partial results.
+
+Conjunctions evaluate bounded positive operands first, known selective estimates
+before unknown ones. Exclusions operate only on those candidates. Repeated direct
+predicates cache UID sets only within this execution's original scope, not a
+restricted branch. Current date windows, UID-level matching, result sorting,
+pagination and export/history scopes are unchanged. No auth or route changes.
+
+Compatibility exceptions are deliberate: IP/net terms within each legacy flat
+criteria leaf form a union. Parenthesized operands intersect normally. Positive
+criteria containing `http_headval` stay an opaque legacy leaf, evaluated against
+the original request scope with their original field order; this preserves the
+order-sensitive header fallback. Generic substring/prefix and legacy `.not`/`.nt`
+matching delegate to the existing helpers. Neither modifier scans nor large exact
+set transfers disappear just because the selected seed is smaller.
+
+`debug.planner` contains planning milliseconds (including counters), root and
+predicate estimates, anonymous predicate IDs, field names, evaluation order,
+scope sizes, result sizes and cache/legacy flags; no searched values or UIDs.
+Debug on/off performs identical searches and backend commands. This planner is
+experimental for performance: local comparisons do not substitute for the
+representative deployment gate below, including concurrent page responsiveness.
+
+#### Local read-only comparison, 2026-10-21
+
+Development Kvrocks: 1,386,916 indexed UIDs; baseline matcher from
+`06972ba8d462a537aaeb6b58815d1c6165d084df`. Three runs per variant in alternating
+order, existing client diagnostics enabled for all variants. No index writes,
+cache flush or application startup. Cache state was uncontrolled/warm, not a
+cold-cache benchmark. Dates: 2026-06-16 14:43:07 through 2026-09-14 14:43:07 UTC.
+
+| Workload | Baseline median | Planned median | Equivalent results |
+| --- | --- | --- | --- |
+| Issue #254 example, unscoped matcher | 0.687 s | 0.249 s | 544 UIDs |
+| Same matcher within the 90-day last_seen scope | 1.136 s | 0.516 s | 384 UIDs |
+| `http_server.lk:nginx tag:lang:php`, scoped matcher | 1.054 s | 1.000 s | 9,455 UIDs |
+| `http_server:apache tag:product:plum254-nonexistent` | 0.306 s | 0.001 s | Empty |
+| Issue example, page executor with a 90-day window | 3.274 s | 2.540 s | 19 IPs |
+| Issue example, full-search/export query executor | 6.585 s | 6.151 s | 19 IPs |
+
+For the issue example, the old expanded query read 259,331 SMEMBERS items in
+six calls. Both planned expanded and parenthesized forms read 88,735 in four
+calls plus four SCARD counts. Planning took approximately 1–2 ms in these local
+matcher runs. The scoped nginx query still performed 78 SCAN and 151 SMEMBERS
+calls: this planner does not remove modifier scans. The missing exact tag stopped
+before downloading Apache's 119,355 UID members.
+
+Page comparisons included matching UID sets, IP order, timestamps, requested
+hostnames and pagination; nondeterministic UID order within a set was ignored.
+Median Python CPU for the page was 2.494 s versus 1.924 s; full search was
+4.933 s versus 4.564 s. The consumer benchmark process peaked at 425 MiB RSS
+across all sequential variants; this is not a per-variant memory comparison.
+Reply volume is measured in items, not wire bytes. These runs did not measure
+browser first-paint/progress, PDF/file generation, cold caches, per-variant peak
+memory, or concurrent requests. The example returns fewer than 100 IPs; larger
+page continuations are covered functionally by tests, not this live timing sample.
+Do not generalize these local timings into a production speedup guarantee.
 
 This is UID-level exclusion. A non-excluded matching UID can retain an IP whose
 other scans carry the excluded value. Missing excluded fields also pass. The
@@ -302,7 +384,7 @@ when modifying search; no quantitative speedup is claimed without measurements.
 | Mechanism and code location | Why it helps | Limit / invariant |
 | --- | --- | --- |
 | Reverse sets, `KVrocksIndexer.add_documents_batch` and exact lookups | Resolve known values directly to UIDs without parsing full scan documents | Search `{field}:{value}`, not forward `{field}s:{uid}` sets |
-| IP/network or exact seed, `get_uids_by_criteria` | Establish candidates before intersecting other conditions | Seed selection follows current control flow, not cardinality estimates; do not reorder special cases silently |
+| Cardinality planning, `CandidatePlanner`; legacy helpers in `get_uids_by_criteria` | Select positive seeds with existing SCARD counts; factor common predicates | Counts are hints, not results; preserve legacy IP/net union and opaque header groups |
 | Indexed `/16`–`/24` networks, `_get_uids_for_net_value` | Reuse precomputed network scopes rather than inspect every document IP | Broad networks still require many indexed scopes; preserve final IP checks outside indexed masks |
 | Sorted-set dates, `get_uids_by_time_range` / `get_uids_by_last_seen_range` | Select timestamp ranges through indexes instead of reading every `doc:{uid}` | Full search still evaluates unscoped criteria before intersecting dates; only page search applies a time UID scope up front |
 | Adaptive windows, `execute_search_page` and `runSearchPage` | Start with recent data; skip sparse history in progressively larger windows | Windows grow 1, 2, 4, ... days up to 4096, retain partially consumed windows, and reset after a completed window with hits |
@@ -481,10 +563,12 @@ the first window also became faster despite reading no history in either run.
 Cache, concurrent work and client/backend latency were not isolated. Preserve
 that distinction when quoting these results.
 
-Criterion ordering is still the user's order on the scoped path, after IP/network
+At the time of this scoped-timestamp benchmark, criterion ordering was still the
+user's order on the scoped path, after IP/network
 handling. Putting the exact PHP tag first avoided all 78 SCAN calls in the empty
 initial window; with nginx first, those calls still occurred. The second window
-retained 78 SCAN calls in either order. No automatic reordering was implemented.
+retained 78 SCAN calls in either order. That fix implemented no automatic reordering;
+the separate #254 candidate planner described above now introduces it.
 
 The Apache report demonstrates remaining costs after the fix:
 
@@ -512,9 +596,9 @@ pipeline per candidate IP. Apache therefore retained 2,750 direct SMEMBERS calls
 limit does not cap candidate metadata work. Fewer HGETALL commands do not remove
 these waits, global field scans or large set transfers.
 
-Deferred ideas remain separate work: exact-filter ordering, choosing between
-reverse indexes and per-UID field values, and resumable work inside a time window.
-None is part of the scoped-timestamp fix. Preserve the current date semantics,
+Exact-filter ordering is now handled by #254. Choosing between reverse indexes
+and per-UID field values, and resumable work inside a time window remain separate
+work. None is part of the scoped-timestamp fix. Preserve the current date semantics,
 matching, ordering and pagination until another change is explicitly designed
 and validated against the regression and performance checks in this guide.
 

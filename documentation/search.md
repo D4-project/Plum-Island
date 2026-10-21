@@ -64,6 +64,34 @@ field.modifier:value
 
 Terms inside one group are combined with `AND` by default. Explicit `OR` can be used between groups.
 
+### Parenthesized alternatives
+
+Use one level of parentheses to apply a shared filter to several alternatives:
+
+```text
+(domain_requested:circl.lu OR net:185.194.93.0/24 OR net:185.194.94.0/24) AND tag:lang:php
+```
+
+This is equivalent to repeating `tag:lang:php` in each OR branch. AND binds more
+tightly than OR. Multiple sibling groups work, for example
+`(port:80 OR port:443) (http_server:nginx OR http_server:apache)`.
+Nested groups, empty groups, unmatched parentheses and `NOT (group)` are rejected.
+Quote literal parentheses in values: `http_title:"Welcome (portal)"`.
+The same grammar applies to report validation and tag-rule queries.
+
+Legacy flat queries retain their special IP/network behavior: `ip:A net:B`
+unions those address scopes before applying other filters. Explicit groups are
+Boolean operands: `(ip:A) (net:B)` intersects them. Use explicit OR for new
+alternative address queries to make intent clear.
+
+Search uses existing per-value Kvrocks set counts to choose selective positive
+filters first and factors shared filters without expanding every combination.
+Counters are ordering hints, not cached results: a zero count still requires
+evaluating the predicate. No migration or index rebuild is required.
+Substring/prefix estimates remain unknown; these still scan indexed field keys.
+The planner's performance remains experimental pending representative deployment
+benchmarks; a smaller seed does not avoid all large set reads.
+
 Examples:
 
 ```text
@@ -118,8 +146,9 @@ port:443 AND NOT http_server.lk:apache
 
 `AND`, `OR` and `NOT` are case-insensitive. `AND` remains optional. `NOT`
 applies only to the next term, including its supported exact/prefix/substring
-modifier. Each OR group must contain a positive term; `NOT tag:vendor:mikrotik`
-alone is rejected. Parenthesized groups and repeated `NOT NOT` are not supported.
+modifier. Every OR path must have a positive term, possibly supplied outside a
+parenthesized group; `NOT tag:vendor:mikrotik` alone is rejected.
+Repeated `NOT NOT` and negating an entire group are not supported.
 `NOT` cannot target `since:` or `debug` directives or legacy `.not`/`.nt` terms.
 Quoted field values such as `http_title:"NOT AND OR"` remain literal values.
 
@@ -376,6 +405,14 @@ search controls. **Download JSON** saves a report for troubleshooting. The repor
 includes backend stage times, Kvrocks command counts and reply sizes in items,
 window/matching/IP counts, browser request times and time to first results inserted
 into the page. Keep the query and selected dates separately when comparing runs.
+
+The `planner` object records planning time (including count reads), estimated
+candidate counts, anonymous predicate IDs and evaluation order, scope/result
+sizes, and reused predicates. `null` estimates mean unknown. Counter reads appear
+under Kvrocks `SCARD` totals even when diagnostics are disabled; enabling `debug`
+does not add search commands. Counts are global per indexed value, not per date
+window. HTTP-header groups retain their legacy evaluation path and are marked
+`legacy` in planner steps. Their internal seed is not reordered.
 
 `debug` is case-insensitive and does not change filters, dates, ordering or
 pagination. `http_title:debug` still searches for that value; `debug` alone is not a

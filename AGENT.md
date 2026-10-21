@@ -490,6 +490,10 @@ The README-level search contract currently includes:
 - abbreviated modifiers `lk` for `like` and `bg` for `begin`
 - implicit `AND` inside one query group
 - explicit `OR` between query groups
+- one level of parentheses, sibling groups allowed; AND binds before OR
+- shared compiler in `utils/search_query.py`, used by search, reports and tag rules
+- read-only `utils/search_plan.py` uses per-value SCARD hints, not new stored counters;
+  preserve flat IP/net unions, header fallback semantics and debug command parity
 
 Keep `AGENT.md`, `readme.md`, parser output, and `KVSearchView.parse_query()` aligned. If one changes without the others, the analyst-facing search model becomes misleading.
 

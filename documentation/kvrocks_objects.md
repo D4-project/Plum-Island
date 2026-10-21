@@ -281,6 +281,14 @@ count,value
 
 `count` is the cardinality of `{field}:{value}`, i.e. the number of UIDs currently attached to that value.
 
+The search candidate planner reuses `SCARD` on these reverse sets to order exact
+predicates and estimate indexed CIDR scopes. These are per-value counts, not one
+count per field type or a new stored statistics object. Counts are global (not
+date-scoped), read per execution and used only as ordering hints. Modifiers have
+unknown estimates; `/24` parent counts bound narrower CIDRs. No schema migration,
+new counter maintenance or index rebuild is needed. See
+[candidate planning](sysinternal/search_engine.md#candidate-planning-254).
+
 ## Notes on the old store document
 
 Older raw MONITOR captures are not a source of truth for the current schema.

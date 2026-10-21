@@ -77,10 +77,12 @@ from .models import (
     is_valid_http_header_name,
 )
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
-from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
+from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
 from .utils.kvrocks import KVrocksIndexer
 from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
+from .utils.search_query import compile_query, tokenize_query
+from .utils.search_plan import CandidatePlanner
 from .utils.report_query import validate_report_query
 from .utils.network_enrichment import enrichment_due, refresh_target_network
 from .utils.ip_whois import WhoisLookupError, lookup_domain_whois, lookup_network_whois
@@ -761,7 +763,7 @@ class KVSearchView(BaseView):
         Extract one optional `since:N` directive from a user query.
         """
         try:
-            parts = shlex.split(query or "")
+            parts = [token.value for token in tokenize_query(query)]
         except ValueError as error:
             return None, False, f"Invalid query syntax: {error}"
 
@@ -1108,39 +1110,13 @@ class KVSearchView(BaseView):
             for header in headers
         ]
 
-    def _get_matching_uids(self, indexer, criteria_groups, scoped_uids=None):
-        """
-        Resolve OR query groups into one UID set before time slicing.
-        """
-        matching_uids = set()
-        for criteria in criteria_groups:
-            criteria = lowercase_dict(criteria)
-            logger.debug(criteria)
-            positive = {
-                field: values
-                for field, values in criteria.items()
-                if not field.startswith("!")
-            }
-            if scoped_uids is None:
-                group_uids = set(indexer.get_uids_by_criteria(positive))
-            else:
-                group_uids = set(
-                    indexer.get_uids_by_criteria_scoped(positive, scoped_uids)
-                )
-            for field, values in criteria.items():
-                if not group_uids:
-                    break
-                if not field.startswith("!"):
-                    continue
-                for value in values:
-                    excluded = indexer.get_uids_by_criteria_scoped(
-                        {field[1:]: [value]}, group_uids
-                    )
-                    group_uids.difference_update(excluded)
-                    if not group_uids:
-                        break
-            matching_uids.update(group_uids)
-        return matching_uids
+    def _get_matching_uids(
+        self, indexer, criteria_groups, scoped_uids=None, diagnostics=None
+    ):
+        """Plan equivalent UID predicates using request-local cardinalities."""
+        return CandidatePlanner(
+            indexer, criteria_groups, scoped_uids, diagnostics
+        ).execute()
 
     @staticmethod
     def _get_export_jobs_folder():
@@ -1484,31 +1460,6 @@ class KVSearchView(BaseView):
                     error=str(error),
                 )
 
-    def split_query_groups(self, query):
-        """
-        Split a query into AND groups separated by explicit OR tokens.
-        """
-        if isinstance(query, (list, tuple)):
-            parts = list(query)
-        else:
-            parts = shlex.split(query or "")
-        if not parts:
-            return [[]]
-
-        groups = []
-        current_group = []
-        for part in parts:
-            normalized_part = part.upper()
-            if normalized_part == "OR":
-                groups.append(current_group)
-                current_group = []
-            elif normalized_part == "AND":
-                continue
-            else:
-                current_group.append(part)
-        groups.append(current_group)
-        return groups
-
     @staticmethod
     def _parse_http_headval_term(part):
         """
@@ -1670,7 +1621,7 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
-    def _parse_query_group_with_not(self, parts):
+    def _parse_query_group_with_not(self, parts, allow_negative_only=False):
         """Compile unary NOT terms separately from the existing positive AND group."""
         positive_parts = []
         negative_parts = []
@@ -1683,7 +1634,7 @@ class KVSearchView(BaseView):
                 negative_parts.append(negative)
             else:
                 positive_parts.append(part)
-        if negative_parts and not positive_parts:
+        if negative_parts and not positive_parts and not allow_negative_only:
             return {}, False, "Each OR group with NOT requires a positive search term"
         result, status, error = self.parse_query_group(positive_parts)
         if not status:
@@ -1705,66 +1656,8 @@ class KVSearchView(BaseView):
     def parse_query(
         self, query, allow_since_directive=False, allow_debug_directive=False
     ):
-        """
-        Parse the full query, supporting explicit OR between AND groups.
-        """
-        if not (query or "").strip():
-            return [], False, "Empty query"
-
-        try:
-            query_parts = shlex.split(query or "")
-        except ValueError as error:
-            return [], False, f"Invalid query syntax: {error}"
-
-        # Validate before stripping AND, debug or since directives: they cannot
-        # silently become operands or move NOT onto a different search term.
-        for position, part in enumerate(query_parts):
-            if part.upper() != "NOT":
-                continue
-            operand = (
-                query_parts[position + 1] if position + 1 < len(query_parts) else ""
-            )
-            if (
-                not operand
-                or operand.upper() in {"AND", "OR", "NOT", "DEBUG"}
-                or operand.lower().startswith(self.SINCE_PREFIX)
-            ):
-                return [], False, "NOT must be followed by a field:value term"
-
-        if allow_debug_directive:
-            query_parts = [part for part in query_parts if part.lower() != "debug"]
-
-        if allow_since_directive:
-            filtered_parts = []
-            for part in query_parts:
-                if str(part).lower().startswith(self.SINCE_PREFIX):
-                    continue
-                filtered_parts.append(part)
-            query_parts = filtered_parts
-
-        if not query_parts:
-            return [], False, "Empty query"
-
-        try:
-            query_groups = self.split_query_groups(query_parts)
-        except ValueError as error:
-            return [], False, f"Invalid query syntax: {error}"
-        parsed_groups = []
-        error_messages = []
-
-        for idx, group in enumerate(query_groups, start=1):
-            if not group:
-                error_messages.append(f"Empty query group around OR at segment {idx}")
-                continue
-
-            criteria, status, msg_error = self._parse_query_group_with_not(group)
-            if not status:
-                error_messages.append(msg_error or f"Invalid query group {idx}")
-                continue
-            parsed_groups.append(criteria)
-
-        status = len(error_messages) == 0
-        return parsed_groups, status, " | ".join(error_messages)
+        """Compile flat queries or one-level parentheses without backend I/O."""
+        return compile_query(self, query, allow_since_directive, allow_debug_directive)
 
     def execute_search(self, query, from_ts=None, to_ts=None):
         """
@@ -1936,7 +1829,10 @@ class KVSearchView(BaseView):
                 _diagnostics.window.update(from_ts=current_from, to_ts=current_to)
                 _diagnostics.counts["window_uids"] = len(window_uids)
             page_uids = self._get_matching_uids(
-                indexer, criteria_groups, scoped_uids=window_uids
+                indexer,
+                criteria_groups,
+                scoped_uids=window_uids,
+                diagnostics=_diagnostics,
             )
             if _diagnostics:
                 _diagnostics.checkpoint("criteria")

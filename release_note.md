@@ -1,3 +1,10 @@
+# Unreleased
+
+- Search supports single-level parentheses with shared report/tag-rule validation
+  (#254). Candidate planning reuses per-value Kvrocks counters, factors shared
+  filters and exposes anonymous estimates/order in `debug`; no migration required.
+  Performance remains experimental pending representative deployment benchmarks.
+
 # Plum Island - 20 Years Hack.lu Release - v0.2610.0
 
 Released on **2026-10-14**. Git tag: **v0.2610.0**.

@@ -54,6 +54,10 @@ Choose domain fields carefully:
   an HTTP redirect or a certificate. It does not imply that domain was the target.
 
 Separate alternatives with `OR`; terms within a group use implicit `AND`.
+One level of parentheses can share filters across alternatives, for example
+`(domain_requested:example.org OR net:192.0.2.0/24) tag:lang:php`.
+Nested groups and `NOT (group)` are rejected on save. Validation uses the same
+compiler as search; it does not contact search backends.
 Always prefix an IP or network with its keyword, including IPv6
 (`net:2001:db8::/48` is a syntax example, not a public scan target).
 
