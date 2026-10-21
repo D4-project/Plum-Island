@@ -83,6 +83,7 @@ from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
 from .utils.search_query import compile_query, tokenize_query
 from .utils.search_plan import CandidatePlanner
+from .utils.resolved_export import write_resolved_csv
 from .utils.report_query import validate_report_query
 from .utils.network_enrichment import enrichment_due, refresh_target_network
 from .utils.ip_whois import WhoisLookupError, lookup_domain_whois, lookup_network_whois
@@ -122,6 +123,7 @@ from . import appbuilder, db
 logger = logging.getLogger("flask_appbuilder")
 EXPORT_JOB_STATES = {}
 EXPORT_JOB_STATES_LOCK = threading.Lock()
+RESOLVED_EXPORT_SLOTS = threading.BoundedSemaphore(2)
 SEARCH_SESSION_STATES = {}
 SEARCH_SESSION_STATES_LOCK = threading.Lock()
 REPORT_PREVIEW_STATES = {}
@@ -1461,6 +1463,65 @@ class KVSearchView(BaseView):
                 )
 
     @staticmethod
+    def _run_resolved_export_job(job_id):
+        """Enrich the full filtered IP set, with a bounded worker and atomic file."""
+        tmp_path = None
+        try:
+            with app.app_context():
+                state = KVSearchView._get_job_state(job_id)
+                if not state:
+                    return
+                KVSearchView._set_job_state(job_id, status="running", error="")
+                results = KVSearchView().execute_search(
+                    state["query"], state.get("from_ts"), state.get("to_ts")
+                )
+                if not results["status"]:
+                    KVSearchView._set_job_state(
+                        job_id, status="error", error="Invalid search query"
+                    )
+                    return
+                total = len(results["results"])
+                KVSearchView._set_job_state(job_id, total_uids=total, processed_uids=0)
+                file_path = os.path.join(
+                    KVSearchView._get_export_jobs_folder(), f"{job_id}.csv"
+                )
+                tmp_path = file_path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8", newline="") as output:
+                    write_resolved_csv(
+                        output,
+                        results,
+                        app.config,
+                        progress=lambda done: KVSearchView._set_job_state(
+                            job_id, processed_uids=done
+                        ),
+                        warning=lambda message: KVSearchView._add_job_warning(
+                            job_id, message
+                        ),
+                    )
+                os.replace(tmp_path, file_path)
+                tmp_path = None
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="done",
+                    processed_uids=total,
+                    file_path=file_path,
+                    finished_at=utcnow_iso(),
+                )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # Never expose upstream credentials, raw query or exception text.
+            logger.error("Resolved export failed (%s)", type(error).__name__)
+            KVSearchView._set_job_state(
+                job_id, status="error", error="Resolved export failed; please retry."
+            )
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    logger.warning("Temporary resolved export could not be removed")
+            RESOLVED_EXPORT_SLOTS.release()
+
+    @staticmethod
     def _parse_http_headval_term(part):
         """
         Parse http_headval:header[.modifier]:value query syntax.
@@ -2325,6 +2386,115 @@ class KVSearchView(BaseView):
         )
         worker.start()
         return jsonify({"job_id": job_id})
+
+    @expose("/export_resolved_start", methods=["POST"])
+    @has_access
+    def export_resolved_start(self):
+        """Create an owner-bound CSV export without queueing unbounded DNS work."""
+        try:
+            validate_csrf(request.headers.get("X-CSRFToken"))
+        except ValidationError:
+            return jsonify(error="Invalid CSRF token"), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or not isinstance(payload.get("q"), str):
+            return jsonify(error="Missing query"), 400
+        query = payload["q"].strip()
+        _, valid, error = self.parse_query(query, True, True)
+        if not valid:
+            return jsonify(error=error or "Invalid query"), 400
+        time_range, valid, error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts"), query=query
+        )
+        if not valid:
+            return jsonify(error=error or "Invalid time range"), 400
+        owner = getattr(current_user, "id", None)
+        if owner is None:
+            return jsonify(error="Forbidden"), 403
+        if not RESOLVED_EXPORT_SLOTS.acquire(blocking=False):
+            return jsonify(error="Resolved exports busy; retry later"), 503
+        job_id = str(uuid.uuid4())
+        with EXPORT_JOB_STATES_LOCK:
+            if any(
+                state.get("export_type") == "resolved_csv"
+                and state.get("owner_user_id") == owner
+                and state.get("status") in {"queued", "running"}
+                for state in EXPORT_JOB_STATES.values()
+            ):
+                RESOLVED_EXPORT_SLOTS.release()
+                return (
+                    jsonify(
+                        error="A resolved export is already running for your account"
+                    ),
+                    409,
+                )
+            EXPORT_JOB_STATES[job_id] = {
+                "job_id": job_id,
+                "export_type": "resolved_csv",
+                "owner_user_id": owner,
+                "status": "queued",
+                "query": query,
+                **time_range,
+                "created_ts": time.time(),
+                "processed_uids": 0,
+                "total_uids": 0,
+                "progress_percent": 0.0,
+                "file_path": None,
+                "error": "",
+                "warnings": [],
+                "warning_count": 0,
+                "finished_at": None,
+            }
+        try:
+            threading.Thread(
+                target=self._run_resolved_export_job, args=(job_id,), daemon=True
+            ).start()
+        except RuntimeError:
+            RESOLVED_EXPORT_SLOTS.release()
+            self._set_job_state(
+                job_id, status="error", error="Unable to start resolved export"
+            )
+            return jsonify(error="Unable to start resolved export"), 503
+        return jsonify(job_id=job_id)
+
+    @expose("/export_resolved_status")
+    @has_access
+    def export_resolved_status(self):
+        """Only the creating user may inspect CSV progress or warnings."""
+        state = self._get_owned_job(request.args.get("job_id", ""))
+        if state is None:
+            return jsonify(error="Unknown export job"), 404
+        if state is False:
+            return jsonify(error="Forbidden"), 403
+        if state.get("export_type") != "resolved_csv":
+            return jsonify(error="Wrong export type"), 409
+        response = jsonify(self._serialize_job_state(state))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @expose("/export_resolved_download")
+    @has_access
+    def export_resolved_download(self):
+        """Download the completed CSV, enforcing ownership and export type."""
+        state = self._get_owned_job(request.args.get("job_id", ""))
+        if state is None:
+            return make_response("Unknown export job", 404)
+        if state is False:
+            return make_response("Forbidden", 403)
+        if state.get("export_type") != "resolved_csv":
+            return make_response("Wrong export type", 409)
+        if state["status"] != "done" or not state.get("file_path"):
+            return make_response("Export not ready", 409)
+        if not os.path.isfile(state["file_path"]):
+            return make_response("Export file missing", 410)
+        response = send_file(
+            state["file_path"],
+            as_attachment=True,
+            download_name="resolved_ips.csv",
+            mimetype="text/csv",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @expose("/export_full_status")
     @has_access

@@ -271,6 +271,54 @@ unrelated historical documents are excluded before those reads. IP detail pages
 retain history within the selected requested-hostname group.
 Exports run on the full filtered result set, not only on the currently visible results.
 
+### Resolved CSV export
+
+The network icon beside **Download IP List** and **Download JSON** starts
+**Download resolved (CSV)**. The existing progress modal tracks the asynchronous
+export and downloads `resolved_ips.csv` when complete.
+
+The UTF-8 CSV has four columns, one row per distinct matching IP:
+
+```csv
+ip,last seen,ptr,pdns
+192.0.2.10,2026-09-14 14:43:07,ptr.example.org,"one.example.org,two.example.org"
+```
+
+- `last seen` is the latest indexed scan observation among the query's matching
+  documents, formatted as `YYYY-MM-DD HH:mm:ss` in UTC. Missing dates stay empty.
+- `ptr` contains current reverse-DNS answers from the controller's configured
+  resolver, not historical PTR names from scan JSON. Multiple answers share one
+  comma-separated cell. IPv4 and IPv6 are supported.
+- `pdns` contains deduplicated, sorted hostnames from CIRCL A/AAAA records tied to
+  that IP. Search dates select the exported IPs/scans, not PDNS observation dates;
+  all available PDNS history returned by the service is considered. These names
+  are not actively resolved or proof of a current association.
+
+The export covers the full search with its selected dates, using interval-overlap
+semantics like other full exports; it is not limited to the visible page.
+Rows sort numerically by IP (IPv4 first). Values are CSV-quoted as needed and
+spreadsheet formula prefixes are neutralized.
+
+Configure `PASSIVE_USER` and `PASSIVE_PWD` for CIRCL Passive DNS. If missing,
+PTR/date export still works with empty PDNS cells and an explicit warning.
+NXDOMAIN/no PTR answer produces an empty PTR cell. Timeouts, upstream errors,
+invalid responses or oversized PDNS responses produce warnings and empty affected
+cells, never a missing IP row. The modal stays open when warnings need review.
+
+Workers resolve sequentially per export, with at most two resolved exports per
+web process and one active export per account. DNS lifetime is five seconds;
+PDNS uses connect/read timeouts of 5/15 seconds and an 8 MiB response limit.
+An oversized response is rejected, not silently truncated to a hostname limit.
+Only fixed CIRCL HTTPS requests and DNS PTR queries are made; no scanned web
+service is contacted. Large exports can take time.
+
+Start/status/download routes require their own FAB permissions plus export
+ownership; start also requires CSRF. Synchronize the bundled Read Only role using
+`tools/initial_setup.py --roles-only` (also invoked by the update/deployment flow).
+Custom roles need `can_export_resolved_start`, `can_export_resolved_status` and
+`can_export_resolved_download` on `KVSearchView`. No schema migration or reindex
+is needed. Files use the existing export folder and retention cleanup.
+
 The **Results of last scans** panel on a target detail page uses the target's
 oldest displayed scan timestamp through the current time. It renders IPs first,
 then retrieves their tag badges asynchronously in the same 200-IP batches as

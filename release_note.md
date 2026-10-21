@@ -1,5 +1,9 @@
 # Unreleased
 
+- Structured search adds an asynchronous resolved CSV export: IP, last scan seen
+  (UTC), current PTR and associated Passive DNS names. Includes IPv6, lookup
+  warnings, protected owner-bound downloads and spreadsheet-safe CSV cells.
+
 - Search supports single-level parentheses with shared report/tag-rule validation
   (#254). Candidate planning reuses per-value Kvrocks counters, factors shared
   filters and exposes anonymous estimates/order in `debug`; no migration required.

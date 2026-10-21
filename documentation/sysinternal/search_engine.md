@@ -321,6 +321,25 @@ The bounds are inclusive. Results group by IP and sort by descending maximum see
 timestamp, then IP string. Full export jobs use the complete filtered set, not the
 currently rendered page. Full JSON exports fetch documents from Meilisearch.
 
+Resolved CSV exports also call `execute_search` for the full overlap scope.
+`_run_resolved_export_job` passes matching IPs and `timestamps[ip].max_seen` to
+`utils/resolved_export.py`; it does not fetch Meilisearch documents or alter
+indexes. The four CSV columns are `ip`, `last seen` (UTC), `ptr` (current DNS),
+and `pdns` (deduplicated CIRCL A/AAAA names associated with the IP). Enrichment
+dates are independent from the scan-selection interval. PDNS credentials, fixed
+upstream URL, disabled active queries, redirect refusal, response-size/read-time
+bounds and CSV injection protection live in this helper. Lookup failures retain
+rows and use the existing bounded job warnings/progress UI.
+
+The three `export_resolved_*` routes have separate FAB permissions; POST start
+validates CSRF, syntax and dates before starting work. Jobs are owner-bound,
+status/download reject wrong export types, and downloads expose only completed
+atomic files. A per-process semaphore permits two workers; the job-state lock
+also enforces one active resolved export per owner. Worker failures release slots
+and remove incomplete files without returning exception details. The existing
+export artifact retention task covers CSV files. Role seeds are updated in
+`webapp/security_roles/read_only.yaml`; no database schema change.
+
 `execute_search_page` uses a different selection:
 
 1. Select an inclusive `last_seen` window ending at the current cursor.

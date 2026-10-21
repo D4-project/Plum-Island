@@ -221,7 +221,8 @@ The structured search page is the more operational one:
 - it normalizes the selected date range to `00:00:00` on the start date and `23:59:59` on the end date
 - it renders only the first 100 IPs at a time for responsiveness and resumes with `Load more`
 - it uses an adaptive backward scan by `last_seen`: start at 1 day, grow to 2/4/8/... days when empty, then fall back to 1 day once hits are found
-- it can export the matching IP list and the full matching JSON set
+- it can export the matching IP list, full matching JSON set, and resolved CSV
+  (`ip`, `last seen`, `ptr`, `pdns`); all use full overlap scope, not visible rows
 
 So the split is:
 

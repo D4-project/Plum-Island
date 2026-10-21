@@ -72,6 +72,15 @@ function downloadSearchDebug() {
 
 const TAG_SUGGEST_DEBOUNCE_MS = 120;
 const EXPORT_CONFIGS = {
+    resolved: {
+        title: 'Preparing Resolved Export',
+        counterUnit: 'IPs',
+        initialText: 'Finding matching IPs...',
+        runningText: 'Resolving PTR and collecting Passive DNS...',
+        startUrl: '/kvsearchview/export_resolved_start',
+        statusUrl: '/kvsearchview/export_resolved_status',
+        downloadUrl: '/kvsearchview/export_resolved_download'
+    },
     ips: {
         title: 'Preparing IP Export',
         counterUnit: 'IPs',
@@ -394,6 +403,16 @@ function setDownloadButtonState(enabled) {
     fullButton.innerHTML = '<i class="fa-solid fa-file-arrow-down" aria-hidden="true"></i>';
     fullButton.addEventListener('click', startFullExport);
     container.appendChild(fullButton);
+
+    const resolvedButton = document.createElement('button');
+    resolvedButton.type = 'button';
+    resolvedButton.id = 'download-resolved-btn';
+    resolvedButton.className = 'btn btn-outline-secondary w-100 mt-2';
+    resolvedButton.title = 'Download resolved (CSV)';
+    resolvedButton.setAttribute('aria-label', 'Download resolved (CSV)');
+    resolvedButton.innerHTML = '<i class="fa-solid fa-network-wired" aria-hidden="true"></i>';
+    resolvedButton.addEventListener('click', () => startExport(EXPORT_CONFIGS.resolved));
+    container.appendChild(resolvedButton);
 }
 
 function setSearchLoading(isLoading, showSpinner = true) {
@@ -1217,7 +1236,8 @@ async function startExport(config) {
         const res = await fetch(config.startUrl, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.getElementById('download-buttons-container').dataset.csrf
             },
             body: JSON.stringify(payload)
         });
@@ -2110,7 +2130,7 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
         <div class="search-toolbar-actions">
             <button type="button" id="search-btn" class="btn btn-primary" onclick="search()">Search</button>
-            <div id="download-buttons-container" class="mt-2"></div>
+            <div id="download-buttons-container" class="mt-2" data-csrf="{{ csrf_token() }}"></div>
         </div>
     </div>
 </div>
