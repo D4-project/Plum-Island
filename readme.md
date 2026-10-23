@@ -109,7 +109,7 @@ See [Reports documentation](documentation/reports.md) for setup, query semantics
 - [v0.2610.0 release notes](release_note.md)
 - [Installation](documentation/installation.md)
 - [Network requirements and data flows](documentation/network.md)
-- [Migration to v0.2610.0 — choose your installed version](documentation/migration.md)
+- [Migration guides — published releases and current main](documentation/migration.md)
 - [Certificate CN/DN upgrade](migration_full_cert.md)
 - [Search](documentation/search.md)
 - [Discovery API and Plum-Virion MCP](documentation/discovery.md)

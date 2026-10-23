@@ -234,6 +234,18 @@ So the split is:
 
 The structured search capability is part of the product, not an auxiliary admin feature. The README presents these fields as the way to explore collected exposure data.
 
+### Search tag catalogue
+
+The five search helper columns show tags present in indexed scans, globally
+independent of query/dates. Both document ingestion and tag-only replacement
+maintain the Kvrocks `tag_catalogue` candidate set. Read names and positive
+`SCARD tag:{value}` counts only; never scan keys, load UID memberships or query
+SQL rules per page. Cache for 60 seconds per worker/backend with a refresh lock.
+Keep zero-count candidates to avoid races with ingestion; full tag flush/rebuild
+clears the set, while rebuilds preserving tags retain it. Seed existing indexes
+with `tools/backfill_tag_catalogue.py`, not an automatic request-time scan.
+Discovery API tag discovery retains its separate active-rule catalogue contract.
+
 ### IP detail view
 
 The structured search page links each IP to `/ip/<ip>`. That page is not a raw document dump; it is a cumulative history view for one IP across all matching stored scans.

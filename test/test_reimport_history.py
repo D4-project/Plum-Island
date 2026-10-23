@@ -76,8 +76,8 @@ class MemoryStore:
     def zadd(self, key, mapping):
         self.data.setdefault(key, {}).update(mapping)
 
-    def sadd(self, key, value):
-        self.data.setdefault(key, set()).add(value)
+    def sadd(self, key, *values):
+        self.data.setdefault(key, set()).update(values)
 
     def srem(self, key, value):
         self.data.setdefault(key, set()).discard(value)

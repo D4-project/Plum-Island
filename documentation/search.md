@@ -46,10 +46,13 @@ Meilisearch via `IN_MEILI_*` and updates only the `port_protocol` index in
 ## Query syntax
 
 The small swap icon at the right of the keyword table header switches between
-keyword help (the default) and a SQL rule-tag catalogue. Its five columns are
-Proto, Type, Products, Vendors and Vulns. Tags come from active rules, are
-deduplicated and sorted, and need not already occur in indexed scans. Reload the
-page to refresh this catalogue after changing rules.
+keyword help (the default) and a catalogue of tags present in indexed scans.
+Its five columns are Proto, Type, Products, Vendors and Vulns. Tags are
+deduplicated and sorted; a tag must have at least one indexed document to appear.
+This list is global, independent of the query and date range. It is cached for
+60 seconds per web worker; reload after that interval to see recent changes.
+For an existing index, initialize it once with
+`.venv/bin/python tools/backfill_tag_catalogue.py` (see [tools](tools.md#backfill_tag_cataloguepy)).
 
 Every tag is clickable (also Enter/Space): for example `vendor:ovh` appends
 `tag:vendor:ovh` to the current query. Keyword controls still append `keyword:`.

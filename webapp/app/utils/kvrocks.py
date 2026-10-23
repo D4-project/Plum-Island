@@ -21,10 +21,10 @@ HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
 
 
 class KVrocksIndexer:
-    """
-    Class for using Kvrock as search engine.w
+    """Manage Kvrocks search indexes and document metadata."""
 
-    """
+    TAG_CATALOGUE_KEY = "tag_catalogue"
+    TAG_CATALOGUE_BATCH_SIZE = 500
 
     def __init__(self, host="localhost", port=6666, socket_timeout=None):
         self.r = redis.Redis(
@@ -132,6 +132,62 @@ class KVrocksIndexer:
             if len(values) >= limit:
                 break
         return values
+
+    def get_observed_tags(self):
+        """Return catalogue candidates still attached to at least one document.
+
+        Never enumerate UID sets or scan the keyspace during a page request.
+        Obsolete candidates stay harmlessly in the catalogue: pruning them here
+        could race with an index writer adding the same tag again.
+        """
+        candidates = sorted(self.r.smembers(self.TAG_CATALOGUE_KEY))
+        observed = []
+        for offset in range(0, len(candidates), self.TAG_CATALOGUE_BATCH_SIZE):
+            batch = candidates[offset : offset + self.TAG_CATALOGUE_BATCH_SIZE]
+            pipe = self.r.pipeline(transaction=False)
+            for tag in batch:
+                pipe.scard(f"tag:{tag}")
+            observed.extend(tag for tag, count in zip(batch, pipe.execute()) if count)
+        return observed
+
+    def backfill_tag_catalogue(self, batch_size=500, progress=None):
+        """Seed existing reverse tag keys without reading document memberships.
+
+        This explicit maintenance scan only adds candidates; it never replaces
+        the catalogue, so concurrent ingestion cannot lose newly observed tags.
+        Reads filter empty reverse indexes before adding each bounded batch.
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        scanned = 0
+        batch = []
+        for key in self.r.scan_iter(match="tag:*", count=batch_size):
+            batch.append(key.removeprefix("tag:"))
+            if len(batch) >= batch_size:
+                self._seed_tag_candidates(batch)
+                scanned += len(batch)
+                batch.clear()
+                if progress:
+                    progress(scanned)
+        if batch:
+            self._seed_tag_candidates(batch)
+            scanned += len(batch)
+        return scanned
+
+    def _seed_tag_candidates(self, candidates):
+        """Add nonempty existing tag indexes to the idempotent candidate set."""
+        pipe = self.r.pipeline(transaction=False)
+        for tag in candidates:
+            pipe.scard(f"tag:{tag}")
+        values = [tag for tag, count in zip(candidates, pipe.execute()) if count]
+        if values:
+            self.r.sadd(self.TAG_CATALOGUE_KEY, *values)
+
+    def _queue_tag_catalogue(self, pipe, docs):
+        """Register distinct batch tags once, after their reverse-index writes."""
+        values = {tag.lower() for doc in docs for tag in doc.get("tag", []) if tag}
+        if values:
+            pipe.sadd(self.TAG_CATALOGUE_KEY, *sorted(values))
 
     def add_documents_batch(self, docs, batch_size=10000, include_tags=True):
         """
@@ -288,6 +344,8 @@ class KVrocksIndexer:
                             # print(f"{field} - {v} - {uid}")
                             pipe.sadd(f"{field}:{v}", uid)
                             pipe.sadd(f"{field}s:{uid}", v)
+            if include_tags:
+                self._queue_tag_catalogue(pipe, batch)
             pipe.execute()
 
     def replace_field_values_batch(self, field, docs, batch_size=10000):
@@ -343,6 +401,8 @@ class KVrocksIndexer:
                 for value in doc[field]:
                     pipe.sadd(f"{field}:{value}", uid)
                     pipe.sadd(f"{field}s:{uid}", value)
+            if field == "tag":
+                self._queue_tag_catalogue(pipe, normalized_batch)
             pipe.execute()
 
     def get_uids_by_time_range(self, from_ts, to_ts):

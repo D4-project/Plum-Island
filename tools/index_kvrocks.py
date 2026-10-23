@@ -449,7 +449,7 @@ def clean_tag_indexes(indexer):
     Remove existing tag indexes before recomputing tags for parsed documents.
     """
     print("Deleting existing Plum Kvrocks tag indexes", flush=True)
-    deleted = 0
+    deleted = indexer.r.delete(indexer.TAG_CATALOGUE_KEY)
     for pattern in ("tag:*", "tags:*"):
         deleted_for_pattern = delete_keys_by_pattern(indexer.r, pattern)
         deleted += deleted_for_pattern
@@ -477,6 +477,8 @@ def rebuild_kvrocks(indexer, include_tags=False):
         "first_seen_index",
         "last_seen_index",
     )
+    if include_tags:
+        deleted += indexer.r.delete(indexer.TAG_CATALOGUE_KEY)
     patterns = list(REBUILD_KEY_PATTERNS)
     for field in INDEX_FIELDS:
         if field == "tag" and not include_tags:

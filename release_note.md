@@ -1,5 +1,12 @@
 # Unreleased
 
+Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
+
+- Search tag columns show only tags present in indexed documents, using an
+  incremental Kvrocks candidate catalogue, existing cardinalities and a 60-second
+  cache. Imports/retagging maintain it; `tools/backfill_tag_catalogue.py` seeds
+  existing data without loading UID memberships. Tag flush/rebuild handles cleanup.
+
 - Dump imports with `tools/index_meili.py` save confirmed-batch checkpoints;
   `--continue` resumes interrupted imports with cumulative progress and verifies
   dump metadata and destination before skipping work.

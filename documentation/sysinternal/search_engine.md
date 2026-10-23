@@ -125,14 +125,28 @@ Invalid forms retain their text and cannot populate the model; hook validation
 precedes schedule normalization. Existing reports are not migrated automatically.
 
 The search-page helper toggle is presentation-only. `KVSearchView.search` loads
-`_collect_tag_catalogue` from `_collect_rule_tags` once per page: active SQL rules,
-five namespace groups, normalized/deduplicated/sorted tags. It does not use the
-Kvrocks-backed autocomplete helper or change indexed values. The existing search
+`_collect_tag_catalogue` from Kvrocks's observed `tag_catalogue` candidate set:
+five namespace groups, deduplicated/sorted tags with positive `SCARD tag:{value}`.
+Membership reads retrieve tag names only; counts use non-transactional pipelines
+of at most 500 commands. No UID memberships, SQL rule reads or keyspace scans
+are used. A monotonic 60-second cache per worker/backend and a refresh lock bound
+repeat work. Cache expiry requires a page reload; current query/dates do not
+scope this global catalogue. Ingestion and tag-only replacement add distinct
+batch tags in one idempotent SADD. The explicit `backfill_tag_catalogue.py` tool
+seeds existing indexes without loading UID lists. Removed tags remain harmless
+candidates, filtered by zero cardinality; readers never prune candidates, avoiding
+a race with ingestion. Full tag flush/rebuild clears the catalogue; rebuilds
+preserving tag indexes retain it. The existing search
 route permission covers the catalogue; no extra endpoint or rule-admin access is
-introduced. SQL failure renders an unavailable message without removing keyword
+introduced. A catalogue backend failure renders an unavailable message without removing keyword
 help. Jinja escapes labels and query terms; `shlex.quote` preserves literal tag
 values in complete `tag:` terms. Browser toggling issues no requests and does not
 submit or reset the query, dates, result state or pagination.
+
+This change affects the helper table only. Autocomplete and Discovery API `tags`
+retain their existing contracts; the latter intentionally lists configured active
+rule tags, including namespaces outside the five UI columns. These are different
+catalogue sources and must not be described as equivalent.
 
 `parse_query` delegates to `utils/search_query.py`: a quote-aware tokenizer splits
 unquoted parentheses, with `shlex` decoding literal tokens. The compiler calls

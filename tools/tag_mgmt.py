@@ -897,7 +897,7 @@ def flush_existing_tag_indexes(indexer, batch_size):
     """
     Remove all Kvrocks tag indexes before a full tag rebuild.
     """
-    total_deleted = 0
+    total_deleted = indexer.r.delete(indexer.TAG_CATALOGUE_KEY)
     for pattern in ("tag:*", "tags:*"):
         print(f"Flushing existing Kvrocks keys matching {pattern}", flush=True)
         deleted = delete_keys_by_pattern(indexer.r, pattern, batch_size)

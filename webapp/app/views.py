@@ -41,6 +41,7 @@ from markupsafe import Markup, escape
 from meilisearch import Client
 from meilisearch.errors import MeilisearchApiError
 import requests
+from redis.exceptions import RedisError
 
 from netaddr import IPNetwork
 from sqlalchemy import or_
@@ -694,6 +695,9 @@ class KVSearchView(BaseView):
     SEARCH_SESSION_TTL_SECONDS = 3600
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
+    TAG_CATALOGUE_TTL_SECONDS = 60
+    _tag_catalogue_cache = None
+    _tag_catalogue_lock = threading.Lock()
     TAG_LOOKUP_BATCH_LIMIT = 200
     HTTP_HEADER_SUGGEST_LIMIT = 128
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
@@ -905,7 +909,21 @@ class KVSearchView(BaseView):
 
     @classmethod
     def _collect_tag_catalogue(cls):
-        """Group active SQL rule tags without querying either search backend."""
+        """Group observed indexed tags, cached per backend for sixty seconds."""
+        endpoint = (db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"])
+        # Serialize refreshes within each worker to avoid a request stampede.
+        with cls._tag_catalogue_lock:
+            cached = cls._tag_catalogue_cache
+            if cached is None or cached[0] != endpoint or cached[1] <= time.monotonic():
+                indexer = KVrocksIndexer(*endpoint, socket_timeout=5)
+                tags = tuple(indexer.get_observed_tags())
+                cls._tag_catalogue_cache = (
+                    endpoint,
+                    time.monotonic() + cls.TAG_CATALOGUE_TTL_SECONDS,
+                    tags,
+                )
+            else:
+                tags = cached[2]
         columns = [
             {"namespace": namespace, "label": label, "tags": []}
             for namespace, label in (
@@ -917,7 +935,7 @@ class KVSearchView(BaseView):
             )
         ]
         groups = {column["namespace"]: column["tags"] for column in columns}
-        for tag in sorted(set(cls._collect_rule_tags())):
+        for tag in sorted(set(tags)):
             namespace = tag.partition(":")[0]
             if namespace in groups:
                 groups[namespace].append(
@@ -2600,8 +2618,7 @@ class KVSearchView(BaseView):
         tag_catalogue_error = False
         try:
             tag_catalogue = self._collect_tag_catalogue()
-        except (SQLAlchemyError, ValueError):
-            db.session.rollback()
+        except (RedisError, ValueError):
             tag_catalogue = []
             tag_catalogue_error = True
         return self.render_template(

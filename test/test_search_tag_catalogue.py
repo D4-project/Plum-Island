@@ -1,4 +1,4 @@
-"""SQL-only tag catalogue and safe search helper rendering."""
+"""Observed tag catalogue, bounded refreshes and safe search helper rendering."""
 
 # pylint: disable=protected-access
 
@@ -9,55 +9,35 @@ import subprocess
 import unittest
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import sessionmaker
+from redis.exceptions import ConnectionError as KvrocksConnectionError
 
 from app import app, db
-from app.models import TagRules
 from app.views import KVSearchView
 
 
 class SearchTagCatalogueTest(unittest.TestCase):
     """Exercise the real view helpers without live search backends or databases."""
 
-    def test_active_sql_rules_are_deduplicated_sorted_and_grouped(self):
-        """Catalogue uses active rules, not tags observed in indexed documents."""
-        engine = create_engine("sqlite://")
-        self.addCleanup(engine.dispose)
-        TagRules.__table__.create(engine)
-        with sessionmaker(bind=engine)() as session, patch.object(
-            db, "session", session
-        ), patch("app.views.KVrocksIndexer") as indexer:
-            session.add_all(
-                [
-                    TagRules(
-                        name="one",
-                        description="test",
-                        query="port:443",
-                        tags="proto:ssh,product:zulu,type:firewall,vendor:ovh,vuln:cve-2025-1234",
-                        active=True,
-                    ),
-                    TagRules(
-                        name="two",
-                        description="test",
-                        query="port:80",
-                        tags="proto:ssh\nproduct:apache\nlang:php",
-                        active=True,
-                    ),
-                    TagRules(
-                        name="off",
-                        description="test",
-                        query="port:22",
-                        tags="proto:telnet",
-                        active=False,
-                    ),
-                ]
-            )
-            session.commit()
-            columns = (
-                KVSearchView._collect_tag_catalogue()
-            )  # pylint: disable=protected-access
+    def setUp(self):
+        """Keep process-local cache state isolated across tests."""
+        self.enterContext(patch.object(KVSearchView, "_tag_catalogue_cache", None))
+
+    def test_observed_tags_are_sorted_and_grouped_without_sql(self):
+        """Only observed tags feed the five columns, independent of SQL rules."""
+        with patch("app.views.KVrocksIndexer") as indexer, patch.object(
+            KVSearchView, "_collect_rule_tags", side_effect=AssertionError("SQL read")
+        ):
+            indexer.return_value.get_observed_tags.return_value = [
+                "product:zulu",
+                "proto:ssh",
+                "product:apache",
+                "type:firewall",
+                "vendor:ovh",
+                "vuln:cve-2025-1234",
+                "lang:php",
+                "proto:ssh",
+            ]
+            columns = KVSearchView._collect_tag_catalogue()
             self.assertEqual(
                 [c["label"] for c in columns],
                 ["Proto", "Type", "Products", "Vendors", "Vulns"],
@@ -77,14 +57,32 @@ class SearchTagCatalogueTest(unittest.TestCase):
                     t["term"] == "tag:" + t["label"] for c in columns for t in c["tags"]
                 )
             )
-            indexer.assert_not_called()
+            indexer.return_value.get_observed_tags.assert_called_once()
+
+    def test_cache_expires_and_backend_changes_refresh(self):
+        """Repeated loads reuse results; expiry and backend changes refresh them."""
+        with patch("app.views.KVrocksIndexer") as indexer, patch(
+            "app.views.time.monotonic", return_value=100
+        ) as clock:
+            indexer.return_value.get_observed_tags.return_value = ["proto:ssh"]
+            KVSearchView._collect_tag_catalogue()
+            clock.return_value = 159
+            KVSearchView._collect_tag_catalogue()
+            indexer.return_value.get_observed_tags.assert_called_once()
+            clock.return_value = 160
+            indexer.return_value.get_observed_tags.return_value = []
+            columns = KVSearchView._collect_tag_catalogue()
+            self.assertFalse(any(column["tags"] for column in columns))
+            self.assertEqual(indexer.return_value.get_observed_tags.call_count, 2)
+            with patch.dict(db.app.config, {"KVROCKS_HOST": "different-backend"}):
+                KVSearchView._collect_tag_catalogue()
+            self.assertEqual(indexer.return_value.get_observed_tags.call_count, 3)
 
     def test_template_escapes_labels_and_handles_empty_catalogue(self):
-        """SQL text is data, including quotes inside HTML attributes."""
-        with patch.object(KVSearchView, "_collect_rule_tags", return_value=[]):
-            columns = (
-                KVSearchView._collect_tag_catalogue()
-            )  # pylint: disable=protected-access
+        """Indexed text is data, including quotes inside HTML attributes."""
+        with patch("app.views.KVrocksIndexer") as indexer:
+            indexer.return_value.get_observed_tags.return_value = []
+            columns = KVSearchView._collect_tag_catalogue()
         template = app.jinja_env.get_template("search_tag_catalogue.html")
         html = template.render(tag_catalogue=columns, tag_catalogue_error=False)
         self.assertEqual(html.count("No tags"), 5)
@@ -98,13 +96,13 @@ class SearchTagCatalogueTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
         self.assertIn("&#34;", html)
 
-    def test_sql_failure_preserves_search_page(self):
+    def test_kvrocks_catalogue_failure_preserves_search_page(self):
         """A catalogue failure still renders search controls and keyword help."""
         view = KVSearchView()
         with app.test_request_context("/kvsearchview/search"), patch(
             "app.views.KVrocksIndexer"
         ) as indexer, patch.object(
-            view, "_collect_tag_catalogue", side_effect=SQLAlchemyError()
+            view, "_collect_tag_catalogue", side_effect=KvrocksConnectionError()
         ), patch.object(
             view, "render_template", return_value="page"
         ) as render, patch.object(
@@ -114,7 +112,7 @@ class SearchTagCatalogueTest(unittest.TestCase):
             self.assertEqual(inspect.unwrap(KVSearchView.search)(view), "page")
             self.assertTrue(render.call_args.kwargs["tag_catalogue_error"])
             self.assertEqual(render.call_args.kwargs["total_scan_count"], 10)
-            rollback.assert_called_once()
+            rollback.assert_not_called()
 
     @unittest.skipUnless(shutil.which("node"), "Node.js required for UI checks")
     def test_browser_helpers(self):

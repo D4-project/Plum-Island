@@ -126,6 +126,21 @@ the parsed fallback value is retained; a rebuild cannot recover absent source da
 
 ## Tag-specific updates
 
+`tag_catalogue` is a set of observed canonical tag values (for example
+`product:nginx`), maintained by both document ingestion and tag-only replacement.
+One deduplicated `SADD` per nonempty tagged batch makes replay safe. It contains
+candidates, not counters or UID lists; `SCARD tag:{value}` remains authoritative.
+The search helper reads candidate names and positive counts in pipelines of at
+most 500 commands, with a 60-second per-worker cache. It never scans keys or
+loads reverse UID sets while displaying the catalogue.
+
+Retagged/deleted values may remain as zero-count candidates; readers do not prune
+them, avoiding races with concurrent writers. Full tag flush/rebuild clears the
+set; rebuilds preserving tags keep it. Normal retries repair an interrupted
+batch; the explicit [backfill tool](tools.md#backfill_tag_cataloguepy) can reseed
+existing or incomplete catalogues without a full reindex. No extra counters
+require reconciliation. The catalogue is global, independent of search dates.
+
 Tag reindexing does not rebuild the whole Kvrocks index.
 `tools/tag_mgmt.py reindex` uses `replace_field_values_batch("tag", docs)` to replace only:
 
@@ -147,6 +162,9 @@ The `--flush` option removes all keys matching:
 tag:*
 tags:*
 ```
+
+It also deletes `tag_catalogue`. Single-tag removal leaves its candidate in place;
+the zero reverse count hides it after the web cache expires.
 
 ## Date filtering
 

@@ -361,6 +361,27 @@ Recover Kvrocks-only UIDs into Meilisearch from retained raw job JSON files.
 See [Search Index Recovery](recovery-tools.md) for dry-run, apply, validation,
 failure handling, and complete Kvrocks-from-Meilisearch rebuild procedures.
 
+### `backfill_tag_catalogue.py`
+
+Initialize the search helper's observed-tag catalogue for an existing index:
+
+```bash
+.venv/bin/python tools/backfill_tag_catalogue.py
+```
+
+Reads `OUT_KVROCKS_HOST` / `OUT_KVROCKS_PORT` from `tools/config.yaml`, or an
+alternative `--config PATH`. Scans existing `tag:*` keys once, reads cardinalities
+in batches (`--batch-size`, default 500), and adds nonempty values to
+`tag_catalogue`. It never reads document UID memberships or rule SQL rows.
+Progress is printed before/during maintenance. Safe to repeat during normal
+ingestion: it only adds candidates and never replaces the catalogue. Do not run
+it concurrently with a destructive tag flush/rebuild.
+
+New document imports and retagging maintain the catalogue automatically. Before
+backfill, only newly encountered tags appear. Existing web workers may retain
+their previous catalogue for up to 60 seconds; reload afterwards. This changes
+no scan documents, query semantics, SQL schema or tag counters.
+
 ### `index_kvrocks.py`
 
 Build or rebuild the Kvrocks search indexes from Meilisearch documents.
