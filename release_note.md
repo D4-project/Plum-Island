@@ -1,5 +1,13 @@
 # Unreleased
 
+- Dump imports with `tools/index_meili.py` save confirmed-batch checkpoints;
+  `--continue` resumes interrupted imports with cumulative progress and verifies
+  dump metadata and destination before skipping work.
+
+- Add protected Discovery API v1 for Plum-Virion: structured and token search,
+  IP/hostname scan evidence, active-rule tag catalogue, configured HTTP headers
+  and deployed query help. Separate MCP client repository; no schema migration.
+
 - Structured search adds an asynchronous resolved CSV export: IP, last scan seen
   (UTC), PTR names from matching stored scans (no reverse-DNS query) and
   associated Passive DNS names filtered to the same search period. Includes IPv6, lookup

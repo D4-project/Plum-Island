@@ -2155,3 +2155,8 @@ appbuilder.add_api(Api)
 appbuilder.add_api(NsesApi)
 appbuilder.add_api(PortsApi)
 appbuilder.add_api(InfoIpApi)
+
+# Views are initialized before APIs; keep the optional read interface separate.
+from .discovery_api import DiscoveryApi  # pylint: disable=wrong-import-position
+
+appbuilder.add_api(DiscoveryApi)

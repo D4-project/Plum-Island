@@ -334,6 +334,27 @@ Use `--progress` when you want percentage output:
 
 This counts importable JSON documents before sending anything to Meilisearch. On large dumps this makes startup slower.
 
+Every import now saves a checkpoint after each successfully completed batch:
+
+```bash
+.venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --continue --progress
+```
+
+The default checkpoint is `<input-dir>/.index-meili-checkpoint`; override it with
+`--checkpoint PATH` (do not use a `.json` extension). Progress remains cumulative.
+The importer verifies the dump path, ordered file names, sizes, modification times,
+destination URL and index before resuming. Keep the dump unchanged during import
+and do not run concurrent imports using the same checkpoint. Metadata validation
+does not hash file contents.
+
+Resume replays the confirmed prefix locally, including JSON parsing, but sends
+only remaining entries. An interrupted or failed batch is retried; stable document
+UIDs make uncertain submissions safe to replace. Parse errors count separately
+and are skipped, as in a normal import. A successful import retains its checkpoint;
+resuming it submits nothing. Run without `--continue` to restart from the beginning.
+Imports interrupted before checkpoint support was installed cannot be resumed
+precisely. `--continue` requires an existing valid checkpoint and fails otherwise.
+
 ### `reintegrate_missing_meili.py`
 
 Recover Kvrocks-only UIDs into Meilisearch from retained raw job JSON files.

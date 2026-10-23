@@ -1583,14 +1583,10 @@ class KVSearchView(BaseView):
         value = f"{header_expr}:{header_value}"
         return key, value, True, None
 
-    def parse_query_group(self, query):
-        """
-        This function parse one AND-only query group.
-        It validate if we got a good syntax and use only authorised keyywords.
-
-        """
-
-        valid_keywords = [
+    @staticmethod
+    def search_keywords():
+        """Expose the same supported fields to the parser and read API."""
+        return [
             "ip",
             "net",
             # "as",
@@ -1634,6 +1630,9 @@ class KVSearchView(BaseView):
             "banner",
         ]
 
+    def parse_query_group(self, query):
+        """Validate one AND-only group using the shared field catalogue."""
+        valid_keywords = self.search_keywords()
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
         exact_only_keywords = {"tag"}
 
@@ -2869,6 +2868,25 @@ class IPDetailView(BaseView):
 
         return jsonify(self._strip_geolookup_meta(payload))
 
+    @staticmethod
+    def observation_scope(indexer, ip, selected_hostname=""):
+        """Share IP-only/requested-hostname selection with the JSON read API."""
+        timestamps = indexer.get_timestamp_for_ip(ip)
+        uids = [uid for uid in timestamps if uid not in ("min_seen", "max_seen")]
+        hostnames = indexer.get_requested_hostnames_for_uids(uids)
+        choices = {name for names in hostnames.values() for name in names}
+        selected = [
+            uid
+            for uid in uids
+            if (
+                selected_hostname in hostnames.get(uid, [])
+                if selected_hostname
+                else not hostnames.get(uid)
+            )
+        ]
+        selected.sort(key=lambda uid: (-(timestamps[uid].get("last_seen") or -1), uid))
+        return timestamps, choices, selected
+
     @expose("/<string:ip>")
     @has_access
     def detail(self, ip):
@@ -2881,31 +2899,12 @@ class IPDetailView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
-        ip_timestamps = indexer.get_timestamp_for_ip(ip)
-        uids = [uid for uid in ip_timestamps if uid not in ("min_seen", "max_seen")]
-        hostnames_by_uid = indexer.get_requested_hostnames_for_uids(uids)
-        requested_hostnames = {
-            hostname for names in hostnames_by_uid.values() for hostname in names
-        }
         selected_hostname = (request.args.get("hostname") or "").strip().lower()
+        ip_timestamps, requested_hostnames, sorted_uids = self.observation_scope(
+            indexer, ip, selected_hostname
+        )
         if selected_hostname and selected_hostname not in requested_hostnames:
             return make_response("Unknown requested hostname for this IP", 404)
-        uids = [
-            uid
-            for uid in uids
-            if (
-                selected_hostname in hostnames_by_uid.get(uid, [])
-                if selected_hostname
-                else not hostnames_by_uid.get(uid)
-            )
-        ]
-        sorted_uids = sorted(
-            uids,
-            key=lambda uid: (
-                -(ip_timestamps.get(uid, {}).get("last_seen") or -1),
-                uid,
-            ),
-        )
 
         index = client.index("plum")
         port_groups = {}

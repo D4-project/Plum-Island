@@ -4,7 +4,11 @@ Import dumped Meilisearch JSON documents into the configured OUT Meilisearch.
 """
 
 import argparse
+import hashlib
 import json
+import os
+import tempfile
+from itertools import islice
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -70,6 +74,16 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--continue",
+        dest="resume",
+        action="store_true",
+        help="Resume after the last successfully indexed batch in the checkpoint.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        help="Checkpoint path. Default: <input-dir>/.index-meili-checkpoint",
+    )
+    parser.add_argument(
         "--stat",
         action="store_true",
         help=(
@@ -126,6 +140,66 @@ def count_documents(json_files):
         if doc is not None:
             total_count += 1
     return total_count, error_count
+
+
+def import_identity(json_files, input_dir, meili_url, index_name):
+    """Bind a checkpoint to the destination and ordered dump file metadata."""
+    digest = hashlib.sha3_512()
+    for json_file in json_files:
+        stat = json_file.stat()
+        values = [str(json_file.relative_to(input_dir)), stat.st_size, stat.st_mtime_ns]
+        digest.update((json.dumps(values, ensure_ascii=True) + "|").encode("utf-8"))
+    return {
+        "version": 1,
+        "input_dir": str(input_dir),
+        "url": meili_url,
+        "index": index_name,
+        "manifest": digest.hexdigest(),
+    }
+
+
+def load_checkpoint(path, identity):
+    """Validate a saved import position before skipping any source entries."""
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"Cannot read checkpoint {path}: {error}") from error
+    if not isinstance(state, dict) or state.get("identity") != identity:
+        raise SystemExit(
+            "Checkpoint dump or destination differs; restart without --continue"
+        )
+    counts = [state.get(key) for key in ("processed", "indexed", "errors")]
+    if any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in counts
+    ):
+        raise SystemExit("Invalid checkpoint counters")
+    if counts[0] != counts[1] + counts[2]:
+        raise SystemExit("Inconsistent checkpoint counters")
+    return counts
+
+
+def save_checkpoint(path, identity, processed, indexed, errors):
+    """Atomically persist only positions whose submitted batches succeeded."""
+    state = {
+        "identity": identity,
+        "processed": processed,
+        "indexed": indexed,
+        "errors": errors,
+    }
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(state, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def format_progress(count, total_count):
@@ -186,12 +260,8 @@ def print_indexing_status(client, index, index_name):
     tasks = active_indexing_tasks(client, index_name)
     queued = sum(task.status == "enqueued" for task in tasks)
     processing = sum(task.status == "processing" for task in tasks)
-    received = sum(
-        (task.details or {}).get("receivedDocuments", 0) for task in tasks
-    )
-    indexed = sum(
-        (task.details or {}).get("indexedDocuments", 0) for task in tasks
-    )
+    received = sum((task.details or {}).get("receivedDocuments", 0) for task in tasks)
+    indexed = sum((task.details or {}).get("indexedDocuments", 0) for task in tasks)
     remaining = max(0, received - indexed)
 
     print(
@@ -206,7 +276,7 @@ def print_indexing_status(client, index, index_name):
     )
 
 
-def main():
+def main():  # pylint: disable=too-many-locals,too-many-statements
     """
     Import dump documents into OUT Meilisearch.
     """
@@ -234,9 +304,40 @@ def main():
         print_indexing_status(client, index, index_name)
         return
 
-    input_dir = Path(args.input_dir)
+    input_dir = Path(args.input_dir).resolve()
     if not input_dir.is_dir():
         raise SystemExit(f"Input directory not found: {input_dir}")
+
+    checkpoint = (
+        Path(args.checkpoint).resolve()
+        if args.checkpoint
+        else input_dir / ".index-meili-checkpoint"
+    )
+    if checkpoint.suffix.lower() == ".json":
+        raise SystemExit("Checkpoint must not use .json (reserved for dump documents)")
+    print(
+        f"Discovering and sorting JSON files in {input_dir}... "
+        "Large dumps may take a while; please wait.",
+        flush=True,
+    )
+    json_files = list(iter_json_files(input_dir))
+    print(
+        f"Checking metadata for {len(json_files)} JSON files "
+        "to validate the import checkpoint...",
+        flush=True,
+    )
+    identity = import_identity(json_files, input_dir, meili_url, index_name)
+    processed_count = indexed_count = error_count = 0
+    if args.resume:
+        processed_count, indexed_count, error_count = load_checkpoint(
+            checkpoint, identity
+        )
+        print(
+            f"Resuming: processed={processed_count}; indexed={indexed_count}; errors={error_count}",
+            flush=True,
+        )
+    else:
+        save_checkpoint(checkpoint, identity, 0, 0, 0)
 
     print(f"Reading JSON dump from {input_dir}", flush=True)
     print(f"Writing documents to {meili_url} / index={index_name}", flush=True)
@@ -245,7 +346,7 @@ def main():
     total_count = None
     if args.progress:
         print("Counting JSON documents...", flush=True)
-        total_count, preflight_error_count = count_documents(iter_json_files(input_dir))
+        total_count, preflight_error_count = count_documents(json_files)
         print(
             f"Found {total_count} importable documents "
             f"({preflight_error_count} preflight errors)",
@@ -253,11 +354,17 @@ def main():
         )
 
     batch = []
-    processed_count = 0
-    indexed_count = 0
-    error_count = 0
 
-    for doc, error in iter_documents(iter_json_files(input_dir)):
+    # Replay the prefix locally to support checkpoints inside multi-document files.
+    # Only entries following the confirmed position are submitted to Meilisearch.
+    print(
+        "Preparing import: "
+        f"skipping {processed_count} previously processed entries locally... "
+        "Large resumed imports may take a while; please wait.",
+        flush=True,
+    )
+    documents = islice(iter_documents(json_files), processed_count, None)
+    for doc, error in documents:
         processed_count += 1
         if error:
             error_count += 1
@@ -267,6 +374,9 @@ def main():
         batch.append(doc)
         if len(batch) >= args.batch_size:
             indexed_count += flush_batch(index, batch, args.task_timeout_ms)
+            save_checkpoint(
+                checkpoint, identity, processed_count, indexed_count, error_count
+            )
             print(
                 f"Progress: processed={processed_count}; "
                 f"indexed={format_progress(indexed_count, total_count)}; "
@@ -275,6 +385,7 @@ def main():
             )
 
     indexed_count += flush_batch(index, batch, args.task_timeout_ms)
+    save_checkpoint(checkpoint, identity, processed_count, indexed_count, error_count)
     print(
         "Meilisearch import complete; every submitted batch succeeded: "
         f"processed={processed_count} "

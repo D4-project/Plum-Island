@@ -313,6 +313,26 @@ For the structured search page specifically, keep these moving parts aligned:
 - `search_kvrocks.html` for the help table, default date handling, and adaptive loading behavior
 - `result_parser.py` plus `KVrocksIndexer.add_documents_batch()` for the actual indexed field names
 
+### Plum-Virion and Discovery API
+
+Plum-Virion is the separate MCP repository (`../Plum-Virion` in a sibling local
+checkout). Its `AGENT.md` follows Plum's Black, compilation, Pylint, tests,
+docstring and documentation requirements. Plum-Island owns query validation,
+execution, stored data and permissions; Virion adapts the authenticated API.
+The authoritative contract is [discovery.md](documentation/discovery.md).
+
+- `webapp/app/discovery_api.py` uses `@protect()` on every operation. Preserve
+  method-level FAB permissions and JWT user binding.
+- `search` reuses `execute_search_page`; signed cursors bind query, dates and
+  seen IPs to the principal. Empty windows may continue.
+- `show_ip` shares `IPDetailView.observation_scope` with the web view. Preserve
+  IP-only/hostname groups, observation history and Kvrocks UID tag provenance.
+- Catalogues describe active SQL rule tags and configured collected headers,
+  not observed matches or historical coverage.
+- Coordinate API changes with Virion and update both repositories' docs/tests.
+  Virion never accesses databases directly or copies the parser.
+- Discovery operations never start scans, modify indexes or resolve external DNS.
+
 ### If you change setup/bootstrap
 
 - `setup.sh`

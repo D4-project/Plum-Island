@@ -80,6 +80,12 @@ permissions:
 - can query on MeiliSearchView
 - can getuid on MeiliSearchView
 - can get on InfoIpApi
+- can search on DiscoveryApi
+- can token search on DiscoveryApi
+- can show ip on DiscoveryApi
+- can tags on DiscoveryApi
+- can headers on DiscoveryApi
+- can search help on DiscoveryApi
 - can index on StatsView
 - can search on KVSearchView
 - can export full status on KVSearchView

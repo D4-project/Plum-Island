@@ -13,6 +13,17 @@ Function names below are navigation anchors; line numbers drift as code changes.
 
 ## Ownership and data flow
 
+The read-only [Discovery API v1](../discovery.md) in `app/discovery_api.py`
+serves the separate Plum-Virion MCP repository. Structured search directly
+reuses `execute_search_page`; token search uses the existing Meilisearch client.
+IP JSON and HTML share `IPDetailView.observation_scope`, preserving hostname
+groups. The parser's field list is exposed by `KVSearchView.search_keywords`
+and reused by its validator and deployed API help. No matching/index changes
+are introduced. Signed API cursors bind resolved dates, query, seen IPs and
+principal, without using the browser's mutable search-session state. Each API
+operation has its own FAB `@protect()` permission; JSON errors are bounded and
+backend details redacted. See the contract for budgets and date-scope differences.
+
 | Component | Responsibility |
 | --- | --- |
 | [result_parser.py](../../webapp/app/utils/result_parser.py), `parse_json` | Public parser: produce UID, IP, timestamps and base fields; historical certificate-name fields remain CNs |

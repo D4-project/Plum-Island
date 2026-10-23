@@ -118,6 +118,7 @@ class IpDetailLinksTest(unittest.TestCase):
             and node.name
             in {
                 "detail",
+                "observation_scope",
                 "_safe_timestamp_to_display",
                 "_port_group_sort_key",
                 "_extract_hostname_details",

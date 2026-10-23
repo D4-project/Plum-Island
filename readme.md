@@ -112,6 +112,7 @@ See [Reports documentation](documentation/reports.md) for setup, query semantics
 - [Migration to v0.2610.0 — choose your installed version](documentation/migration.md)
 - [Certificate CN/DN upgrade](migration_full_cert.md)
 - [Search](documentation/search.md)
+- [Discovery API and Plum-Virion MCP](documentation/discovery.md)
 - [Tagging rules](https://github.com/D4-project/Plum-Antibodies/tree/main/tags)
 - [Tag tooling](documentation/tools.md#tag-tools)
 - [Reports](documentation/reports.md)

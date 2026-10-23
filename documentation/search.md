@@ -6,6 +6,9 @@ Plum Island stores parsed scan results in Kvrocks indexes. The main search UI us
 
 ## InfoIP API
 
+For both search modes, IP evidence and tag/header discovery through an
+authenticated client, see [Discovery API v1 and Plum-Virion](discovery.md).
+
 `GET /api/v1/infoip/<ip>` is a protected, Swagger-documented endpoint
 that returns distinct open ports and their co-observed tags for indexed scan
 reports of one public IPv4 or IPv6 address. CIDR ranges are rejected with `400`.

@@ -377,6 +377,7 @@ def isolated_search_view(indexer):
         if isinstance(node, ast.ClassDef) and node.name == "KVSearchView"
     )
     names = {
+        "search_keywords",
         "parse_query_group",
         "_parse_query_group_with_not",
         "parse_query",
