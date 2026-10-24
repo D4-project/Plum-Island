@@ -2,6 +2,7 @@
 """Tests for application file logging."""
 
 import logging
+import io
 import os
 import sys
 import tempfile
@@ -12,11 +13,82 @@ from unittest import TestCase, mock
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(BASE_DIR, "webapp"))
 
-from app.logging_config import DateFileHandler, configure_logging
+from app.logging_config import (  # pylint: disable=wrong-import-position
+    DateFileHandler,
+    configure_logging,
+)
 
 
 class ApplicationLoggingTest(TestCase):
     """Tests for configurable persistent application logs."""
+
+    def setUp(self):
+        """Restore the operator-independent test process's root level afterwards."""
+        root = logging.getLogger()
+        self.addCleanup(root.setLevel, root.level)
+
+    def test_configured_levels_filter_console_without_file_logging(self):
+        """Each configured standard level controls emitted root messages."""
+        for name in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            with self.subTest(level=name):
+                root = logging.Logger("isolated-root")
+                output = io.StringIO()
+                handler = logging.StreamHandler(output)
+                root.addHandler(handler)
+                with mock.patch(
+                    "app.logging_config.logging.getLogger", return_value=root
+                ):
+                    self.assertIsNone(
+                        configure_logging({"LOG_LEVEL": f" {name.lower()} "})
+                    )
+                for message_level in (10, 20, 30, 40, 50):
+                    root.log(message_level, "severity %s", message_level)
+                expected = [
+                    f"severity {level}"
+                    for level in (10, 20, 30, 40, 50)
+                    if level >= getattr(logging, name)
+                ]
+                self.assertEqual(output.getvalue().splitlines(), expected)
+                self.assertEqual(root.handlers, [handler])
+
+    def test_missing_or_invalid_level_falls_back_to_warning(self):
+        """Missing names and non-level module attributes must neither crash nor debug."""
+        configs = [{}] + [
+            {"LOG_LEVEL": value}
+            for value in ("INVALID", "BASIC_FORMAT", "NOTSET", "", None, True, 10)
+        ]
+        for config in configs:
+            with self.subTest(config=config):
+                root = logging.Logger("isolated-root")
+                with mock.patch(
+                    "app.logging_config.logging.getLogger", return_value=root
+                ):
+                    self.assertIsNone(configure_logging(config))
+                self.assertEqual(root.level, logging.WARNING)
+                self.assertEqual(root.handlers, [])
+
+    def test_file_handler_uses_and_refreshes_configured_level(self):
+        """Repeated configuration reuses its file handler and applies the new level."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = logging.Logger("isolated-root")
+            # Its own manager makes setLevel invalidate this isolated root's cache.
+            root.manager = logging.Manager(root)
+            config = {"LOG_ENABLED": True, "LOG_DIR": directory, "LOG_LEVEL": "INFO"}
+            with mock.patch("app.logging_config.logging.getLogger", return_value=root):
+                handler = configure_logging(config)
+                self.addCleanup(handler.close)
+                root.debug("hidden")
+                root.info("visible")
+                self.assertIs(
+                    configure_logging(dict(config, LOG_LEVEL="DEBUG")), handler
+                )
+                root.debug("debug enabled")
+            self.assertEqual(root.handlers, [handler])
+            self.assertEqual(handler.level, logging.DEBUG)
+            contents = next(Path(directory).glob("*.log")).read_text(encoding="utf-8")
+            self.assertNotIn("hidden", contents)
+            self.assertIn("visible", contents)
+            self.assertIn("debug enabled", contents)
 
     def test_handler_creates_date_named_file(self):
         """First record creates the configured date-named log file."""

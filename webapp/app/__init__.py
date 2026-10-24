@@ -12,13 +12,10 @@ from sqlalchemy.engine import Engine
 from .security import CustomSecurityManager  # Custom Security menu
 from .logging_config import configure_logging
 
-# Loggin configuration
-logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
-logging.getLogger().setLevel(logging.DEBUG)
-
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
 configure_logging(app.config)
 
 

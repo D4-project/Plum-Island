@@ -19,6 +19,8 @@ complete the appropriate [versioned migration](migration.md).
 - Resolved CSV export includes last scan dates, stored PTR names and Passive DNS
   records filtered to the search period.
 - Meilisearch dump imports support confirmed-batch checkpoints and `--continue`.
+- Root logging uses configured `LOG_LEVEL`, with `WARNING` as the missing/invalid
+  fallback instead of `DEBUG`. Existing explicit settings remain effective.
 
 There are **no new SQL schema migrations** after the scripts already included
 in v0.2610.0 for these changes. Do not replay SQL migrations 14–24, the
@@ -93,6 +95,16 @@ No MCP installation is needed for normal browser search.
 
 Discovery API tag discovery intentionally lists active rule tags. It differs
 from the search helper table's observed-tag catalogue; see [Discovery](discovery.md).
+
+## Logging configuration
+
+Review `LOG_LEVEL` in the existing `webapp/config.py`. New sample configurations
+default to `WARNING`; an existing `LOG_LEVEL = "DEBUG"` is preserved and still
+enables debug output. Set it explicitly to `INFO` or `WARNING` for lower log
+volume, then restart the controller. It applies to root/console logging even
+when `LOG_ENABLED = False`; that flag only enables persistent files. Supported
+names are `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Missing or invalid
+values fall back to `WARNING`. No database or index migration is involved.
 
 ## Existing workflows
 

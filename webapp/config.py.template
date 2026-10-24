@@ -170,9 +170,11 @@ SCHEDULER_DELAY = 10
 NETWORK_LOOKUP_TIMEOUT_SECONDS = 10
 NETWORK_REFRESH_BATCH_SIZE = 32
 
+# Root logging level, including console output: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+# Missing or invalid values fall back to WARNING; applies even without file logging.
+LOG_LEVEL = "WARNING"
 # Optional persistent application logging. Files use <prefix>-YYMMDD.log.
 LOG_ENABLED = False
-LOG_LEVEL = "DEBUG"
 LOG_DIR = "./log"
 LOG_FILE_PREFIX = "island"
 # Date-named logs always rotate daily at local midnight. This legacy setting

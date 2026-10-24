@@ -2,6 +2,10 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Root logging honors `LOG_LEVEL` without a forced startup DEBUG level; missing
+  or invalid values fall back to WARNING. Explicit DEBUG remains supported,
+  including with file logging disabled (#101, supersedes PR #105).
+
 - Search tag columns show only tags present in indexed documents, using an
   incremental Kvrocks candidate catalogue, existing cardinalities and a 60-second
   cache. Imports/retagging maintain it; `tools/backfill_tag_catalogue.py` seeds

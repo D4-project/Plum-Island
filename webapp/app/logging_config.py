@@ -9,7 +9,14 @@ from pathlib import Path
 LOG_FILE_RE = re.compile(r"^(?P<prefix>.+)-(?P<date>\d{6})\.log$")
 DEFAULT_LOG_DIR = "./log"
 DEFAULT_LOG_PREFIX = "agent"
-DEFAULT_LOG_LEVEL = "DEBUG"
+DEFAULT_LOG_LEVEL = "WARNING"
+LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 DEFAULT_LOG_ROTATION_DAYS = 90
 DEFAULT_LOG_RETENTION_DAYS = 90
 
@@ -88,8 +95,9 @@ def _get_positive_int(config, name, default):
 
 def configure_logging(config):
     """Configure root logging from application config values."""
-    level_name = str(config.get("LOG_LEVEL", DEFAULT_LOG_LEVEL)).upper()
-    level = getattr(logging, level_name, logging.DEBUG)
+    level_name = str(config.get("LOG_LEVEL", DEFAULT_LOG_LEVEL)).strip().upper()
+    # Restrict names to actual severity levels, not arbitrary logging attributes.
+    level = LOG_LEVELS.get(level_name, logging.WARNING)
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
@@ -107,6 +115,7 @@ def configure_logging(config):
 
     for handler in root_logger.handlers:
         if isinstance(handler, DateFileHandler):
+            handler.setLevel(level)
             return handler
 
     handler = DateFileHandler(log_dir, prefix, rotation_days, retention_days)

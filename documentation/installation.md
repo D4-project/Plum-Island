@@ -81,6 +81,13 @@ python run.py
 
 ### Application logs
 
+`LOG_LEVEL` in `webapp/config.py` controls the root logger, including console
+output, even when `LOG_ENABLED = False`. Standard levels are `DEBUG`, `INFO`,
+`WARNING`, `ERROR` and `CRITICAL` (case-insensitive). Missing or invalid values
+fall back to `WARNING`. Existing explicit `DEBUG` settings remain effective;
+set `INFO` or `WARNING` to reduce production log volume, then restart the app.
+`LOG_ENABLED` controls only the optional persistent file handler.
+
 Enable persistent direct-run logs in `webapp/config.py`:
 
 ```python
