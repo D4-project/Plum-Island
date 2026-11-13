@@ -2,6 +2,14 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Refresh the bundled Antibodies rules, adding shared Cisco web-interface favicon
+  and IOS self-signed certificate detection without inferring IOS XE. The update
+  also includes upstream rule improvements and consolidated DokuWiki, MantisBT,
+  Drupal and Roundcube rules. Remove retired rules from the rule database before
+  importing replacements and reindexing; removing YAML files alone does not
+  delete previously imported rules. See the submodule's
+  [operations guide](webapp/tags/documentation/operations.md).
+
 - Root logging honors `LOG_LEVEL` without a forced startup DEBUG level; missing
   or invalid values fall back to WARNING. Explicit DEBUG remains supported,
   including with file logging disabled (#101, supersedes PR #105).
