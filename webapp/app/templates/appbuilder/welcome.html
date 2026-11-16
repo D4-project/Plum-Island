@@ -1,0 +1,21 @@
+{% extends "appbuilder/base.html" %}
+
+{% block head_css %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/welcome_logo.css') }}">
+{% endblock %}
+
+{% block content %}
+<h2 class="text-center">Welcome To</h2>
+<div class="plum-welcome-image">
+  <img src="{{ url_for('static', filename='plum_logo.png') }}" alt="Plum Island" class="plum-welcome-logo">
+  <button type="button" id="plum-welcome-button" class="plum-welcome-button"
+          aria-label="Play cow sound" title="Moo!"></button>
+</div>
+<audio id="plum-welcome-moo" preload="none" src="{{ url_for('static', filename='audio/cow-moo.mp3') }}"></audio>
+{% endblock %}
+
+{% block add_tail_js %}
+  {{ super() }}
+  <script src="{{ url_for('static', filename='js/welcome_logo.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+{% endblock %}
