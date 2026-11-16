@@ -11,7 +11,6 @@ from unittest import TestCase, skipUnless
 from flask import Flask
 from jinja2 import TemplateNotFound
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "plum_ui_theme", ROOT / "webapp/app/ui_theme.py"
@@ -23,13 +22,26 @@ SPEC.loader.exec_module(UI_THEME)
 class UiThemeTest(TestCase):
     """Exercise template selection, inheritance and both UI implementations."""
 
+    @skipUnless(shutil.which("node"), "Node.js required for UI checks")
+    def test_color_mode_preferences(self):
+        """Preserve manual choices and synchronize existing and new viewers."""
+        subprocess.run(
+            [shutil.which("node"), str(ROOT / "test/plum_color_mode_ui.js")],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+
     def test_template_inheritance_and_fallback_follow_selected_theme(self):
         """Plum overrides includes and parents, falling back to original files."""
         with TemporaryDirectory() as directory:
             templates = Path(directory) / "templates"
             themed = templates / "themes/plum"
             themed.mkdir(parents=True)
-            (templates / "base.html").write_text("Original {% block body %}{% endblock %}")
+            (templates / "base.html").write_text(
+                "Original {% block body %}{% endblock %}"
+            )
             (templates / "page.html").write_text(
                 "{% extends 'base.html' %}{% block body %}"
                 "{% include 'part.html' %} {% include 'shared.html' %}{% endblock %}"
@@ -63,7 +75,9 @@ class UiThemeTest(TestCase):
                 if theme == "plum.css":
                     expected /= "themes/plum"
                 for name in (
-                    "plum_baselayout.html", "ip_detail.html", "search_kvrocks.html"
+                    "plum_baselayout.html",
+                    "ip_detail.html",
+                    "search_kvrocks.html",
                 ):
                     template = app.jinja_env.get_template(name)
                     self.assertEqual(Path(template.filename), expected / name)

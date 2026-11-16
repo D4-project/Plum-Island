@@ -48,7 +48,7 @@ async function search() {
             collapse.className = 'panel-collapse collapse';
             const viewer = document.createElement('vt-json');
             viewer.setAttribute('variant', 'full');
-            viewer.setAttribute('theme', 'light');
+            viewer.setAttribute('theme', document.documentElement.getAttribute('data-plum-color-mode') || 'light');
             viewer.setAttribute('label', 'Scan report');
             viewer.textContent = JSON.stringify(hit.body, null, 2);
             const bodyDiv = document.createElement('div');

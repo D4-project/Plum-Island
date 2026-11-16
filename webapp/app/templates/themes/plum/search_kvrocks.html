@@ -1678,7 +1678,7 @@ async function loadUid(uid, targetId) {
         target.textContent = '';
         const viewer = document.createElement('vt-json');
         viewer.setAttribute('variant', 'full');
-        viewer.setAttribute('theme', 'light');
+        viewer.setAttribute('theme', document.documentElement.getAttribute('data-plum-color-mode') || 'light');
         viewer.setAttribute('label', 'Scan report');
         viewer.textContent = JSON.stringify(data, null, 2);
         target.appendChild(viewer);

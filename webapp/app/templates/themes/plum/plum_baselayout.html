@@ -6,3 +6,8 @@
   <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
   {{ super() }}
 {% endblock %}
+
+{% block head_js %}
+  <script src="{{ url_for('static', filename='themes/plum/color_mode.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+  {{ super() }}
+{% endblock %}

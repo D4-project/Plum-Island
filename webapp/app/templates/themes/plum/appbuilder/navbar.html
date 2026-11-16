@@ -55,6 +55,12 @@
         {{ navigation_items() }}
       </ul>
       <ul class="nav navbar-nav navbar-right">
+        <li class="plum-color-mode-item">
+          <button type="button" id="plum-color-mode-toggle" class="plum-color-mode-toggle"
+                  aria-label="Dark mode" aria-pressed="false" title="Use dark mode">
+            <i class="fa fa-moon" aria-hidden="true"></i> <span>Dark mode</span>
+          </button>
+        </li>
         {{ navigation_items(true) }}
         {% include 'appbuilder/navbar_right.html' %}
       </ul>

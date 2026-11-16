@@ -205,6 +205,11 @@ visual styles. Exact static asset routes serve the two project stylesheets at
 AppBuilder's normal theme URLs. The original base template loads neither.
 Plum's tag renderer is also isolated in `webapp/app/static/themes/plum/`.
 
+The Plum navbar includes a Dark mode toggle. It follows the browser's system
+preference until the user chooses a mode, then remembers that choice in local
+browser storage. The palette also applies to new and expanded JSON viewers.
+Dark mode is limited to the Plum templates; print styles keep the light palette.
+
 New configs default to `APP_THEME = "plum.css"` through
 `webapp/config.py.template`; existing installations retain their selected theme.
 
