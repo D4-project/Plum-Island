@@ -14,3 +14,7 @@ tools/tmp/
 external/
 /Plan/
 /plan/
+*.pyc
+webapp/app.db-shm
+webapp/app.db-wal
+/webapp/app/static/uploads
