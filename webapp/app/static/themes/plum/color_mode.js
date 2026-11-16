@@ -32,7 +32,8 @@
         const button = document.getElementById('plum-color-mode-toggle');
         if (button) {
             button.setAttribute('aria-pressed', String(mode === 'dark'));
-            button.title = mode === 'dark' ? 'Use light mode' : 'Use dark mode';
+            const icon = button.querySelector('i');
+            if (icon) icon.className = mode === 'dark' ? 'fa fa-moon' : 'fa fa-sun';
         }
         syncViewers(document);
     }

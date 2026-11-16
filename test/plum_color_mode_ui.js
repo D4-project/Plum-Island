@@ -14,7 +14,9 @@ function harness({saved = null, dark = false, blocked = false} = {}) {
     let ready = false;
     let mutation;
     let domReady;
-    const button = {attributes: {}, setAttribute(name, value) { this.attributes[name] = value; },
+    const icon = {className: 'fa fa-sun'};
+    const button = {attributes: {}, querySelector: () => icon,
+        setAttribute(name, value) { this.attributes[name] = value; },
         addEventListener(name, callback) { this[name] = callback; }};
     const document = {
         documentElement: {setAttribute: (name, value) => { attributes[name] = value; }},
@@ -37,7 +39,7 @@ function harness({saved = null, dark = false, blocked = false} = {}) {
     const viewer = () => ({theme: null, matches: selector => selector === 'vt-json',
         setAttribute(_name, value) { this.theme = value; }});
     return {
-        attributes, button, system, values, events, viewers, viewer,
+        attributes, button, icon, system, values, events, viewers, viewer,
         mode: () => attributes['data-plum-color-mode'],
         ready() { ready = true; viewers.push(viewer()); domReady(); },
         add(node) { mutation([{addedNodes: [node]}]); }
@@ -48,13 +50,16 @@ const follow = harness({dark: true});
 assert.equal(follow.mode(), 'dark', 'apply system preference before body renders');
 follow.ready();
 assert.equal(follow.button.attributes['aria-pressed'], 'true');
+assert.equal(follow.icon.className, 'fa fa-moon', 'initial icon reflects the active dark mode');
 assert.equal(follow.viewers[0].theme, 'dark');
 follow.system.matches = false;
 follow.system.change();
 assert.equal(follow.mode(), 'light', 'follow system changes without an explicit choice');
+assert.equal(follow.icon.className, 'fa fa-sun');
 follow.button.click();
 assert.equal(follow.mode(), 'dark');
-assert.equal(follow.button.title, 'Use light mode');
+assert.equal(follow.button.title, undefined, 'the icon-only toggle has no text tooltip');
+assert.equal(follow.icon.className, 'fa fa-moon', 'clicking switches the sun to a moon');
 assert.equal(follow.values.get('plum.color-mode'), 'dark');
 follow.system.change();
 assert.equal(follow.mode(), 'dark', 'system changes must preserve a manual choice');
@@ -65,9 +70,11 @@ follow.viewers.push(added);
 follow.button.click();
 assert.equal(added.theme, 'light', 'existing JSON viewers update on toggle');
 assert.equal(follow.button.attributes['aria-pressed'], 'false');
+assert.equal(follow.icon.className, 'fa fa-sun', 'clicking again restores the sun');
 follow.values.set('plum.color-mode', 'dark');
 follow.events.storage({key: 'plum.color-mode'});
 assert.equal(follow.mode(), 'dark', 'other tabs synchronize saved choices');
+assert.equal(follow.icon.className, 'fa fa-moon', 'other tabs also synchronize the icon');
 follow.values.clear();
 follow.events.storage({key: null});
 assert.equal(follow.mode(), 'light', 'clearing a saved choice restores system preference');

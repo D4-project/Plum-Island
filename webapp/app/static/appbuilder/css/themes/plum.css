@@ -28,6 +28,15 @@ a:hover, a:focus { color: var(--plum-accent-hover); }
 :focus-visible { outline: 3px solid #64b6b0; outline-offset: 3px; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--plum-accent); }
 
+/* Give wide screens more room while keeping the page and navigation aligned. */
+@media screen and (min-width: 1200px) {
+  body > .container, .top .navbar > .container, footer .container {
+    width: 92%;
+    min-width: 1170px;
+    max-width: 1600px;
+  }
+}
+
 /* Keep the existing horizontal menu, with quieter borders and clearer hover. */
 .top .navbar { background: #fff; border: 0; border-bottom: 1px solid var(--plum-border); border-radius: 0; box-shadow: 0 1px 4px #25334404; }
 .navbar-brand a { color: var(--plum-accent); font-weight: 650; letter-spacing: .02em; }
@@ -117,8 +126,8 @@ code { color: #2c6867; background: #edf5f4; }
 
 /* The preference lives on the root before the page renders. */
 :root { color-scheme: light; }
-.plum-navbar .navbar-nav > .plum-color-mode-item { display: flex; align-items: center; min-height: 64px; padding: 0 8px; }
-.plum-color-mode-toggle { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--plum-border); border-radius: 5px; background: transparent; color: var(--plum-muted); font-family: inherit; font-size: 13px; line-height: 1.4; cursor: pointer; }
+.plum-navbar .navbar-nav > .plum-color-mode-item { display: flex; align-items: center; justify-content: flex-end; min-height: 64px; padding: 0 0 0 8px; }
+.plum-color-mode-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--plum-border); border-radius: 5px; background: transparent; color: var(--plum-muted); font-family: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
 .plum-color-mode-toggle:hover, .plum-color-mode-toggle[aria-pressed="true"] { background: var(--plum-accent-soft); color: var(--plum-accent); }
 @media (max-width: 767px) {
   .plum-navbar .navbar-nav > .plum-color-mode-item { min-height: 44px; padding: 5px 15px; }
@@ -165,7 +174,11 @@ code { color: #2c6867; background: #edf5f4; }
   :root[data-plum-color-mode="dark"] :is(.btn-primary, .btn-primary:hover, .btn-primary:focus, .btn-primary:active) { color: #102b27; }
   :root[data-plum-color-mode="dark"] .nav-tabs > li.active > a { background: var(--plum-card); color: var(--plum-accent); border-color: var(--plum-border); border-bottom-color: var(--plum-card); }
 
-  :root[data-plum-color-mode="dark"] :is(.table, .table > thead > tr > th, .table > tbody > tr > td, .kvrocks-table th, .kvrocks-table td) { border-color: var(--plum-border); }
+  /* Detail widgets put field labels in tbody th cells, not a thead. */
+  :root[data-plum-color-mode="dark"] :is(.table, .table > :is(thead, tbody, tfoot) > tr > :is(th, td), .table-responsive, .kvrocks-table th, .kvrocks-table td) { border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.table-bordered, .table .table) { background: var(--plum-card); color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] .table > :is(tbody, tfoot) > tr > th { background: var(--plum-raised); color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] .table .fa-black { color: var(--plum-ink); }
   :root[data-plum-color-mode="dark"] :is(.table > thead > tr > th, .kvrocks-table th) { background: var(--plum-raised); color: var(--plum-muted); }
   :root[data-plum-color-mode="dark"] :is(.table-responsive > .table > tbody > tr:nth-child(even), .kvrocks-table tbody tr:nth-child(even)) { background: #1d2a38; }
   :root[data-plum-color-mode="dark"] .kvrocks-table tbody tr:nth-child(odd) { background: var(--plum-card); }
