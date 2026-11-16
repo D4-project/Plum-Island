@@ -692,6 +692,7 @@ class KVSearchView(BaseView):
     SEARCH_PAGE_LIMIT = 100
     SEARCH_WINDOW_SECONDS = 24 * 60 * 60
     MAX_EXPORT_WARNINGS = 20
+    EXPORT_TAG_BATCH_SIZE = 500
     SEARCH_SESSION_TTL_SECONDS = 3600
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
@@ -1343,6 +1344,19 @@ class KVSearchView(BaseView):
         return KVSearchView._timestamp_to_iso(timestamp)
 
     @staticmethod
+    def _iter_export_tags(indexer, uids):
+        """Read tags only for matching UIDs, using bounded Kvrocks pipelines."""
+        uids = list(uids)
+        for offset in range(0, len(uids), KVSearchView.EXPORT_TAG_BATCH_SIZE):
+            batch = uids[offset : offset + KVSearchView.EXPORT_TAG_BATCH_SIZE]
+            with indexer.r.pipeline(transaction=False) as pipeline:
+                for uid in batch:
+                    pipeline.smembers(f"tags:{uid}")
+                tag_sets = pipeline.execute()
+            for uid, tags in zip(batch, tag_sets):
+                yield uid, sorted(normalize_tags(tags), key=str.lower)
+
+    @staticmethod
     def _run_full_export_job(job_id):
         with app.app_context():
             job_state = KVSearchView._get_job_state(job_id)
@@ -1374,10 +1388,13 @@ class KVSearchView(BaseView):
 
             processed_uids = 0
             try:
+                indexer = KVrocksIndexer(
+                    db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+                )
                 for ip, uids in sorted(results["results"].items()):
                     ip_timestamps = results["timestamps"].get(ip, {})
                     export_payload["results"][ip] = []
-                    for uid in uids:
+                    for uid, tags in KVSearchView._iter_export_tags(indexer, uids):
                         document, warning, warning_message = (
                             KVSearchView._load_meili_document(index, uid)
                         )
@@ -1387,6 +1404,7 @@ class KVSearchView(BaseView):
 
                         export_entry = {
                             "uid": uid,
+                            "tags": tags,
                             "first_seen": ip_timestamps.get(uid, {}).get("first_seen"),
                             "last_seen": ip_timestamps.get(uid, {}).get("last_seen"),
                             "document": document,

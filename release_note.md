@@ -2,6 +2,9 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Search JSON exports include normalized tags for each matching scan, including
+  metadata-only entries when the Meilisearch document is missing (#257).
+
 - Refresh the bundled Antibodies rules, adding shared Cisco web-interface favicon
   and IOS self-signed certificate detection without inferring IOS XE. The update
   also includes upstream rule improvements and consolidated DokuWiki, MantisBT,
