@@ -1,0 +1,13 @@
+{# APP_THEME loads plum.css, which imports the Plum component stylesheet. #}
+{% extends "appbuilder/baselayout.html" %}
+
+{% block head_css %}
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  {{ super() }}
+{% endblock %}
+
+{% block head_js %}
+  <script src="{{ url_for('static', filename='themes/plum/color_mode.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+  {{ super() }}
+{% endblock %}

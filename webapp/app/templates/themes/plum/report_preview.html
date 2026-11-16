@@ -1,0 +1,27 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title, "Report Preview") }}
+
+<div class="report-preview-toolbar">
+    <a class="btn btn-default" href="{{ url_for('ReportsView.show', pk=report.id) }}">
+        <i class="fa fa-arrow-left" aria-hidden="true"></i>
+    </a>
+    <a class="btn btn-primary" href="{{ url_for('ReportsView.run', pk=report.id) }}">
+        Run now
+    </a>
+    <button class="btn btn-default report-print-action" type="button" onclick="window.print()">
+        <i class="fa fa-print" aria-hidden="true"></i> Print
+    </button>
+    {% if pdf_url %}
+    <a class="btn btn-default report-pdf-action" href="{{ pdf_url }}">
+        <i class="fa fa-file-pdf-o" aria-hidden="true"></i> Download PDF
+    </a>
+    {% endif %}
+</div>
+
+{{ report_html }}
+
+{{ lib.panel_end() }}
+{% endblock content %}

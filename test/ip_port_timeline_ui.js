@@ -127,7 +127,7 @@ console.log('Port timelines: hostname-scoped shared scale, overlaps, missing dat
 // Run the actual hostname filter to check per-port counts, not just SVG items.
 const fs = require('node:fs');
 const vm = require('node:vm');
-const template = fs.readFileSync(require('node:path').join(__dirname, '../webapp/app/templates/ip_detail.html'), 'utf8');
+const template = fs.readFileSync(require('./ui_template_paths').templatePath('ip_detail.html'), 'utf8');
 const filterSource = ['getObservationHostnames', 'observationMatchesFilter', 'updatePortFilter'].map(name => {
     const start = template.indexOf(`    function ${name}(`);
     const end = template.indexOf('\n    }', start);

@@ -1,0 +1,741 @@
+{% extends "ip_detail_fragment_base.html" if fragment else "appbuilder/base.html" %}
+
+{% macro render_tag_content(tag) -%}
+    {%- set parts = tag.split(':', 1) -%}
+    {%- if parts|length == 2 and parts[0] -%}
+        <span class="plum-tag-namespace">{{ parts[0] }}:</span><span class="plum-tag-value">{{ parts[1] }}</span>
+    {%- else -%}
+        <span class="plum-tag-value">{{ tag }}</span>
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro render_ip_tag(tag) -%}
+    {%- set tag_prefix = tag.split(':', 1)[0] -%}
+    {%- if tag_prefix == 'vendor' and ':' in tag -%}
+        {%- set vendor_value = tag.split(':', 1)[1] -%}
+        <a class="ip-detail-tag ip-detail-tag-vendor" title="{{ tag }}" href="https://vulnerability.circl.lu/search?vendor={{ vendor_value|urlencode }}" target="_blank" rel="noopener noreferrer">{{ render_tag_content(tag) }}</a>
+    {%- else -%}
+        <span title="{{ tag }}" class="ip-detail-tag{% if tag_prefix == 'vuln' %} ip-detail-tag-vuln{% elif tag_prefix == 'vendor' %} ip-detail-tag-vendor{% elif tag_prefix == 'product' %} ip-detail-tag-product{% elif tag_prefix == 'type' %} ip-detail-tag-type{% elif tag_prefix == 'proto' %} ip-detail-tag-proto{% elif tag_prefix == 'lang' %} ip-detail-tag-lang{% elif tag_prefix == 'cpe' or tag_prefix == 'hard' %} ip-detail-tag-cpe{% endif %}">{{ render_tag_content(tag) }}</span>
+    {%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+{% if fragment %}
+{{ self.scan_summary() }}
+{{ self.scan_group() }}
+{% else %}
+<div class="plum-ip-page">
+
+<div class="ip-detail-toolbar">
+    <div class="ip-detail-heading">
+        <div class="ip-detail-title-row">
+            <span class="ip-detail-eyebrow">IP overview</span>
+            <h2 class="ip-detail-title">{{ ip }}</h2>
+            <button type="button" id="ip-copy-button" class="ip-quick-link" title="Copy IP" aria-label="Copy IP">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i>
+            </button>
+        </div>
+        {% block scan_summary %}
+        <div id="ip-scan-summary">
+            {% if ip_tags %}
+            <div class="ip-detail-tags" aria-label="Tags">
+                {% for tag in ip_tags %}
+                {{ render_ip_tag(tag) }}
+                {% endfor %}
+            </div>
+            {% endif %}
+        <div class="ip-detail-meta">
+            <span class="ip-summary-stat"><strong>{{ total_documents }}</strong> scan{% if total_documents != 1 %}s{% endif %}</span>
+            <span class="ip-summary-stat"><strong>{{ total_ports }}</strong> port{% if total_ports != 1 %}s{% endif %}</span>
+            <span class="ip-summary-stat"><strong>{{ requested_hostnames|length }}</strong> virtual host{% if requested_hostnames|length != 1 %}s{% endif %}</span>
+            {% if first_seen or last_seen %}
+                <span class="ip-summary-date">First seen <strong>{{ first_seen or "N/A" }}</strong></span>
+                <span class="ip-summary-date">Last seen <strong>{{ last_seen or "N/A" }}</strong></span>
+            {% endif %}
+        </div>
+        </div>
+        {% endblock scan_summary %}
+    </div>
+    <div>
+        <a class="btn btn-default ip-back-link" href="/kvsearchview/search" onclick="goBackToPreviousPage(event)" title="Back">
+            <i class="fa fa-arrow-left" aria-hidden="true"></i> Back
+        </a>
+    </div>
+</div>
+
+<ul class="nav nav-tabs ip-detail-tabs" role="tablist">
+    <li role="presentation" class="active">
+        <a href="#ip-scans-results" aria-controls="ip-scans-results" role="tab" data-toggle="tab">
+            Scans Results
+        </a>
+    </li>
+    <li role="presentation">
+        <a href="#ip-informations" aria-controls="ip-informations" role="tab" data-toggle="tab">
+            Informations
+        </a>
+    </li>
+    <li role="presentation">
+        <a href="#ip-whois" aria-controls="ip-whois" role="tab" data-toggle="tab">
+            Whois
+        </a>
+    </li>
+</ul>
+
+<div class="tab-content">
+<div role="tabpanel" class="tab-pane active" id="ip-scans-results">
+<div class="ip-scan-filter">
+    <label for="scan-hostname-filter">Requested Hostname</label>
+    <select id="scan-hostname-filter" class="form-control">
+        <option value="__ip_only__"{% if not selected_hostname %} selected{% endif %}>IP only</option>
+        {% for hostname in requested_hostnames %}
+        <option value="{{ hostname }}"{% if hostname == selected_hostname %} selected{% endif %}>{{ hostname }}</option>
+        {% endfor %}
+    </select>
+</div>
+<div id="scan-group-status" role="status" aria-live="polite"></div>
+<div id="scan-group-container">
+{% block scan_group %}
+<div id="ip-scan-group">
+{% if warnings %}
+<div class="alert alert-warning" role="alert">
+    <strong>{{ warnings|length }} warning{% if warnings|length > 1 %}s{% endif %}</strong>
+    <ul class="ip-detail-warning">
+        {% for warning in warnings %}
+        <li>{{ warning }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if not port_cards and not unmapped_documents %}
+<div class="alert alert-info" role="alert">
+    No document found for this selection.
+</div>
+{% endif %}
+
+<div id="scan-filter-empty" class="alert alert-info ip-filter-empty" role="alert" hidden>
+    No scan result matches the selected hostname.
+</div>
+
+{% for port_card in port_cards %}
+{% set port_idx = loop.index0 %}
+<div class="panel panel-default ip-port-card">
+    <div class="panel-heading">
+        <div class="ip-port-title-row">
+            <h4 class="panel-title">
+                <span class="ip-port-protocol">{{ port_card.protocol | upper }}</span><span class="ip-port-number">{{ port_card.portid }}</span>
+                {% if port_card.service_names %}
+                <small class="ip-port-service">
+                    {% if port_card.service_names|length == 1 %}
+                        {{ port_card.service_names[0] }}
+                    {% else %}
+                        {{ port_card.service_names | join(", ") }}
+                    {% endif %}
+                </small>
+                {% endif %}
+            </h4>
+            <div class="ip-port-title-actions">
+                <span class="ip-port-observation-count">{{ port_card.observation_count }} observation{% if port_card.observation_count != 1 %}s{% endif %}</span>
+                <button
+                    type="button"
+                    class="ip-port-link"
+                    data-port="{{ port_card.portid }}"
+                    onclick="openPortSite(this)"
+                    hidden
+                    title="Open web service"
+                    aria-label="Open web service"
+                >
+                    <i class="fa fa-external-link" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
+        <div class="ip-port-history">
+            <div class="ip-port-history-label">Observation history <span>UTC</span></div>
+            <div class="ip-port-timeline" aria-label="Observation history for {{ port_card.protocol | upper }}/{{ port_card.portid }}"></div>
+        </div>
+    </div>
+    <div class="panel-body">
+        <ul class="nav nav-tabs ip-port-tabs" role="tablist">
+            {% for observation in port_card.observations %}
+            <li
+                role="presentation"
+                class="{% if loop.last %}active{% endif %}"
+                data-user-hostnames='{{ observation.user_hostnames | tojson }}'
+                data-first-seen="{{ observation.first_seen_epoch if observation.first_seen_epoch is not none else '' }}"
+                data-last-seen="{{ observation.last_seen_epoch if observation.last_seen_epoch is not none else '' }}"
+            >
+                <a
+                    href="#port-{{ port_idx }}-{{ loop.index0 }}"
+                    aria-controls="port-{{ port_idx }}-{{ loop.index0 }}"
+                    role="tab"
+                    data-toggle="tab"
+                    title="{{ observation.tab_label }}"
+                >
+                    {{ observation.tab_label }}
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+
+        <div class="tab-content ip-port-tab-content">
+            {% for observation in port_card.observations %}
+            <div
+                role="tabpanel"
+                class="tab-pane {% if loop.last %}active{% endif %}"
+                id="port-{{ port_idx }}-{{ loop.index0 }}"
+                data-user-hostnames='{{ observation.user_hostnames | tojson }}'
+                data-web-scheme="{{ observation.web_scheme }}"
+            >
+                <div class="ip-port-observation-meta">
+                    <div class="ip-observation-dates">
+                        <span>First seen <strong>{{ observation.first_seen or "N/A" }}</strong></span>
+                        <span>Last seen <strong>{{ observation.last_seen or "N/A" }}</strong></span>
+                    </div>
+                    {% if observation.tags %}
+                    <span class="ip-port-observation-tags" aria-label="Tags">
+                        {% for tag in observation.tags %}
+                        {{ render_ip_tag(tag) }}
+                        {% endfor %}
+                    </span>
+                    {% endif %}
+                </div>
+                {% if observation.resolved_hosts or observation.ptr_records %}
+                <div class="ip-hosts-block">
+                    <div class="ip-hosts-title">Hostnames</div>
+                    <div class="ip-hosts-box">
+                    {% if observation.resolved_hosts %}
+                        {% for host in observation.resolved_hosts %}
+                        <div class="ip-host-line">{{ host }}</div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if observation.ptr_records %}
+                        {% for host in observation.ptr_records %}
+                        <div class="ip-host-line">{{ host }} <span class="ip-ptr-icon" title="PTR"><i class="fa fa-backward" aria-hidden="true"></i></span></div>
+                        {% endfor %}
+                    {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                {% if observation.port.scripts %}
+                    {% for script in observation.port.scripts %}
+                    <div class="ip-script-block">
+                        <div class="ip-script-title">{{ script.id or "script" }}</div>
+                        {% if script.id == "ssl-cert" %}
+                        {% set cert_extensions = script.extensions or {} %}
+                        {% set cert_issuer = script.issuer or {} %}
+                        {% set cert_subject = script.subject or {} %}
+                        {% set cert_validity = script.validity or {} %}
+                        {% set cert_pubkey = script.pubkey or {} %}
+                        {% set cert_san = cert_extensions.get("X509v3 Subject Alternative Name") %}
+                        {% set cert_san_values = cert_san.split(",") if cert_san else [] %}
+                        {% endif %}
+                        {% if script.output and script.id == "ssl-cert" %}
+                        <div class="ip-cert-raw-box">{% if cert_subject %}<strong>Subject</strong>
+{% if cert_subject.commonName %}    CN: {{ cert_subject.commonName }}
+{% endif %}{% if cert_subject.organizationName %}    Org: {{ cert_subject.organizationName }}
+{% endif %}{% if cert_subject.organizationalUnitName %}    OU: {{ cert_subject.organizationalUnitName }}
+{% endif %}{% if cert_subject.stateOrProvinceName %}    State: {{ cert_subject.stateOrProvinceName }}
+{% endif %}{% if cert_subject.localityName %}    Locality: {{ cert_subject.localityName }}
+{% endif %}{% if cert_subject.countryName %}    Country: {{ cert_subject.countryName }}
+{% endif %}{% endif %}{% if cert_issuer %}<strong>Issuer</strong>
+{% if cert_issuer.commonName %}    CN: {{ cert_issuer.commonName }}
+{% endif %}{% if cert_issuer.organizationName %}    Org: {{ cert_issuer.organizationName }}
+{% endif %}{% if cert_issuer.organizationalUnitName %}    OU: {{ cert_issuer.organizationalUnitName }}
+{% endif %}{% if cert_issuer.stateOrProvinceName %}    State: {{ cert_issuer.stateOrProvinceName }}
+{% endif %}{% if cert_issuer.localityName %}    Locality: {{ cert_issuer.localityName }}
+{% endif %}{% if cert_issuer.countryName %}    Country: {{ cert_issuer.countryName }}
+{% endif %}{% endif %}{% if cert_san %}<strong>SAN</strong>
+{% for san_value in cert_san_values[:10] %}    {{ san_value|trim }}
+{% endfor %}{% if cert_san_values|length > 10 %}<details class="ip-cert-collapse ip-cert-san-more"><summary>{{ cert_san_values|length - 10 }} more SANs</summary><div class="ip-cert-san-list">{% for san_value in cert_san_values[10:] %}<div class="ip-cert-san-item">    {{ san_value|trim }}</div>{% endfor %}</div></details>{% endif %}{% endif %}{% for output_line in script.output.splitlines() %}{% if output_line.startswith("Signature Algorithm:") %}
+{% if cert_pubkey.type or cert_pubkey.bits or cert_pubkey.exponent %}<strong>Public Key:</strong> {{ cert_pubkey.type or "N/A" }}{% if cert_pubkey.bits %} / {{ cert_pubkey.bits }} bits{% endif %}{% if cert_pubkey.exponent %} / exponent {{ cert_pubkey.exponent }}{% endif %}
+{% endif %}<strong>Signature Algorithm:</strong> {{ output_line.split(":", 1)[1]|trim }}
+{% if script.md5 %}<strong>MD5:</strong> {{ script.md5|replace(":", "")|trim }}
+{% endif %}{% if script.sha1 %}<strong>SHA-1:</strong> {{ script.sha1|replace(":", "")|trim }}
+{% endif %}
+{% if cert_validity.notBefore %}<strong>Not valid before:</strong> {{ cert_validity.notBefore }}
+{% endif %}{% if cert_validity.notAfter %}<strong>Not valid after:</strong> {{ cert_validity.notAfter }}
+{% endif %}{% elif not output_line.startswith("Subject:") and not output_line.startswith("Subject Alternative Name:") and not output_line.startswith("Issuer:") and not output_line.startswith("Public Key type:") and not output_line.startswith("Public Key bits:") and not output_line.startswith("Not valid before:") and not output_line.startswith("Not valid after:") and not output_line.startswith("MD5:") and not output_line.startswith("SHA-1:") %}{{ output_line }}
+{% endif %}{% endfor %}{% if cert_extensions.get("X509v3 CRL Distribution Points") %}<strong>X509v3 CRL Distribution Points:</strong> {{ cert_extensions.get("X509v3 CRL Distribution Points") }}
+{% endif %}{% if cert_extensions.get("X509v3 Certificate Policies") %}<strong>X509v3 Certificate Policies:</strong> {{ cert_extensions.get("X509v3 Certificate Policies") }}
+{% endif %}{% if cert_extensions.get("X509v3 Extended Key Usage") %}<strong>X509v3 Extended Key Usage:</strong> {{ cert_extensions.get("X509v3 Extended Key Usage") }}
+{% endif %}{% if cert_extensions.get("X509v3 Key Usage") %}<strong>X509v3 Key Usage:</strong> {{ cert_extensions.get("X509v3 Key Usage") }}
+{% endif %}{% if script.pem %}
+<details class="ip-cert-collapse ip-cert-raw-details"><summary>PEM certificate</summary><pre>{{ script.pem }}</pre></details>{% endif %}</div>
+                        {% elif script.output %}
+                        <pre>{{ script.output }}</pre>
+                        {% else %}
+                        <div class="text-muted">No output.</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                <div class="text-muted">Port Open, no other details.</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+{% if unmapped_documents %}
+<div class="panel panel-warning">
+    <div class="panel-heading">
+        <h4 class="panel-title">
+            Documents without port detail
+        </h4>
+    </div>
+    <div class="panel-body">
+        {% for item in unmapped_documents %}
+        <div class="ip-unmapped-doc">
+            <div class="ip-unmapped-meta">
+                First seen: {{ item.first_seen or "N/A" }}
+                | Last seen: {{ item.last_seen or "N/A" }}
+            </div>
+            <div class="alert alert-warning" role="alert">
+                {{ item.warning }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+</div>
+{% endblock scan_group %}
+</div>
+</div>
+<div role="tabpanel" class="tab-pane" id="ip-informations">
+    <div class="ip-info-panel">
+        <div id="ip-info-loading" class="ip-section-loading" role="status" aria-live="polite" hidden>Loading IP information…</div>
+        <div id="ip-info-error" class="alert alert-warning" role="alert" hidden></div>
+        <div id="ip-info-results"></div>
+    </div>
+    <div class="ip-pdns-panel">
+        <div class="ip-pdns-title"><span>Passive DNS</span>
+            {% if appbuilder.sm.has_access('can_resolve_passive_dns', 'IPDetailView') %}
+            <button id="ip-pdns-resolve" type="button" class="btn btn-default btn-xs" title="Resolve" aria-label="Resolve" disabled
+                data-endpoint="{{ url_for('IPDetailView.resolve_passive_dns', ip=ip) }}" data-csrf="{{ csrf_token() }}">
+                <i class="fa fa-refresh" aria-hidden="true"></i> Active DNS
+            </button>
+            {% endif %}
+        </div>
+        <div class="ip-pdns-box">
+            <div id="ip-pdns-loading" class="ip-section-loading" role="status" aria-live="polite" hidden>Loading Passive DNS…</div>
+            <div id="ip-pdns-error" class="alert alert-warning" role="alert" hidden></div>
+            <div id="ip-pdns-results"></div>
+        </div>
+    </div>
+</div>
+<div role="tabpanel" class="tab-pane" id="ip-whois">
+    <div id="ip-whois-loading" class="ip-section-loading" role="status" aria-live="polite" hidden>Querying WHOIS registry…</div>
+    <div id="ip-whois-error" class="alert alert-warning" role="alert" hidden></div>
+    <pre id="ip-whois-result" role="status" aria-live="polite" hidden></pre>
+</div>
+</div>
+
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+    const tab = document.querySelector('a[href="#ip-whois"]');
+    const endpoint = {{ url_for('IPDetailView.whois_lookup', ip=ip) | tojson }};
+    const loading = document.getElementById('ip-whois-loading');
+    const error = document.getElementById('ip-whois-error');
+    const result = document.getElementById('ip-whois-result');
+    if (!tab || !loading || !error || !result) return;
+    let started = false;
+    $(tab).on('shown.bs.tab', async () => {
+        if (started) return;
+        started = true;
+        loading.textContent = 'Querying WHOIS registry...';
+        loading.hidden = false;
+        error.hidden = true;
+        try {
+            const response = await fetch(endpoint, {
+                credentials: 'same-origin',
+                headers: { Accept: 'application/json' }
+            });
+            const isJson = (response.headers.get('content-type') || '').toLowerCase().includes('json');
+            if (!response.ok) {
+                const fallback = response.status === 401 || response.status === 403
+                    ? 'WHOIS access denied or session expired.'
+                    : `WHOIS lookup failed (${response.status}).`;
+                const data = isJson ? await response.json() : null;
+                throw new Error(data?.error || fallback);
+            }
+            if (!isJson) throw new Error('WHOIS returned an unexpected response. Sign in and retry.');
+            const data = await response.json();
+            loading.hidden = true;
+            result.hidden = false;
+            result.textContent = data.result || 'No WHOIS record returned.';
+        } catch (lookupError) {
+            loading.hidden = true;
+            error.textContent = lookupError.message || 'WHOIS lookup failed.';
+            error.hidden = false;
+        }
+    });
+})();
+</script>
+
+<script src="{{ url_for('static', filename='js/ip_port_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_pdns_resolve.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_hostname_groups.js') }}"></script>
+<script>
+(function () {
+    const ip = {{ ip | tojson }};
+    const loadingEl = document.getElementById('ip-info-loading');
+    const errorEl = document.getElementById('ip-info-error');
+    const resultsEl = document.getElementById('ip-info-results');
+    const pdnsLoadingEl = document.getElementById('ip-pdns-loading');
+    const pdnsErrorEl = document.getElementById('ip-pdns-error');
+    const pdnsResultsEl = document.getElementById('ip-pdns-results');
+    let pdnsTimelines = null;
+    let pdnsResolver = null;
+    window.addEventListener('pagehide', () => { if (pdnsResolver) pdnsResolver.cancel(); });
+    let informationStarted = false;
+
+    function goBackToPreviousPage(event) {
+        if (window.history.length > 1) {
+            event.preventDefault();
+            window.history.back();
+        }
+    }
+    window.goBackToPreviousPage = goBackToPreviousPage;
+
+    function appendInfoRow(container, label, value) {
+        if (value === null || value === undefined || value === '') {
+            return;
+        }
+        const labelEl = document.createElement('div');
+        labelEl.className = 'ip-info-label';
+        labelEl.textContent = label;
+
+        const valueEl = document.createElement('div');
+        valueEl.className = 'ip-info-value';
+        valueEl.textContent = String(value);
+
+        container.appendChild(labelEl);
+        container.appendChild(valueEl);
+    }
+
+    function renderEntry(entry, index) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'ip-info-entry';
+
+        const title = document.createElement('div');
+        title.className = 'ip-info-title';
+
+        const box = document.createElement('div');
+        box.className = 'ip-info-box';
+        const grid = document.createElement('div');
+        grid.className = 'ip-info-grid';
+        const countryInfo = entry && entry.country_info ? entry.country_info : {};
+        const country = entry && entry.country ? entry.country : {};
+        const hasAsInfo = Boolean(
+            country['AutonomousSystemNumber'] || country['AutonomousSystemOrganization']
+        );
+
+        title.textContent = hasAsInfo
+            ? 'Autonomous System Informations'
+            : 'Ip Informations';
+
+        appendInfoRow(grid, 'Country', countryInfo['Country']);
+        appendInfoRow(grid, 'ISO Code', country.iso_code || countryInfo['Alpha-2 code']);
+        appendInfoRow(grid, 'Alpha-3', countryInfo['Alpha-3 code']);
+        appendInfoRow(grid, 'Numeric Code', countryInfo['Numeric code']);
+        appendInfoRow(grid, 'ASN', country['AutonomousSystemNumber']);
+        appendInfoRow(grid, 'AS Name', country['AutonomousSystemOrganization']);
+        appendInfoRow(grid, 'Latitude', countryInfo['Latitude (average)']);
+        appendInfoRow(grid, 'Longitude', countryInfo['Longitude (average)']);
+
+        if (!grid.children.length) {
+            appendInfoRow(grid, 'Data', JSON.stringify(entry || {}, null, 2));
+        }
+
+        wrapper.appendChild(title);
+        box.appendChild(grid);
+        wrapper.appendChild(box);
+        return wrapper;
+    }
+
+    function loadInformation() {
+        if (informationStarted) return;
+        informationStarted = true;
+        loadingEl.hidden = false;
+        pdnsLoadingEl.hidden = false;
+        // Independent requests: Passive DNS must not delay IP information.
+        fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
+        .then((response) => {
+            if (!response.ok) {
+                throw new Error(`Lookup failed (${response.status})`);
+            }
+            return response.json();
+        })
+        .then((payload) => {
+            loadingEl.hidden = true;
+            const entries = Array.isArray(payload) ? payload : [payload];
+            if (!entries.length) {
+                resultsEl.innerHTML = '<div class="text-muted">No information returned.</div>';
+                return;
+            }
+            entries.forEach((entry, index) => {
+                resultsEl.appendChild(renderEntry(entry, index));
+            });
+        })
+        .catch((error) => {
+            loadingEl.hidden = true;
+            errorEl.textContent = error.message;
+            errorEl.hidden = false;
+        });
+
+    fetch(`/ip/pdns/${encodeURIComponent(ip)}`)
+        .then((response) => response.json().then((payload) => ({ ok: response.ok, payload, status: response.status })))
+        .then(({ ok, payload, status }) => {
+            pdnsLoadingEl.hidden = true;
+            if (payload && payload.disabled) {
+                const messageEl = document.createElement('div');
+                messageEl.className = 'text-muted';
+                messageEl.textContent = payload.message || '';
+                pdnsResultsEl.innerHTML = '';
+                pdnsResultsEl.appendChild(messageEl);
+                return;
+            }
+            if (!ok) {
+                throw new Error(payload && payload.error ? payload.error : `Passive DNS lookup failed (${status})`);
+            }
+            const records = Array.isArray(payload) ? payload : [];
+            if (!records.length) {
+                pdnsResultsEl.innerHTML = '<div class="text-muted">No Passive DNS data returned.</div>';
+                return;
+            }
+            pdnsTimelines = window.PlumPdnsTimeline.mount(document, pdnsResultsEl, records);
+            const resolveButton = document.getElementById('ip-pdns-resolve');
+            if (resolveButton) {
+                pdnsResolver = window.PlumPdnsResolve.mount(resolveButton,
+                    document.getElementById('ip-pdns-resolve-progress'), pdnsTimelines,
+                    resolveButton.dataset.endpoint, resolveButton.dataset.csrf);
+            }
+        })
+        .catch((error) => {
+            pdnsLoadingEl.hidden = true;
+            pdnsErrorEl.textContent = error.message;
+            pdnsErrorEl.hidden = false;
+        });
+    }
+
+    function copyIpToClipboard(value, triggerEl) {
+        const markCopied = () => {
+            if (!triggerEl) {
+                return;
+            }
+            triggerEl.classList.add('copied');
+            triggerEl.setAttribute('aria-label', `Copied ${value}`);
+            setTimeout(() => {
+                triggerEl.classList.remove('copied');
+                triggerEl.setAttribute('aria-label', `Copy ${value}`);
+            }, 1500);
+        };
+
+        const fallbackCopy = () => {
+            const textarea = document.createElement('textarea');
+            textarea.value = value;
+            textarea.setAttribute('readonly', '');
+            textarea.className = 'plum-clipboard-fallback';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                markCopied();
+            } catch (err) {
+                console.warn('Clipboard copy failed', err);
+            } finally {
+                document.body.removeChild(textarea);
+            }
+        };
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(markCopied).catch(fallbackCopy);
+        } else {
+            fallbackCopy();
+        }
+    }
+    window.copyIpToClipboard = copyIpToClipboard;
+    const copyButton = document.getElementById('ip-copy-button');
+    if (copyButton) {
+        copyButton.title = `Copy ${ip}`;
+        copyButton.setAttribute('aria-label', `Copy ${ip}`);
+        copyButton.addEventListener('click', () => copyIpToClipboard(ip, copyButton));
+    }
+
+    function formatUrlHost(hostValue) {
+        if (!hostValue) {
+            return ip;
+        }
+        return hostValue.includes(':') && !hostValue.startsWith('[')
+            ? `[${hostValue}]`
+            : hostValue;
+    }
+
+    function buildPortSiteUrl(scheme, port) {
+        if (!['http', 'https'].includes(scheme)) return null;
+        const numericPort = Number(port);
+        if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) return null;
+        const hostnameFilter = document.getElementById('scan-hostname-filter');
+        const selectedValue = hostnameFilter ? hostnameFilter.value : '';
+        const targetHost = selectedValue && selectedValue !== '__ip_only__' ? selectedValue : ip;
+        const normalizedHost = formatUrlHost(targetHost);
+        const defaultPort = scheme === 'https' ? 443 : 80;
+        const portSuffix = numericPort !== defaultPort
+            ? `:${numericPort}`
+            : '';
+        return `${scheme}://${normalizedHost}${portSuffix}`;
+    }
+
+    function updatePortSiteLink(card) {
+        const button = card.querySelector('.ip-port-link');
+        if (!button) return;
+        const pane = card.querySelector('.ip-port-tab-content > .tab-pane.active');
+        const scheme = pane ? pane.getAttribute('data-web-scheme') : '';
+        const available = Boolean(buildPortSiteUrl(scheme, button.getAttribute('data-port')));
+        button.hidden = !available;
+        button.title = available ? `Open ${scheme} service` : 'Open web service';
+        button.setAttribute('aria-label', button.title);
+    }
+
+    function openPortSite(button) {
+        const card = button.closest('.ip-port-card');
+        const pane = card ? card.querySelector('.ip-port-tab-content > .tab-pane.active') : null;
+        const scheme = pane ? pane.getAttribute('data-web-scheme') : '';
+        const url = buildPortSiteUrl(scheme, button.getAttribute('data-port'));
+        if (url) window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    window.openPortSite = openPortSite;
+
+    function getObservationHostnames(element) {
+        try {
+            return JSON.parse(element.getAttribute('data-user-hostnames') || '[]');
+        } catch (error) {
+            return [];
+        }
+    }
+
+    function observationMatchesFilter(hostnames, selectedValue) {
+        if (selectedValue === '__ip_only__') {
+            return hostnames.length === 0;
+        }
+        return hostnames.includes(selectedValue);
+    }
+
+    function updatePortFilter() {
+        const select = document.getElementById('scan-hostname-filter');
+        const emptyState = document.getElementById('scan-filter-empty');
+        const cards = Array.from(document.querySelectorAll('.ip-port-card'));
+        const selectedValue = select ? select.value : '';
+        let visibleCards = 0;
+
+        cards.forEach((card) => {
+            const tabs = Array.from(card.querySelectorAll('.ip-port-tabs > li'));
+            const panes = Array.from(card.querySelectorAll('.ip-port-tab-content > .tab-pane'));
+            let firstVisibleTab = null;
+            let firstVisiblePane = null;
+            let lastVisibleTab = null;
+            let lastVisiblePane = null;
+            let visibleObservations = 0;
+
+            tabs.forEach((tab, index) => {
+                const pane = panes[index];
+                const hostnames = getObservationHostnames(tab);
+                const visible = observationMatchesFilter(hostnames, selectedValue);
+                tab.style.display = visible ? '' : 'none';
+                if (pane) {
+                    pane.style.display = visible ? '' : 'none';
+                }
+                tab.classList.remove('active');
+                if (pane) {
+                    pane.classList.remove('active');
+                }
+                if (visible) {
+                    visibleObservations += 1;
+                    if (!firstVisibleTab) {
+                        firstVisibleTab = tab;
+                        firstVisiblePane = pane;
+                    }
+                    lastVisibleTab = tab;
+                    lastVisiblePane = pane;
+                }
+            });
+
+            const hasVisible = Boolean(lastVisibleTab && lastVisiblePane);
+            const count = card.querySelector('.ip-port-observation-count');
+            if (count) {
+                count.textContent = `${visibleObservations} observation${visibleObservations === 1 ? '' : 's'}`;
+            }
+            card.style.display = hasVisible ? '' : 'none';
+            if (hasVisible) {
+                visibleCards += 1;
+                lastVisibleTab.classList.add('active');
+                lastVisiblePane.classList.add('active');
+            }
+            updatePortSiteLink(card);
+        });
+
+        if (emptyState) {
+            emptyState.textContent = selectedValue === '__ip_only__'
+                ? 'No scan result matches.'
+                : 'No scan result matches the selected hostname.';
+            emptyState.hidden = Boolean(visibleCards);
+        }
+        if (portTimelines) portTimelines.refresh();
+    }
+
+    function selectRequestedHostnameFromUrl(select) {
+        const params = new URLSearchParams(window.location.search);
+        const requestedHostname = (params.get('hostname') || '').trim().toLowerCase();
+        if (!requestedHostname) {
+            return;
+        }
+
+        const option = Array.from(select.options).find((item) => {
+            return String(item.value || '').trim().toLowerCase() === requestedHostname;
+        });
+        if (option) {
+            select.value = option.value;
+        }
+    }
+
+    const hostnameFilter = document.getElementById('scan-hostname-filter');
+    let portTimelines = window.PlumPortTimeline
+        ? window.PlumPortTimeline.mount(document) : null;
+    if (window.jQuery) {
+        window.jQuery('a[href="#ip-informations"]').on('shown.bs.tab', function () {
+            loadInformation();
+            if (pdnsTimelines) pdnsTimelines.refresh();
+        });
+        window.jQuery(document).on('shown.bs.tab', '.ip-port-tabs a[data-toggle="tab"]', function () {
+            updatePortSiteLink(this.closest('.ip-port-card'));
+            if (portTimelines) portTimelines.sync();
+        });
+    }
+    if (hostnameFilter) {
+        selectRequestedHostnameFromUrl(hostnameFilter);
+        updatePortFilter();
+        window.PlumHostnameGroups.mount({
+            select: hostnameFilter,
+            container: document.getElementById('scan-group-container'),
+            status: document.getElementById('scan-group-status'),
+            beforeSwap: function () {
+                if (portTimelines) portTimelines.destroy();
+            },
+            afterSwap: function () {
+                portTimelines = window.PlumPortTimeline
+                    ? window.PlumPortTimeline.mount(document) : null;
+                document.querySelectorAll('.ip-port-card').forEach(updatePortSiteLink);
+            }
+        });
+    }
+})();
+</script>
+
+</div>
+{% endif %}
+{% endblock content %}

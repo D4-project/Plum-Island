@@ -11,10 +11,25 @@ from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from .security import CustomSecurityManager  # Custom Security menu
 from .logging_config import configure_logging
+from .ui_theme import configure_ui_templates
 
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+configure_ui_templates(app)
+# AppBuilder's static blueprint otherwise looks only in its packaged themes.
+app.add_url_rule(
+    "/static/appbuilder/css/themes/plum.css",
+    endpoint="plum_theme",
+    view_func=app.send_static_file,
+    defaults={"filename": "appbuilder/css/themes/plum.css"},
+)
+app.add_url_rule(
+    "/static/appbuilder/css/themes/plum-components.css",
+    endpoint="plum_theme_components",
+    view_func=app.send_static_file,
+    defaults={"filename": "appbuilder/css/themes/plum-components.css"},
+)
 logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
 configure_logging(app.config)
 

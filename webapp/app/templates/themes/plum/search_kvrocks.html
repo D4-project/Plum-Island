@@ -1,0 +1,1984 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block head_js %}
+{{ super() }}
+{% include 'plum_json_assets.html' %}
+{% endblock %}
+
+{% block content %}
+<div class="plum-scan-search">
+{{ lib.panel_begin("Search scans", "Query Scans") }}
+<p class="plum-search-description">Find hosts, services, and technical indicators across <strong>{{ '{:,}'.format(total_scan_count) }}</strong> collected port scans.</p>
+
+<script src="{{ url_for('static', filename='themes/plum/ip_tag_enrichment.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+<script>
+let lastSuccessfulSearch = null;
+let exportStatusPoller = null;
+let activeExportConfig = null;
+let searchPageUnloading = false;
+let activeSearchAbortController = null;
+const SEARCH_PAGE_SIZE = 100;
+const MAX_SEARCH_WINDOW_DAYS = 4096;
+const MAX_DEBUG_PAGES = 100;
+let searchDebugReport = null;
+let searchDebugStarted = 0;
+
+function resetSearchDebug() {
+    searchDebugReport = null;
+    searchDebugStarted = performance.now();
+    document.getElementById('search-debug').hidden = true;
+    document.getElementById('search-debug-report').textContent = '';
+}
+
+function recordSearchDebug(data, requestMs, renderMs, controller) {
+    if (!data.debug || activeSearchAbortController !== controller) return;
+    if (!searchDebugReport) {
+        searchDebugReport = {
+            schema_version: 1,
+            page_count: 0,
+            request_ms: 0,
+            server_ms: 0,
+            pages: []
+        };
+    }
+    searchDebugReport.page_count += 1;
+    searchDebugReport.request_ms += requestMs;
+    searchDebugReport.server_ms += data.debug.total_ms;
+    if (searchDebugReport.page_count === 1) {
+        searchDebugReport.first_response_ms = performance.now() - searchDebugStarted - renderMs;
+    }
+    if (data.debug.counts.returned_ips > 0 && searchDebugReport.first_results_dom_ms === undefined) {
+        searchDebugReport.first_results_dom_ms = performance.now() - searchDebugStarted;
+    }
+    searchDebugReport.pages.push({
+        page: searchDebugReport.page_count,
+        received_at: new Date().toISOString(),
+        request_ms: requestMs,
+        render_ms: renderMs,
+        status: data.status,
+        pagination: data.pagination,
+        ...data.debug
+    });
+    if (searchDebugReport.pages.length > MAX_DEBUG_PAGES) searchDebugReport.pages.shift();
+    document.getElementById('search-debug').hidden = false;
+    document.getElementById('search-debug-summary').textContent =
+        `Performance: ${searchDebugReport.page_count} responses, latest ${formatProcessingTime(requestMs)}`;
+    document.getElementById('search-debug-report').textContent = JSON.stringify(searchDebugReport, null, 2);
+}
+
+function downloadSearchDebug() {
+    if (!searchDebugReport) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(searchDebugReport, null, 2)], {type: 'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'search-debug.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const TAG_SUGGEST_DEBOUNCE_MS = 120;
+const EXPORT_CONFIGS = {
+    resolved: {
+        title: 'Preparing Resolved Export',
+        counterUnit: 'IPs',
+        initialText: 'Finding matching IPs...',
+        runningText: 'Reading stored PTR records and collecting Passive DNS...',
+        startUrl: '/kvsearchview/export_resolved_start',
+        statusUrl: '/kvsearchview/export_resolved_status',
+        downloadUrl: '/kvsearchview/export_resolved_download'
+    },
+    ips: {
+        title: 'Preparing IP Export',
+        counterUnit: 'IPs',
+        initialText: 'Preparing IP export...',
+        runningText: 'Preparing filtered IP list...',
+        startUrl: '/kvsearchview/export_ips_start',
+        statusUrl: '/kvsearchview/export_ips_status',
+        downloadUrl: '/kvsearchview/export_ips_download'
+    },
+    json: {
+        title: 'Preparing JSON Export',
+        counterUnit: 'documents',
+        initialText: 'Preparing JSON export...',
+        runningText: 'Preparing filtered export...',
+        startUrl: '/kvsearchview/export_full_start',
+        statusUrl: '/kvsearchview/export_full_status',
+        downloadUrl: '/kvsearchview/export_full_download'
+    }
+};
+let tagSuggestAbortController = null;
+let tagSuggestDebounceTimer = null;
+let tagSuggestItems = [];
+let tagSuggestSelectedIndex = -1;
+let tagSuggestContext = null;
+let manualTimeRangeSnapshot = null;
+let sinceDirectiveModeActive = false;
+let ipTagEnricher = null;
+let pendingIpExpansions = new Map();
+let ipExpansionTimer = null;
+let activeIpExpansionAbortController = null;
+let ipExpansionInFlight = false;
+let ipExpansionGeneration = 0;
+
+window.addEventListener('pagehide', () => {
+    searchPageUnloading = true;
+    abortActiveSearch();
+});
+
+window.addEventListener('pageshow', () => {
+    searchPageUnloading = false;
+});
+
+function abortActiveSearch() {
+    if (activeSearchAbortController) {
+        activeSearchAbortController.abort();
+    }
+    if (ipTagEnricher) {
+        ipTagEnricher.abort();
+    }
+    if (activeIpExpansionAbortController) {
+        activeIpExpansionAbortController.abort();
+    }
+}
+
+function resetTagLookups() {
+    if (ipTagEnricher) {
+        ipTagEnricher.reset();
+    }
+    ipExpansionGeneration += 1;
+    pendingIpExpansions.clear();
+    if (ipExpansionTimer) {
+        clearTimeout(ipExpansionTimer);
+        ipExpansionTimer = null;
+    }
+    if (activeIpExpansionAbortController) {
+        activeIpExpansionAbortController.abort();
+        activeIpExpansionAbortController = null;
+    }
+    ipExpansionInFlight = false;
+}
+
+function renderIpTags(ip, tags) {
+    const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
+    window.renderIpTagBadges(target, tags);
+}
+
+function updateIpTimestamps(ip, timestampData) {
+    const target = document.querySelector(`[data-search-ip-timestamps="${CSS.escape(ip)}"]`);
+    if (!target || !timestampData) {
+        return;
+    }
+    const replacement = buildTimestampMeta(timestampData.min_seen, timestampData.max_seen);
+    if (!replacement) {
+        return;
+    }
+    replacement.dataset.searchIpTimestamps = ip;
+    target.replaceWith(replacement);
+}
+
+function queueTagsForSearchChunk(results, timeRange) {
+    ipTagEnricher.queue(results, timeRange);
+}
+
+function scheduleIpExpansion() {
+    if (ipExpansionTimer || ipExpansionInFlight || pendingIpExpansions.size === 0) {
+        return;
+    }
+    ipExpansionTimer = setTimeout(() => {
+        ipExpansionTimer = null;
+        processIpExpansionQueue();
+    }, 0);
+}
+
+async function processIpExpansionQueue() {
+    if (ipExpansionInFlight || pendingIpExpansions.size === 0) {
+        return;
+    }
+    const generation = ipExpansionGeneration;
+    const batch = [...pendingIpExpansions.keys()].slice(0, 200);
+    const config = pendingIpExpansions.get(batch[0]);
+    for (const ip of batch) {
+        pendingIpExpansions.delete(ip);
+    }
+    ipExpansionInFlight = true;
+    const controller = new AbortController();
+    activeIpExpansionAbortController = controller;
+    try {
+        const res = await fetch('/kvsearchview/expand_ips', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                ips: batch,
+                query: config.query,
+                from_ts: config.fromTs,
+                to_ts: config.toTs
+            }),
+            signal: controller.signal
+        });
+        const data = await readJsonResponse(res);
+        if (generation !== ipExpansionGeneration) {
+            return;
+        }
+        for (const [ip, uids] of Object.entries(data.results || {})) {
+            appendUidPanels(ip, uids, (data.uid_timestamps || {})[ip] || {});
+            updateIpTimestamps(ip, (data.timestamps || {})[ip]);
+        }
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
+            console.warn('IP search expansion failed', error);
+        }
+    } finally {
+        if (activeIpExpansionAbortController === controller) {
+            activeIpExpansionAbortController = null;
+        }
+        ipExpansionInFlight = false;
+        scheduleIpExpansion();
+    }
+}
+
+function queueIpExpansionForSearchChunk(results, timeRange, query) {
+    const config = {
+        query,
+        fromTs: timeRange?.from_ts ?? null,
+        toTs: timeRange?.to_ts ?? null
+    };
+    for (const ip of Object.keys(results || {})) {
+        pendingIpExpansions.set(ip, config);
+    }
+    scheduleIpExpansion();
+}
+
+function isSearchNavigationAbort(error) {
+    const message = error?.message || '';
+    return error?.name === 'AbortError'
+        || (searchPageUnloading && message.includes('NetworkError'));
+}
+
+function bindSearchNavigationAbort() {
+    document.addEventListener('click', (event) => {
+        const link = event.target.closest('.ip-address-link');
+        if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+            return;
+        }
+        searchPageUnloading = true;
+        abortActiveSearch();
+    });
+}
+
+async function readJsonResponse(res) {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        return await res.json();
+    }
+
+    const rawText = await res.text();
+    const snippet = rawText.trim().slice(0, 300) || `HTTP ${res.status}`;
+    throw new Error(snippet);
+}
+
+ipTagEnricher = window.createIpTagEnricher({
+    readJsonResponse,
+    renderTags: renderIpTags,
+    renderTimestamps: updateIpTimestamps
+});
+
+function formatTimestamp(ts) {
+    if (ts === null || ts === undefined) {
+        return '';
+    }
+    const numericTs = Number(ts);
+    if (Number.isNaN(numericTs)) {
+        return '';
+    }
+    const milliseconds = numericTs > 1e12 ? numericTs : numericTs * 1000;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
+}
+
+function formatTimestampWithRaw(ts) {
+    if (ts === null || ts === undefined || ts === '') {
+        return '';
+    }
+    const pretty = formatTimestamp(ts);
+    return pretty || ts;
+}
+
+function hasTimestampValue(value) {
+    return value !== null && value !== undefined && value !== '';
+}
+
+function buildTimestampMeta(first, last) {
+    if (!hasTimestampValue(first) && !hasTimestampValue(last)) {
+        return null;
+    }
+    const firstDisplay = hasTimestampValue(first) ? formatTimestampWithRaw(first) : 'N/A';
+    const lastDisplay = hasTimestampValue(last) ? formatTimestampWithRaw(last) : 'N/A';
+
+    const meta = document.createElement('span');
+    meta.className = 'timestamp-meta';
+
+    const firstChip = document.createElement('span');
+    firstChip.className = 'timestamp-chip timestamp-first';
+    const firstIcon = document.createElement('i');
+    firstIcon.className = 'fa-solid fa-backward-step';
+    firstIcon.setAttribute('aria-hidden', 'true');
+    firstChip.appendChild(firstIcon);
+    firstChip.appendChild(document.createTextNode(` ${firstDisplay}`));
+
+    const separator = document.createElement('span');
+    separator.className = 'timestamp-separator';
+    separator.textContent = '|';
+
+    const lastChip = document.createElement('span');
+    lastChip.className = 'timestamp-chip timestamp-last';
+    lastChip.appendChild(document.createTextNode(`${lastDisplay} `));
+    const lastIcon = document.createElement('i');
+    lastIcon.className = 'fa-solid fa-forward-step';
+    lastIcon.setAttribute('aria-hidden', 'true');
+    lastChip.appendChild(lastIcon);
+
+    meta.appendChild(firstChip);
+    meta.appendChild(separator);
+    meta.appendChild(lastChip);
+    return meta;
+}
+
+function copyIpToClipboard(ip, triggerEl) {
+    const markCopied = () => {
+        if (!triggerEl) {
+            return;
+        }
+        triggerEl.classList.add('copied');
+        triggerEl.setAttribute('aria-label', `Copied ${ip}`);
+        setTimeout(() => {
+            triggerEl.classList.remove('copied');
+            triggerEl.removeAttribute('aria-label');
+        }, 1500);
+    };
+
+    const fallbackCopy = () => {
+        const textarea = document.createElement('textarea');
+        textarea.value = ip;
+        textarea.setAttribute('readonly', '');
+        textarea.className = 'plum-clipboard-fallback';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand('copy');
+            markCopied();
+        } catch (err) {
+            console.warn('Clipboard copy failed', err);
+        } finally {
+            document.body.removeChild(textarea);
+        }
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(ip).then(markCopied).catch(fallbackCopy);
+    } else {
+        fallbackCopy();
+    }
+}
+
+function setDownloadButtonState(enabled) {
+    const container = document.getElementById('download-buttons-container');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+    if (!enabled) {
+        return;
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'download-ips-btn';
+    button.className = 'btn btn-outline-secondary w-100 mt-2';
+    button.title = 'Download IP List';
+    button.setAttribute('aria-label', 'Download IP List');
+    button.innerHTML = '<i class="fa-solid fa-download" aria-hidden="true"></i>';
+    button.addEventListener('click', startIpExport);
+    container.appendChild(button);
+
+    const fullButton = document.createElement('button');
+    fullButton.type = 'button';
+    fullButton.id = 'download-full-export-btn';
+    fullButton.className = 'btn btn-outline-secondary w-100 mt-2';
+    fullButton.title = 'Download JSON';
+    fullButton.setAttribute('aria-label', 'Download JSON');
+    fullButton.innerHTML = '<i class="fa-solid fa-file-arrow-down" aria-hidden="true"></i>';
+    fullButton.addEventListener('click', startFullExport);
+    container.appendChild(fullButton);
+
+    const resolvedButton = document.createElement('button');
+    resolvedButton.type = 'button';
+    resolvedButton.id = 'download-resolved-btn';
+    resolvedButton.className = 'btn btn-outline-secondary w-100 mt-2';
+    resolvedButton.title = 'Download resolved (CSV)';
+    resolvedButton.setAttribute('aria-label', 'Download resolved (CSV)');
+    resolvedButton.innerHTML = '<i class="fa-solid fa-network-wired" aria-hidden="true"></i>';
+    resolvedButton.addEventListener('click', () => startExport(EXPORT_CONFIGS.resolved));
+    container.appendChild(resolvedButton);
+}
+
+function setSearchLoading(isLoading, showSpinner = true) {
+    const spinner = document.getElementById('info-spinner');
+    const searchBtn = document.getElementById('search-btn');
+    if (!spinner || !searchBtn) {
+        return;
+    }
+    if (isLoading) {
+        spinner.hidden = !showSpinner;
+        searchBtn.disabled = true;
+    } else {
+        spinner.hidden = true;
+        searchBtn.disabled = false;
+    }
+}
+
+function setLoadMoreLoading(isLoading) {
+    const container = document.getElementById('load-more-container');
+    if (!container || !isLoading) {
+        return;
+    }
+    container.innerHTML = `
+        <span class="text-muted" role="status" aria-live="polite">
+            <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+        </span>
+    `;
+}
+
+function padDatePart(value) {
+    return String(value).padStart(2, '0');
+}
+
+function formatProcessingTime(milliseconds) {
+    const numericValue = Number(milliseconds || 0);
+    if (numericValue >= 1000) {
+        return `${(numericValue / 1000).toFixed(3)}s`;
+    }
+    return `${numericValue.toFixed(3)}ms`;
+}
+
+function formatDateInput(date) {
+    return `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+}
+
+function tokenizeSearchQuery(query) {
+    const tokens = [];
+    let current = '';
+    let activeQuote = null;
+
+    for (let index = 0; index < (query || '').length; index += 1) {
+        const char = query[index];
+
+        if (activeQuote) {
+            current += char;
+            if (char === activeQuote) {
+                activeQuote = null;
+            }
+            continue;
+        }
+
+        if (char === '"' || char === '\'') {
+            activeQuote = char;
+            current += char;
+            continue;
+        }
+
+        if (/\s/.test(char)) {
+            if (current) {
+                tokens.push(current);
+                current = '';
+            }
+            continue;
+        }
+
+        current += char;
+    }
+
+    if (current) {
+        tokens.push(current);
+    }
+    return tokens;
+}
+
+function getSinceDirectiveState(query) {
+    const tokens = tokenizeSearchQuery(query);
+    const matches = tokens.filter((token) => token.toLowerCase().startsWith('since:'));
+
+    if (!matches.length) {
+        return {
+            active: false,
+            days: null,
+            error: null
+        };
+    }
+
+    if (matches.length > 1) {
+        return {
+            active: true,
+            days: null,
+            error: 'Only one since: directive is allowed'
+        };
+    }
+
+    const rawValue = matches[0].slice('since:'.length).trim();
+    if (!/^\d+$/.test(rawValue) || Number(rawValue) <= 0) {
+        return {
+            active: true,
+            days: null,
+            error: 'since: expects a positive integer number of days'
+        };
+    }
+
+    return {
+        active: true,
+        days: Number(rawValue),
+        error: null
+    };
+}
+
+function computeSinceTimeRange(days) {
+    const toDate = new Date();
+    toDate.setHours(23, 59, 59, 0);
+
+    const fromDate = new Date();
+    fromDate.setHours(0, 0, 0, 0);
+    fromDate.setDate(fromDate.getDate() - Number(days));
+
+    return {
+        fromDate,
+        toDate,
+        fromTs: Math.floor(fromDate.getTime() / 1000),
+        toTs: Math.floor(toDate.getTime() / 1000)
+    };
+}
+
+function readVisibleTimeRangeValues() {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    return {
+        from: fromInput ? fromInput.value : '',
+        to: toInput ? toInput.value : ''
+    };
+}
+
+function writeVisibleTimeRangeValues(fromValue, toValue) {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromPicker = document.getElementById('time-from-picker');
+    const toPicker = document.getElementById('time-to-picker');
+
+    if (fromInput) {
+        fromInput.value = fromValue || '';
+    }
+    if (toInput) {
+        toInput.value = toValue || '';
+    }
+    if (fromPicker) {
+        fromPicker.value = fromValue || '';
+    }
+    if (toPicker) {
+        toPicker.value = toValue || '';
+    }
+}
+
+function setTimeRangeInputsLocked(isLocked) {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromButton = document.getElementById('time-from-btn');
+    const toButton = document.getElementById('time-to-btn');
+    const fromField = fromInput ? fromInput.closest('.search-date-field') : null;
+    const toField = toInput ? toInput.closest('.search-date-field') : null;
+
+    if (fromInput) {
+        fromInput.disabled = isLocked;
+    }
+    if (toInput) {
+        toInput.disabled = isLocked;
+    }
+    if (fromButton) {
+        fromButton.disabled = isLocked;
+    }
+    if (toButton) {
+        toButton.disabled = isLocked;
+    }
+    if (fromField) {
+        fromField.classList.toggle('search-date-field-disabled', isLocked);
+    }
+    if (toField) {
+        toField.classList.toggle('search-date-field-disabled', isLocked);
+    }
+}
+
+function syncSinceDirectiveState() {
+    const queryInput = document.getElementById('query');
+    if (!queryInput) {
+        return {
+            active: false,
+            days: null,
+            error: null
+        };
+    }
+
+    const directive = getSinceDirectiveState(queryInput.value || '');
+
+    if (directive.active && !sinceDirectiveModeActive) {
+        manualTimeRangeSnapshot = readVisibleTimeRangeValues();
+    } else if (!directive.active && sinceDirectiveModeActive) {
+        if (manualTimeRangeSnapshot) {
+            writeVisibleTimeRangeValues(
+                manualTimeRangeSnapshot.from,
+                manualTimeRangeSnapshot.to
+            );
+        }
+        manualTimeRangeSnapshot = null;
+    }
+
+    sinceDirectiveModeActive = directive.active;
+    setTimeRangeInputsLocked(directive.active);
+
+    if (directive.active && directive.days !== null) {
+        const timeRange = computeSinceTimeRange(directive.days);
+        writeVisibleTimeRangeValues(
+            formatDateInput(timeRange.fromDate),
+            formatDateInput(timeRange.toDate)
+        );
+    }
+
+    return directive;
+}
+
+function setDefaultTimeRange() {
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromPicker = document.getElementById('time-from-picker');
+    const toPicker = document.getElementById('time-to-picker');
+    if (!fromInput || !toInput) {
+        return;
+    }
+    const toDate = new Date();
+    const fromDate = new Date(toDate);
+    fromDate.setMonth(fromDate.getMonth() - 3);
+    fromInput.value = formatDateInput(fromDate);
+    toInput.value = formatDateInput(toDate);
+    if (fromPicker) {
+        fromPicker.value = fromInput.value;
+    }
+    if (toPicker) {
+        toPicker.value = toInput.value;
+    }
+}
+
+function getSearchTimeRange() {
+    const sinceDirective = syncSinceDirectiveState();
+    if (sinceDirective.active) {
+        if (sinceDirective.error) {
+            throw new Error(sinceDirective.error);
+        }
+        return computeSinceTimeRange(sinceDirective.days);
+    }
+
+    const fromInput = document.getElementById('time-from');
+    const toInput = document.getElementById('time-to');
+    const fromDate = new Date(`${fromInput.value}T00:00:00`);
+    const toDate = new Date(`${toInput.value}T23:59:59`);
+
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+        throw new Error('Invalid time range');
+    }
+    if (fromDate.getTime() > toDate.getTime()) {
+        throw new Error('Start time must be before end time');
+    }
+
+    return {
+        fromTs: Math.floor(fromDate.getTime() / 1000),
+        toTs: Math.floor(toDate.getTime() / 1000)
+    };
+}
+
+function getInclusiveDayCount(fromTs, toTs) {
+    const secondsPerDay = 24 * 60 * 60;
+    return Math.max(1, Math.floor((Number(toTs) - Number(fromTs)) / secondsPerDay) + 1);
+}
+
+function openDatePicker(inputId) {
+    const visibleInput = document.getElementById(inputId);
+    const pickerInput = document.getElementById(`${inputId}-picker`);
+    if (!visibleInput || !pickerInput || visibleInput.disabled) {
+        return;
+    }
+
+    pickerInput.value = visibleInput.value || pickerInput.value;
+    pickerInput.focus();
+    if (typeof pickerInput.showPicker === 'function') {
+        try {
+            pickerInput.showPicker();
+            return;
+        } catch (error) {
+            // Fall through to click for browsers that gate showPicker differently.
+        }
+    }
+    pickerInput.click();
+}
+
+function bindDateInput(inputId) {
+    const visibleInput = document.getElementById(inputId);
+    const pickerInput = document.getElementById(`${inputId}-picker`);
+    if (!visibleInput || !pickerInput) {
+        return;
+    }
+
+    pickerInput.addEventListener('change', () => {
+        visibleInput.value = pickerInput.value;
+    });
+
+    visibleInput.addEventListener('change', () => {
+        pickerInput.value = visibleInput.value;
+    });
+}
+
+function buildSearchParams(query, timeRange, cursorTs = null, searchId = null, limit = SEARCH_PAGE_SIZE, windowDays = 1) {
+    const params = new URLSearchParams();
+    params.set('q', query);
+    params.set('from_ts', String(timeRange.fromTs));
+    params.set('to_ts', String(timeRange.toTs));
+    params.set('limit', String(limit));
+    params.set('window_days', String(windowDays));
+    if (cursorTs !== null && cursorTs !== undefined) {
+        params.set('cursor_ts', String(cursorTs));
+    }
+    if (searchId) {
+        params.set('search_id', searchId);
+    }
+    return params;
+}
+
+function getTagSuggestMenu() {
+    return document.getElementById('query-tag-suggest');
+}
+
+function hideTagSuggestions() {
+    if (tagSuggestAbortController) {
+        tagSuggestAbortController.abort();
+        tagSuggestAbortController = null;
+    }
+    if (tagSuggestDebounceTimer) {
+        clearTimeout(tagSuggestDebounceTimer);
+        tagSuggestDebounceTimer = null;
+    }
+    const menu = getTagSuggestMenu();
+    if (menu) {
+        menu.style.display = 'none';
+        menu.innerHTML = '';
+    }
+    tagSuggestItems = [];
+    tagSuggestSelectedIndex = -1;
+    tagSuggestContext = null;
+}
+
+function getQueryTagContext() {
+    const input = document.getElementById('query');
+    if (!input) {
+        return null;
+    }
+    const caretStart = input.selectionStart;
+    const caretEnd = input.selectionEnd;
+    if (caretStart === null || caretEnd === null || caretStart !== caretEnd) {
+        return null;
+    }
+
+    const value = input.value || '';
+    let tokenStart = caretStart;
+    while (tokenStart > 0 && !/\s/.test(value.charAt(tokenStart - 1))) {
+        tokenStart -= 1;
+    }
+
+    let tokenEnd = caretStart;
+    while (tokenEnd < value.length && !/\s/.test(value.charAt(tokenEnd))) {
+        tokenEnd += 1;
+    }
+
+    const token = value.slice(tokenStart, tokenEnd);
+    const lowerToken = token.toLowerCase();
+    if (!lowerToken.startsWith('tag:') && !lowerToken.startsWith('http_headval:')) {
+        return null;
+    }
+    if (lowerToken.startsWith('http_headval:')) {
+        const headerFragment = lowerToken.slice('http_headval:'.length);
+        if (headerFragment.includes(':')) {
+            return null;
+        }
+    }
+
+    const suggestType = lowerToken.startsWith('http_headval:') ? 'header' : 'tag';
+    if (suggestType === 'header' && token.includes(' ')) {
+        return null;
+    }
+
+    return {
+        input,
+        token,
+        suggestType,
+        tokenStart,
+        tokenEnd
+    };
+}
+
+function updateTagSuggestionSelection(nextIndex) {
+    const menu = getTagSuggestMenu();
+    if (!menu || !tagSuggestItems.length) {
+        tagSuggestSelectedIndex = -1;
+        return;
+    }
+    const buttons = [...menu.querySelectorAll('.tag-suggest-item')];
+    if (!buttons.length) {
+        tagSuggestSelectedIndex = -1;
+        return;
+    }
+
+    const boundedIndex = Math.max(0, Math.min(nextIndex, buttons.length - 1));
+    tagSuggestSelectedIndex = boundedIndex;
+    buttons.forEach((button, index) => {
+        button.classList.toggle('active', index === boundedIndex);
+    });
+    buttons[boundedIndex].scrollIntoView({ block: 'nearest' });
+}
+
+function applyTagSuggestion(index) {
+    if (!tagSuggestContext || !tagSuggestItems[index]) {
+        return;
+    }
+
+    const suggestion = tagSuggestItems[index];
+    const input = tagSuggestContext.input;
+    const currentValue = input.value || '';
+    const before = currentValue.slice(0, tagSuggestContext.tokenStart);
+    const after = currentValue.slice(tagSuggestContext.tokenEnd);
+    const needsTrailingSpace = suggestion.kind === 'tag' && (after === '' || !/^\s/.test(after));
+    const replacement = `${suggestion.value}${needsTrailingSpace ? ' ' : ''}`;
+    input.value = `${before}${replacement}${after}`;
+    const nextCaret = before.length + replacement.length;
+    input.focus();
+    input.setSelectionRange(nextCaret, nextCaret);
+
+    if (suggestion.kind === 'namespace') {
+        scheduleTagSuggestionFetch();
+        return;
+    }
+    hideTagSuggestions();
+}
+
+function renderTagSuggestions(suggestions, context) {
+    const menu = getTagSuggestMenu();
+    if (!menu) {
+        return;
+    }
+    if (!suggestions.length) {
+        hideTagSuggestions();
+        return;
+    }
+
+    tagSuggestItems = suggestions;
+    tagSuggestContext = context;
+    menu.textContent = '';
+    suggestions.forEach((suggestion, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'tag-suggest-item';
+        button.dataset.index = String(index);
+
+        const label = document.createElement('span');
+        label.className = 'tag-suggest-label';
+        label.textContent = suggestion.label || '';
+        button.appendChild(label);
+
+        const kind = document.createElement('span');
+        kind.className = 'tag-suggest-kind';
+        kind.textContent = suggestion.kind || '';
+        button.appendChild(kind);
+
+        menu.appendChild(button);
+    });
+    menu.style.display = 'block';
+
+    [...menu.querySelectorAll('.tag-suggest-item')].forEach((button) => {
+        button.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+        });
+        button.addEventListener('click', () => {
+            applyTagSuggestion(Number(button.dataset.index));
+        });
+    });
+    updateTagSuggestionSelection(0);
+}
+
+async function fetchTagSuggestions(context) {
+    if (tagSuggestAbortController) {
+        tagSuggestAbortController.abort();
+    }
+    tagSuggestAbortController = new AbortController();
+
+    try {
+        const params = new URLSearchParams();
+        params.set('term', context.token);
+        const suggestPath = context.suggestType === 'header' ? 'header_suggest' : 'tag_suggest';
+        const res = await fetch(`/kvsearchview/${suggestPath}?${params.toString()}`, {
+            signal: tagSuggestAbortController.signal
+        });
+        const data = await readJsonResponse(res);
+        const latestContext = getQueryTagContext();
+        if (!latestContext || latestContext.token !== context.token || latestContext.tokenStart !== context.tokenStart) {
+            return;
+        }
+        renderTagSuggestions(data.suggestions || [], latestContext);
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            return;
+        }
+        hideTagSuggestions();
+    }
+}
+
+function scheduleTagSuggestionFetch() {
+    if (tagSuggestDebounceTimer) {
+        clearTimeout(tagSuggestDebounceTimer);
+    }
+
+    const context = getQueryTagContext();
+    if (!context) {
+        hideTagSuggestions();
+        return;
+    }
+
+    tagSuggestDebounceTimer = setTimeout(() => {
+        fetchTagSuggestions(context);
+    }, TAG_SUGGEST_DEBOUNCE_MS);
+}
+
+function handleQueryKeydown(event) {
+    if (event.isComposing) {
+        return;
+    }
+
+    const menu = getTagSuggestMenu();
+    const isOpen = menu && menu.style.display !== 'none' && tagSuggestItems.length > 0;
+    if (!isOpen) {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            search();
+        }
+        return;
+    }
+
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        updateTagSuggestionSelection(tagSuggestSelectedIndex + 1);
+    } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        updateTagSuggestionSelection(tagSuggestSelectedIndex - 1);
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        applyTagSuggestion(tagSuggestSelectedIndex >= 0 ? tagSuggestSelectedIndex : 0);
+    } else if (event.key === 'Escape') {
+        event.preventDefault();
+        hideTagSuggestions();
+    }
+}
+
+function bindQueryTagHelper() {
+    const input = document.getElementById('query');
+    if (!input) {
+        return;
+    }
+
+    input.addEventListener('input', () => {
+        scheduleTagSuggestionFetch();
+        syncSinceDirectiveState();
+    });
+    input.addEventListener('click', scheduleTagSuggestionFetch);
+    input.addEventListener('keydown', handleQueryKeydown);
+    input.addEventListener('blur', () => {
+        setTimeout(() => {
+            const activeElement = document.activeElement;
+            const menu = getTagSuggestMenu();
+            if (menu && menu.contains(activeElement)) {
+                return;
+            }
+            hideTagSuggestions();
+        }, 120);
+    });
+}
+
+const SEARCH_KEYWORDS = new Set([
+    'ip', 'net', 'fqdn', 'fqdn_requested', 'domain_requested', 'host', 'domain',
+    'tld', 'port', 'banner', 'tag', 'since', 'http_title', 'http_cookiename',
+    'http_etag', 'http_server', 'http_header', 'http_headval',
+    'http_favicon_path', 'http_favicon_mmhash', 'http_favicon_md5',
+    'http_favicon_sha256', 'x509_issuer', 'x509_issuer_cn', 'x509_subject',
+    'x509_subject_cn', 'x509_san', 'x509_md5', 'x509_sha1', 'x509_sha256'
+]);
+
+function appendSearchKeyword(keyword) {
+    if (!SEARCH_KEYWORDS.has(keyword)) {
+        return;
+    }
+    appendSearchTerm(`${keyword}:`);
+}
+
+function appendSearchTerm(term) {
+    const input = document.getElementById('query');
+    if (!input) {
+        return;
+    }
+    const prefix = input.value && !/\s$/.test(input.value) ? ' ' : '';
+    input.value += `${prefix}${term}`;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new Event('input', {bubbles: true}));
+}
+
+function bindSearchKeywordHelpers() {
+    document.querySelectorAll('[data-search-keyword]').forEach((keyword) => {
+        const appendKeyword = () => appendSearchKeyword(keyword.dataset.searchKeyword);
+        keyword.addEventListener('click', appendKeyword);
+        keyword.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                appendKeyword();
+            }
+        });
+    });
+    document.querySelectorAll('[data-search-tag-term]').forEach((tag) => {
+        tag.addEventListener('click', () => appendSearchTerm(tag.dataset.searchTagTerm));
+    });
+    document.querySelectorAll('[data-search-helper-toggle]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const keywords = document.getElementById('search-keyword-table');
+            const tags = document.getElementById('search-tag-table');
+            const showTags = tags.hidden;
+            keywords.hidden = showTags;
+            tags.hidden = !showTags;
+            // The clicked control is now hidden: keep keyboard focus on its counterpart.
+            (showTags ? tags : keywords).querySelector('[data-search-helper-toggle]').focus();
+        });
+    });
+}
+
+function buildExportPayload() {
+    if (!lastSuccessfulSearch) {
+        return null;
+    }
+    return {
+        q: lastSuccessfulSearch.query,
+        from_ts: lastSuccessfulSearch.fromTs,
+        to_ts: lastSuccessfulSearch.toTs
+    };
+}
+
+function setAlertMessage(container, message, alertClass = 'alert-danger', extraClass = 'mt-2') {
+    if (!container) {
+        return;
+    }
+    container.textContent = '';
+    const alert = document.createElement('div');
+    alert.className = ['alert', alertClass, extraClass].filter(Boolean).join(' ');
+    alert.setAttribute('role', 'alert');
+    alert.textContent = message === null || message === undefined ? '' : String(message);
+    container.appendChild(alert);
+}
+
+function resetExportModal(config) {
+    activeExportConfig = config;
+    const titleEl = document.getElementById('export-full-modal-label');
+    const progressBar = document.getElementById('export-progress-bar');
+    const statusEl = document.getElementById('export-status-text');
+    const counterEl = document.getElementById('export-progress-count');
+    const elapsedEl = document.getElementById('export-elapsed');
+    const errorEl = document.getElementById('export-error');
+    const warningEl = document.getElementById('export-warning');
+    titleEl.textContent = config.title;
+    progressBar.style.width = '0%';
+    progressBar.setAttribute('aria-valuenow', '0');
+    progressBar.textContent = '0%';
+    statusEl.textContent = config.initialText;
+    counterEl.textContent = `0 / 0 ${config.counterUnit}`;
+    elapsedEl.textContent = '0.0s';
+    errorEl.innerHTML = '';
+    warningEl.innerHTML = '';
+}
+
+function stopExportPolling() {
+    if (exportStatusPoller) {
+        clearInterval(exportStatusPoller);
+        exportStatusPoller = null;
+    }
+}
+
+function updateExportWarnings(data) {
+    const warningEl = document.getElementById('export-warning');
+    if (!warningEl) {
+        return;
+    }
+    const warnings = data.warnings || [];
+    const warningCount = Number(data.warning_count || warnings.length || 0);
+    if (warningCount <= 0) {
+        warningEl.textContent = '';
+        return;
+    }
+
+    const hiddenCount = Math.max(0, warningCount - warnings.length);
+    warningEl.textContent = '';
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-warning mt-2';
+    alert.setAttribute('role', 'alert');
+
+    const title = document.createElement('strong');
+    title.textContent = `${warningCount} warning${warningCount > 1 ? 's' : ''}`;
+    alert.appendChild(title);
+
+    if (warnings.length) {
+        const list = document.createElement('ul');
+        list.className = 'mb-0';
+        warnings.forEach((warning) => {
+            const item = document.createElement('li');
+            item.textContent = warning;
+            list.appendChild(item);
+        });
+        alert.appendChild(list);
+    }
+
+    if (hiddenCount > 0) {
+        const hiddenText = document.createElement('p');
+        hiddenText.className = 'mb-0';
+        hiddenText.textContent = `${hiddenCount} additional warnings not shown.`;
+        alert.appendChild(hiddenText);
+    }
+
+    warningEl.appendChild(alert);
+}
+
+function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.json) {
+    const progressBar = document.getElementById('export-progress-bar');
+    const statusEl = document.getElementById('export-status-text');
+    const counterEl = document.getElementById('export-progress-count');
+    const elapsedEl = document.getElementById('export-elapsed');
+    const errorEl = document.getElementById('export-error');
+    const percent = Number(data.progress_percent || 0).toFixed(1);
+
+    progressBar.style.width = `${percent}%`;
+    progressBar.setAttribute('aria-valuenow', percent);
+    progressBar.textContent = `${percent}%`;
+    counterEl.textContent = `${data.processed_uids || 0} / ${data.total_uids || 0} ${config.counterUnit}`;
+    elapsedEl.textContent = `${Number(data.elapsed_seconds || 0).toFixed(1)}s`;
+    errorEl.innerHTML = '';
+    updateExportWarnings(data);
+
+    if (data.status === 'queued') {
+        statusEl.textContent = 'Queued...';
+    } else if (data.status === 'running') {
+        statusEl.textContent = config.runningText;
+    } else if (data.status === 'done') {
+        statusEl.textContent = 'Export ready. Starting download...';
+    } else if (data.status === 'error') {
+        statusEl.textContent = 'Export failed';
+        setAlertMessage(errorEl, data.error || 'Unexpected error');
+    }
+}
+
+async function pollExport(jobId, config) {
+    try {
+        const res = await fetch(`${config.statusUrl}?job_id=${encodeURIComponent(jobId)}`);
+        const data = await readJsonResponse(res);
+        updateExportModal(data, config);
+
+        if (data.status === 'done' && data.download_ready) {
+            stopExportPolling();
+            const hasWarnings = Number(data.warning_count || 0) > 0;
+            const tmpLink = document.createElement('a');
+            tmpLink.href = `${config.downloadUrl}?job_id=${encodeURIComponent(jobId)}`;
+            tmpLink.hidden = true;
+            document.body.appendChild(tmpLink);
+            tmpLink.click();
+            document.body.removeChild(tmpLink);
+            if (!hasWarnings) {
+                setTimeout(() => {
+                    $('#export-full-modal').modal('hide');
+                }, 800);
+            }
+        } else if (data.status === 'error') {
+            stopExportPolling();
+        }
+        return data.status;
+    } catch (error) {
+        stopExportPolling();
+        const errorEl = document.getElementById('export-error');
+        document.getElementById('export-status-text').textContent = 'Export failed';
+        setAlertMessage(errorEl, error?.message || 'Unexpected error');
+        return 'error';
+    }
+}
+
+async function startExport(config) {
+    if (!lastSuccessfulSearch) {
+        return;
+    }
+
+    const payload = buildExportPayload();
+    if (!payload) {
+        return;
+    }
+
+    stopExportPolling();
+    resetExportModal(config);
+    $('#export-full-modal').modal({
+        backdrop: 'static',
+        keyboard: false
+    });
+    $('#export-full-modal').modal('show');
+
+    try {
+        const res = await fetch(config.startUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.getElementById('download-buttons-container').dataset.csrf
+            },
+            body: JSON.stringify(payload)
+        });
+        const data = await readJsonResponse(res);
+        if (!res.ok || data.error) {
+            throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        const status = await pollExport(data.job_id, config);
+        if (status !== 'done' && status !== 'error') {
+            exportStatusPoller = setInterval(() => {
+                pollExport(data.job_id, config);
+            }, 1000);
+        }
+    } catch (error) {
+        document.getElementById('export-status-text').textContent = 'Export failed';
+        setAlertMessage(document.getElementById('export-error'), error?.message || 'Unexpected error');
+    }
+}
+
+async function startIpExport() {
+    await startExport(EXPORT_CONFIGS.ips);
+}
+
+async function startFullExport() {
+    await startExport(EXPORT_CONFIGS.json);
+}
+
+function splitQueryTokens(query) {
+    const tokens = [];
+    let current = '';
+    let quote = null;
+    let escaped = false;
+
+    for (const char of String(query || '')) {
+        if (escaped) {
+            current += char;
+            escaped = false;
+            continue;
+        }
+        if (char === '\\') {
+            current += char;
+            escaped = true;
+            continue;
+        }
+        if (quote) {
+            current += char;
+            if (char === quote) {
+                quote = null;
+            }
+            continue;
+        }
+        if (char === '"' || char === "'") {
+            current += char;
+            quote = char;
+            continue;
+        }
+        if (/\s/.test(char)) {
+            if (current) {
+                tokens.push(current);
+                current = '';
+            }
+            continue;
+        }
+        current += char;
+    }
+    if (current) {
+        tokens.push(current);
+    }
+    return tokens;
+}
+
+function hasMultiplePortTerms(query) {
+    let portTermsInGroup = 0;
+    for (const token of splitQueryTokens(query)) {
+        if (token.toUpperCase() === 'OR') {
+            portTermsInGroup = 0;
+            continue;
+        }
+        if (token.toLowerCase().startsWith('port:')) {
+            portTermsInGroup += 1;
+            if (portTermsInGroup > 1) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+async function search() {
+    const query = document.getElementById('query').value || '';
+    if (hasMultiplePortTerms(query)) {
+        window.alert('Search is currently single port based. Please search one port at a time.');
+        return;
+    }
+    await runSearchPage(null, false);
+}
+
+async function loadMoreResults() {
+    if (!lastSuccessfulSearch) {
+        return;
+    }
+    await runSearchPage(lastSuccessfulSearch.nextCursor, true);
+}
+
+function appendUidPanels(ip, uids, timestamps) {
+    const uidsDiv = document.querySelector(`[data-search-ip-uids="${CSS.escape(ip)}"]`);
+    if (!uidsDiv) {
+        return;
+    }
+    const resultIndex = uidsDiv.dataset.resultIndex;
+    const existing = new Set(
+        [...uidsDiv.querySelectorAll('[data-search-uid]')].map((element) => element.dataset.searchUid)
+    );
+    let uidIndex = uidsDiv.children.length;
+    for (const uid of (uids || [])) {
+        const uidLabel = String(uid);
+        if (existing.has(uidLabel)) {
+            continue;
+        }
+        existing.add(uidLabel);
+        const uidPanel = document.createElement('div');
+        uidPanel.className = 'panel panel-info';
+        const uidTimestamp = timestamps && timestamps[uidLabel] ? timestamps[uidLabel] : null;
+        const uidHeading = document.createElement('div');
+        uidHeading.className = 'panel-heading';
+        const uidTitle = document.createElement('h5');
+        uidTitle.className = 'panel-title';
+        const uidLink = document.createElement('a');
+        uidLink.href = '#';
+        uidLink.dataset.uid = uidLabel;
+        uidLink.dataset.searchUid = uidLabel;
+        uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
+        uidLink.textContent = uidLabel;
+        uidLink.addEventListener('click', (event) => {
+            event.preventDefault();
+            loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+        });
+        uidTitle.appendChild(uidLink);
+        if (uidTimestamp) {
+            uidTitle.appendChild(buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen));
+        }
+        uidHeading.appendChild(uidTitle);
+        uidPanel.appendChild(uidHeading);
+        const uidBody = document.createElement('div');
+        uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
+        uidBody.className = 'panel-body';
+        uidBody.style.display = 'none';
+        uidPanel.appendChild(uidBody);
+        uidsDiv.appendChild(uidPanel);
+        uidIndex += 1;
+    }
+}
+
+function renderSearchChunk(data, baseIndex, hitsDiv) {
+    const returnedIps = Object.keys(data.results || {});
+    const requestedHostnames = data.requested_hostnames || {};
+
+    Object.entries(data.results || {}).forEach(([ip, uids], ipIndex) => {
+        const resultIndex = baseIndex + ipIndex;
+        const ipPanel = document.createElement('div');
+        ipPanel.className = 'panel panel-default';
+        const ipTimestamps = data.timestamps && data.timestamps[ip] ? data.timestamps[ip] : {};
+        const ipLabel = ip;
+        const ipMeta = buildTimestampMeta(ipTimestamps.min_seen, ipTimestamps.max_seen);
+        const sortedUids = [...uids].sort((a, b) => {
+            const aLast = ipTimestamps[a] && ipTimestamps[a].last_seen ? Number(ipTimestamps[a].last_seen) : -Infinity;
+            const bLast = ipTimestamps[b] && ipTimestamps[b].last_seen ? Number(ipTimestamps[b].last_seen) : -Infinity;
+            return bLast - aLast;
+        });
+        const requestedHostname = findRequestedHostnameForUids(sortedUids, requestedHostnames);
+        const detailUrl = buildIpDetailUrl(ipLabel, requestedHostname);
+
+        const heading = document.createElement('div');
+        heading.className = 'panel-heading';
+        const title = document.createElement('h4');
+        title.className = 'panel-title';
+
+        const collapseLink = document.createElement('a');
+        collapseLink.className = 'ip-address-link';
+        collapseLink.href = detailUrl;
+        collapseLink.title = `Open details for ${ipLabel}`;
+        collapseLink.textContent = ipLabel;
+        title.appendChild(collapseLink);
+
+        const detailLink = document.createElement('a');
+        detailLink.className = 'ip-detail-link';
+        detailLink.setAttribute('data-toggle', 'collapse');
+        detailLink.setAttribute('data-parent', '#hits');
+        detailLink.href = `#collapse-ip-${resultIndex}`;
+        detailLink.title = `Expand scan reports for ${ipLabel}`;
+        const detailIcon = document.createElement('i');
+        detailIcon.className = 'fa fa-info-circle';
+        detailIcon.setAttribute('aria-hidden', 'true');
+        detailLink.appendChild(detailIcon);
+        title.appendChild(detailLink);
+
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.className = 'ip-quick-link';
+        copyButton.dataset.ip = ipLabel;
+        copyButton.title = `Copy ${ipLabel}`;
+        copyButton.addEventListener('click', () => copyIpToClipboard(copyButton.dataset.ip, copyButton));
+        const copyIcon = document.createElement('i');
+        copyIcon.className = 'fa-regular fa-copy';
+        copyIcon.setAttribute('aria-hidden', 'true');
+        copyButton.appendChild(copyIcon);
+        title.appendChild(copyButton);
+
+        const tagContainer = document.createElement('span');
+        tagContainer.className = 'search-ip-tags';
+        tagContainer.dataset.searchIpTags = ipLabel;
+        tagContainer.hidden = true;
+        title.appendChild(tagContainer);
+
+        if (ipMeta) {
+            ipMeta.dataset.searchIpTimestamps = ipLabel;
+            title.appendChild(ipMeta);
+        }
+
+        heading.appendChild(title);
+        ipPanel.appendChild(heading);
+
+        const collapse = document.createElement('div');
+        collapse.id = `collapse-ip-${resultIndex}`;
+        collapse.className = 'panel-collapse collapse';
+        const uidsDiv = document.createElement('div');
+        uidsDiv.className = 'panel-body';
+        uidsDiv.id = `uids-${resultIndex}`;
+        uidsDiv.dataset.searchIpUids = ipLabel;
+        uidsDiv.dataset.resultIndex = resultIndex;
+        collapse.appendChild(uidsDiv);
+        ipPanel.appendChild(collapse);
+        hitsDiv.appendChild(ipPanel);
+
+        appendUidPanels(ipLabel, sortedUids, ipTimestamps);
+    });
+
+    queueTagsForSearchChunk(data.results || {}, data.time_range || {});
+    queueIpExpansionForSearchChunk(data.results || {}, data.time_range || {}, document.getElementById('query').value || '');
+
+    return returnedIps;
+}
+
+function findRequestedHostnameForUids(sortedUids, requestedHostnames) {
+    for (const uid of sortedUids) {
+        const hostnames = requestedHostnames[uid] || [];
+        if (hostnames.length) {
+            return hostnames[0];
+        }
+    }
+    return '';
+}
+
+function buildIpDetailUrl(ip, requestedHostname) {
+    const params = new URLSearchParams();
+    if (requestedHostname) {
+        params.set('hostname', requestedHostname);
+    }
+    const query = params.toString();
+    return `/ip/${encodeURIComponent(ip)}${query ? `?${query}` : ''}`;
+}
+
+function renderLoadMoreButton(loadMoreDiv) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-default';
+    button.textContent = 'Load more';
+    button.addEventListener('click', loadMoreResults);
+    loadMoreDiv.appendChild(button);
+}
+
+async function runSearchPage(cursorTs, append) {
+    const query = document.getElementById('query').value;
+    const hitsDiv = document.getElementById('hits');
+    const infoDiv = document.getElementById('info');
+    const errorDiv = document.getElementById('msg_error');
+    const loadMoreDiv = document.getElementById('load-more-container');
+
+    if (append) {
+        setLoadMoreLoading(true);
+    }
+    if (!append) {
+        resetSearchDebug();
+        resetTagLookups();
+        lastSuccessfulSearch = null;
+        setDownloadButtonState(false);
+        hitsDiv.innerHTML = '';
+        loadMoreDiv.innerHTML = '';
+    }
+    let renderedCount = append && lastSuccessfulSearch ? lastSuccessfulSearch.renderedCount || 0 : 0;
+    let nextCursor = cursorTs;
+    let windowDays = append && lastSuccessfulSearch ? lastSuccessfulSearch.nextWindowDays || 1 : 1;
+    let searchId = append && lastSuccessfulSearch ? lastSuccessfulSearch.searchId || null : null;
+
+    let timeRange;
+    try {
+        timeRange = getSearchTimeRange();
+    } catch (error) {
+        setAlertMessage(errorDiv, error?.message || 'Invalid time range', 'alert-warning', '');
+        infoDiv.textContent = '';
+        if (!append) {
+            hitsDiv.innerHTML = '';
+        }
+        loadMoreDiv.innerHTML = '';
+        return;
+    }
+    setSearchLoading(true, !append);
+    abortActiveSearch();
+    const searchAbortController = new AbortController();
+    activeSearchAbortController = searchAbortController;
+    try {
+        if (!append) {
+            loadMoreDiv.innerHTML = '';
+        }
+        errorDiv.innerHTML = '';
+
+        let addedThisRun = 0;
+        let hasMore = true;
+        let totalProcessingTime = 0;
+        let scannedDays = 0;
+        let lastData = null;
+
+        while (addedThisRun < SEARCH_PAGE_SIZE && hasMore) {
+            const remaining = SEARCH_PAGE_SIZE - addedThisRun;
+            const cursorBefore = nextCursor;
+            const params = buildSearchParams(
+                query,
+                timeRange,
+                nextCursor,
+                searchId,
+                remaining,
+                windowDays
+            );
+            const requestStarted = performance.now();
+            const res = await fetch(`/kvsearchview/query?${params.toString()}`, {
+                signal: searchAbortController.signal
+            });
+            const data = await readJsonResponse(res);
+            const requestMs = performance.now() - requestStarted;
+            lastData = data;
+            searchId = data.search_id || searchId;
+
+            const pagination = data.pagination || {};
+            totalProcessingTime += Number(data.processingTimeMs || 0);
+            scannedDays += Number(pagination.scanned_days || 0);
+
+            if (data.status === false) {
+                recordSearchDebug(data, requestMs, 0, searchAbortController);
+                setAlertMessage(errorDiv, data.msg_error || '', 'alert-warning', '');
+                hasMore = false;
+                break;
+            }
+
+            const renderStarted = performance.now();
+            const returnedIps = renderSearchChunk(data, renderedCount, hitsDiv);
+            recordSearchDebug(data, requestMs, performance.now() - renderStarted, searchAbortController);
+            if (returnedIps.length > 0) {
+                renderedCount += returnedIps.length;
+                addedThisRun += returnedIps.length;
+                setDownloadButtonState(true);
+            }
+
+            hasMore = Boolean(data.status && pagination.has_more);
+            nextCursor = pagination.next_cursor;
+            if (returnedIps.length === 0) {
+                windowDays = Math.min(windowDays * 2, MAX_SEARCH_WINDOW_DAYS);
+            } else if (pagination.stopped_in_window) {
+                windowDays = Number(pagination.window_days || windowDays || 1);
+            } else {
+                windowDays = 1;
+            }
+            lastSuccessfulSearch = {
+                query,
+                fromTs: timeRange.fromTs,
+                toTs: timeRange.toTs,
+                nextCursor,
+                nextWindowDays: windowDays,
+                searchId,
+                renderedCount
+            };
+
+            const time = formatProcessingTime(totalProcessingTime);
+            const totalDays = getInclusiveDayCount(timeRange.fromTs, timeRange.toTs);
+            const effectiveScannedDays = hasMore ? scannedDays : totalDays;
+            const daySummary = effectiveScannedDays >= totalDays
+                ? `${totalDays} days`
+                : `${effectiveScannedDays}/${totalDays} days`;
+            if (hasMore && renderedCount > 0) {
+                infoDiv.textContent = `Showing first ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
+            } else {
+                infoDiv.textContent = `Showing ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
+            }
+
+            if (!hasMore) {
+                break;
+            }
+            if (nextCursor === null || nextCursor === undefined || String(nextCursor) === String(cursorBefore)) {
+                break;
+            }
+
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+
+        loadMoreDiv.innerHTML = '';
+        if (lastData && lastData.status && hasMore) {
+            renderLoadMoreButton(loadMoreDiv);
+        }
+    } catch (error) {
+        if (isSearchNavigationAbort(error)) {
+            return;
+        }
+        console.error('KV search failed', error);
+        setAlertMessage(errorDiv, `Search failed: ${error?.message || 'Unexpected error'}`, 'alert-danger', '');
+        infoDiv.textContent = '';
+        if (!append) {
+            hitsDiv.innerHTML = '';
+        }
+        loadMoreDiv.innerHTML = '';
+    } finally {
+        if (activeSearchAbortController === searchAbortController) {
+            activeSearchAbortController = null;
+            setSearchLoading(false);
+        }
+    }
+}
+
+async function loadUid(uid, targetId) {
+    const target = document.getElementById(targetId);
+    if (target.style.display === 'none' || target.innerHTML === '') {
+        const res = await fetch(`/meilisearchview/getuid?uid=${encodeURIComponent(uid)}`);
+        const data = await readJsonResponse(res);
+        target.textContent = '';
+        const viewer = document.createElement('vt-json');
+        viewer.setAttribute('variant', 'full');
+        viewer.setAttribute('theme', document.documentElement.getAttribute('data-plum-color-mode') || 'light');
+        viewer.setAttribute('label', 'Scan report');
+        viewer.textContent = JSON.stringify(data, null, 2);
+        target.appendChild(viewer);
+        target.style.display = 'block';
+    } else {
+        target.style.display = 'none';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    bindDateInput('time-from');
+    bindDateInput('time-to');
+    bindQueryTagHelper();
+    bindSearchKeywordHelpers();
+    bindSearchNavigationAbort();
+    setDefaultTimeRange();
+    syncSinceDirectiveState();
+    document.querySelectorAll('[data-query-example]').forEach(button => {
+        button.addEventListener('click', () => {
+            const input = document.getElementById('query');
+            input.value = button.dataset.queryExample;
+            input.dispatchEvent(new Event('input', {bubbles: true}));
+            input.focus();
+        });
+    });
+});
+
+</script>
+<div class="plum-search-surface">
+    <div class="search-toolbar">
+        <div class="search-toolbar-input">
+            <label for="query">Search query</label>
+            <div class="search-query-wrapper">
+                <i class="fa fa-search plum-query-icon" aria-hidden="true"></i>
+                <input type="search" id="query" class="form-control" placeholder="IP, domain, port, or tag — e.g. port:443" aria-describedby="scan-query-help" autocomplete="off">
+                <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Tag suggestions"></div>
+            </div>
+            <div class="search-time-range">
+                <div class="plum-search-date">
+                <label for="time-from">From (UTC)</label>
+                <div class="input-group search-date-field">
+                    <span class="input-group-btn">
+                        <button type="button" id="time-from-btn" class="btn btn-default" onclick="openDatePicker('time-from')" title="Select start date" aria-label="Select start date">
+                            <i class="fa fa-calendar" aria-hidden="true"></i>
+                        </button>
+                    </span>
+                    <input type="text" id="time-from" class="form-control search-date-input" title="Start date" aria-label="Start date" inputmode="numeric" placeholder="YYYY-MM-DD" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" autocomplete="off">
+                    <input type="date" id="time-from-picker" class="search-date-picker-proxy" tabindex="-1" aria-hidden="true">
+                </div>
+                </div>
+                <div class="plum-search-date">
+                <label for="time-to">To (UTC)</label>
+                <div class="input-group search-date-field">
+                    <span class="input-group-btn">
+                        <button type="button" id="time-to-btn" class="btn btn-default" onclick="openDatePicker('time-to')" title="Select end date" aria-label="Select end date">
+                            <i class="fa fa-calendar" aria-hidden="true"></i>
+                        </button>
+                    </span>
+                    <input type="text" id="time-to" class="form-control search-date-input" title="End date" aria-label="End date" inputmode="numeric" placeholder="YYYY-MM-DD" pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}" autocomplete="off">
+                    <input type="date" id="time-to-picker" class="search-date-picker-proxy" tabindex="-1" aria-hidden="true">
+                </div>
+                </div>
+                <div id="info" class="search-summary" role="status" aria-live="polite"></div>
+            </div>
+            <div class="plum-search-examples" aria-label="Example queries">
+                <span>Try an example:</span>
+                <button type="button" data-query-example="port:443">HTTPS · port:443</button>
+                <button type="button" data-query-example="port:22">SSH · port:22</button>
+                <button type="button" data-query-example="http_server.lk:nginx">nginx servers</button>
+            </div>
+            <div class="plum-search-help" id="scan-query-help">
+                Use implicit <code>AND</code> inside one group and explicit <code>OR</code> between groups.
+                Exclude matching scans with <code>AND NOT</code>, e.g. <code>tag:type:router AND NOT tag:vendor:mikrotik</code>.
+            </div>
+        </div>
+        <div class="search-toolbar-actions">
+            <button type="button" id="search-btn" class="btn btn-primary" onclick="search()"><i class="fa fa-search" aria-hidden="true"></i>Search</button>
+            <div id="download-buttons-container" class="mt-2" data-csrf="{{ csrf_token() }}"></div>
+        </div>
+    </div>
+</div>
+
+<details id="search-debug" hidden>
+    <summary id="search-debug-summary">Performance diagnostics</summary>
+    <p>Available after each response. Includes search pages only; history, tags and document loading run separately.</p>
+    <button type="button" class="btn btn-default" onclick="downloadSearchDebug()">Download JSON</button>
+    <pre id="search-debug-report"></pre>
+</details>
+
+<div id="info-spinner" class="search-status mt-1" role="status" aria-live="polite" hidden>
+    <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+    <span>Searching...</span>
+</div>
+<div id="msg_error" class="panel-group mt-2"></div>
+<div id="hits" class="panel-group mt-2"></div>
+<div id="load-more-container" class="mt-2"></div>
+{{ lib.panel_end() }}
+
+<div class="modal fade" id="export-full-modal" tabindex="-1" role="dialog" aria-labelledby="export-full-modal-label">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title" id="export-full-modal-label">Preparing Export</h4>
+            </div>
+            <div class="modal-body">
+                <p id="export-status-text">Preparing export...</p>
+                <div class="progress">
+                    <div
+                        id="export-progress-bar"
+                        class="progress-bar progress-bar-striped active"
+                        role="progressbar"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >0%</div>
+                </div>
+                <div class="export-stats">
+                    <span id="export-progress-count">0 / 0 documents</span>
+                    <span>Elapsed: <span id="export-elapsed">0.0s</span></span>
+                </div>
+                <div id="export-error"></div>
+                <div id="export-warning"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-default" onclick="stopExportPolling(); $('#export-full-modal').modal('hide');">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="kvrocks-table-wrapper">
+    <table class="kvrocks-table" id="search-keyword-table">
+        <thead>
+            <tr>
+                <th>Keyword</th>
+                <th>Modifier</th>
+                <th>Description</th>
+                <th>Keyword</th>
+                <th>Modifier</th>
+                <th>Description
+                    <button type="button" class="search-helper-toggle" data-search-helper-toggle
+                            title="Show tags" aria-label="Show tags" aria-controls="search-tag-table">
+                        <i class="fa fa-exchange" aria-hidden="true"></i>
+                    </button>
+                </th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="ip" role="button" tabindex="0">ip</span></td>
+                <td></td>
+                <td>IP of the host</td>
+                <td><span class="search-keyword" data-search-keyword="http_title" role="button" tabindex="0">http_title</span></td>
+                <td>lk, bg</td>
+                <td>HTML title tag</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="net" role="button" tabindex="0">net</span></td>
+                <td></td>
+                <td>CIDR network, from /16 to /24</td>
+                <td><span class="search-keyword" data-search-keyword="http_cookiename" role="button" tabindex="0">http_cookiename</span></td>
+                <td>lk, bg</td>
+                <td>HTTP Set-Cookie key name</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="fqdn" role="button" tabindex="0">fqdn</span></td>
+                <td>lk, bg</td>
+                <td>Fully qualified domain name found</td>
+                <td><span class="search-keyword" data-search-keyword="http_etag" role="button" tabindex="0">http_etag</span></td>
+                <td>lk, bg</td>
+                <td>HTTP ETag value</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="fqdn_requested" role="button" tabindex="0">fqdn_requested</span></td>
+                <td>lk, bg</td>
+                <td>FQDN given to scanner</td>
+                <td><span class="search-keyword" data-search-keyword="http_server" role="button" tabindex="0">http_server</span></td>
+                <td>lk, bg</td>
+                <td>HTTP server header</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="domain_requested" role="button" tabindex="0">domain_requested</span></td>
+                <td>lk, bg</td>
+                <td>Domain given to scanner</td>
+                <td><span class="search-keyword" data-search-keyword="http_header" role="button" tabindex="0">http_header</span></td>
+                <td>lk, bg</td>
+                <td>Collected HTTP header presence, e.g. <code>http_header:cache-control</code></td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="host" role="button" tabindex="0">host</span></td>
+                <td>lk, bg</td>
+                <td>Hostname, the subdomain part</td>
+                <td><span class="search-keyword" data-search-keyword="http_headval" role="button" tabindex="0">http_headval</span></td>
+                <td>header.lk, header.bg</td>
+                <td>Collected HTTP header value, e.g. <code>http_headval:x-powered-by:php</code></td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_path" role="button" tabindex="0">http_favicon_path</span></td>
+                <td>lk, bg</td>
+                <td>Favicon source path</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="domain" role="button" tabindex="0">domain</span></td>
+                <td>lk, bg</td>
+                <td>DNS domain</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_mmhash" role="button" tabindex="0">http_favicon_mmhash</span></td>
+                <td></td>
+                <td>Favicon MurmurHash value</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="tld" role="button" tabindex="0">tld</span></td>
+                <td>lk, bg</td>
+                <td>Top level domain</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_md5" role="button" tabindex="0">http_favicon_md5</span></td>
+                <td></td>
+                <td>Favicon MD5 hash</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="port" role="button" tabindex="0">port</span></td>
+                <td></td>
+                <td>Open port</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_sha256" role="button" tabindex="0">http_favicon_sha256</span></td>
+                <td></td>
+                <td>Favicon SHA256 hash</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="banner" role="button" tabindex="0">banner</span></td>
+                <td>lk, bg</td>
+                <td>Service banner value</td>
+                <td><span class="search-keyword" data-search-keyword="x509_issuer" role="button" tabindex="0">x509_issuer</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate issuer DN</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_issuer_cn" role="button" tabindex="0">x509_issuer_cn</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate issuer common name</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_subject" role="button" tabindex="0">x509_subject</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate subject DN</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_subject_cn" role="button" tabindex="0">x509_subject_cn</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate subject common name</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="tag" role="button" tabindex="0">tag</span></td>
+                <td></td>
+                <td>tagged devices</td>
+                <td><span class="search-keyword" data-search-keyword="x509_san" role="button" tabindex="0">x509_san</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate subject alternative names</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="since" role="button" tabindex="0">since</span></td>
+                <td></td>
+                <td>set the time range in days</td>
+                <td><span class="search-keyword" data-search-keyword="x509_md5" role="button" tabindex="0">x509_md5</span></td>
+                <td></td>
+                <td>MD5 of the TLS certificate public signature</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_sha1" role="button" tabindex="0">x509_sha1</span></td>
+                <td></td>
+                <td>SHA1 of the TLS certificate public signature</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_sha256" role="button" tabindex="0">x509_sha256</span></td>
+                <td></td>
+                <td>SHA256 of the TLS certificate public signature</td>
+            </tr>
+        </tbody>
+    </table>
+    {% include 'search_tag_catalogue.html' %}
+</div>
+
+</div>
+{% endblock content %}
+
+{% block add_tail_js %}
+<script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+{% endblock %}

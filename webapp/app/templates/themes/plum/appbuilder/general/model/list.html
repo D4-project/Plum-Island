@@ -1,0 +1,18 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+{{ lib.panel_begin(title) }}
+
+  {% block list_search scoped %}
+    {% if widgets.get('search') %}
+      {{ widgets.get('search')()|safe }}
+    {% endif %}
+  {% endblock %}
+
+  {% block list_list scoped %}
+    <div>{{ widgets.get('list')()|safe }}</div>
+  {% endblock %}
+
+{{ lib.panel_end() }}
+{% endblock %}

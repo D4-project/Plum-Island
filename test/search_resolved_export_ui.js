@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const template = fs.readFileSync(path.join(__dirname, '../webapp/app/templates/search_kvrocks.html'), 'utf8');
+const template = fs.readFileSync(require('./ui_template_paths').templatePath('search_kvrocks.html'), 'utf8');
 const source = template.split('<script>')[1].split('</script>')[0];
 const container = {
     children: [], dataset: {csrf: 'test-csrf'},

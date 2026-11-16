@@ -227,7 +227,10 @@ JOB_SCAVENGE = 60
 # APP_THEME = "cyborg.css"
 # APP_THEME = "flatly.css"
 # APP_THEME = "journal.css"
-APP_THEME = "readable.css"
+# Plum selects templates/themes/plum plus static/appbuilder/css/themes/plum.css.
+# Bundled themes (for example readable.css) use the original templates.
+APP_THEME = "plum.css"
+# APP_THEME = "readable.css"
 # APP_THEME = "simplex.css"
 # APP_THEME = "slate.css"
 # APP_THEME = "spacelab.css"
