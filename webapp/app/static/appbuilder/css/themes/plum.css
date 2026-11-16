@@ -42,13 +42,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--plum-accent); 
 .dropdown-menu > li > a:hover, .dropdown-menu > li > a:focus { background: var(--plum-accent-soft); color: var(--plum-accent-hover); }
 
 .panel { border: 1px solid var(--plum-border); border-radius: 8px; box-shadow: 0 2px 8px #25334404; }
-.panel-primary > .panel-heading { color: var(--plum-ink); background: #fff; border-color: var(--plum-border); padding: 18px 22px; border-radius: 8px 8px 0 0; }
+.panel-primary > .panel-heading { color: var(--plum-ink); background: #fff; border-color: var(--plum-border); padding: 18px 22px; border-radius: 7px 7px 0 0; }
 .panel-primary > .panel-heading > .panel-title { font-size: 20px; font-weight: 600; line-height: 1.35; }
 .panel-default > .panel-heading { color: var(--plum-ink); background: #f8fafb; border-color: var(--plum-border); border-radius: 7px 7px 0 0; }
 .panel-default > .panel-heading .panel-title { font-size: 14px; font-weight: 550; }
 .panel-heading a { color: inherit; }
 .panel-body { padding: 22px; }
 .panel-group .panel { border-radius: 7px; }
+.panel-group .panel > .panel-heading { border-radius: 6px 6px 0 0; }
 .well { background: #f8fafb; border-color: var(--plum-border); border-radius: 6px; box-shadow: none; }
 
 /* Preserve real table links, server sorting, pagination and bulk actions. */
@@ -67,6 +68,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--plum-accent); 
 .table .action_check, .table .action_check_all { width: 16px; height: 16px; margin: 0; vertical-align: middle; cursor: pointer; }
 .table .action_checkboxes { width: 38px; }
 .table-responsive { border-radius: 6px; scrollbar-width: thin; }
+/* Let the scrolling container draw and clip one continuous rounded frame. */
+.table-responsive:has(> .table) { border: 1px solid var(--plum-border); margin-bottom: 20px; background: var(--plum-card, #fff); }
+.table-responsive > .table { border: 0; margin-bottom: 0; }
+.table-responsive > .table > :is(thead, tbody, tfoot):first-child > tr:first-child > :is(th, td) { border-top: 0; }
+.table-responsive > .table > :is(thead, tbody, tfoot):last-child > tr:last-child > :is(th, td) { border-bottom: 0; }
+/* Detail field labels retain their divider without a second outer border. */
+.table-responsive > .table-bordered > tbody > tr > th:first-child { border-left: 0; }
+.table-responsive > .table-bordered > tbody > tr > :is(th, td):last-child { border-right: 0; }
 .table .btn-group { white-space: nowrap; }
 .table .btn-group > .btn { padding: 5px 8px; }
 .table .btn-group > .btn-default { color: #617387; background: white; border-color: #dce4e9; }
