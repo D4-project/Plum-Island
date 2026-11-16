@@ -38,6 +38,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--plum-accent); 
 }
 
 /* Keep the existing horizontal menu, with quieter borders and clearer hover. */
+@media screen {
+  header.top { position: sticky; top: 0; z-index: 1030; }
+}
 .top .navbar { background: #fff; border: 0; border-bottom: 1px solid var(--plum-border); border-radius: 0; box-shadow: 0 1px 4px #25334404; }
 .navbar-brand a { color: var(--plum-accent); font-weight: 650; letter-spacing: .02em; }
 .navbar-brand.plum-brand { color: var(--plum-accent); font-weight: 650; letter-spacing: .02em; }
