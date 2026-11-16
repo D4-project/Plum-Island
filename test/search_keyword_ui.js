@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(
-    path.join(__dirname, '../webapp/app/templates/search_kvrocks.html'), 'utf8'
+    require('./ui_template_paths').templatePath('search_kvrocks.html'), 'utf8'
 );
 const helpers = source.match(
     /const SEARCH_KEYWORDS[\s\S]*?\n}\n\nfunction buildExportPayload/
@@ -84,7 +84,7 @@ let prevented = false;
 keywords[0].listeners.keydown({key: 'Enter', preventDefault() { prevented = true; }});
 assert.equal(prevented, true);
 assert.ok(input.value.endsWith(' port:'));
-const catalogue = fs.readFileSync(path.join(__dirname, '../webapp/app/templates/search_tag_catalogue.html'), 'utf8');
+const catalogue = fs.readFileSync(require('./ui_template_paths').templatePath('search_tag_catalogue.html'), 'utf8');
 // Native buttons provide Enter/Space activation without duplicate key handlers.
 assert.match(catalogue, /<button type="button" data-search-tag-term=/);
 assert.match(source, /<th>Description\s*<button[^>]*data-search-helper-toggle/);

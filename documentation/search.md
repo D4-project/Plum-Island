@@ -4,6 +4,32 @@ Contributor reference: [search engine internals and change contract](sysinternal
 
 Plum Island stores parsed scan results in Kvrocks indexes. The main search UI uses these indexes to find matching scan documents and then loads full result details from Meilisearch when needed.
 
+The optional Plum UI (`APP_THEME = "plum.css"`) provides the visual changes
+described below; bundled themes retain the original templates.
+
+The Plum search form labels its date range in UTC. Example-query buttons fill the
+query field without submitting; edit the query or press Search to run it.
+Token Search accepts plain text and can also be submitted with Enter.
+Expanded raw scan reports use a locally bundled [Vitrine JSON viewer](https://ecrou-exact.github.io/vitrine/docs.html?page=components/json)
+with Tree/Raw views, search, copy and download controls. Table sorting,
+pagination, filters and bulk actions continue to use Flask-AppBuilder.
+
+List pages have a collapsible Search & filter panel above the table. No field
+is selected automatically: open the panel and choose Add filter to start.
+Search (or Enter) applies the selected criteria across all pages, and Reset
+returns to the unfiltered list. Saved filtered URLs reopen the panel with
+their existing criteria and an applied-filter count.
+
+Tags use compact, softly colored badges with the category separated visually
+from its value. This styling is shared by IP details, scan-search results and
+target results. Full values remain visible and wrap when needed; vendor links
+on IP details keep their existing destination.
+
+IP details show a separate overview card and one card per port, with a service
+header, observation timeline and labeled report sections. Timeline selection
+and the requested-hostname filter continue to update the selected observation
+and group; the layout wraps for smaller screens.
+
 ## InfoIP API
 
 For both search modes, IP evidence and tag/header discovery through an

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const template = fs.readFileSync(path.join(__dirname, '../webapp/app/templates/search_kvrocks.html'), 'utf8');
+const template = fs.readFileSync(require('./ui_template_paths').templatePath('search_kvrocks.html'), 'utf8');
 const tagEnrichment = fs.readFileSync(
     path.join(__dirname, '../webapp/app/static/js/ip_tag_enrichment.js'), 'utf8'
 );

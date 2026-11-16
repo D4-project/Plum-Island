@@ -1,0 +1,90 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block head_js %}
+{{ super() }}
+{% include 'plum_json_assets.html' %}
+{% endblock %}
+
+{% block content %}
+{{ lib.panel_begin("Token search", "Query Scans") }}
+<p class="plum-search-description">Search text anywhere in collected scan reports, including service banners and script output.</p>
+
+
+<script>
+async function search() {
+    const button = document.getElementById('token-search-btn');
+    const infoDiv = document.getElementById('info');
+    if (button.disabled) return;
+    button.disabled = true;
+    infoDiv.textContent = 'Searching…';
+    try {
+        const query = document.getElementById('query').value;
+        const res = await fetch(`/meilisearchview/query?q=${encodeURIComponent(query)}`);
+        if (!res.ok) throw new Error('Search request failed');
+        const data = await res.json();
+        const hitsDiv = document.getElementById('hits');
+        infoDiv.textContent = `Found ${data.estimatedTotalHits} scans in ${data.processingTimeMs}ms`;
+        hitsDiv.innerHTML = '';
+
+        data.hits.forEach((hit, index) => {
+            const panel = document.createElement('div');
+            panel.className = 'panel panel-default';
+            const heading = document.createElement('div');
+            heading.className = 'panel-heading';
+            const title = document.createElement('h4');
+            title.className = 'panel-title';
+            const link = document.createElement('a');
+            link.setAttribute('data-toggle', 'collapse');
+            link.setAttribute('data-parent', '#hits');
+            link.href = `#collapse${index}`;
+            link.textContent = `${hit.ip || ''} (ID: ${hit.id || ''})`;
+            title.appendChild(link);
+            heading.appendChild(title);
+            panel.appendChild(heading);
+
+            const collapse = document.createElement('div');
+            collapse.id = `collapse${index}`;
+            collapse.className = 'panel-collapse collapse';
+            const viewer = document.createElement('vt-json');
+            viewer.setAttribute('variant', 'full');
+            viewer.setAttribute('theme', 'light');
+            viewer.setAttribute('label', 'Scan report');
+            viewer.textContent = JSON.stringify(hit.body, null, 2);
+            const bodyDiv = document.createElement('div');
+            bodyDiv.className = 'panel-body';
+            bodyDiv.appendChild(viewer);
+            collapse.appendChild(bodyDiv);
+            panel.appendChild(collapse);
+            hitsDiv.appendChild(panel);
+        });
+    } catch (error) {
+        infoDiv.textContent = 'Search is unavailable. Please try again.';
+    } finally {
+        button.disabled = false;
+    }
+}
+</script>
+
+<form class="plum-search-surface plum-token-form" onsubmit="event.preventDefault(); search();" role="search">
+  <label for="query">Search terms</label>
+  <div class="plum-token-query-row">
+    <div class="search-query-wrapper">
+      <i class="fa fa-search plum-query-icon" aria-hidden="true"></i>
+      <input type="search" id="query" class="form-control" placeholder="Search a hostname, service, or phrase…" aria-describedby="token-query-help">
+    </div>
+    <button type="submit" id="token-search-btn" class="btn btn-primary"><i class="fa fa-search" aria-hidden="true"></i> Search</button>
+  </div>
+  <p class="plum-search-help" id="token-query-help">Use plain text here. For filters such as <code>port:443</code>, use <a href="{{ url_for('KVSearchView.search') }}">Search Scans</a>.</p>
+</form>
+
+
+<div id="info" class="plum-token-status" role="status" aria-live="polite"></div>
+<div id="hits" class="panel-group mt-2"></div>
+
+{{ lib.panel_end() }}
+
+{% endblock content %}
+{% block add_tail_js %}
+<script src="{{url_for('appbuilder.static',filename='js/ab_keep_tab.js')}}" nonce="{{ baselib.get_nonce() }}"></script>
+{% endblock %}

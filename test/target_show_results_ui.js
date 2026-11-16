@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 // Target pages must ignore global tab memory, including BFCache restores.
 const template = fs.readFileSync(
-    path.join(__dirname, '../webapp/app/templates/show_targetsview.html'), 'utf8'
+    require('./ui_template_paths').templatePath('show_targetsview.html'), 'utf8'
 );
 assert.doesNotMatch(template, /<script[^>]+src=[^>]*ab_keep_tab/);
 const tabScript = template.match(/<script id="target-default-tab"[^>]*>([\s\S]*?)<\/script>/)[1];
@@ -43,7 +43,7 @@ for (const savedTab of ['#TargetWhois', '#TargetResults', '#JobsView']) {
 }
 
 const source = fs.readFileSync(
-    path.join(__dirname, '../webapp/app/static/js/ip_tag_enrichment.js'), 'utf8'
+    require('./ui_template_paths').tagRendererPath(), 'utf8'
 );
 const requests = [];
 const received = [];

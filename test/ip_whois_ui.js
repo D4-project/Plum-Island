@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const template = fs.readFileSync(path.join(__dirname, '../webapp/app/templates/ip_detail.html'), 'utf8');
+const template = fs.readFileSync(require('./ui_template_paths').templatePath('ip_detail.html'), 'utf8');
 const script = template.match(/<script nonce="\{\{ baselib\.get_nonce\(\) \}\}">([\s\S]*?)<\/script>/);
 assert.ok(script, 'WHOIS tab script exists');
 const source = script[1].replace(

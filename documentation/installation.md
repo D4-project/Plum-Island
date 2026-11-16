@@ -182,6 +182,32 @@ config; a simple restart of the same container does not regenerate it. Config
 is otherwise stored in the container layer, not a named volume. Set a stable
 `SECRET_KEY` for deployments that recreate containers.
 
+### UI theme
+
+`APP_THEME` in `webapp/config.py` selects the CSS and template set. Restart the
+web application after changing it:
+
+```python
+APP_THEME = "readable.css"  # Original templates and the bundled Readable theme.
+# APP_THEME = "plum.css"   # Isolated Plum templates and styling.
+```
+
+The original application templates stay in `webapp/app/templates/`. Plum's
+customizations live in `webapp/app/templates/themes/plum/`, using the same
+relative filenames. Only `APP_THEME = "plum.css"` enables that override folder;
+missing overrides fall back to the original templates and Flask-AppBuilder.
+Views and URLs do not need to change. Other bundled themes use the originals.
+
+For future Plum UI changes, edit the HTML files in `templates/themes/plum/` and
+the stylesheets in `webapp/app/static/appbuilder/css/themes/`. `plum.css` imports
+the packaged Readable CSS and `plum-components.css`, then applies its global
+visual styles. Exact static asset routes serve the two project stylesheets at
+AppBuilder's normal theme URLs. The original base template loads neither.
+Plum's tag renderer is also isolated in `webapp/app/static/themes/plum/`.
+
+New configs default to `APP_THEME = "plum.css"` through
+`webapp/config.py.template`; existing installations retain their selected theme.
+
 ### Persistent custom configuration, including report SMTP
 
 `REPORT_SMTP_*` variables are not mapped from the environment by the current

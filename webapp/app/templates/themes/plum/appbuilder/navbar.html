@@ -1,0 +1,63 @@
+{% set menu = appbuilder.menu %}
+{% set languages = appbuilder.languages %}
+
+{% macro navigation_items(security_only=false) %}
+  {% for item in menu.get_list() if (item.name == 'Security') == security_only %}
+    {% if item | is_menu_visible %}
+      {% if item.childs %}
+        <li class="dropdown">
+          <a class="dropdown-toggle" data-toggle="dropdown" href="#">
+            {% if item.icon %}<i class="fa {{ item.icon }}" aria-hidden="true"></i>&nbsp;{% endif %}
+            {{ _(item.label) }}<b class="caret"></b>
+          </a>
+          <ul class="dropdown-menu">
+            {% for child in item.childs %}
+              {% if child %}
+                {% if child.name == '-' %}
+                  {% if not loop.last %}<li class="divider"></li>{% endif %}
+                {% elif child | is_menu_visible %}
+                  <li><a tabindex="-1" href="{{ child.get_url() }}">
+                    {% if child.icon %}<i class="fa fa-fw {{ child.icon }}" aria-hidden="true"></i>&nbsp;{% endif %}
+                    {{ _(child.label) }}
+                  </a></li>
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+          </ul>
+        </li>
+      {% else %}
+        <li><a tabindex="-1" href="{{ item.get_url() }}">
+          {% if item.icon %}<i class="fa fa-fw {{ item.icon }}" aria-hidden="true"></i>&nbsp;{% endif %}
+          {{ _(item.label) }}
+        </a></li>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+{% endmacro %}
+
+<div class="navbar plum-navbar {{ menu.extra_classes }}" role="navigation">
+  <div class="container">
+    <div class="navbar-header">
+      <button type="button" class="navbar-toggle" data-toggle="collapse"
+              data-target=".navbar-collapse" aria-label="Toggle navigation">
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+        <span class="icon-bar"></span>
+      </button>
+      <a class="navbar-brand plum-brand" href="{{ appbuilder.get_url_for_index }}">
+        <img src="{{ appbuilder.app_icon or url_for('static', filename='plum_logo.png') }}"
+             alt="" class="plum-navbar-logo" aria-hidden="true">
+        <span>{{ appbuilder.app_name }}</span>
+      </a>
+    </div>
+    <div class="navbar-collapse collapse">
+      <ul class="nav navbar-nav">
+        {{ navigation_items() }}
+      </ul>
+      <ul class="nav navbar-nav navbar-right">
+        {{ navigation_items(true) }}
+        {% include 'appbuilder/navbar_right.html' %}
+      </ul>
+    </div>
+  </div>
+</div>
