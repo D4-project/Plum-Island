@@ -10,7 +10,7 @@
 
 /* Static presentation; JavaScript only updates visibility and live progress. */
 body [hidden] { display: none !important; }
-.plum-welcome-logo { display: block; width: 240px; max-width: 100%; height: auto; margin: 0 auto; }
+.plum-welcome-logo { display: block; margin: 0 auto; }
 .plum-target-refresh-form { display: inline-block; margin-left: 4px; }
 .plum-clipboard-fallback { position: fixed; top: 0; left: -9999px; opacity: 0; }
 #search-debug-report { max-height: 28em; overflow: auto; }
