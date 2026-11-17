@@ -1,5 +1,8 @@
 # Unreleased
 
+- Keep KVSearch loading spinners and status text readable in Plum dark mode,
+  including Load more and live color-mode changes (#273).
+
 - Resume full reconciliation past valid non-public Meilisearch-only sources,
   counting parser exclusions explicitly while retaining failures for unavailable,
   malformed or already-indexed source data (#271).
