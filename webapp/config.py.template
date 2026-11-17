@@ -172,6 +172,13 @@ TAG_RECONCILIATION_ENABLED = True
 TAG_RECONCILIATION_POLL_SECONDS = 30
 TAG_RECONCILIATION_BATCH_SIZE = 25
 TAG_RECONCILIATION_PAUSE_SECONDS = 0.1
+# Runtime pacing does not invalidate a frozen job or restart its saved cursor.
+TAG_RECONCILIATION_PLANNING_BATCH_SIZE = 1000
+TAG_RECONCILIATION_LATENCY_BUDGET = 0.10
+TAG_RECONCILIATION_QUIET_SECONDS = 2
+TAG_RECONCILIATION_IDLE_SECONDS = 15
+# Soft per-read planning duration target; commands already running cannot preempt.
+TAG_RECONCILIATION_UNIT_SECONDS = 0.05
 
 # Independent CIRCL enrichment worker: initial operational limits, tune to latency.
 NETWORK_LOOKUP_TIMEOUT_SECONDS = 10

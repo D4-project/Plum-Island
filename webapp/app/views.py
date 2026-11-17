@@ -80,10 +80,14 @@ from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
 from .utils.kvrocks import KVrocksIndexer
 from .utils.index_generations import (
-    pinned_read,
     generation_identity,
     reader_generation,
     restore_reader_generation,
+)
+from .utils.index_activity import (
+    prioritized_read as pinned_read,
+    prioritized_search,
+    pacing_status,
 )
 from .utils.index_reconciliation import reconciliation_status
 from .utils.ip_links import port_web_scheme
@@ -1787,6 +1791,7 @@ class KVSearchView(BaseView):
         """Compile flat queries or one-level parentheses without backend I/O."""
         return compile_query(self, query, allow_since_directive, allow_debug_directive)
 
+    @prioritized_search
     def execute_search(self, query, from_ts=None, to_ts=None):
         """
         Shared search executor used by both JSON and export endpoints.
@@ -1872,6 +1877,7 @@ class KVSearchView(BaseView):
         }
 
     @profile_search_page
+    @prioritized_search
     def execute_search_page(
         self,
         query,
@@ -2119,6 +2125,7 @@ class KVSearchView(BaseView):
 
     @expose("/tag_suggest")
     @has_access
+    @prioritized_search
     def tag_suggest(self):
         """
         AJAX helper for tag: query autocompletion.
@@ -2129,6 +2136,7 @@ class KVSearchView(BaseView):
 
     @expose("/header_suggest")
     @has_access
+    @prioritized_search
     def header_suggest(self):
         """
         AJAX helper for http_headval: header-name autocompletion.
@@ -2143,6 +2151,7 @@ class KVSearchView(BaseView):
 
     @expose("/tags", methods=["POST"])
     @has_access
+    @prioritized_search
     def tags(self):
         """
         Return normalized tags for all scan UIDs behind a bounded batch of IPs.
@@ -2239,6 +2248,7 @@ class KVSearchView(BaseView):
 
     @expose("/expand_ips", methods=["POST"])
     @has_access
+    @prioritized_search
     def expand_ips(self):
         """Resolve every matching UID for the already displayed IPs."""
         payload = request.get_json(silent=True) or {}
@@ -2946,6 +2956,7 @@ class IPDetailView(BaseView):
 
     @expose("/<string:ip>")
     @has_access
+    @prioritized_search
     def detail(self, ip):
         """
         Render only the selected requested-hostname group for one IP.
@@ -3941,7 +3952,9 @@ class TagRulesView(ModelView):
             app.config["KVROCKS_PORT"],
             socket_timeout=5,
         )
-        return jsonify(reconciliation_status(indexer.raw))
+        return jsonify(
+            dict(reconciliation_status(indexer.raw), pacing=pacing_status(indexer.raw))
+        )
 
     @action(
         "muldelete",

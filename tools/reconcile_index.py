@@ -26,8 +26,8 @@ def main():
     from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
         KVrocksIndexer,
     )  # pylint: disable=import-outside-toplevel
-    from app.utils.index_reconciliation import (  # pylint: disable=import-outside-toplevel
-        ReconciliationWorker,
+    from app.utils.index_pacing import (  # pylint: disable=import-outside-toplevel
+        PacedReconciliationWorker,
     )  # pylint: disable=import-outside-toplevel
 
     raw = KVrocksIndexer(
@@ -40,12 +40,7 @@ def main():
         app.config["MEILI_KEY"],
         timeout=app.config.get("MEILI_HTTP_TIMEOUT_SECONDS", 30),
     ).index("plum")
-    worker = ReconciliationWorker(
-        raw,
-        meili,
-        batch_size=app.config.get("TAG_RECONCILIATION_BATCH_SIZE", 25),
-        pause_seconds=app.config.get("TAG_RECONCILIATION_PAUSE_SECONDS", 0.1),
-    )
+    worker = PacedReconciliationWorker(raw, meili, app.config)
 
     install_stop_handlers(worker)
     with app.app_context():

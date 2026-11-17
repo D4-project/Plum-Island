@@ -45,6 +45,7 @@ from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
 from .utils.kvrocks import KVrocksIndexer
 from .utils.index_generations import GenerationClient, CONTROL
+from .utils.index_activity import prioritized_search
 from .utils.result_parser import port_protocol_values
 from .utils.tagrules import normalize_tags
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
@@ -2026,6 +2027,7 @@ class InfoIpApi(BaseApi):
     @expose("/<path:ip>", methods=["GET"])
     @protect()
     @safe
+    @prioritized_search
     def get(self, ip):
         """
         ---

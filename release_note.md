@@ -1,5 +1,10 @@
 # Unreleased
 
+- Prioritize searches and ingestion during automatic reconciliation, accelerate
+  while idle, and adapt independent inventory batches to backend latency. Track
+  comparable search timings against a +10% target; preserve running job cursors
+  across this operational upgrade (#271).
+
 - Recover older inline reconciliation jobs, replace superseded blocked jobs,
   and persist frozen inputs atomically with their progress metadata (#271).
 

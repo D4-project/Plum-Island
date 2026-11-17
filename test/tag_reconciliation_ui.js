@@ -54,9 +54,17 @@ async function advance(value) {
     assert.equal(detail.textContent, '<img src=x onerror=alert(1)>');
     assert(classes.has('progress-bar-danger'));
     assert(!classes.has('active'));
+    await advance({phase: 'planning', pacing: {mode: 'foreground'}});
+    assert.match(detail.textContent, /Waiting for search and ingestion/);
+    await advance({phase: 'planning', pacing: {mode: 'idle_boost', candidates: 1234}});
+    assert.match(detail.textContent, /Running faster/);
+    assert.match(detail.textContent, /1234 captures identified/);
+    assert(!detail.textContent.includes('%'));
+    await advance({phase: 'planning', pacing: {mode: 'limited', comparable_samples: 4, observed_degradation: 0.12}});
+    assert.match(detail.textContent, /\+12%/);
     await advance({phase: 'up_to_date'});
     assert.equal(bar.style.width, '100%');
     assert.equal(status.textContent, 'Detections up to date');
-    assert.equal(requests, 5);
+    assert.equal(requests, 8);
     console.log('Automatic detection progress checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -41,7 +41,7 @@ from .models import TagRules
 from .utils.mutils import compute_scan_unit_count_list
 from .utils.domains import is_hostname_syntax
 from .utils.kvrocks import KVrocksIndexer
-from .utils.index_generations import pinned_read
+from .utils.index_activity import prioritized_read as pinned_read, prioritized_ingestion
 from .utils.index_reconciliation import ingest_indexer_sources
 from .utils.index_supervisor import IndexSupervisor
 from .utils.tag_runtime import desired_snapshot
@@ -2443,6 +2443,7 @@ def _advance_new_meili_export(export_context):
     )
 
 
+@prioritized_ingestion
 def task_export_to_dbs():
     """Advance durable Meilisearch-first export state by at most one batch."""
     export_context = _build_export_context()
