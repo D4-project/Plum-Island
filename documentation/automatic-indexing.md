@@ -93,6 +93,15 @@ directory. No new queue service is required.
 
 ## Work selection and coverage
 
+Full bootstrap may discover Meilisearch-only documents with valid non-public
+addresses. These are excluded by the existing parser policy and counted in
+progress as exclusions encountered, without adding them to the replacement index.
+The counter records distinct sources excluded during scanning; later journaled
+updates remain eligible for normal replay under the same frozen parser.
+Missing documents, malformed addresses and non-public sources conflicting with
+existing indexed history remain failures; they are never silently discarded.
+The runtime adapter preserves the frozen parser/rule inputs and resume cursor.
+
 Each run freezes executable rules, parser configuration and a code fingerprint.
 Subsequent edits queue the latest desired revision. A normal rule-only update
 uses normalized Kvrocks fields and previous per-rule contributions. It scans the

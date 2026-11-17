@@ -12,8 +12,13 @@ import time
 import redis
 
 from app.utils.index_activity import ACTIVITY, PACING, SAMPLE_LIMIT, SAMPLES
-from app.utils.index_generations import CONTROL
-from app.utils.index_reconciliation import ReconciliationWorker
+from app.utils.index_generations import CONTROL, GenerationClient
+from app.utils.index_reconciliation import (
+    ReconciliationWorker,
+    SnapshotInvalid,
+    write_barrier,
+)
+from app.utils.index_sources import ExcludedSource, SourceDocuments
 
 
 class LoadController:  # pylint: disable=too-many-instance-attributes
@@ -56,6 +61,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
         self.active = 0
         self.comparisons = 0
         self.candidates = None
+        self.excluded = 0
 
     def observe_latency(self):
         """Compare only matching first-page requests with uncontended baselines."""
@@ -105,6 +111,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
                     "planning_batch": dict(self.planning_sizes),
                     "slowdown_factor": self.effective_factor,
                     "candidates": self.candidates,
+                    "excluded_sources": self.excluded,
                 }
             ),
         )
@@ -172,11 +179,18 @@ class PacedReconciliationWorker(ReconciliationWorker):
     def __init__(self, raw, meili, config):
         super().__init__(
             raw,
-            meili,
+            SourceDocuments(meili),
             batch_size=config.get("TAG_RECONCILIATION_BATCH_SIZE", 25),
             pause_seconds=config.get("TAG_RECONCILIATION_PAUSE_SECONDS", 0.1),
         )
         self.load = LoadController(raw, config)
+
+    def start(self):
+        """Restore operational counters alongside the original frozen inputs."""
+        started = super().start()
+        if started:
+            self.load.excluded = self.job.get("excluded_sources", 0)
+        return started
 
     @property
     def pause_seconds(self):
@@ -225,7 +239,31 @@ class PacedReconciliationWorker(ReconciliationWorker):
     def process_uid(self, uid):
         """Yield between captures, then finish a claimed unit even on SIGTERM."""
         self.load.wait(lambda: self.stopping)
-        super().process_uid(uid)
+        try:
+            super().process_uid(uid)
+        except ExcludedSource:
+            self.exclude_source(uid)
+
+    def exclude_source(self, uid):
+        """Count only unindexed full-bootstrap exclusions; retain active data."""
+        with write_barrier():
+            base = GenerationClient(self.raw, self.job["parent"])
+            target = GenerationClient(self.raw, self.job["id"])
+            if not self.job["full"] or any(
+                client.exists(f"doc:{uid}") or client.sismember("all_uids", uid)
+                for client in (base, target)
+            ):
+                raise SnapshotInvalid(
+                    "Non-public source conflicts with indexed history or incremental "
+                    "work. Review source/index consistency before retrying."
+                )
+            key = CONTROL + "g:" + self.job["id"] + ":excluded_sources"
+            pipe = self.raw.pipeline(transaction=True)
+            pipe.sadd(key, uid)
+            pipe.sadd(CONTROL + "processed:" + self.job["id"], uid)
+            pipe.execute()
+            self.load.excluded = self.raw.scard(key)
+            self.job["excluded_sources"] = self.load.excluded
 
     def replay_batch(self):
         """Check foreground priority between individual journal entries."""

@@ -1,5 +1,9 @@
 # Unreleased
 
+- Resume full reconciliation past valid non-public Meilisearch-only sources,
+  counting parser exclusions explicitly while retaining failures for unavailable,
+  malformed or already-indexed source data (#271).
+
 - Prioritize searches and ingestion during automatic reconciliation, accelerate
   while idle, and adapt independent inventory batches to backend latency. Track
   comparable search timings against a +10% target; preserve running job cursors

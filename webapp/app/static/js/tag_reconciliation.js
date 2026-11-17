@@ -35,6 +35,9 @@
             if (measurable) notes.push(data.processed + '/' + data.total + ' captures');
             if (data.pending_changes) notes.push(data.pending_changes + ' additional rule changes pending');
             const pacing = data.pacing || {};
+            if (Number(pacing.excluded_sources) > 0) {
+                notes.push(pacing.excluded_sources + ' non-public source exclusions encountered');
+            }
             if (data.phase === 'planning' && Number.isFinite(pacing.candidates)) {
                 notes.push(pacing.candidates + ' captures identified');
             }
