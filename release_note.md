@@ -2,6 +2,18 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Present search examples in seven equally sized cards explaining AND, OR,
+  parentheses, AND NOT, prefix, substring and HTTP header-value searches before
+  showing their clickable queries; adapt to narrow screens (#264).
+
+- Search completes all supported field keywords at the cursor in both themes,
+  preserving quoted values, surrounding clauses and tag/header suggestions (#263).
+  Completion also suggests .bg/.begin (prefix) and .lk/.like (substring) on
+  supported fields, with inline descriptions.
+  Themes share one completion script. The question-mark control replaces the
+  keyword/tag table with example queries, including prefix (.bg/.begin) versus
+  substring (.lk/.like) matching, then restores the previous table.
+
 - Refresh the bundled Antibodies rules, adding shared Cisco web-interface favicon
   and IOS self-signed certificate detection without inferring IOS XE. The update
   also includes upstream rule improvements and consolidated DokuWiki, MantisBT,

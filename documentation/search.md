@@ -7,8 +7,21 @@ Plum Island stores parsed scan results in Kvrocks indexes. The main search UI us
 The optional Plum UI (`APP_THEME = "plum.css"`) provides the visual changes
 described below; bundled themes retain the original templates.
 
-The Plum search form labels its date range in UTC. Example-query buttons fill the
-query field without submitting; edit the query or press Search to run it.
+The Plum search form labels its date range in UTC. The question-mark button next
+to the keyword/tag switch replaces the table with query examples in the same
+panel; examples are hidden initially. Press it again to return to the previous
+keyword or tag table. The same controls remain available in the example view.
+Both search themes display seven equally sized example cards, following the
+Plum light/dark palette. Each explains its behavior before its clickable query:
+`AND`, `OR`, parentheses, `AND NOT`, `.bg`, `.lk` and HTTP header values.
+Click a query to fill and focus the input without submitting, then edit it or
+press Search to run it. Cards adapt to narrow screens without overflowing.
+The modifier examples compare
+`http_server.bg:nginx` (`.begin`: starts with `nginx`) with
+`http_server.lk:nginx` (`.like`: contains `nginx` anywhere).
+Both match `nginx/1.26`; only `.lk`/`.like` matches `custom-nginx`.
+The header-value example, `http_headval:x-powered-by.lk:php`, matches collected
+`x-powered-by` values containing `php`; `.lk` applies to the value.
 Token Search accepts plain text and can also be submitted with Enter.
 Expanded raw scan reports use a locally bundled [Vitrine JSON viewer](https://ecrou-exact.github.io/vitrine/docs.html?page=components/json)
 with Tree/Raw views, search, copy and download controls. Table sorting,
@@ -95,6 +108,27 @@ field.modifier:value
 ```
 
 Terms inside one group are combined with `AND` by default. Explicit `OR` can be used between groups.
+
+The query input suggests supported field names while typing: `po` offers
+`port:`, `http_` offers HTTP fields and `x509_` offers certificate fields.
+For a complete field such as `http_server`, the menu also offers
+`http_server.bg:` (starts with) and `http_server.lk:` (contains). After a dot,
+type `b` or `l` to narrow the modifier choices; `.begin` and `.like` aliases are
+also suggested. Exact-only tags and the separate `since`/`http_headval` forms
+do not receive field-modifier suggestions.
+Suggestions use the parser's field catalogue, loaded with the page; no index
+lookup is needed for field names. Click a suggestion or use Up/Down followed by
+Enter/Tab to insert it at the cursor. Escape dismisses the menu. Completion
+preserves surrounding clauses and parentheses, skips quoted values and does not
+submit the search. The original and Plum themes both support this behavior.
+After `tag:` or `http_headval:`, the existing tag or header-name suggestions
+continue to apply. Other field values are entered manually.
+
+All themes share `static/js/search_autocomplete.js`, including keyword controls,
+tag/header completion and example buttons. Search templates include
+`search_query_helpers.html` to load the parser-derived catalogue and common JS,
+and `search_query_examples.html` to display the examples; no theme-specific JS
+copy is needed for these controls.
 
 ### Parenthesized alternatives
 

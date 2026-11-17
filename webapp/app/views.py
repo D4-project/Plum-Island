@@ -1648,6 +1648,13 @@ class KVSearchView(BaseView):
             "banner",
         ]
 
+    @classmethod
+    def _search_suggestion_keywords(cls):
+        """Expose parser fields and separately handled directives to the UI."""
+        return sorted(
+            set(cls.search_keywords()) | {"http_headval", cls.SINCE_PREFIX[:-1]}
+        )
+
     def parse_query_group(self, query):
         """Validate one AND-only group using the shared field catalogue."""
         valid_keywords = self.search_keywords()
@@ -2626,6 +2633,7 @@ class KVSearchView(BaseView):
             total_scan_count=count_objects.get("uid_count", 0),
             tag_catalogue=tag_catalogue,
             tag_catalogue_error=tag_catalogue_error,
+            search_keywords=self._search_suggestion_keywords(),
         )
 
 
