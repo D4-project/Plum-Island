@@ -50,6 +50,10 @@ worker yields between captures and journal entries while these leases are live.
 One heartbeat per web process renews leases, and crashed readers expire after
 30 seconds. Passive progress polling does not register activity. After a quiet
 interval the worker resumes, then accelerates during longer idle periods.
+An export tick with no pending Meilisearch task and no loaded job batch does not
+register ingestion activity. Actual batches acquire priority after loading, so a
+job arriving after the preliminary backlog count still receives priority. Empty
+scheduler polling therefore cannot keep resetting the idle timer.
 Every additional idle minute halves the effective slowdown, returning to normal
 idle speed after at most four minutes. Foreground activity immediately restores
 priority and the retained slowdown; a quiet server cannot remain throttled
@@ -71,6 +75,8 @@ and the quiet interval, and reduces the duration target for inventory batches.
 Different queries and continuation pages are not mixed into a baseline. Queries
 and IP addresses are not stored in this timing telemetry; its sample list and
 baseline catalogue are bounded. Telemetry failure cannot fail a foreground read.
+Scalar timestamp reads use a new timing namespace, so pre-upgrade timings cannot
+mask their lower baseline. New comparable baseline samples are collected normally.
 
 The progress page distinguishes waiting for activity from idle acceleration and
 shows an observed timing difference only when comparable samples exist. This is

@@ -28,7 +28,8 @@ PACING = CONTROL + "pacing"
 LEASE_SECONDS = 30
 HEARTBEAT_SECONDS = 5
 SAMPLE_LIMIT = 256
-SAMPLES = ACTIVITY + "samples:v2"
+# Scalar timestamp reads have a new latency baseline; do not reuse v2 timings.
+SAMPLES = ACTIVITY + "samples:v3"
 FOREGROUND_SCOPE = ContextVar("plum_index_foreground_scope", default=None)
 
 

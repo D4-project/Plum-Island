@@ -396,36 +396,41 @@ the requested range. The separate `tags` route aggregates tags from all eligible
 UIDs for those IPs in the range, including UIDs that do not match the query.
 These are different scopes. Expansion does not discover new IP rows.
 
-`_build_timestamp_array`, shared by page and full search, passes each IP's matching
-UIDs as `scoped_uids` to `get_timestamp_for_ip`. The helper still reads
-`SMEMBERS ip:{ip}`, then intersects with the supplied scope **before** queuing
-`HGETALL doc:{uid}`. This avoids reading unrelated historical document metadata.
-Keep the membership intersection: reading matching `doc:{uid}` keys directly
-would change behavior when UID-to-IP and IP membership indexes disagree.
+`_build_timestamp_array`, shared by page and full search, calls
+[`search_timestamps`](../../webapp/app/utils/search_timestamps.py) with already
+matched IP/UID pairs. Batches of 250 pairs check `SISMEMBER ip:{ip} uid`, then read
+only `first_seen` and `last_seen` using `HMGET doc:{uid}` for confirmed members.
+Each reply has fixed field cardinality; no full IP membership set or document
+hash is transferred. The helper uses the caller's generation client, preserving
+inherited keys, copy-on-write ownership, tombstones and pinned old readers.
 
-`scoped_uids=None` retains full history for other callers, including the IP detail
-view; an empty scope must not fall back to full history. Missing documents retain
-null timestamps, and normalization of partial, reversed, ISO and millisecond
-timestamps remains unchanged. The search view still filters/recomputes min/max
-on matching UIDs and applies the same IP ordering, dates and cursor rules.
+Keep membership checks: reading matching `doc:{uid}` keys directly changes
+behavior when UID-to-IP and IP membership indexes disagree. Empty scopes return
+empty metadata, and missing documents retain null timestamps. Partial, reversed,
+ISO and millisecond timestamps use the existing normalization. Bounds still cover
+only matching UIDs; IP ordering, dates and cursor rules remain unchanged. This does
+not limit candidate UIDs to the visible page size. Other callers, including IP
+detail, retain `get_timestamp_for_ip` and its optional full-history behavior.
 
-This change retains one IP-membership read and the existing transactional metadata
-pipeline per candidate IP. It neither limits matching to 100 UIDs nor removes
-global criterion scans, large set replies, or per-IP pipeline waits. No new index,
-migration, caching, criterion reordering, SCAN hints or batching policy is involved.
+The earlier scoped-read change retained one full IP-membership read and one
+metadata pipeline per candidate IP. The scalar helper removes that repeated
+transport while leaving criterion scans, criterion set replies, matching and
+stored indexes unchanged. This differs from rejected #161, which batched large
+set replies. No new index, migration or shared result cache is involved.
 
-Maintainer debug reports motivating this change recorded 128,031 history document
+Maintainer debug reports motivating the earlier scoped change recorded 128,031 history document
 reads for 5,077 matching UIDs, and 54,923 for 1,081. The latter took 210.56 s and
 51.51 s in two runs despite identical document-read counts. These observations
 identify excess reads and variable latency; they do not establish the speedup of
-scoped reads. Compare `HGETALL.pipeline_calls`, `ip_history_timestamps`, first
-response and first-results time on the same queries/dates after deployment.
-The production follow-up under diagnostics below records the observed outcome.
+scoped reads. Compare `ip_history_timestamps`, first response and first-results
+time on the same queries/dates. Older reports use HGETALL; scalar reads use
+SISMEMBER/HMGET. The follow-ups below record observations for each implementation.
 
 Unit tests compare full/page responses and explicit IP ordering with the previous
-read-all-then-filter path, including more than 100 IPs and incomplete indexes.
-A separate fixture verifies that a 1,002-UID history issues only two metadata reads
-for two matching UIDs. This is read-volume validation, not a live Kvrocks benchmark.
+read-all-then-filter path, including more than 100 IPs, continuation and incomplete
+indexes. Scalar batch-boundary tests preserve empty scopes, duplicate UIDs, missing
+documents and normalization; disposable Redis integration verifies pinned parent
+and child generations. These tests establish semantics, not production speed.
 
 UI date inputs normalize days to start/end boundaries. Backend defaults without
 explicit bounds use current UTC time minus three calendar months through now.
@@ -444,7 +449,7 @@ when modifying search; no quantitative speedup is claimed without measurements.
 | Sorted-set dates, `get_uids_by_time_range` / `get_uids_by_last_seen_range` | Select timestamp ranges through indexes instead of reading every `doc:{uid}` | Full search still evaluates unscoped criteria before intersecting dates; only page search applies a time UID scope up front |
 | Adaptive windows, `execute_search_page` and `runSearchPage` | Start with recent data; skip sparse history in progressively larger windows | Windows grow 1, 2, 4, ... days up to 4096, retain partially consumed windows, and reset after a completed window with hits |
 | First 100 IPs and `limit + 1` probe, `execute_search_page` | Reduce initial response/rendering and determine whether a window needs continuation | Query evaluation and grouping still materialize window results; the limit does not bound all backend work to 100 records |
-| Scoped history metadata, `_build_timestamp_array` / `get_timestamp_for_ip` | Read document timestamps only for matching UIDs belonging to each candidate IP | Full IP membership sets and one metadata pipeline per candidate IP remain; omitted scope retains full history |
+| Scoped history metadata, `_build_timestamp_array` / `search_timestamps` | Read membership and two timestamp fields only for matching UIDs in bounded scalar batches | Criterion scans/set replies remain; IP detail retains the separate full-history helper |
 | Session `seen_ips`, `query` | Avoid returning an already displayed IP when continuing within/across windows | Session stores continuation state, not cached complete query results; preserve ownership and expiry |
 | Deferred history, `expand_ips` / `processIpExpansionQueue` | Render initial IP rows before retrieving all matching UID history | Client batches at most 200 IPs; server caps at 200. Histories of those IPs can still contain many UIDs |
 | Deferred tags, `tags` / `processTagLookupQueue` | Load badges independently of document rendering, directly from Kvrocks | 200-IP batches, one request in flight per queue, deduplication and resolved-IP tracking. Keep full eligible per-IP tag history |
@@ -561,9 +566,9 @@ additional logical commands. Pipeline duration cannot be attributed to individua
 commands, so their `direct_ms` remains zero unless also called directly.
 
 Stage times include client durations; do not add both. `ip_history_timestamps`
-includes reading each candidate IP's full UID membership set, intersecting it with
-matching UIDs, and reading only their document timestamps. Reports before the
-scoped-read change include all historical document reads before filtering.
+includes membership checks and timestamp reads for matching UIDs. Before the
+scalar helper, it read each candidate IP's full membership set; before the earlier
+scoped-read change it also read all historical document hashes before filtering.
 A large SMEMBERS maximum versus a small `window_uids` count exposes read
 amplification, not proof that a different transport will be faster.
 
@@ -736,6 +741,50 @@ validation is unavailable, report that limitation and keep the change experiment
 do not treat unit-test success or fewer pipeline executes as deployment approval.
 Preserve the separate overlap and last_seen-window semantics and current not/nt
 behavior during transport-only work.
+
+### Scalar timestamp follow-up (#271, 2026-11-17)
+
+A live profile of `port:22`, one historical day, found 1,559 matching UIDs across
+1,558 candidate IPs. The earlier helper made 3,123 logical pipeline executions;
+the scalar helper made 21, with the same results. Criterion matching still read
+the full 84,693-member port set. This change addresses timestamp transport, not
+that remaining criterion cost.
+
+The following comparison used real Kvrocks, a copied SQLite database and actual
+search view methods in Flask request contexts. The fixed range ended at
+`2026-09-14T14:43:07Z`. Each scenario ran old/new, then new/old; a foreground lease
+held reconciliation paused throughout. Existing caches were retained, so these
+are mixed/warm observations, not controlled cold-cache results. The independent
+Meilisearch CLI import continued concurrently. All result fields and visible IP
+order matched exactly, excluding diagnostic timings. Medians of two runs:
+
+| Query / range / path | Previous elapsed | Scalar elapsed | Previous / scalar CPU | Returned IPs |
+| --- | ---: | ---: | ---: | ---: |
+| `port:22`, 1 day, page | 0.510 s | 0.213 s | 0.336 / 0.152 s | 100 |
+| `http_server.lk:nginx`, 7 days, page | 6.433 s | 3.056 s | 3.397 / 1.759 s | 100 |
+| `http_server.lk:apache`, 7 days, page | 4.623 s | 3.096 s | 2.403 / 1.763 s | 100 |
+| `port:22`, 1 day, full search | 2.524 s | 2.214 s | 1.792 / 1.639 s | 1,558 |
+| `http_server.lk:nginx`, 7 days, full search | 9.729 s | 7.858 s | 5.755 / 4.910 s | 12,244 |
+
+Serialized response sizes were unchanged: approximately 26 KB, 1.10 MB, 2.03 MB,
+411 KB and 8.73 MB respectively, without diagnostic timings. Whole-process peak
+RSS reached 435,740 KiB across both implementations and retained comparison
+responses; this is not an isolated per-implementation memory comparison. Earlier
+25-IP comparisons also covered `port:22 OR port:443` and a seven-day SSH window.
+
+A separate eight-pair alternating comparison measured the scalar helper's first
+25-IP SSH page after 20 seconds of reconciliation suspension versus after five
+seconds of stable idle acceleration. Reconciliation was genuinely reparsing:
+progress advanced from 54,850 to 60,150 captures. Median elapsed was 201 ms paused
+and 226 ms after resumption (**+12.7%**); maxima were 305 and 297 ms. The **+10%
+target was not met in this series**. Median timestamp time was 61.7 / 72.1 ms;
+criterion time was 110.3 / 119.5 ms. Occasional compaction and concurrent Meilisearch
+work prevent attributing the residual difference to one proven backend cause.
+
+These measurements support deploying the narrower scalar read change; they do
+not validate browser first-paint/progress, sustained concurrent users, completed
+export files, ingestion lag, full-scale cutover or a universal latency bound.
+Keep #271 open until those operational acceptance checks are complete.
 
 ## Required change workflow and verification
 

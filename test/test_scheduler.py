@@ -1145,6 +1145,71 @@ class StalledJobWatchdogTest(TestCase):
         self.assertEqual(summary["scanner_json_files_read"], 0)
         self.assertEqual(summary["documents_integrated"], 0)
 
+    def test_empty_export_tick_does_not_reset_reconciliation_idle_time(self):
+        """No queued tasks or loaded jobs means no foreground ingestion lease."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.scalar.return_value = 0
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_build_export_context", return_value=mock.Mock()
+        ), mock.patch.object(
+            self.scheduler, "_load_pending_meili_task_uids", return_value=[]
+        ), mock.patch.object(
+            self.scheduler, "_load_export_job_states", return_value=[]
+        ), mock.patch(
+            "app.utils.index_activity.monitor_for"
+        ) as monitor:
+            summary = self.scheduler.task_export_to_dbs()
+        monitor.assert_not_called()
+        self.assertEqual(summary["documents_integrated"], 0)
+        session.remove.assert_called_once_with()
+
+    def test_loaded_export_has_priority_even_after_empty_backlog_count(self):
+        """Use the actual loaded batch so new arrivals cannot miss priority."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.scalar.return_value = 0
+        states = [{"uid": "arrived-after-count"}]
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_build_export_context", return_value=mock.Mock()
+        ), mock.patch.object(
+            self.scheduler, "_load_pending_meili_task_uids", return_value=[]
+        ), mock.patch.object(
+            self.scheduler, "_load_export_job_states", return_value=states
+        ), mock.patch(
+            "app.utils.index_activity.monitor_for"
+        ) as monitor, mock.patch.object(
+            self.scheduler, "_prepare_meili_export_batch"
+        ) as prepare, mock.patch.object(
+            self.scheduler,
+            "_submit_meili_export_batch",
+            return_value=self.scheduler._export_summary(1),
+        ):
+
+            def preparing(_context, loaded):
+                monitor.return_value.begin.assert_called_once_with("ingestion", None)
+                monitor.return_value.begin.return_value.finish.assert_not_called()
+                self.assertEqual(loaded, states)
+                return {"documents": [{"id": "one"}]}
+
+            prepare.side_effect = preparing
+            self.scheduler.task_export_to_dbs()
+        monitor.return_value.begin.return_value.finish.assert_called_once_with()
+
+    def test_pending_export_failure_releases_ingestion_priority(self):
+        """Existing tasks still acquire and release priority if recovery fails."""
+        with mock.patch(
+            "app.utils.index_activity.monitor_for"
+        ) as monitor, mock.patch.object(
+            self.scheduler, "_load_export_job_states", side_effect=RuntimeError("test")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "test"):
+                self.scheduler._resume_persisted_export(mock.Mock(), [42])
+        monitor.return_value.begin.assert_called_once_with("ingestion", None)
+        monitor.return_value.begin.return_value.finish.assert_called_once_with()
+
     def test_succeeded_persisted_task_writes_kvrocks_after_status(self):
         """Confirmed Meili success precedes Kvrocks and job completion."""
         meili_index = mock.Mock()
