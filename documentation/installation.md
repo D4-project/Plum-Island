@@ -208,8 +208,9 @@ Plum's tag renderer is also isolated in `webapp/app/static/themes/plum/`.
 Plum loads its CSS, JavaScript and fonts from the application, without a CDN or
 Google Fonts request. Its local Readable copy imports Raleway WOFF2 files from
 `static/vendor/raleway/`, preserving regular/bold weights and Unicode subsets.
-Font Awesome and Glyphicons are served from the installed Flask-AppBuilder
-assets. Licenses and source/update notes are retained with the vendored files.
+Glyphicons remain served from the installed Flask-AppBuilder assets; Font Awesome
+uses the matched local bundle described below. Licenses and source/update notes
+are retained with the vendored files.
 After updating assets, reload without cache (Ctrl+F5). Other themes retain their
 existing stylesheet configuration.
 
@@ -217,6 +218,20 @@ The Plum navbar includes a Dark mode toggle. It follows the browser's system
 preference until the user chooses a mode, then remembers that choice in local
 browser storage. The palette also applies to new and expanded JSON viewers.
 Dark mode is limited to the Plum templates; print styles keep the light palette.
+
+All themes use the locally bundled official Font Awesome Free 6.7.2 CSS and
+matching solid, regular and brand fonts. These replace FAB 4.8.1's older icon
+assets at the same `/static/appbuilder/css/fontawesome/` and
+`/static/appbuilder/css/webfonts/` URLs, retaining legacy icon classes. This fixes
+Firefox's `Glyph bbox was incorrect; adjusting` warning from the old solid font;
+it is separate from JavaScript loading or dark-mode control behavior. Provenance
+and licenses are recorded in
+[`static/vendor/fontawesome/README.md`](../webapp/app/static/vendor/fontawesome/README.md).
+No dependency upgrade or configuration change is required. Restart the controller
+after deployment and reload cached static assets (hard reload or clear the site
+cache); any proxy/CDN cache for those existing URLs must also be refreshed.
+Rolling back the application restores FAB's original assets; no database or
+index changes are involved.
 
 New configs default to `APP_THEME = "plum.css"` through
 `webapp/config.py.template`; existing installations retain their selected theme.

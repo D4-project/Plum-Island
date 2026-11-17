@@ -2,6 +2,10 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Serve official Font Awesome Free 6.7.2 CSS and matching local fonts at FAB's
+  existing URLs for every theme, fixing Firefox's glyph bounding-box warning.
+  Preserve legacy icon aliases; restart and refresh cached static assets (#266).
+
 - Clean obsolete FAB permission/view pairs and their role grants atomically per
   registered view, preserving active permissions and fixing startup refusal
   warnings with FAB 4.8.1. Back up the SQL database before upgrading (#260).
