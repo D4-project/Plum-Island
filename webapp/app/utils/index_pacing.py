@@ -146,6 +146,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
         ]
         if baselines:
             target = min(target, max(0.001, min(baselines) * self.target))
+        target = max(0.001, target / self.factor)
         estimate = int(size * target / elapsed)
         self.planning_sizes[backend] = max(
             1, min(self.max_planning, estimate, size * 2)
@@ -169,11 +170,8 @@ class PacedReconciliationWorker(ReconciliationWorker):
         """Use short idle yields; measured slowdowns increase normal pacing."""
         if not hasattr(self, "load"):
             return self._base_pause
-        return (
-            0.01
-            if self.load.mode == "idle_boost"
-            else self._base_pause * self.load.factor
-        )
+        pause = 0.01 if self.load.mode == "idle_boost" else self._base_pause
+        return pause * self.load.factor
 
     @pause_seconds.setter
     def pause_seconds(self, value):

@@ -12,7 +12,7 @@ from app.utils.index_activity import (
     foreground_activity,
     request_signature,
 )
-from app.utils.index_pacing import LoadController
+from app.utils.index_pacing import LoadController, PacedReconciliationWorker
 
 
 class LoadControllerTest(unittest.TestCase):
@@ -84,6 +84,18 @@ class LoadControllerTest(unittest.TestCase):
         self.controller.planning_observed("meili", 100, 0.001)
         self.assertEqual(self.controller.planning_sizes["meili"], 200)
 
+    def test_latency_feedback_also_limits_idle_boost(self):
+        """An idle period cannot bypass slowdown after a measured budget miss."""
+        self.controller.factor = 4
+        self.controller.mode = "idle_boost"
+        worker = PacedReconciliationWorker(self.raw, Mock(), {})
+        worker.load = self.controller
+        self.assertAlmostEqual(worker.pause_seconds, 0.04)
+        self.controller.mode = "limited"
+        self.assertAlmostEqual(worker.pause_seconds, 0.4)
+        self.controller.planning_observed("meili", 100, 0.05)
+        self.assertEqual(self.controller.planning_sizes["meili"], 25)
+
     def test_stop_interrupts_foreground_wait(self):
         """No polling or background work after the stop flag is raised."""
         self.assertFalse(self.controller.wait(lambda: True))
@@ -102,14 +114,28 @@ class ActivityMonitorTest(unittest.TestCase):
     def test_signature_is_specific_anonymous_and_skips_continuations(self):
         """Different queries/windows cannot silently share timing baselines."""
         request = SimpleNamespace(
-            endpoint="KVSearchView.query", is_json=False, args={"query": "port:443"}
+            endpoint="KVSearchView.query", is_json=False, args={"q": "port:443"}
         )
         first = request_signature(request)
         self.assertEqual(len(first), 128)
         self.assertNotIn("port", first)
-        request.args["query"] = "port:22"
+        request.args["q"] = "port:22"
         self.assertNotEqual(first, request_signature(request))
         request.args["search_id"] = "continuation"
+        self.assertIsNone(request_signature(request))
+
+    def test_api_signature_uses_json_query(self):
+        """API and GUI use different input names; both distinguish queries."""
+        payload = {"query": "port:443", "from_ts": 10, "to_ts": 20}
+        request = SimpleNamespace(
+            endpoint="DiscoveryApi.search",
+            is_json=True,
+            get_json=lambda **_kwargs: payload,
+        )
+        first = request_signature(request)
+        payload["query"] = "port:22"
+        self.assertNotEqual(first, request_signature(request))
+        payload["cursor"] = "next-page"
         self.assertIsNone(request_signature(request))
 
     def test_invalid_json_does_not_fail_inside_telemetry(self):
