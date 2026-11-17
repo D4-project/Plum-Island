@@ -5,6 +5,7 @@
 {{ lib.panel_begin(title, "Query Scans") }}
 
 <script src="{{ url_for('static', filename='js/ip_tag_enrichment.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+{% include 'search_query_helpers.html' %}
 <script>
 let lastSuccessfulSearch = null;
 let exportStatusPoller = null;
@@ -70,7 +71,6 @@ function downloadSearchDebug() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const TAG_SUGGEST_DEBOUNCE_MS = 120;
 const EXPORT_CONFIGS = {
     resolved: {
         title: 'Preparing Resolved Export',
@@ -100,11 +100,6 @@ const EXPORT_CONFIGS = {
         downloadUrl: '/kvsearchview/export_full_download'
     }
 };
-let tagSuggestAbortController = null;
-let tagSuggestDebounceTimer = null;
-let tagSuggestItems = [];
-let tagSuggestSelectedIndex = -1;
-let tagSuggestContext = null;
 let manualTimeRangeSnapshot = null;
 let sinceDirectiveModeActive = false;
 let ipTagEnricher = null;
@@ -747,317 +742,6 @@ function buildSearchParams(query, timeRange, cursorTs = null, searchId = null, l
         params.set('search_id', searchId);
     }
     return params;
-}
-
-function getTagSuggestMenu() {
-    return document.getElementById('query-tag-suggest');
-}
-
-function hideTagSuggestions() {
-    if (tagSuggestAbortController) {
-        tagSuggestAbortController.abort();
-        tagSuggestAbortController = null;
-    }
-    if (tagSuggestDebounceTimer) {
-        clearTimeout(tagSuggestDebounceTimer);
-        tagSuggestDebounceTimer = null;
-    }
-    const menu = getTagSuggestMenu();
-    if (menu) {
-        menu.style.display = 'none';
-        menu.innerHTML = '';
-    }
-    tagSuggestItems = [];
-    tagSuggestSelectedIndex = -1;
-    tagSuggestContext = null;
-}
-
-function getQueryTagContext() {
-    const input = document.getElementById('query');
-    if (!input) {
-        return null;
-    }
-    const caretStart = input.selectionStart;
-    const caretEnd = input.selectionEnd;
-    if (caretStart === null || caretEnd === null || caretStart !== caretEnd) {
-        return null;
-    }
-
-    const value = input.value || '';
-    let tokenStart = caretStart;
-    while (tokenStart > 0 && !/\s/.test(value.charAt(tokenStart - 1))) {
-        tokenStart -= 1;
-    }
-
-    let tokenEnd = caretStart;
-    while (tokenEnd < value.length && !/\s/.test(value.charAt(tokenEnd))) {
-        tokenEnd += 1;
-    }
-
-    const token = value.slice(tokenStart, tokenEnd);
-    const lowerToken = token.toLowerCase();
-    if (!lowerToken.startsWith('tag:') && !lowerToken.startsWith('http_headval:')) {
-        return null;
-    }
-    if (lowerToken.startsWith('http_headval:')) {
-        const headerFragment = lowerToken.slice('http_headval:'.length);
-        if (headerFragment.includes(':')) {
-            return null;
-        }
-    }
-
-    const suggestType = lowerToken.startsWith('http_headval:') ? 'header' : 'tag';
-    if (suggestType === 'header' && token.includes(' ')) {
-        return null;
-    }
-
-    return {
-        input,
-        token,
-        suggestType,
-        tokenStart,
-        tokenEnd
-    };
-}
-
-function updateTagSuggestionSelection(nextIndex) {
-    const menu = getTagSuggestMenu();
-    if (!menu || !tagSuggestItems.length) {
-        tagSuggestSelectedIndex = -1;
-        return;
-    }
-    const buttons = [...menu.querySelectorAll('.tag-suggest-item')];
-    if (!buttons.length) {
-        tagSuggestSelectedIndex = -1;
-        return;
-    }
-
-    const boundedIndex = Math.max(0, Math.min(nextIndex, buttons.length - 1));
-    tagSuggestSelectedIndex = boundedIndex;
-    buttons.forEach((button, index) => {
-        button.classList.toggle('active', index === boundedIndex);
-    });
-    buttons[boundedIndex].scrollIntoView({ block: 'nearest' });
-}
-
-function applyTagSuggestion(index) {
-    if (!tagSuggestContext || !tagSuggestItems[index]) {
-        return;
-    }
-
-    const suggestion = tagSuggestItems[index];
-    const input = tagSuggestContext.input;
-    const currentValue = input.value || '';
-    const before = currentValue.slice(0, tagSuggestContext.tokenStart);
-    const after = currentValue.slice(tagSuggestContext.tokenEnd);
-    const needsTrailingSpace = suggestion.kind === 'tag' && (after === '' || !/^\s/.test(after));
-    const replacement = `${suggestion.value}${needsTrailingSpace ? ' ' : ''}`;
-    input.value = `${before}${replacement}${after}`;
-    const nextCaret = before.length + replacement.length;
-    input.focus();
-    input.setSelectionRange(nextCaret, nextCaret);
-
-    if (suggestion.kind === 'namespace') {
-        scheduleTagSuggestionFetch();
-        return;
-    }
-    hideTagSuggestions();
-}
-
-function renderTagSuggestions(suggestions, context) {
-    const menu = getTagSuggestMenu();
-    if (!menu) {
-        return;
-    }
-    if (!suggestions.length) {
-        hideTagSuggestions();
-        return;
-    }
-
-    tagSuggestItems = suggestions;
-    tagSuggestContext = context;
-    menu.textContent = '';
-    suggestions.forEach((suggestion, index) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'tag-suggest-item';
-        button.dataset.index = String(index);
-
-        const label = document.createElement('span');
-        label.className = 'tag-suggest-label';
-        label.textContent = suggestion.label || '';
-        button.appendChild(label);
-
-        const kind = document.createElement('span');
-        kind.className = 'tag-suggest-kind';
-        kind.textContent = suggestion.kind || '';
-        button.appendChild(kind);
-
-        menu.appendChild(button);
-    });
-    menu.style.display = 'block';
-
-    [...menu.querySelectorAll('.tag-suggest-item')].forEach((button) => {
-        button.addEventListener('mousedown', (event) => {
-            event.preventDefault();
-        });
-        button.addEventListener('click', () => {
-            applyTagSuggestion(Number(button.dataset.index));
-        });
-    });
-    updateTagSuggestionSelection(0);
-}
-
-async function fetchTagSuggestions(context) {
-    if (tagSuggestAbortController) {
-        tagSuggestAbortController.abort();
-    }
-    tagSuggestAbortController = new AbortController();
-
-    try {
-        const params = new URLSearchParams();
-        params.set('term', context.token);
-        const suggestPath = context.suggestType === 'header' ? 'header_suggest' : 'tag_suggest';
-        const res = await fetch(`/kvsearchview/${suggestPath}?${params.toString()}`, {
-            signal: tagSuggestAbortController.signal
-        });
-        const data = await readJsonResponse(res);
-        const latestContext = getQueryTagContext();
-        if (!latestContext || latestContext.token !== context.token || latestContext.tokenStart !== context.tokenStart) {
-            return;
-        }
-        renderTagSuggestions(data.suggestions || [], latestContext);
-    } catch (error) {
-        if (error?.name === 'AbortError') {
-            return;
-        }
-        hideTagSuggestions();
-    }
-}
-
-function scheduleTagSuggestionFetch() {
-    if (tagSuggestDebounceTimer) {
-        clearTimeout(tagSuggestDebounceTimer);
-    }
-
-    const context = getQueryTagContext();
-    if (!context) {
-        hideTagSuggestions();
-        return;
-    }
-
-    tagSuggestDebounceTimer = setTimeout(() => {
-        fetchTagSuggestions(context);
-    }, TAG_SUGGEST_DEBOUNCE_MS);
-}
-
-function handleQueryKeydown(event) {
-    if (event.isComposing) {
-        return;
-    }
-
-    const menu = getTagSuggestMenu();
-    const isOpen = menu && menu.style.display !== 'none' && tagSuggestItems.length > 0;
-    if (!isOpen) {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            search();
-        }
-        return;
-    }
-
-    if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        updateTagSuggestionSelection(tagSuggestSelectedIndex + 1);
-    } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        updateTagSuggestionSelection(tagSuggestSelectedIndex - 1);
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault();
-        applyTagSuggestion(tagSuggestSelectedIndex >= 0 ? tagSuggestSelectedIndex : 0);
-    } else if (event.key === 'Escape') {
-        event.preventDefault();
-        hideTagSuggestions();
-    }
-}
-
-function bindQueryTagHelper() {
-    const input = document.getElementById('query');
-    if (!input) {
-        return;
-    }
-
-    input.addEventListener('input', () => {
-        scheduleTagSuggestionFetch();
-        syncSinceDirectiveState();
-    });
-    input.addEventListener('click', scheduleTagSuggestionFetch);
-    input.addEventListener('keydown', handleQueryKeydown);
-    input.addEventListener('blur', () => {
-        setTimeout(() => {
-            const activeElement = document.activeElement;
-            const menu = getTagSuggestMenu();
-            if (menu && menu.contains(activeElement)) {
-                return;
-            }
-            hideTagSuggestions();
-        }, 120);
-    });
-}
-
-const SEARCH_KEYWORDS = new Set([
-    'ip', 'net', 'fqdn', 'fqdn_requested', 'domain_requested', 'host', 'domain',
-    'tld', 'port', 'banner', 'tag', 'since', 'http_title', 'http_cookiename',
-    'http_etag', 'http_server', 'http_header', 'http_headval',
-    'http_favicon_path', 'http_favicon_mmhash', 'http_favicon_md5',
-    'http_favicon_sha256', 'x509_issuer', 'x509_issuer_cn', 'x509_subject',
-    'x509_subject_cn', 'x509_san', 'x509_md5', 'x509_sha1', 'x509_sha256'
-]);
-
-function appendSearchKeyword(keyword) {
-    if (!SEARCH_KEYWORDS.has(keyword)) {
-        return;
-    }
-    appendSearchTerm(`${keyword}:`);
-}
-
-function appendSearchTerm(term) {
-    const input = document.getElementById('query');
-    if (!input) {
-        return;
-    }
-    const prefix = input.value && !/\s$/.test(input.value) ? ' ' : '';
-    input.value += `${prefix}${term}`;
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-    input.dispatchEvent(new Event('input', {bubbles: true}));
-}
-
-function bindSearchKeywordHelpers() {
-    document.querySelectorAll('[data-search-keyword]').forEach((keyword) => {
-        const appendKeyword = () => appendSearchKeyword(keyword.dataset.searchKeyword);
-        keyword.addEventListener('click', appendKeyword);
-        keyword.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                appendKeyword();
-            }
-        });
-    });
-    document.querySelectorAll('[data-search-tag-term]').forEach((tag) => {
-        tag.addEventListener('click', () => appendSearchTerm(tag.dataset.searchTagTerm));
-    });
-    document.querySelectorAll('[data-search-helper-toggle]').forEach((button) => {
-        button.addEventListener('click', () => {
-            const keywords = document.getElementById('search-keyword-table');
-            const tags = document.getElementById('search-tag-table');
-            const showTags = tags.hidden;
-            keywords.hidden = showTags;
-            tags.hidden = !showTags;
-            // The clicked control is now hidden: keep keyboard focus on its counterpart.
-            (showTags ? tags : keywords).querySelector('[data-search-helper-toggle]').focus();
-        });
-    });
 }
 
 function buildExportPayload() {
@@ -2099,8 +1783,8 @@ document.addEventListener('DOMContentLoaded', () => {
     <div class="search-toolbar">
         <div class="search-toolbar-input">
             <div class="search-query-wrapper">
-                <input type="text" id="query" class="form-control" placeholder="Query {{ total_scan_count }} Ports scans...">
-                <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Tag suggestions"></div>
+                <input type="text" id="query" class="form-control" aria-describedby="scan-query-help" placeholder="Query {{ total_scan_count }} Ports scans...">
+                <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Search suggestions"></div>
             </div>
             <div class="search-time-range">
                 <div class="input-group search-date-field">
@@ -2122,10 +1806,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     <input type="date" id="time-to-picker" class="search-date-picker-proxy" tabindex="-1" aria-hidden="true">
                 </div>
                 <div id="info" class="search-summary"></div>
-            </div>
-            <div class="text-muted mt-1" style="font-size: 0.9em;">
-                Use implicit <code>AND</code> inside one group and explicit <code>OR</code> between groups.
-                Exclude matching scans with <code>AND NOT</code>, e.g. <code>tag:type:router AND NOT tag:vendor:mikrotik</code>.
             </div>
         </div>
         <div class="search-toolbar-actions">
@@ -2185,6 +1865,7 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 
 <div class="kvrocks-table-wrapper">
+    {% include 'search_query_examples.html' %}
     <table class="kvrocks-table" id="search-keyword-table">
         <thead>
             <tr>
@@ -2198,6 +1879,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             title="Show tags" aria-label="Show tags" aria-controls="search-tag-table">
                         <i class="fa fa-exchange" aria-hidden="true"></i>
                     </button>
+                    {% include 'search_examples_toggle.html' %}
                 </th>
             </tr>
         </thead>
