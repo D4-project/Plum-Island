@@ -1,5 +1,10 @@
 # Kvrocks Objects
 
+Managed installations resolve these logical keys through pinned Kvrocks generations.
+See [automatic indexing](automatic-indexing.md) for physical routing, journal/cutover
+semantics and legacy maintenance limits.
+
+
 Contributor reference: [search engine internals and change contract](sysinternal/search_engine.md).
 
 Plum Island uses Kvrocks as the fast search index for parsed scan documents.

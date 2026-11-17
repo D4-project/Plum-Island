@@ -7,8 +7,10 @@ It contains all the logic to find something.
 
 try:
     from .timeutils import utcnow_iso
+    from .index_generations import GenerationClient, READER_SCOPE
 except ImportError:
     from timeutils import utcnow_iso
+    from index_generations import GenerationClient, READER_SCOPE
 from datetime import datetime, timezone
 import ipaddress
 import logging
@@ -25,9 +27,10 @@ class KVrocksIndexer:
 
     TAG_CATALOGUE_KEY = "tag_catalogue"
     TAG_CATALOGUE_BATCH_SIZE = 500
+    accepts_source_documents = True
 
     def __init__(self, host="localhost", port=6666, socket_timeout=None):
-        self.r = redis.Redis(
+        self.raw = redis.Redis(
             host=host,
             port=port,
             decode_responses=True,
@@ -35,6 +38,25 @@ class KVrocksIndexer:
             socket_connect_timeout=socket_timeout,
             socket_timeout=socket_timeout,
         )
+        self._endpoint = (host, port)
+        self._r = GenerationClient(self.raw)
+        self._automatic_generation = True
+
+    @property
+    def r(self):
+        """Share a generation across all clients used by one request or export."""
+        scope = READER_SCOPE.get()
+        if getattr(self, "_automatic_generation", False) and scope is not None:
+            if self._endpoint not in scope:
+                scope[self._endpoint] = GenerationClient(self.raw)
+            return scope[self._endpoint]
+        return self._r
+
+    @r.setter
+    def r(self, client):
+        """Explicit internal writers and test doubles own their keyspace."""
+        self._r = client
+        self._automatic_generation = False
 
     @staticmethod
     def now_rfc():

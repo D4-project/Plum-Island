@@ -44,6 +44,7 @@ from .models import (
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
 from .utils.kvrocks import KVrocksIndexer
+from .utils.index_generations import GenerationClient, CONTROL
 from .utils.result_parser import port_protocol_values
 from .utils.tagrules import normalize_tags
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
@@ -1932,7 +1933,14 @@ class InfoIpApi(BaseApi):
                     resolved[uid] = set(pairs)
                     docs.append({"uid": uid, "port_protocol": pairs})
             if docs:
-                indexer.replace_field_values_batch("port_protocol", docs)
+                # Automatic reconciliation owns writes once enabled. The API
+                # can still return source-derived protocols without altering
+                # a pinned (possibly retired) generation.
+                managed = isinstance(indexer.r, GenerationClient) and bool(
+                    indexer.r.raw.get(CONTROL + "desired")
+                )
+                if not managed:
+                    indexer.replace_field_values_batch("port_protocol", docs)
         return resolved
 
     @staticmethod

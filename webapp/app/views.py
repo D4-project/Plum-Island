@@ -18,7 +18,6 @@ import logging
 import os
 import re
 import shlex
-import sys
 import threading
 import time
 import uuid
@@ -80,6 +79,13 @@ from .models import (
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
 from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
 from .utils.kvrocks import KVrocksIndexer
+from .utils.index_generations import (
+    pinned_read,
+    generation_identity,
+    reader_generation,
+    restore_reader_generation,
+)
+from .utils.index_reconciliation import reconciliation_status
 from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
 from .utils.search_query import compile_query, tokenize_query
@@ -912,14 +918,19 @@ class KVSearchView(BaseView):
     def _collect_tag_catalogue(cls):
         """Group observed indexed tags, cached per backend for sixty seconds."""
         endpoint = (db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"])
+        indexer = KVrocksIndexer(*endpoint, socket_timeout=5)
+        cache_key = (*endpoint, generation_identity(indexer.r))
         # Serialize refreshes within each worker to avoid a request stampede.
         with cls._tag_catalogue_lock:
             cached = cls._tag_catalogue_cache
-            if cached is None or cached[0] != endpoint or cached[1] <= time.monotonic():
-                indexer = KVrocksIndexer(*endpoint, socket_timeout=5)
+            if (
+                cached is None
+                or cached[0] != cache_key
+                or cached[1] <= time.monotonic()
+            ):
                 tags = tuple(indexer.get_observed_tags())
                 cls._tag_catalogue_cache = (
-                    endpoint,
+                    cache_key,
                     time.monotonic() + cls.TAG_CATALOGUE_TTL_SECONDS,
                     tags,
                 )
@@ -1169,6 +1180,7 @@ class KVSearchView(BaseView):
                 "from_ts": from_ts,
                 "to_ts": to_ts,
                 "seen_ips": [],
+                "generation": reader_generation(app.config),
                 "created_ts": now_ts,
                 "updated_ts": now_ts,
             }
@@ -1357,6 +1369,7 @@ class KVSearchView(BaseView):
                 yield uid, sorted(normalize_tags(tags), key=str.lower)
 
     @staticmethod
+    @pinned_read
     def _run_full_export_job(job_id):
         with app.app_context():
             job_state = KVSearchView._get_job_state(job_id)
@@ -2068,6 +2081,7 @@ class KVSearchView(BaseView):
             from_ts = search_session.get("from_ts")
             to_ts = search_session.get("to_ts")
             seen_ips = search_session.get("seen_ips", [])
+            restore_reader_generation(app.config, search_session.get("generation"))
         else:
             from_ts = request.args.get("from_ts")
             to_ts = request.args.get("to_ts")
@@ -3902,7 +3916,7 @@ class TagRulesView(ModelView):
             flash(
                 "Enabled header collection for active tag rules: "
                 + ", ".join(sorted(set(enabled)))
-                + ". Existing documents require rebuild/reimport.",
+                + ". Existing captures will be updated automatically.",
                 "warning",
             )
         if summary.get("ambiguous"):
@@ -3918,203 +3932,16 @@ class TagRulesView(ModelView):
                 "warning",
             )
 
-    @staticmethod
-    def _tag_reindex_state(job_id, **updates):
-        with TAG_REINDEX_STATES_LOCK:
-            state = TAG_REINDEX_STATES.setdefault(job_id, {})
-            state.update(updates)
-            return dict(state)
-
-    def _run_tag_reindex(self, job_id, rule_id, resume_state=None):
-        try:
-            tools_dir = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..", "tools")
-            )
-            if tools_dir not in sys.path:
-                sys.path.insert(0, tools_dir)
-            import tag_mgmt
-            from types import SimpleNamespace
-
-            def progress(message):
-                self._tag_reindex_state(job_id, message=str(message))
-                match = re.search(
-                    r"processed=(\d+);(?: total=\d+;)? updated=(\d+); errors=(\d+)",
-                    str(message),
-                )
-                if match:
-                    self._tag_reindex_state(
-                        job_id,
-                        processed=int(match.group(1)),
-                        updated=int(match.group(2)),
-                        errors=int(match.group(3)),
-                    )
-                total_match = re.search(r"processed=(\d+); total=(\d+);", str(message))
-                if total_match:
-                    self._tag_reindex_state(job_id, total=int(total_match.group(2)))
-                cursor_match = re.search(r"cursor=(\d+)", str(message))
-                if cursor_match:
-                    self._tag_reindex_state(
-                        job_id, scan_cursor=int(cursor_match.group(1))
-                    )
-
-            args = SimpleNamespace(
-                allrules=rule_id is None,
-                rule_id=rule_id,
-                batch_size=tag_mgmt.MAX_BATCH_SIZE,
-                flush=False,
-                resume_cursor=int((resume_state or {}).get("scan_cursor", 0) or 0),
-                processed=int((resume_state or {}).get("processed", 0) or 0),
-                updated=int((resume_state or {}).get("updated", 0) or 0),
-                errors=int((resume_state or {}).get("errors", 0) or 0),
-                total=int((resume_state or {}).get("total", 0) or 0),
-            )
-            tag_mgmt.reindex_tags(args, progress_callback=progress)
-            self._tag_reindex_state(job_id, status="done", message="Reindex completed")
-        except Exception as error:  # background task must publish failure
-            logger.exception("Tag reindex failed")
-            self._tag_reindex_state(job_id, status="error", message=str(error))
-
-    def _launch_tag_reindex_job(self, rule_id, resume_state=None):
-        """Create one in-process reindex job after shared-lock validation."""
-        with TAG_REINDEX_STATES_LOCK:
-            if any(
-                state.get("status") in ("queued", "running")
-                for state in TAG_REINDEX_STATES.values()
-            ):
-                return None
-            job_id = uuid.uuid4().hex
-            TAG_REINDEX_STATES[job_id] = {
-                "status": "queued",
-                "rule_id": rule_id,
-                "processed": 0,
-                "updated": 0,
-                "errors": 0,
-                "message": "Queued",
-                "recovered": bool(resume_state),
-            }
-        self._tag_reindex_state(job_id, status="running", message="Reindex started")
-        threading.Thread(
-            target=self._run_tag_reindex,
-            args=(job_id, rule_id, resume_state),
-            daemon=True,
-        ).start()
-        return job_id
-
-    @expose("/reindex_start", methods=["POST"])
-    @has_access
-    def reindex_start(self):
-        """Start one background reindex for all rules or one selected rule."""
-        try:
-            tools_dir = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..", "tools")
-            )
-            if tools_dir not in sys.path:
-                sys.path.insert(0, tools_dir)
-            import tag_mgmt
-
-            if tag_mgmt.reindex_lock_is_held():
-                return (
-                    jsonify(error="A tag reindex is already running (CLI or web)"),
-                    409,
-                )
-        except ImportError as error:
-            logger.exception("Unable to load tag reindex tooling")
-            return jsonify(error=str(error)), 500
-        rule_id = request.get_json(silent=True) or {}
-        rule_id = rule_id.get("rule_id") or request.form.get("rule_id")
-        if rule_id not in (None, ""):
-            try:
-                rule_id = int(rule_id)
-            except (TypeError, ValueError):
-                return jsonify(error="Invalid rule id"), 400
-            if (
-                db.session.query(TagRules).filter(TagRules.id == rule_id).one_or_none()
-                is None
-            ):
-                return jsonify(error="Tag rule not found"), 404
-        else:
-            rule_id = None
-        job_id = self._launch_tag_reindex_job(rule_id)
-        if job_id is None:
-            return jsonify(error="A tag reindex is already running"), 409
-        return jsonify(job_id=job_id, status="running")
-
-    @expose("/reindex_status/<job_id>")
-    @has_access
-    def reindex_status(self, job_id):
-        with TAG_REINDEX_STATES_LOCK:
-            state = TAG_REINDEX_STATES.get(job_id)
-        if state is None and job_id == "shared":
-            try:
-                tools_dir = os.path.abspath(
-                    os.path.join(os.path.dirname(__file__), "..", "..", "tools")
-                )
-                if tools_dir not in sys.path:
-                    sys.path.insert(0, tools_dir)
-                import tag_mgmt
-
-                state = tag_mgmt.read_reindex_status()
-            except ImportError:
-                state = None
-        if state is None:
-            return jsonify(error="Unknown reindex job"), 404
-        return jsonify(state)
-
     @expose("/reindex_current")
     @has_access
     def reindex_current(self):
-        """Return the most recent queued/running reindex for page reloads."""
-        with TAG_REINDEX_STATES_LOCK:
-            active = [
-                (job_id, state)
-                for job_id, state in TAG_REINDEX_STATES.items()
-                if state.get("status") in ("queued", "running")
-            ]
-            if active:
-                job_id, state = active[-1]
-                return jsonify(job_id=job_id, **state)
-        try:
-            tools_dir = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..", "tools")
-            )
-            if tools_dir not in sys.path:
-                sys.path.insert(0, tools_dir)
-            import tag_mgmt
-
-            shared = tag_mgmt.read_reindex_status()
-            if (
-                shared
-                and shared.get("status") == "running"
-                and _tag_reindex_is_stale(shared)
-            ):
-                # A process killed during reindex releases the flock, but its
-                # JSON status remains running. Restart the idempotent Kvrocks
-                # pass automatically instead of leaving the UI stalled.
-                if tag_mgmt.reindex_lock_is_held():
-                    return jsonify(job_id="shared", **shared)
-                rule_id = shared.get("rule_id")
-                if rule_id not in (None, ""):
-                    try:
-                        rule_id = int(rule_id)
-                    except (TypeError, ValueError):
-                        rule_id = None
-                # Status files written before cursor persistence can only be
-                # restarted safely from the beginning; do not carry their old
-                # counters into a fresh scan.
-                resume_state = shared if "scan_cursor" in shared else {}
-                job_id = self._launch_tag_reindex_job(
-                    rule_id, resume_state=resume_state
-                )
-                if job_id is not None:
-                    with TAG_REINDEX_STATES_LOCK:
-                        state = dict(TAG_REINDEX_STATES.get(job_id, {}))
-                    state["recovered"] = True
-                    return jsonify(job_id=job_id, **state)
-            if shared and shared.get("status") == "running":
-                return jsonify(job_id="shared", **shared)
-        except ImportError:
-            pass
-        return jsonify(job_id=None, status="idle")
+        """Read scheduler-owned state without starting or recovering work."""
+        indexer = KVrocksIndexer(
+            app.config["KVROCKS_HOST"],
+            app.config["KVROCKS_PORT"],
+            socket_timeout=5,
+        )
+        return jsonify(reconciliation_status(indexer.raw))
 
     @action(
         "muldelete",
@@ -4358,6 +4185,7 @@ class ReportsView(ModelView):
                 db.session.remove()
 
     @staticmethod
+    @pinned_read
     def _build_report(report, run_at=None, progress_callback=None):
         def update_progress(step, **kwargs):
             if progress_callback:

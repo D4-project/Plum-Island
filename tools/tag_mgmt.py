@@ -11,7 +11,6 @@ from contextlib import contextmanager
 import fcntl
 import json
 import os
-import re
 import logging
 import sys
 import warnings
@@ -29,8 +28,16 @@ TOOLS_CONFIG = BASE_DIR / "tools" / "config.yaml"
 MISSING_VERSION_TIME = datetime(1970, 1, 1)
 TAG_FLUSH_BATCH_SIZE = 1000
 MAX_BATCH_SIZE = 1000
-REINDEX_LOCK_FILE = Path(__import__("os").environ.get("PLUM_REINDEX_LOCK_FILE", "/tmp/plum-island-tag-reindex.lock"))
-REINDEX_STATUS_FILE = Path(os.environ.get("PLUM_REINDEX_STATUS_FILE", "/tmp/plum-island-tag-reindex.status.json"))
+REINDEX_LOCK_FILE = Path(
+    __import__("os").environ.get(
+        "PLUM_REINDEX_LOCK_FILE", "/tmp/plum-island-tag-reindex.lock"
+    )
+)
+REINDEX_STATUS_FILE = Path(
+    os.environ.get(
+        "PLUM_REINDEX_STATUS_FILE", "/tmp/plum-island-tag-reindex.status.json"
+    )
+)
 
 
 def read_reindex_status():
@@ -178,7 +185,7 @@ def build_parser():
 
     reindex_parser = subparsers.add_parser(
         "reindex",
-        help="Recompute Kvrocks tags from Meilisearch documents.",
+        help="Queue reconciliation in the scheduler-managed background process.",
     )
     reindex_parser.add_argument(
         "rule_id",
@@ -200,7 +207,7 @@ def build_parser():
     reindex_parser.add_argument(
         "--flush",
         action="store_true",
-        help="Delete all existing Kvrocks tag indexes before recomputing them.",
+        help="Queue a full background rebuild; preserve the active index until publication.",
     )
 
     list_parser = subparsers.add_parser(
@@ -326,7 +333,7 @@ def legacy_reindex_args(argv=None):
     parser.add_argument(
         "--flush",
         action="store_true",
-        help="Delete all existing Kvrocks tag indexes before recomputing them.",
+        help="Queue a full background rebuild; preserve the active index until publication.",
     )
     parser.add_argument(
         "--list_tags",
@@ -675,9 +682,7 @@ def import_rules(args):
         if args.dry_run:
             db.session.rollback()
         else:
-            reconciliation = ensure_rule_required_headers(
-                db.session, commit=False
-            )
+            reconciliation = ensure_rule_required_headers(db.session, commit=False)
             db.session.commit()
             if reconciliation.get("ambiguous"):
                 print(
@@ -838,7 +843,9 @@ def iter_kvrocks_document_batches(indexer, batch_size, start_cursor=0):
             results = pipe.execute()
             fields_per_uid = len(REINDEX_FIELDS) + 1
             for offset, uid in enumerate(uid_batch):
-                values = results[offset * fields_per_uid : (offset + 1) * fields_per_uid]
+                values = results[
+                    offset * fields_per_uid : (offset + 1) * fields_per_uid
+                ]
                 metadata = values[0] or {}
                 document = {
                     "id": uid,
@@ -1104,44 +1111,42 @@ def _reindex_tags_unlocked(args, progress_callback=None):
             )
 
 
-def reindex_tags(args, progress_callback=None):
-    """Run a serialized tag reindex, shared by CLI and web UI."""
-    with reindex_execution_lock():
-        _write_reindex_status(
-            status="running",
-            message="Reindex started",
-            processed=int(getattr(args, "processed", 0) or 0),
-            total=int(getattr(args, "total", 0) or 0),
-            updated=int(getattr(args, "updated", 0) or 0),
-            errors=int(getattr(args, "errors", 0) or 0),
-            scan_cursor=int(getattr(args, "resume_cursor", 0) or 0),
-            pid=os.getpid(),
-            rule_id=getattr(args, "rule_id", None),
-            allrules=bool(getattr(args, "allrules", False)),
-            batch_size=int(getattr(args, "batch_size", MAX_BATCH_SIZE)),
-            started_at=datetime.now(timezone.utc).isoformat(),
+def request_reconciliation(full=False, endpoint=None):
+    """Queue work for the scheduler; never start a competing CLI indexer."""
+    # Import runtime dependencies only after CLI argument/help handling.
+    # pylint: disable=import-outside-toplevel
+    sys.path.insert(0, str(WEBAPP_DIR))
+    from app import app  # pylint: disable=import-outside-toplevel
+    from app.utils.kvrocks import (
+        KVrocksIndexer,
+    )  # pylint: disable=import-outside-toplevel
+    from app.utils.index_reconciliation import (
+        queue_snapshot,
+        reconciliation_status,
+    )  # pylint: disable=import-outside-toplevel
+    from app.utils.tag_runtime import (
+        desired_snapshot,
+    )  # pylint: disable=import-outside-toplevel
+
+    configured = (app.config["KVROCKS_HOST"], int(app.config["KVROCKS_PORT"]))
+    if endpoint is not None and tuple(endpoint) != configured:
+        raise SystemExit(
+            "Tool output backend differs from the controller; use the matching controller configuration"
         )
-        def callback(message):
-            text = str(message)
-            updates = {"message": text}
-            match = re.search(r"processed=(\d+);(?: total=(\d+);)? updated=(\d+); errors=(\d+)", text)
-            if match:
-                updates.update(processed=int(match.group(1)), updated=int(match.group(3)), errors=int(match.group(4)))
-                if match.group(2):
-                    updates["total"] = int(match.group(2))
-            cursor_match = re.search(r"cursor=(\d+)", text)
-            if cursor_match:
-                updates["scan_cursor"] = int(cursor_match.group(1))
-            _write_reindex_status(**updates)
-            if progress_callback:
-                progress_callback(message)
-        try:
-            result = _reindex_tags_unlocked(args, progress_callback=callback)
-        except Exception as error:
-            _write_reindex_status(status="error", message=str(error))
-            raise
-        _write_reindex_status(status="done", message="Reindex completed")
-        return result
+    with app.app_context():
+        raw = KVrocksIndexer(*configured).raw
+        queue_snapshot(raw, desired_snapshot(), full=full)
+        return reconciliation_status(raw)
+
+
+def reindex_tags(args, progress_callback=None):
+    """Compatibility entry point: queue automatic work, or a forced full build."""
+    status = request_reconciliation(full=bool(getattr(args, "flush", False)))
+    message = "Index reconciliation queued for the scheduler; progress is visible on Tag Rules"
+    print(message)
+    if progress_callback:
+        progress_callback(message)
+    return status
 
 
 def list_tags(args):

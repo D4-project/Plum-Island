@@ -5,7 +5,7 @@ This is the init module of the flask appbuilder application.
 import logging
 import os
 import sqlite3
-from flask import Flask
+from flask import Flask, g
 from flask_appbuilder import AppBuilder, SQLA
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
@@ -13,12 +13,29 @@ from .security import CustomSecurityManager  # Custom Security menu
 from .logging_config import configure_logging
 from .ui_theme import configure_ui_templates
 from .ui_assets import configure_icon_assets
+from .utils.index_generations import READER_SCOPE
 
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
 configure_ui_templates(app)
 configure_icon_assets(app)
+
+
+@app.before_request
+def pin_request_index():
+    """All structured reads within a request share the same index generation."""
+    g.index_generation_token = READER_SCOPE.set({})
+
+
+@app.teardown_request
+def release_request_index(_error=None):
+    """Release the context without deleting generations used by other readers."""
+    token = g.pop("index_generation_token", None)
+    if token is not None:
+        READER_SCOPE.reset(token)
+
+
 # AppBuilder's static blueprint otherwise looks only in its packaged themes.
 app.add_url_rule(
     "/static/appbuilder/css/themes/plum.css",

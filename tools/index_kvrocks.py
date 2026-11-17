@@ -811,10 +811,15 @@ def main():
     suppress_connection_debug_logs()
 
     input_dir = Path(args.input_dir)
+    if args.rebuild_from_meili:
+        from tag_mgmt import (  # pylint: disable=import-outside-toplevel
+            request_reconciliation,
+        )  # pylint: disable=import-outside-toplevel
+
+        request_reconciliation(full=True, endpoint=(KVROCKS_HOST, int(KVROCKS_PORT)))
+        print("Full rebuild queued for the scheduler; follow progress on Tag Rules")
+        return
     indexer = KVrocksIndexer(KVROCKS_HOST, KVROCKS_PORT)
-    meili_index = None
-    first_meili_results = None
-    total_count = None
     tag_rules = None
 
     PARSER_CONF["HTTP_HEADER_COLLECTION"] = load_collected_header_collection()
@@ -827,48 +832,18 @@ def main():
             flush=True,
         )
 
-    if args.rebuild_from_meili:
-        meili_url, index_name, meili_index = build_meili_index()
-        print(
-            f"Reading source documents from {meili_url} / index={index_name}",
-            flush=True,
-        )
-        first_meili_results, total_count = fetch_meili_page(
-            meili_index,
-            args.batch_size,
-            0,
-        )
-        if not first_meili_results:
-            raise SystemExit(
-                "Meilisearch returned no documents; refusing to rebuild Kvrocks"
-            )
-
     seen_snapshot = (
-        rebuild_kvrocks(indexer, include_tags=args.retag)
-        if args.rebuild or args.rebuild_from_meili
-        else None
+        rebuild_kvrocks(indexer, include_tags=args.retag) if args.rebuild else None
     )
-
-    if args.rebuild_from_meili:
-        source_docs = parsed_documents_from_meili(
-            meili_index,
-            seen_snapshot,
-            args.batch_size,
-            first_results=first_meili_results,
-            tag_rules=tag_rules,
-            workers=args.workers,
-        )
-        progress_label = "Meili documents"
-    else:
-        total_count = sum(1 for _json_file in iter_json_files(input_dir))
-        source_docs = parsed_documents_from_files(
-            input_dir,
-            seen_snapshot,
-            tag_rules=tag_rules,
-            workers=args.workers,
-            batch_size=args.batch_size,
-        )
-        progress_label = "files"
+    total_count = sum(1 for _json_file in iter_json_files(input_dir))
+    source_docs = parsed_documents_from_files(
+        input_dir,
+        seen_snapshot,
+        tag_rules=tag_rules,
+        workers=args.workers,
+        batch_size=args.batch_size,
+    )
+    progress_label = "files"
 
     install_graceful_interrupt_handler()
     processed_count, indexed_count, error_count = index_documents_with_errors(

@@ -250,6 +250,18 @@ So the split is:
 
 The structured search capability is part of the product, not an auxiliary admin feature. The README presents these fields as the way to explore collected exposure data.
 
+### Automatic index reconciliation
+
+The scheduler owns the lifecycle of `tools/reconcile_index.py`. GUI status reads
+must never launch recovery/index threads. Rule imports and GUI changes converge
+through committed SQL snapshots; worker inputs remain frozen until publication.
+Managed Kvrocks clients resolve logical keys through pinned generations. Route
+source ingestion through `ingest_indexer_sources` and the common journal/write
+barrier; never mutate a retired reader generation or clear the live index.
+Keep search sessions, signed API cursors, exports/reports and catalogue caches
+bound to their generation. See `documentation/automatic-indexing.md` for coverage,
+contribution provenance, bootstrap, recovery and offline cleanup contracts.
+
 ### Search tag catalogue
 
 The five search helper columns show tags present in indexed scans, globally

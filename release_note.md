@@ -1,5 +1,10 @@
 # Unreleased
 
+- Automatically reconcile tag-rule changes through a scheduler-supervised process,
+  with frozen revisions, incremental candidates, coverage-aware Meilisearch
+  reparsing, journaled ingestion and generation publication. Replace GUI reindex
+  buttons with persistent progress; retain CLI rebuild/recovery operations (#271).
+
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
 - Serve official Font Awesome Free 6.7.2 CSS and matching local fonts at FAB's

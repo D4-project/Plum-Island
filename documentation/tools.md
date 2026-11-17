@@ -229,31 +229,21 @@ Version policy:
 
 Recompute tags in Kvrocks after tag rule changes.
 
-Reindex all active rules:
+Rule changes are reconciled automatically by a scheduler-supervised subprocess.
+The Tag Rules page shows shared CLI/GUI progress; it has no manual update button.
+
+Compatibility commands enqueue work instead of starting another indexer:
 
 ```bash
 .venv/bin/python tools/tag_mgmt.py reindex --allrules
-```
-
-Reindex from one tag rule id:
-
-```bash
 .venv/bin/python tools/tag_mgmt.py reindex 42
-```
-
-Flush existing tag indexes before recomputing:
-
-```bash
+# Force a full background reconstruction; preserve the active generation:
 .venv/bin/python tools/tag_mgmt.py reindex --allrules --flush
 ```
 
-List complete tag values currently indexed in Kvrocks:
-
-```bash
-.venv/bin/python tools/tag_mgmt.py list-tags
-```
-
-`tools/import_tags.py` and `tools/reindex_tagrule.py` remain as compatibility wrappers.
+`tools/import_tags.py` and `tools/reindex_tagrule.py` remain compatibility wrappers.
+See [automatic indexing](automatic-indexing.md) for coverage, process lifecycle,
+progress, resource settings, migration, recovery and generation cleanup.
 
 ## Search and dump tools
 
@@ -383,6 +373,12 @@ their previous catalogue for up to 60 seconds; reload afterwards. This changes
 no scan documents, query semantics, SQL schema or tag counters.
 
 ### `index_kvrocks.py`
+
+**Managed installations:** `--rebuild-from-meili` now queues a full background
+rebuild through the controller scheduler. It does not delete the active index.
+The controller owns batch/resource settings for this path. Existing dump-based
+maintenance paths below are for isolated or legacy, unmanaged indexes only;
+they cannot write into a managed generation. See [automatic indexing](automatic-indexing.md).
 
 Build or rebuild the Kvrocks search indexes from Meilisearch documents.
 Kvrocks stores compact reverse indexes used by structured search; Meilisearch remains the source for full scan documents.

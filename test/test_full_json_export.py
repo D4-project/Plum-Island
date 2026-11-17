@@ -13,6 +13,7 @@ from unittest.mock import Mock
 
 from test.test_kvrocks_search import make_indexer
 from tagrules import normalize_tags
+from app.utils.index_generations import pinned_read
 
 # pylint: disable=protected-access,missing-function-docstring
 
@@ -56,6 +57,7 @@ def export_view(indexer, index, directory):
         "KVrocksIndexer": lambda *_args: indexer,
         "MeilisearchApiError": LookupError,
         "normalize_tags": normalize_tags,
+        "pinned_read": pinned_read,
         "utcnow_iso": lambda: "2026-11-16T12:00:00+00:00",
         "logger": logging.getLogger(__name__),
         "json": json,

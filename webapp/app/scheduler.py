@@ -41,6 +41,10 @@ from .models import TagRules
 from .utils.mutils import compute_scan_unit_count_list
 from .utils.domains import is_hostname_syntax
 from .utils.kvrocks import KVrocksIndexer
+from .utils.index_generations import pinned_read
+from .utils.index_reconciliation import ingest_indexer_sources
+from .utils.index_supervisor import IndexSupervisor
+from .utils.tag_runtime import desired_snapshot
 from .utils.result_parser import parse_json, prepare_kvrocks_document
 from .utils.reports import (
     build_report_markdown,
@@ -2151,9 +2155,14 @@ def _finalize_ready_export_jobs(job_states, export_context):
                 f"submission: expected {total}, found {len(meili_documents)}"
             )
         for offset in range(0, len(kvrocks_documents), MEILI_EXPORT_BATCH_SIZE):
-            export_context.kvrocks_idx.add_documents_batch(
-                kvrocks_documents[offset : offset + MEILI_EXPORT_BATCH_SIZE]
+            managed = ingest_indexer_sources(
+                export_context.kvrocks_idx,
+                meili_documents[offset : offset + MEILI_EXPORT_BATCH_SIZE],
             )
+            if not managed:
+                export_context.kvrocks_idx.add_documents_batch(
+                    kvrocks_documents[offset : offset + MEILI_EXPORT_BATCH_SIZE]
+                )
         documents_exported += len(kvrocks_documents)
         jobs_exported += 1
         job_state["exported"] = True
@@ -2466,6 +2475,7 @@ def task_export_to_dbs():
         db.session.remove()
 
 
+@pinned_read
 def _build_due_report(report, run_at):
     """
     Execute a report query and return its Markdown body.
@@ -2749,8 +2759,27 @@ try:
 except MeilisearchError as error:
     logger.warning("Deferred Meilisearch index configuration: %s", error)
 
+index_supervisor = IndexSupervisor(db.app.config["KVROCKS_IDX"].raw, db.app.config)
+
+
+def task_supervise_indexing():
+    """Observe committed rule changes and supervise the independent child."""
+    db.session.remove()
+    try:
+        return index_supervisor.tick(desired_snapshot())
+    finally:
+        db.session.remove()
+
+
 # Start the scheduled jobs.
 scheduler = SafeBackgroundScheduler()
+scheduler.add_job(
+    func=task_supervise_indexing,
+    trigger="interval",
+    id="index_reconciliation",
+    max_instances=1,
+    seconds=db.app.config.get("TAG_RECONCILIATION_POLL_SECONDS", 30),
+)
 scheduler.add_job(
     func=process_pending_network_refreshes,
     trigger="interval",
@@ -2777,6 +2806,7 @@ scheduler.start()
 
 def _shutdown_scheduler():
     """Stop APScheduler before Python tears down its thread pool."""
+    index_supervisor.stop()
     if scheduler.running:
         try:
             scheduler.shutdown(wait=False)
