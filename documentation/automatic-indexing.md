@@ -108,6 +108,21 @@ Missing documents, malformed addresses and non-public sources conflicting with
 existing indexed history remain failures; they are never silently discarded.
 The runtime adapter preserves the frozen parser/rule inputs and resume cursor.
 
+Legacy `index_kvrocks.py` rebuilds deliberately retain `doc:{uid}` timestamp
+hashes after removing memberships. A non-public source can therefore have a
+detached IP/date hash without being an indexed capture. The adapter copies this
+hash intact into staging before recording its exclusion. It requires matching
+source/hash addresses, only the three IP/date fields, and no UID, IP, date-index,
+field, contribution or coverage references in either generation. Conflicting
+staging data and partial indexes still block; no source or old hash is deleted.
+
+The scheduler recognizes the earlier orphan-hash conflict and queues one retry
+after the same narrow checks. Only phase, message and retry time change; frozen
+inputs, generation ID, pending candidates and counters stay intact. A durable
+generation marker prevents restart loops if normal worker validation discovers
+another conflict. The worker re-reads the source and applies its usual snapshot
+integrity check before progressing.
+
 Each run freezes executable rules, parser configuration and a code fingerprint.
 Subsequent edits queue the latest desired revision. A normal rule-only update
 uses normalized Kvrocks fields and previous per-rule contributions. It scans the

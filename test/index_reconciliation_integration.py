@@ -38,6 +38,8 @@ from app.utils.index_reconciliation import (
 )
 from app.utils.index_activity import ACTIVITY, PACING, SAMPLES, ActivityMonitor
 from app.utils.index_pacing import PacedReconciliationWorker
+from app.utils.index_source_recovery import SOURCE_CONFLICT, requeue_orphan_exclusion
+from app.utils.index_supervisor import IndexSupervisor
 from app.utils.search_timestamps import search_timestamps
 
 from tools.index_generation_admin import retired_keys
@@ -587,6 +589,125 @@ class ReconciliationPacingTest(ReconciliationCase):
         self.assertEqual(read_json(self.raw, "job")["phase"], "blocked")
         self.assertIsNone(self.raw.get(ACTIVE))
         self.assertEqual(GenerationClient(self.raw).smembers("all_uids"), {"one"})
+        supervisor = IndexSupervisor(self.raw, {})
+        with patch("app.utils.index_supervisor.subprocess.Popen") as process:
+            supervisor.tick(self.first)
+        process.assert_not_called()
+
+    def orphan(self):
+        """Retained timestamp hash matching the legacy rebuild's documented case."""
+        self.documents["private"] = dict(source("private"), ip="10.0.0.1")
+        metadata = {"ip": "10.0.0.1", "first_seen": "100", "last_seen": "200"}
+        self.raw.hset("doc:private", mapping=metadata)
+        return metadata
+
+    def test_excluded_orphan_dates_survive_publication_and_restart(self):
+        """Keep detached dates verbatim without inventing searchable captures."""
+        metadata = self.orphan()
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        self.scan(worker)
+        worker.checkpoint(phase="paused")
+        generation = worker.job["id"]
+        self.paced().run()
+        current = GenerationClient(self.raw)
+        self.assertEqual(current.hgetall("doc:private"), metadata)
+        self.assertEqual(self.raw.hgetall("doc:private"), metadata)
+        self.assertEqual(current.smembers("all_uids"), {"one"})
+        self.assertFalse(current.exists("uid:private"))
+        self.assertIsNone(current.zscore("last_seen_index", "private"))
+        self.assertEqual(read_json(self.raw, "job")["id"], generation)
+        self.assertEqual(read_json(self.raw, "job")["excluded_sources"], 1)
+
+    def test_partial_or_conflicting_orphan_data_remains_blocked(self):
+        """Missing all_uids alone cannot make existing history safe to exclude."""
+        self.orphan()
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        target = GenerationClient(self.raw, worker.job["id"], writable=True)
+        cases = (
+            (lambda: self.raw.set("uid:private", "10.0.0.1"), "uid:private"),
+            (lambda: self.raw.sadd("ip:10.0.0.1", "private"), "ip:10.0.0.1"),
+            (lambda: self.raw.zadd("last_seen_index", {"private": 0}), None),
+            (lambda: self.raw.sadd("ports:private", "443"), "ports:private"),
+            (lambda: self.raw.set("coverage:private", "old"), "coverage:private"),
+            (
+                lambda: target.hset("doc:private", mapping={"ip": "10.0.0.2"}),
+                None,
+            ),
+        )
+        for mutation, cleanup in cases:
+            with self.subTest(cleanup=cleanup):
+                mutation()
+                with self.assertRaises(SnapshotInvalid):
+                    worker.process_uid("private")
+                if cleanup:
+                    self.raw.delete(cleanup)
+                self.raw.zrem("last_seen_index", "private")
+                target.delete("doc:private")
+        self.raw.hset("doc:private", "unexpected", "retain-me")
+        with self.assertRaises(SnapshotInvalid):
+            worker.process_uid("private")
+        self.assertEqual(worker.load.excluded, 0)
+
+    def test_failed_orphan_copy_is_retried_before_exclusion_is_recorded(self):
+        """An interrupted copy must not mark the source as processed."""
+        metadata = self.orphan()
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        execute = GenerationClient.run
+
+        def failing(client, commands):
+            if any(name == "hset" for name, _args, _kwargs in commands):
+                raise redis.ConnectionError("copy interrupted")
+            return execute(client, commands)
+
+        with patch.object(GenerationClient, "run", failing):
+            with self.assertRaises(redis.ConnectionError):
+                worker.process_uid("private")
+        self.assertFalse(
+            self.raw.sismember(CONTROL + "processed:" + worker.job["id"], "private")
+        )
+        worker.process_uid("private")
+        target = GenerationClient(self.raw, worker.job["id"])
+        self.assertEqual(target.hgetall("doc:private"), metadata)
+
+    def test_scheduler_recovers_known_orphan_block_once_with_same_inputs(self):
+        """Upgrade resumes the existing job through its normal scheduler owner."""
+        self.orphan()
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        worker.checkpoint(
+            phase="blocked",
+            message=SOURCE_CONFLICT,
+            pending_uids=["private"],
+            retry_at=time.time() + 3600,
+        )
+        before = read_json(self.raw, "job")
+        inputs = self.raw.get(CONTROL + "g:" + before["id"] + ":inputs")
+        supervisor = IndexSupervisor(self.raw, {})
+        with patch("app.utils.index_supervisor.subprocess.Popen") as process:
+            supervisor.tick(self.first)
+        process.assert_called_once()
+        resumed = read_json(self.raw, "job")
+        for field in set(before) - {"phase", "message", "retry_at"}:
+            self.assertEqual(resumed[field], before[field])
+        self.assertEqual(resumed["phase"], "paused")
+        self.assertIsNone(resumed["retry_at"])
+        self.assertEqual(
+            self.raw.get(CONTROL + "g:" + before["id"] + ":inputs"), inputs
+        )
+        # A changed source can still fail normal validation; never restart-loop.
+        self.documents["private"]["ip"] = "10.0.0.2"
+        with self.assertRaises(SnapshotInvalid):
+            self.paced().run()
+        blocked = read_json(self.raw, "job")
+        self.assertEqual(requeue_orphan_exclusion(self.raw, blocked), blocked)
+        self.assertEqual(blocked["phase"], "blocked")
 
     def test_journal_update_after_exclusion_is_still_applied(self):
         """An exclusion marker cannot suppress a later valid source update."""

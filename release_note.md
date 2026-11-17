@@ -1,5 +1,9 @@
 # Unreleased
 
+- Preserve detached timestamp hashes left by legacy rebuilds when excluding
+  non-public sources. Resume that specific blocked reconciliation once through
+  the scheduler, keeping its frozen inputs and progress (#271).
+
 - Keep KVSearch loading spinners and status text readable in Plum dark mode,
   including Load more and live color-mode changes (#273).
 
