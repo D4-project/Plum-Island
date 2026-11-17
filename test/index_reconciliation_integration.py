@@ -7,6 +7,7 @@ configuration as described in the reconciliation operational documentation.
 """
 
 from copy import deepcopy
+import json
 import os
 import multiprocessing
 import time
@@ -34,6 +35,8 @@ from app.utils.index_reconciliation import (
     delete_capture,
     reconciliation_status,
 )
+from app.utils.index_activity import ACTIVITY, PACING, ActivityMonitor
+from app.utils.index_pacing import PacedReconciliationWorker
 
 from tools.index_generation_admin import retired_keys
 from tools.reconcile_index import install_stop_handlers
@@ -493,6 +496,105 @@ class ReconciliationRecoveryTest(ReconciliationCase):
         self.assertEqual(inputs["snapshot"], self.first)
         self.worker().run()
         self.assertEqual(read_json(self.raw, "job")["phase"], "done")
+
+
+class ReconciliationPacingTest(ReconciliationCase):
+    """Exercise pacing against real Redis commands and existing frozen jobs."""
+
+    def paced(self):
+        """Use immediate quiet detection in protocol checks, not production tuning."""
+        return PacedReconciliationWorker(
+            self.raw,
+            self.meili,
+            {
+                "TAG_RECONCILIATION_BATCH_SIZE": 1,
+                "TAG_RECONCILIATION_QUIET_SECONDS": 0,
+                "TAG_RECONCILIATION_IDLE_SECONDS": 0,
+                "TAG_RECONCILIATION_PAUSE_SECONDS": 0,
+            },
+        )
+
+    def test_planning_batches_are_independent_of_processing_batch(self):
+        """Small capture batches no longer require one sleep per handful of IDs."""
+        self.raw.sadd("all_uids", *[f"candidate-{index}" for index in range(200)])
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        worker.prepare_candidates_batch()
+        self.assertEqual(
+            self.raw.scard(CONTROL + "candidates:" + worker.job["id"]), 201
+        )
+        self.assertEqual(worker.batch_size, 1)
+
+    def test_runtime_upgrade_resumes_original_job_and_cursor(self):
+        """Runtime pacing must not invalidate frozen parser/rule fingerprints."""
+        queue_snapshot(self.raw, self.first)
+        original = self.worker()
+        original.start()
+        original.prepare_candidates_batch()
+        saved = read_json(self.raw, "job")
+        upgraded = self.paced()
+        upgraded.start()
+        self.assertEqual(upgraded.job["id"], saved["id"])
+        self.assertEqual(upgraded.job["candidate_cursor"], saved["candidate_cursor"])
+        self.assertEqual(upgraded.job["candidate_source"], saved["candidate_source"])
+        upgraded.run()
+        self.assertEqual(self.raw.get(ACTIVE), saved["id"])
+        self.assertEqual(read_json(self.raw, "published"), self.first)
+        self.assertEqual(json.loads(self.raw.get(PACING))["mode"], "stopped")
+
+    def test_search_and_ingestion_leases_release_and_expire(self):
+        """Foreground completion or process death cannot pause indexing forever."""
+        worker = self.paced()
+        monitor = ActivityMonitor(self.raw)
+        with patch("app.utils.index_activity.threading.Thread"):
+            for kind in ("search", "ingestion"):
+                lease = monitor.begin(kind)
+                self.assertIsNotNone(lease)
+                self.assertFalse(worker.load.ready())
+                lease.finish()
+                self.assertTrue(worker.load.ready())
+        self.raw.zadd(ACTIVITY + "search", {"crashed-reader": time.time() - 1})
+        self.assertTrue(worker.load.ready())
+
+    def test_stop_during_priority_wait_preserves_pending_work(self):
+        """A stop while users are active must not consume a pending capture."""
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        while not worker.job["candidates_ready"]:
+            worker.prepare_candidates_batch()
+        before = read_json(self.raw, "job")
+
+        def stop(_check):
+            worker.stopping = True
+            return False
+
+        with patch.object(worker.load, "wait", side_effect=stop):
+            worker.run()
+        after = read_json(self.raw, "job")
+        self.assertEqual(after["phase"], "paused")
+        self.assertEqual(after["pending_uids"], before["pending_uids"])
+        self.assertEqual(after["processed"], 0)
+        self.assertIsNone(self.raw.get(ACTIVE))
+
+    def test_priority_is_checked_between_replayed_journal_entries(self):
+        """A busy replay batch can stop after one entry and resume without loss."""
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        self.scan(worker)
+        ingest_sources(self.raw, [source("two"), source("three")], self.first)
+        worker.batch_size = 25
+        with patch.object(worker.load, "wait", side_effect=[True, False]):
+            self.assertFalse(worker.replay_batch())
+        self.assertEqual(worker.job["journal_offset"], 1)
+        self.assertIsNone(self.raw.get(ACTIVE))
+        self.assertTrue(worker.replay_batch())
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tag:proto:https"),
+            {"one", "two", "three"},
+        )
 
 
 if __name__ == "__main__":

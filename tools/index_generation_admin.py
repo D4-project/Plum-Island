@@ -73,7 +73,10 @@ def main():
         socket_timeout=30,
     )
     if args.operation == "status":
-        print(json.dumps(reconciliation_status(raw), indent=2))
+        state = reconciliation_status(raw)
+        # Keep this administrative path independent of Flask initialization.
+        state["pacing"] = read_json(raw, "pacing", {})
+        print(json.dumps(state, indent=2))
         return
     count = 0
     with file_lock(state_directory() / "worker.lock", blocking=False), write_barrier():

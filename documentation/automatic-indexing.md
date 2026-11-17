@@ -37,6 +37,37 @@ Initial tuning values in `webapp/config.py.template`:
 | `TAG_RECONCILIATION_POLL_SECONDS` | `30` | Observe desired state and supervise work |
 | `TAG_RECONCILIATION_BATCH_SIZE` | `25` | Bounded planning/scanning/replay work per iteration |
 | `TAG_RECONCILIATION_PAUSE_SECONDS` | `0.1` | Yield between iterations |
+| `TAG_RECONCILIATION_PLANNING_BATCH_SIZE` | `1000` | Maximum IDs per inventory read, independent of capture batches |
+| `TAG_RECONCILIATION_LATENCY_BUDGET` | `0.10` | Target maximum increase against comparable search baselines |
+| `TAG_RECONCILIATION_QUIET_SECONDS` | `2` | Wait after foreground activity before resuming |
+| `TAG_RECONCILIATION_IDLE_SECONDS` | `15` | Quiet interval before faster idle pacing |
+| `TAG_RECONCILIATION_UNIT_SECONDS` | `0.05` | Soft duration target for the next inventory read |
+
+Searches, IP detail reads, reports, exports and ingestion receive priority over
+reconciliation. Authorized operations register short-lived activity leases; the
+worker yields between captures and journal entries while these leases are live.
+One heartbeat per web process renews leases, and crashed readers expire after
+30 seconds. Passive progress polling does not register activity. After a quiet
+interval the worker resumes, then accelerates during longer idle periods.
+
+Inventory batches adapt to measured backend response time. Meilisearch starts
+with smaller batches than Kvrocks; inventory size is independent of the number
+of captures parsed per batch. A runtime pacing upgrade retains existing frozen
+rules and planning cursors: it does not change the parser/index fingerprint.
+
+The requested latency target is **at most +10%**. The controller compares a
+request only with the same anonymized first-page query, dates and page settings,
+using at least three timings recorded while background work was paused or
+stopped. A measured excess increases pacing delays and the quiet interval.
+Different queries and continuation pages are not mixed into a baseline. Queries
+and IP addresses are not stored in this timing telemetry; its sample list and
+baseline catalogue are bounded. Telemetry failure cannot fail a foreground read.
+
+The progress page distinguishes waiting for activity from idle acceleration and
+shows an observed timing difference only when comparable samples exist. This is
+feedback toward the target, not a universal latency guarantee: an in-flight
+backend command cannot be preempted, cold caches and other server load still
+matter, and representative end-to-end measurements remain required.
 
 These are starting settings, not throughput or availability guarantees. Smaller
 batches and longer pauses reduce background load. A single large Kvrocks `COPY`

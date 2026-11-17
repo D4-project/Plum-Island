@@ -14,6 +14,7 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 from . import app, db
 from .models import CollectedHeaders
 from .utils.kvrocks import KVrocksIndexer
+from .utils.index_activity import prioritized_search
 from .utils.index_generations import (
     lease_reader_generation,
     reader_generation,
@@ -213,6 +214,7 @@ class DiscoveryApi(BaseApi):
     @expose("/token_search", methods=["POST"])
     @protect()
     @read_operation
+    @prioritized_search
     def token_search(self):
         """Forward free text to Meilisearch, preserving ranking and token semantics."""
         data = payload({"query", "limit", "offset"})
@@ -239,6 +241,7 @@ class DiscoveryApi(BaseApi):
     @expose("/show_ip", methods=["POST"])
     @protect()
     @read_operation
+    @prioritized_search
     def show_ip(self):
         """Return selected-hostname scan documents and UID tags, without enrichment."""
         data = payload({"ip", "hostname", "from_ts", "to_ts", "limit", "offset"})

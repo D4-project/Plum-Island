@@ -400,6 +400,7 @@ def isolated_search_view(indexer):
         "time": time,
         "shlex": shlex,
         "profile_search_page": profile_search_page,
+        "prioritized_search": lambda function: function,
         "compile_query": compile_query,
         "CandidatePlanner": CandidatePlanner,
         "logger": logging.getLogger(__name__),

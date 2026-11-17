@@ -34,6 +34,19 @@
             if (data.revision) notes.push('Revision ' + data.revision);
             if (measurable) notes.push(data.processed + '/' + data.total + ' captures');
             if (data.pending_changes) notes.push(data.pending_changes + ' additional rule changes pending');
+            const pacing = data.pacing || {};
+            if (data.phase === 'planning' && Number.isFinite(pacing.candidates)) {
+                notes.push(pacing.candidates + ' captures identified');
+            }
+            if (!complete && ['foreground', 'quiet'].includes(pacing.mode)) {
+                notes.push('Waiting for search and ingestion activity to settle');
+            } else if (!complete && pacing.mode === 'idle_boost') {
+                notes.push('Running faster while the system is idle');
+            }
+            if (pacing.comparable_samples > 0 && Number.isFinite(pacing.observed_degradation)) {
+                const change = Math.round(pacing.observed_degradation * 100);
+                notes.push('Latest comparable search: ' + (change > 0 ? '+' : '') + change + '%');
+            }
             if (data.message) notes.push(data.message);
             detail.textContent = notes.join(' · ');
             bar.style.width = (percent === null ? 100 : percent) + '%';
