@@ -62,9 +62,10 @@ async function advance(value) {
     assert(!detail.textContent.includes('%'));
     await advance({phase: 'planning', pacing: {mode: 'limited', comparable_samples: 4, observed_degradation: 0.12}});
     assert.match(detail.textContent, /\+12%/);
-    await advance({phase: 'up_to_date'});
+    await advance({phase: 'up_to_date', pacing: {excluded_sources: 2}});
     assert.equal(bar.style.width, '100%');
     assert.equal(status.textContent, 'Detections up to date');
+    assert.match(detail.textContent, /2 non-public source exclusions encountered/);
     assert.equal(requests, 8);
     console.log('Automatic detection progress checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

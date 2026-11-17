@@ -29,6 +29,7 @@ from app.utils.index_generations import (
 )
 from app.utils.index_reconciliation import (
     ReconciliationWorker,
+    SnapshotInvalid,
     index_for,
     ingest_sources,
     queue_snapshot,
@@ -525,6 +526,67 @@ class ReconciliationPacingTest(ReconciliationCase):
             self.raw.scard(CONTROL + "candidates:" + worker.job["id"]), 201
         )
         self.assertEqual(worker.batch_size, 1)
+
+    def test_bootstrap_excludes_private_meili_only_source_and_resumes(self):
+        """Reference parsing ignores private-only sources; bootstrap must finish."""
+        self.documents["private"] = dict(source("private"), ip="10.0.0.1")
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        self.scan(worker)
+        worker.checkpoint(phase="paused")
+        saved = read_json(self.raw, "job")
+        self.assertEqual(saved["excluded_sources"], 1)
+        resumed = self.paced()
+        resumed.run()
+        final = read_json(self.raw, "job")
+        self.assertEqual(final["id"], saved["id"])
+        self.assertEqual(final["phase"], "done")
+        self.assertEqual(final["processed"], 2)
+        self.assertEqual(GenerationClient(self.raw).smembers("all_uids"), {"one"})
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tag:proto:https"), {"one"}
+        )
+        self.assertEqual(json.loads(self.raw.get(PACING))["excluded_sources"], 1)
+
+    def test_excluded_source_cannot_hide_existing_indexed_history(self):
+        """A source/index disagreement requires review, never silent deletion."""
+        self.documents["one"]["ip"] = "10.0.0.1"
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        with self.assertRaises(SnapshotInvalid):
+            worker.run()
+        self.assertEqual(read_json(self.raw, "job")["phase"], "blocked")
+        self.assertIsNone(self.raw.get(ACTIVE))
+        self.assertEqual(GenerationClient(self.raw).smembers("all_uids"), {"one"})
+
+    def test_journal_update_after_exclusion_is_still_applied(self):
+        """An exclusion marker cannot suppress a later valid source update."""
+        self.documents["later"] = dict(source("later"), ip="10.0.0.1")
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        self.scan(worker)
+        ingest_sources(self.raw, [source("later")], self.first)
+        worker.run()
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tag:proto:https"), {"one", "later"}
+        )
+        self.assertEqual(read_json(self.raw, "job")["phase"], "done")
+
+    def test_malformed_or_missing_source_still_fails(self):
+        """No general exception handler may turn unavailable data into success."""
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        self.documents["malformed"] = dict(source("malformed"), ip="invalid")
+        for uid, exception in (("malformed", ValueError), ("missing", KeyError)):
+            with self.subTest(uid=uid), self.assertRaises(exception):
+                worker.process_uid(uid)
+            self.assertFalse(
+                self.raw.sismember(CONTROL + "processed:" + worker.job["id"], uid)
+            )
+        self.assertEqual(worker.load.excluded, 0)
 
     def test_runtime_upgrade_resumes_original_job_and_cursor(self):
         """Runtime pacing must not invalidate frozen parser/rule fingerprints."""
