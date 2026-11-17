@@ -126,6 +126,23 @@ class SupervisorTest(unittest.TestCase):
         supervisor.process.terminate.assert_called_once()
         supervisor.process.wait.assert_not_called()
 
+    def test_unchanged_blocked_inline_snapshot_is_not_restarted(self):
+        """Old jobs expose their frozen revision inside snapshot, not metadata."""
+        raw = Mock()
+        raw.get.return_value = None
+        supervisor = IndexSupervisor(raw, {})
+        state = {
+            "job": {"phase": "blocked", "snapshot": {"revision": "current"}},
+            "failure": {},
+            "published": {},
+        }
+        with patch("app.utils.index_supervisor.queue_snapshot"), patch(
+            "app.utils.index_supervisor.read_json",
+            side_effect=lambda _raw, key, _default: state[key],
+        ), patch("app.utils.index_supervisor.subprocess.Popen") as process:
+            supervisor.tick({"revision": "current"})
+        process.assert_not_called()
+
     def test_tick_starts_only_one_child_without_werkzeug_scheduler_flag(self):
         """Launching the child cannot recursively import another scheduler."""
         supervisor = IndexSupervisor(Mock(), {})

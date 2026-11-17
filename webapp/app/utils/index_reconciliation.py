@@ -269,6 +269,11 @@ def queue_snapshot(raw, snapshot, full=False):
             raw.set(CONTROL + "force_full", "1")
 
 
+def processing_revision(job):
+    """Read either compact job metadata or the original inline snapshot format."""
+    return job.get("snapshot_revision") or job.get("snapshot", {}).get("revision")
+
+
 def reconciliation_status(raw):
     """Return public operational state, never rule bodies or source documents."""
     desired = read_json(raw, "desired", {})
@@ -279,7 +284,7 @@ def reconciliation_status(raw):
         job = dict(job, **failure)
     pending = desired.get("revision") != published.get("revision")
     inputs = read_json(raw, "g:" + job["id"] + ":inputs", {}) if job.get("id") else {}
-    processing = inputs.get("snapshot", {})
+    processing = inputs.get("snapshot", job.get("snapshot", {}))
     pending_rules = (
         sum(
             processing.get("rules", {}).get(key) != desired.get("rules", {}).get(key)
@@ -322,7 +327,7 @@ def exact_anchor(client, criteria, coverage):
     return min(anchors)[1] if anchors else None
 
 
-class ReconciliationWorker:
+class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
     """One resumable worker; supervisor owns start/stop and retry scheduling."""
 
     def __init__(self, raw, meili, batch_size=25, pause_seconds=0.1):
@@ -333,20 +338,32 @@ class ReconciliationWorker:
         self.stopping = False
         self.job = None
         self.plan = None
+        self._inputs_saved = False
 
     def checkpoint(self, **changes):
         """Publish progress only after corresponding durable writes succeed."""
         self.job.update(changes, heartbeat=time.time())
-        if "candidate_sources" in changes:
-            write_json(
-                self.raw,
-                "g:" + self.job["id"] + ":inputs",
-                {
-                    key: self.job[key]
-                    for key in ("snapshot", "previous", "candidate_sources")
-                },
+        if "snapshot" in self.job and (
+            "candidate_sources" in changes or not self._inputs_saved
+        ):
+            inputs = {
+                key: self.job[key]
+                for key in ("snapshot", "previous", "candidate_sources")
+            }
+            # Never persist a compact job before its frozen inputs. A failed
+            # first checkpoint can itself enter the exception checkpoint path.
+            pipe = self.raw.pipeline(transaction=True)
+            pipe.set(
+                CONTROL + "g:" + self.job["id"] + ":inputs",
+                json.dumps(inputs, sort_keys=True),
             )
-        write_json(self.raw, "job", self.progress_record())
+            pipe.set(
+                CONTROL + "job", json.dumps(self.progress_record(), sort_keys=True)
+            )
+            pipe.execute()
+            self._inputs_saved = True
+        else:
+            write_json(self.raw, "job", self.progress_record())
 
     def progress_record(self):
         """Keep large frozen definitions out of frequently updated counters."""
@@ -356,27 +373,65 @@ class ReconciliationWorker:
             if key not in ("snapshot", "previous", "candidate_sources")
         }
 
+    def restore_job(self, job):
+        """Restore frozen inputs, upgrading inline jobs without taking newer rules."""
+        self.job = job
+        inputs = read_json(self.raw, "g:" + job["id"] + ":inputs")
+        if inputs is None:
+            if "snapshot" not in job:
+                raise SnapshotInvalid(
+                    "Missing frozen reconciliation inputs; cannot resume this staging "
+                    "generation. Queue a full rebuild with tag_mgmt.py reindex --allrules --flush."
+                )
+            inputs = {
+                key: job.get(key)
+                for key in ("snapshot", "previous", "candidate_sources")
+            }
+        else:
+            self._inputs_saved = True
+        job.update(inputs, snapshot_revision=inputs["snapshot"]["revision"])
+        if "candidate_source" not in job:
+            # Older jobs scanned all_uids directly. Replan in the same staging
+            # generation and replay its retained journal from the beginning.
+            job.update(
+                candidate_sources=None,
+                candidate_source=0,
+                candidate_cursor=0,
+                candidates_ready=False,
+                cursor=0,
+                pending_uids=[],
+                scan_complete=False,
+                journal_offset=0,
+                processed=0,
+            )
+            self.raw.delete(
+                CONTROL + "candidates:" + job["id"], CONTROL + "processed:" + job["id"]
+            )
+            self.checkpoint(candidate_sources=None)
+
     def start(self):
         """Resume immutable inputs or establish a new generation and journal."""
         with write_barrier():
             job = read_json(self.raw, "job")
-            if job:
-                inputs = read_json(self.raw, "g:" + job["id"] + ":inputs")
-                if inputs is None:
-                    raise RuntimeError("Missing frozen reconciliation inputs")
-                job.update(inputs)
-            desired = read_json(self.raw, "desired")
+            desired = read_json(self.raw, "desired", {})
+            # Completed work and superseded blocked work need no resumption.
+            # Inspect both historical formats before requiring separate inputs.
+            if job and job["phase"] == "done":
+                job = None
             if (
                 job
                 and job["phase"] == "blocked"
                 and (
-                    desired.get("revision") != job["snapshot"]["revision"]
+                    (
+                        processing_revision(job)
+                        and desired.get("revision") != processing_revision(job)
+                    )
                     or self.raw.get(CONTROL + "force_full")
                 )
             ):
                 job = None
-            if job and job["phase"] != "done":
-                self.job = job
+            if job:
+                self.restore_job(job)
                 if job["snapshot"]["code"] != code_revision():
                     raise SnapshotInvalid(
                         "Parser changed: resume with the original code before upgrading"
@@ -638,6 +693,9 @@ class ReconciliationWorker:
                         ),
                         retry_at=time.time() + min(3600, 30 * 2 ** min(attempts, 7)),
                     )
+                    # A previous startup failure must not mask this job's
+                    # actionable blocked/error status indefinitely.
+                    self.raw.delete(CONTROL + "failure")
                 else:
                     write_json(
                         self.raw,

@@ -1,5 +1,8 @@
 # Unreleased
 
+- Recover older inline reconciliation jobs, replace superseded blocked jobs,
+  and persist frozen inputs atomically with their progress metadata (#271).
+
 - Automatically reconcile tag-rule changes through a scheduler-supervised process,
   with frozen revisions, incremental candidates, coverage-aware Meilisearch
   reparsing, journaled ingestion and generation publication. Replace GUI reindex

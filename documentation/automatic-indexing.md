@@ -141,6 +141,13 @@ to become blocked: a new desired revision starts fresh staging without mixing
 code versions. Backend failures retain the active generation and retry. Failed
 publication acknowledgements are checked against the durable active pointer.
 
+Jobs created by the earlier inline-snapshot format upgrade automatically. Their
+original rules and journal remain frozen; an old scan cursor is replanned before
+replay. Completed jobs and blocked jobs superseded by corrected inputs do not
+require obsolete staging snapshots. If an unfinished compact job has genuinely
+lost its frozen inputs, it is blocked with a recovery message instead of guessing
+the rules. Queue an administrative full rebuild with `--flush` to replace it.
+
 To undo rule changes, restore the desired rule definitions through normal GUI or
 versioned YAML import (use a newer import version), then let reconciliation
 publish them over current captures. Force a full rebuild when parser/index

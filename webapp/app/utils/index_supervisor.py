@@ -7,7 +7,11 @@ import sys
 import time
 
 from app.utils.index_generations import CONTROL, file_lock, read_json
-from app.utils.index_reconciliation import queue_snapshot, state_directory
+from app.utils.index_reconciliation import (
+    processing_revision,
+    queue_snapshot,
+    state_directory,
+)
 
 
 class IndexSupervisor:
@@ -43,7 +47,7 @@ class IndexSupervisor:
         pending = pending or self.raw.get(CONTROL + "force_full")
         if (
             job.get("phase") == "blocked"
-            and snapshot.get("revision") == job.get("snapshot_revision")
+            and snapshot.get("revision") == processing_revision(job)
             and not self.raw.get(CONTROL + "force_full")
         ):
             return

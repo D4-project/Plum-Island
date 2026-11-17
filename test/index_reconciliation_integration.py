@@ -19,13 +19,20 @@ from test.test_tag_reconciliation import snapshot
 import redis
 from meilisearch.models.document import Document
 
-from app.utils.index_generations import ACTIVE, CONTROL, GenerationClient, read_json
+from app.utils.index_generations import (
+    ACTIVE,
+    CONTROL,
+    GenerationClient,
+    read_json,
+    write_json,
+)
 from app.utils.index_reconciliation import (
     ReconciliationWorker,
     index_for,
     ingest_sources,
     queue_snapshot,
     delete_capture,
+    reconciliation_status,
 )
 
 from tools.index_generation_admin import retired_keys
@@ -45,8 +52,8 @@ def source(uid="one", port="443", endtime="2026-09-10T00:00:00"):
     }
 
 
-class ReconciliationIntegrationTest(unittest.TestCase):
-    """Exercise real command ordering, COW ownership, journals and publication."""
+class ReconciliationCase(unittest.TestCase):
+    """Isolated backend and source fixtures shared by protocol integration checks."""
 
     def setUp(self):
         """Setup."""
@@ -104,6 +111,10 @@ class ReconciliationIntegrationTest(unittest.TestCase):
         queue_snapshot(self.raw, state)
         self.worker().run()
         self.assertEqual(read_json(self.raw, "job")["phase"], "done")
+
+
+class ReconciliationIntegrationTest(ReconciliationCase):
+    """Exercise real command ordering, COW ownership, journals and publication."""
 
     def test_full_bootstrap_keeps_history_and_old_reader(self):
         """Full bootstrap keeps history and old reader."""
@@ -359,6 +370,129 @@ class ReconciliationIntegrationTest(unittest.TestCase):
         current = GenerationClient(self.raw)
         profile = read_json(self.raw, "coverage:" + current.get("coverage:one"))
         self.assertEqual(profile["parser"], changed["parser"])
+
+
+class ReconciliationRecoveryTest(ReconciliationCase):
+    """Recover historical persisted jobs and interrupted checkpoint creation."""
+
+    def legacy_job(self, worker, phase):
+        """Reproduce the original inline format, before candidate planning existed."""
+        job = deepcopy(worker.job)
+        for key in (
+            "candidate_sources",
+            "candidate_source",
+            "candidate_cursor",
+            "candidates_ready",
+            "planned_total",
+            "snapshot_revision",
+        ):
+            job.pop(key, None)
+        job["phase"] = phase
+        write_json(self.raw, "job", job)
+        self.raw.delete(CONTROL + "g:" + job["id"] + ":inputs")
+        return job
+
+    def test_superseded_blocked_inline_job_starts_current_revision(self):
+        """Recover the reported pre-migration job without requiring a missing key."""
+        queue_snapshot(self.raw, self.first)
+        worker = self.worker()
+        worker.start()
+        legacy = self.legacy_job(worker, "blocked")
+        self.assertEqual(
+            reconciliation_status(self.raw)["revision"], self.first["revision"][:12]
+        )
+        changed = snapshot([("a", "port:443", ["type:server"])])
+        self.publish(changed)
+        self.assertNotEqual(self.raw.get(ACTIVE), legacy["id"])
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tags:one"), {"type:server"}
+        )
+
+    def test_inline_job_migration_preserves_frozen_rules_and_journal(self):
+        """Replan old scan cursors while retaining staged data and ordered ingestion."""
+        self.publish(self.first)
+        frozen = snapshot([("a", "port:443", ["type:server"])])
+        queue_snapshot(self.raw, frozen)
+        worker = self.worker()
+        worker.start()
+        self.scan(worker)
+        ingest_sources(self.raw, [source("two")], frozen)
+        legacy = self.legacy_job(worker, "paused")
+        latest = snapshot([("a", "port:22", ["proto:ssh"])])
+        queue_snapshot(self.raw, latest)
+        self.worker().run()
+        self.assertEqual(self.raw.get(ACTIVE), legacy["id"])
+        self.assertEqual(read_json(self.raw, "published"), frozen)
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tag:type:server"), {"one", "two"}
+        )
+        inputs = read_json(self.raw, "g:" + legacy["id"] + ":inputs")
+        self.assertEqual(inputs["snapshot"], frozen)
+        self.assertNotIn("snapshot", read_json(self.raw, "job"))
+        self.worker().run()
+        self.assertEqual(read_json(self.raw, "published"), latest)
+
+    def test_completed_job_does_not_require_its_frozen_inputs(self):
+        """Completed jobs do not need resumption when the next revision arrives."""
+        self.publish(self.first)
+        self.raw.delete(CONTROL + "g:" + self.raw.get(ACTIVE) + ":inputs")
+        self.publish(snapshot([("a", "port:443", ["type:server"])]))
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tags:one"), {"type:server"}
+        )
+
+    def test_missing_inputs_block_safely_and_allow_forced_rebuild(self):
+        """Never guess frozen inputs; retain active data and expose CLI recovery."""
+        queue_snapshot(self.raw, self.first)
+        worker = self.worker()
+        worker.start()
+        self.raw.delete(CONTROL + "g:" + worker.job["id"] + ":inputs")
+        write_json(self.raw, "failure", {"phase": "failed", "message": "Old failure"})
+        with self.assertRaisesRegex(ValueError, "Missing frozen reconciliation inputs"):
+            self.worker().run()
+        job = read_json(self.raw, "job")
+        self.assertEqual(job["phase"], "blocked")
+        self.assertIn("--flush", job["message"])
+        self.assertEqual(reconciliation_status(self.raw)["phase"], "blocked")
+        self.assertIsNone(self.raw.get(ACTIVE))
+        self.assertEqual(self.raw.smembers("tags:one"), {"type:server"})
+        queue_snapshot(self.raw, self.first, full=True)
+        self.worker().run()
+        self.assertEqual(read_json(self.raw, "job")["phase"], "done")
+
+    def test_first_checkpoint_failure_cannot_leave_job_without_inputs(self):
+        """The failure checkpoint must persist the snapshot with compact metadata."""
+        queue_snapshot(self.raw, self.first)
+        factory = self.raw.pipeline
+        failed = False
+
+        def pipeline(*args, **kwargs):
+            pipe = factory(*args, **kwargs)
+            execute = pipe.execute
+
+            def fail_first_checkpoint():
+                nonlocal failed
+                checkpoint = any(
+                    command[0][:2] == ("SET", CONTROL + "job")
+                    for command in pipe.command_stack
+                )
+                if checkpoint and not failed:
+                    failed = True
+                    raise redis.ConnectionError("First checkpoint interrupted")
+                return execute()
+
+            pipe.execute = fail_first_checkpoint
+            return pipe
+
+        with patch.object(self.raw, "pipeline", side_effect=pipeline):
+            with self.assertRaises(redis.ConnectionError):
+                self.worker().run()
+        job = read_json(self.raw, "job")
+        self.assertEqual(job["phase"], "failed")
+        inputs = read_json(self.raw, "g:" + job["id"] + ":inputs")
+        self.assertEqual(inputs["snapshot"], self.first)
+        self.worker().run()
+        self.assertEqual(read_json(self.raw, "job")["phase"], "done")
 
 
 if __name__ == "__main__":
