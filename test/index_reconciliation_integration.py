@@ -38,6 +38,7 @@ from app.utils.index_reconciliation import (
 )
 from app.utils.index_activity import ACTIVITY, PACING, SAMPLES, ActivityMonitor
 from app.utils.index_pacing import PacedReconciliationWorker
+from app.utils.search_timestamps import search_timestamps
 
 from tools.index_generation_admin import retired_keys
 from tools.reconcile_index import install_stop_handlers
@@ -119,6 +120,33 @@ class ReconciliationCase(unittest.TestCase):
 
 class ReconciliationIntegrationTest(ReconciliationCase):
     """Exercise real command ordering, COW ownership, journals and publication."""
+
+    def test_search_timestamps_keep_pinned_parent_and_child_ownership(self):
+        """Scalar reads preserve inherited keys, COW metadata and tombstones."""
+        self.publish(self.first)
+        scope = {"93.184.216.34": ["one"]}
+        parent = index_for(GenerationClient(self.raw))
+        expected_parent = search_timestamps(parent, scope)
+        self.publish(snapshot([("a", "port:22", ["proto:ssh"])]))
+        child = index_for(GenerationClient(self.raw, writable=True))
+        self.assertEqual(search_timestamps(child, scope), expected_parent)
+        child.r.hset("doc:one", mapping={"first_seen": 300, "last_seen": 400})
+        self.assertEqual(
+            search_timestamps(child, scope),
+            {
+                "93.184.216.34": {
+                    "one": {"first_seen": 300, "last_seen": 400},
+                    "min_seen": 300,
+                    "max_seen": 400,
+                }
+            },
+        )
+        child.r.srem("ip:93.184.216.34", "one")
+        self.assertEqual(
+            search_timestamps(child, scope),
+            {"93.184.216.34": {"min_seen": None, "max_seen": None}},
+        )
+        self.assertEqual(search_timestamps(parent, scope), expected_parent)
 
     def test_full_bootstrap_keeps_history_and_old_reader(self):
         """Full bootstrap keeps history and old reader."""
@@ -619,8 +647,8 @@ class ReconciliationPacingTest(ReconciliationCase):
         self.raw.zadd(ACTIVITY + "search", {"crashed-reader": time.time() - 1})
         self.assertTrue(worker.load.ready())
 
-    def test_upgrade_ignores_old_timings_with_mixed_gui_queries(self):
-        """Historic samples cannot reintroduce the GUI query-signature defect."""
+    def test_upgrade_ignores_old_query_and_timestamp_timings(self):
+        """Earlier signatures and slower timestamp reads cannot seed baselines."""
         samples = [
             {"id": str(index), "signature": "mixed", "seconds": 1, "baseline": True}
             for index in range(3)
@@ -628,7 +656,8 @@ class ReconciliationPacingTest(ReconciliationCase):
         samples.append(
             {"id": "slow", "signature": "mixed", "seconds": 5, "baseline": False}
         )
-        self.raw.rpush(ACTIVITY + "samples", *[json.dumps(item) for item in samples])
+        for name in ("samples", "samples:v2"):
+            self.raw.rpush(ACTIVITY + name, *[json.dumps(item) for item in samples])
         controller = self.paced().load
         controller.observe_latency()
         self.assertEqual(controller.factor, 1)
@@ -638,6 +667,7 @@ class ReconciliationPacingTest(ReconciliationCase):
             lease.finish()
         self.assertEqual(self.raw.llen(SAMPLES), 1)
         self.assertEqual(self.raw.llen(ACTIVITY + "samples"), 4)
+        self.assertEqual(self.raw.llen(ACTIVITY + "samples:v2"), 4)
 
     def test_stop_during_priority_wait_preserves_pending_work(self):
         """A stop while users are active must not consume a pending capture."""

@@ -94,6 +94,7 @@ from .utils.ip_links import port_web_scheme
 from .utils.search_debug import profile_search_page
 from .utils.search_query import compile_query, tokenize_query
 from .utils.search_plan import CandidatePlanner
+from .utils.search_timestamps import search_timestamps
 from .utils.resolved_export import write_resolved_csv
 from .utils.report_query import validate_report_query
 from .utils.network_enrichment import enrichment_due, refresh_target_network
@@ -841,36 +842,8 @@ class KVSearchView(BaseView):
 
     @staticmethod
     def _build_timestamp_array(indexer, results_ip):
-        """
-        Build per-IP timestamp metadata for a search result map.
-        """
-        timestamp_array = {}
-        for ip in results_ip:
-            ip_timestamps = indexer.get_timestamp_for_ip(ip, scoped_uids=results_ip[ip])
-            filtered_timestamps = {
-                uid: ip_timestamps[uid]
-                for uid in results_ip[ip]
-                if uid in ip_timestamps
-            }
-
-            min_seen = None
-            max_seen = None
-            for uid_data in filtered_timestamps.values():
-                first_seen = uid_data.get("first_seen")
-                last_seen = uid_data.get("last_seen")
-                if first_seen is not None:
-                    min_seen = (
-                        first_seen if min_seen is None else min(min_seen, first_seen)
-                    )
-                if last_seen is not None:
-                    max_seen = (
-                        last_seen if max_seen is None else max(max_seen, last_seen)
-                    )
-
-            filtered_timestamps["min_seen"] = min_seen
-            filtered_timestamps["max_seen"] = max_seen
-            timestamp_array[ip] = filtered_timestamps
-        return timestamp_array
+        """Read matching capture timestamps with bounded scalar replies."""
+        return search_timestamps(indexer, results_ip)
 
     @staticmethod
     def _build_requested_hostname_array(indexer, results_ip):

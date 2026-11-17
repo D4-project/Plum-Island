@@ -2304,6 +2304,7 @@ def _load_pending_meili_task_uids():
     return task_uids
 
 
+@prioritized_ingestion
 def _resume_persisted_export(export_context, pending_task_uids):
     """Advance oldest persisted task once without resubmitting its documents."""
     if len(pending_task_uids) > 1:
@@ -2426,6 +2427,12 @@ def _advance_new_meili_export(export_context):
     job_states = _load_export_job_states()
     if not job_states:
         return _export_summary(0)
+    return _advance_loaded_meili_export(export_context, job_states)
+
+
+@prioritized_ingestion
+def _advance_loaded_meili_export(export_context, job_states):
+    """Prioritize real ingestion without resetting idle time for empty ticks."""
     batch_state = _prepare_meili_export_batch(export_context, job_states)
     if not batch_state["documents"]:
         return _export_summary(
@@ -2443,7 +2450,6 @@ def _advance_new_meili_export(export_context):
     )
 
 
-@prioritized_ingestion
 def task_export_to_dbs():
     """Advance durable Meilisearch-first export state by at most one batch."""
     export_context = _build_export_context()

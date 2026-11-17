@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "webapp/app/utils"))
 from kvrocks import KVrocksIndexer  # pylint: disable=wrong-import-position
 from search_query import compile_query  # pylint: disable=wrong-import-position
 from search_plan import CandidatePlanner  # pylint: disable=wrong-import-position
+from search_timestamps import search_timestamps  # pylint: disable=wrong-import-position
 from search_debug import (  # pylint: disable=wrong-import-position
     debug_requested,
     profile_search_page,
@@ -51,16 +52,26 @@ class MemoryPipeline:
     def hgetall(self, key):
         self.commands.append(("hash", key))
 
+    def sismember(self, key, uid):
+        self.commands.append(("member", key, uid))
+
+    def hmget(self, key, *fields):
+        self.commands.append(("fields", key, *fields))
+
     def execute(self):
         self.client.batches.append((self.transaction, list(self.commands)))
         results = []
-        for kind, key in self.commands:
+        for kind, key, *args in self.commands:
             if kind == "set":
                 result = set(self.client.sets.get(key, set()))
             elif kind == "count":
                 result = len(self.client.sets.get(key, set()))
             elif kind == "hash":
                 result = dict(self.client.hashes.get(key, {}))
+            elif kind == "member":
+                result = args[0] in self.client.sets.get(key, set())
+            elif kind == "fields":
+                result = [self.client.hashes.get(key, {}).get(name) for name in args]
             else:
                 result = self.client.strings.get(key)
             results.append(result)
@@ -75,8 +86,10 @@ class MemoryPipeline:
             "string": "GET",
             "hash": "HGETALL",
             "count": "SCARD",
+            "member": "SISMEMBER",
+            "fields": "HMGET",
         }
-        return [((names[kind], key), {}) for kind, key in self.commands]
+        return [((names[command[0]], *command[1:]), {}) for command in self.commands]
 
 
 class MemoryClient:  # pylint: disable=too-many-instance-attributes
@@ -403,6 +416,7 @@ def isolated_search_view(indexer):
         "prioritized_search": lambda function: function,
         "compile_query": compile_query,
         "CandidatePlanner": CandidatePlanner,
+        "search_timestamps": search_timestamps,
         "logger": logging.getLogger(__name__),
         "KVrocksIndexer": lambda *_args: indexer,
         "db": SimpleNamespace(
@@ -571,7 +585,24 @@ class SearchConsumerTest(unittest.TestCase):
         self.indexer.r.sets["ip:8.8.8.8"].remove("u1")
         del self.indexer.r.hashes["doc:u3"]
         self.indexer.r.hashes["doc:extra0"] = {"first_seen": "invalid"}
-        full_history = self.indexer.get_timestamp_for_ip
+
+        def previous_timestamps(indexer, results_ip):
+            """Independent reference: full history, then matching UID bounds."""
+            result = {}
+            for ip, uids in results_ip.items():
+                history = indexer.get_timestamp_for_ip(ip)
+                selected = {uid: history[uid] for uid in uids if uid in history}
+                first = [row["first_seen"] for row in selected.values()]
+                last = [row["last_seen"] for row in selected.values()]
+                selected["min_seen"] = min(
+                    (value for value in first if value is not None), default=None
+                )
+                selected["max_seen"] = max(
+                    (value for value in last if value is not None), default=None
+                )
+                result[ip] = selected
+            return result
+
         query = "http_server.bg:nginx OR http_server:apache port:443"
 
         for method in (self.view.execute_search, self.view.execute_search_page):
@@ -583,9 +614,9 @@ class SearchConsumerTest(unittest.TestCase):
                     else {}
                 )
                 with patch.object(
-                    self.indexer,
-                    "get_timestamp_for_ip",
-                    side_effect=lambda ip, **_kwargs: full_history(ip),
+                    self.view,
+                    "_build_timestamp_array",
+                    side_effect=previous_timestamps,
                 ):
                     # The old path reads all metadata and filters in the view.
                     previous = method(query, 200, 300, **kwargs)
@@ -628,10 +659,12 @@ class SearchConsumerTest(unittest.TestCase):
         commands = diagnostics["kvrocks"]["commands"]
         self.assertEqual(commands["SCAN"]["reply_items"], 2)
         self.assertEqual(commands["SCAN"]["direct_calls"], 1)
-        self.assertEqual(commands["SMEMBERS"]["direct_calls"], 2)
-        # Full nginx/IP sets still read; only the matching history document fetched.
+        self.assertEqual(commands["SMEMBERS"]["direct_calls"], 1)
+        # Full criterion set still read; IP membership and timestamps are scalar.
         self.assertEqual(commands["SMEMBERS"]["max_reply_items"], 2)
-        self.assertEqual(commands["HGETALL"]["pipeline_calls"], 1)
+        self.assertEqual(commands["SISMEMBER"]["pipeline_calls"], 1)
+        self.assertEqual(commands["HMGET"]["pipeline_calls"], 1)
+        self.assertNotIn("HGETALL", commands)
         self.assertEqual(commands["GET"]["pipeline_calls"], 1)
         self.assertEqual(commands["SCARD"]["direct_calls"], 2)
         self.assertGreaterEqual(

@@ -3,6 +3,11 @@
 - Keep KVSearch loading spinners and status text readable in Plum dark mode,
   including Load more and live color-mode changes (#273).
 
+- Reduce search timestamp reads during reconciliation: check matching capture
+  membership and fetch only two date fields in bounded batches, preserving
+  pagination, export scope and pinned index generations (#271).
+  Empty scheduler export ticks no longer reset the idle acceleration timer.
+
 - Resume full reconciliation past valid non-public Meilisearch-only sources,
   counting parser exclusions explicitly while retaining failures for unavailable,
   malformed or already-indexed source data (#271).
