@@ -12,11 +12,13 @@ from sqlalchemy.engine import Engine
 from .security import CustomSecurityManager  # Custom Security menu
 from .logging_config import configure_logging
 from .ui_theme import configure_ui_templates
+from .ui_assets import configure_icon_assets
 
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
 configure_ui_templates(app)
+configure_icon_assets(app)
 # AppBuilder's static blueprint otherwise looks only in its packaged themes.
 app.add_url_rule(
     "/static/appbuilder/css/themes/plum.css",
