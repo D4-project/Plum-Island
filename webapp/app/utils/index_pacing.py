@@ -11,7 +11,7 @@ import time
 
 import redis
 
-from app.utils.index_activity import ACTIVITY, PACING, SAMPLE_LIMIT
+from app.utils.index_activity import ACTIVITY, PACING, SAMPLE_LIMIT, SAMPLES
 from app.utils.index_generations import CONTROL
 from app.utils.index_reconciliation import ReconciliationWorker
 
@@ -33,15 +33,20 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
         self.max_planning = max(
             1, int(config.get("TAG_RECONCILIATION_PLANNING_BATCH_SIZE", 1000))
         )
+        self.min_planning = min(
+            self.max_planning,
+            max(1, int(config.get("TAG_RECONCILIATION_MIN_PLANNING_BATCH_SIZE", 25))),
+        )
         self.planning_sizes = {
             "kvrocks": self.max_planning,
-            "meili": min(250, self.max_planning),
+            "meili": max(self.min_planning, min(250, self.max_planning)),
         }
         self.max_unit_seconds = max(
             0.001, float(config.get("TAG_RECONCILIATION_UNIT_SECONDS", 0.05))
         )
         self.mode = "limited"
         self.factor = 1.0
+        self.idle_periods = 0
         self.degradation = None
         self.baselines = OrderedDict()
         self.seen = deque(maxlen=SAMPLE_LIMIT)
@@ -58,7 +63,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
             return
         self.last_metrics = time.monotonic()
         seen = set(self.seen)
-        for serialized in self.raw.lrange(ACTIVITY + "samples", -SAMPLE_LIMIT, -1):
+        for serialized in self.raw.lrange(SAMPLES, -SAMPLE_LIMIT, -1):
             sample = json.loads(serialized)
             if sample["id"] in seen:
                 continue
@@ -98,6 +103,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
                     "observed_degradation": self.degradation,
                     "comparable_samples": self.comparisons,
                     "planning_batch": dict(self.planning_sizes),
+                    "slowdown_factor": self.effective_factor,
                     "candidates": self.candidates,
                 }
             ),
@@ -116,6 +122,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
         results = pipe.execute()
         self.active = int(results[1]) + int(results[3])
         quiet = now - float(results[4] or 0)
+        self.idle_periods = min(4, max(0, int((quiet - self.idle_seconds) // 60)))
         self.observe_latency()
         if self.active:
             self.mode = "foreground"
@@ -134,6 +141,12 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
             time.sleep(0.05)
         return False
 
+    @property
+    def effective_factor(self):
+        """Recover idle throughput each quiet minute; retain pressure on return."""
+        periods = self.idle_periods if self.mode == "idle_boost" else 0
+        return max(1.0, self.factor / (2**periods))
+
     def planning_observed(self, backend, size, elapsed):
         """Bound the next planning read using the duration of the previous one."""
         if elapsed <= 0:
@@ -146,10 +159,10 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
         ]
         if baselines:
             target = min(target, max(0.001, min(baselines) * self.target))
-        target = max(0.001, target / self.factor)
+        target = max(0.001, target / self.effective_factor)
         estimate = int(size * target / elapsed)
         self.planning_sizes[backend] = max(
-            1, min(self.max_planning, estimate, size * 2)
+            self.min_planning, min(self.max_planning, estimate, size * 2)
         )
 
 
@@ -171,7 +184,7 @@ class PacedReconciliationWorker(ReconciliationWorker):
         if not hasattr(self, "load"):
             return self._base_pause
         pause = 0.01 if self.load.mode == "idle_boost" else self._base_pause
-        return pause * self.load.factor
+        return pause * self.load.effective_factor
 
     @pause_seconds.setter
     def pause_seconds(self, value):

@@ -96,6 +96,34 @@ class LoadControllerTest(unittest.TestCase):
         self.controller.planning_observed("meili", 100, 0.05)
         self.assertEqual(self.controller.planning_sizes["meili"], 25)
 
+    def test_slow_fixed_cost_cannot_collapse_inventory_to_single_ids(self):
+        """Backend overhead must not multiply a full inventory into tiny reads."""
+        self.controller.factor = 16
+        for _ in range(8):
+            size = self.controller.planning_sizes["meili"]
+            self.controller.planning_observed("meili", size, 0.2)
+        self.assertEqual(self.controller.planning_sizes["meili"], 25)
+        bounded = LoadController(
+            self.raw, {"TAG_RECONCILIATION_PLANNING_BATCH_SIZE": 5}
+        )
+        bounded.planning_observed("meili", 5, 0.2)
+        self.assertEqual(bounded.planning_sizes["meili"], 5)
+
+    def test_long_idle_recovers_speed_without_forgetting_foreground_pressure(self):
+        """Old slow timings cannot permanently throttle a now-idle server."""
+        self.controller.factor = 16
+        self.raw.pipeline.return_value.execute.return_value = [0, 0, 0, 0, "100"]
+        with patch("app.utils.index_pacing.time.time", return_value=175):
+            self.assertTrue(self.controller.ready())
+        self.assertEqual(self.controller.effective_factor, 8)
+        with patch("app.utils.index_pacing.time.time", return_value=355):
+            self.assertTrue(self.controller.ready())
+        self.assertEqual(self.controller.effective_factor, 1)
+        self.raw.pipeline.return_value.execute.return_value = [0, 1, 0, 0, "355"]
+        with patch("app.utils.index_pacing.time.time", return_value=355):
+            self.assertFalse(self.controller.ready())
+        self.assertEqual(self.controller.effective_factor, 16)
+
     def test_stop_interrupts_foreground_wait(self):
         """No polling or background work after the stop flag is raised."""
         self.assertFalse(self.controller.wait(lambda: True))
