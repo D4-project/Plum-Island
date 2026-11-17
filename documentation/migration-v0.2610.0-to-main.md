@@ -21,6 +21,9 @@ complete the appropriate [versioned migration](migration.md).
 - Meilisearch dump imports support confirmed-batch checkpoints and `--continue`.
 - Root logging uses configured `LOG_LEVEL`, with `WARNING` as the missing/invalid
   fallback instead of `DEBUG`. Existing explicit settings remain effective.
+- View registration removes obsolete permission/view pairs from all referencing
+  roles before FAB synchronization, fixing repeated startup cleanup warnings
+  with Flask-AppBuilder 4.8.1 (#260).
 
 There are **no new SQL schema migrations** after the scripts already included
 in v0.2610.0 for these changes. Do not replay SQL migrations 14–24, the
@@ -53,6 +56,40 @@ The Read Only role gains the six `DiscoveryApi` method permissions. Custom roles
 require explicit grants for the operations they need; see the
 [Discovery API contract](discovery.md#authentication-and-installation).
 Existing search route permissions continue to cover the helper catalogue.
+
+### Obsolete FAB permissions
+
+Before deploying this cleanup to an existing installation, stop the controller
+and its workers and back up the configured SQL database, including role grants.
+For SQLite, use its backup operation rather than copying a live database without
+its WAL files. Substitute the configured database and backup paths:
+
+```bash
+sqlite3 /path/to/app.db ".backup '/path/to/backups/app-before-permission-cleanup.db'"
+```
+
+Restarting with the updated code, or running the role synchronization command
+above, triggers cleanup while each view registers. Permissions absent from that
+view's registered permission list are detached from every referencing role and
+their permission/view pairs are deleted in one transaction per view. The known
+obsolete entries are `TargetsView.custom_action` and `can_add`, `can_download`,
+`can_delete`, and `can_edit` on `TargetScanStatesView`. Current permissions,
+registered custom actions, and shared permission/view-name records are retained.
+No SQL schema migration, manual permission deletion or scan-index rebuild is
+required. Repeated startups make no further cleanup changes.
+
+If cleanup fails, its transaction is rolled back and startup/role synchronization
+raises `Failed to clean obsolete permissions for view ...`; investigate the SQL
+database error before retrying. Earlier successfully registered views may already
+have completed their own cleanup. Verify that startup no longer emits the five
+`Refused to delete permission view, assoc with role exists` warnings and that
+Admin, Read Only and custom roles retain their intended access.
+
+To recover the exact pre-upgrade role assignments, stop all controller processes,
+restore the SQL backup through the normal database restore procedure, and deploy
+the previous code before restarting. Restoring the database also restores other
+application state to the backup time; preserve any subsequent state before doing
+so. Returning to previous code alone does not recreate deleted role grants.
 
 ## 2. Initialize the observed-tag catalogue once
 

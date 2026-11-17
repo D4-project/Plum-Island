@@ -2,6 +2,10 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Clean obsolete FAB permission/view pairs and their role grants atomically per
+  registered view, preserving active permissions and fixing startup refusal
+  warnings with FAB 4.8.1. Back up the SQL database before upgrading (#260).
+
 - Plum serves its Readable base CSS and original Raleway WOFF2 fonts locally,
   retaining regular/bold text and Unicode subsets without Google Fonts requests.
   Contributor instructions require shared GUI behavior, cross-theme regression
