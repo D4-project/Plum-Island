@@ -58,7 +58,8 @@ rules and planning cursors: it does not change the parser/index fingerprint.
 The requested latency target is **at most +10%**. The controller compares a
 request only with the same anonymized first-page query, dates and page settings,
 using at least three timings recorded while background work was paused or
-stopped. A measured excess increases pacing delays and the quiet interval.
+stopped. A measured excess increases pacing delays (including idle acceleration)
+and the quiet interval, and reduces the duration target for inventory batches.
 Different queries and continuation pages are not mixed into a baseline. Queries
 and IP addresses are not stored in this timing telemetry; its sample list and
 baseline catalogue are bounded. Telemetry failure cannot fail a foreground read.

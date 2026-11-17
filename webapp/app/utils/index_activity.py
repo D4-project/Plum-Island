@@ -45,9 +45,13 @@ def request_signature(request):
         key: str(data.get(key) or "")
         for key in ("query", "from_ts", "to_ts", "limit", "window_days")
     }
+    if request.endpoint == "KVSearchView.query":
+        parameters["query"] = str(data.get("q") or "")
     if any(len(value) > 4096 for value in parameters.values()):
         return None
-    return fingerprint({"endpoint": request.endpoint, "parameters": parameters})
+    return fingerprint(
+        {"version": 2, "endpoint": request.endpoint, "parameters": parameters}
+    )
 
 
 @dataclass
