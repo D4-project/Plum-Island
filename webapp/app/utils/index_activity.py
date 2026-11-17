@@ -28,6 +28,7 @@ PACING = CONTROL + "pacing"
 LEASE_SECONDS = 30
 HEARTBEAT_SECONDS = 5
 SAMPLE_LIMIT = 256
+SAMPLES = ACTIVITY + "samples:v2"
 FOREGROUND_SCOPE = ContextVar("plum_index_foreground_scope", default=None)
 
 
@@ -121,7 +122,7 @@ class ActivityMonitor:
             pipe.set(ACTIVITY + "last", str(time.time()))
             if lease.signature:
                 pipe.rpush(
-                    ACTIVITY + "samples",
+                    SAMPLES,
                     json.dumps(
                         {
                             "id": lease.token,
@@ -131,7 +132,7 @@ class ActivityMonitor:
                         }
                     ),
                 )
-                pipe.ltrim(ACTIVITY + "samples", -SAMPLE_LIMIT, -1)
+                pipe.ltrim(SAMPLES, -SAMPLE_LIMIT, -1)
             pipe.execute()
         except redis.RedisError:
             pass

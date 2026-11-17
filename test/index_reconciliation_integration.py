@@ -35,7 +35,7 @@ from app.utils.index_reconciliation import (
     delete_capture,
     reconciliation_status,
 )
-from app.utils.index_activity import ACTIVITY, PACING, ActivityMonitor
+from app.utils.index_activity import ACTIVITY, PACING, SAMPLES, ActivityMonitor
 from app.utils.index_pacing import PacedReconciliationWorker
 
 from tools.index_generation_admin import retired_keys
@@ -556,6 +556,26 @@ class ReconciliationPacingTest(ReconciliationCase):
                 self.assertTrue(worker.load.ready())
         self.raw.zadd(ACTIVITY + "search", {"crashed-reader": time.time() - 1})
         self.assertTrue(worker.load.ready())
+
+    def test_upgrade_ignores_old_timings_with_mixed_gui_queries(self):
+        """Historic samples cannot reintroduce the GUI query-signature defect."""
+        samples = [
+            {"id": str(index), "signature": "mixed", "seconds": 1, "baseline": True}
+            for index in range(3)
+        ]
+        samples.append(
+            {"id": "slow", "signature": "mixed", "seconds": 5, "baseline": False}
+        )
+        self.raw.rpush(ACTIVITY + "samples", *[json.dumps(item) for item in samples])
+        controller = self.paced().load
+        controller.observe_latency()
+        self.assertEqual(controller.factor, 1)
+        self.assertEqual(controller.comparisons, 0)
+        with patch("app.utils.index_activity.threading.Thread"):
+            lease = ActivityMonitor(self.raw).begin(signature="new-query")
+            lease.finish()
+        self.assertEqual(self.raw.llen(SAMPLES), 1)
+        self.assertEqual(self.raw.llen(ACTIVITY + "samples"), 4)
 
     def test_stop_during_priority_wait_preserves_pending_work(self):
         """A stop while users are active must not consume a pending capture."""

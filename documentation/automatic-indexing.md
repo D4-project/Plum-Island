@@ -38,6 +38,7 @@ Initial tuning values in `webapp/config.py.template`:
 | `TAG_RECONCILIATION_BATCH_SIZE` | `25` | Bounded planning/scanning/replay work per iteration |
 | `TAG_RECONCILIATION_PAUSE_SECONDS` | `0.1` | Yield between iterations |
 | `TAG_RECONCILIATION_PLANNING_BATCH_SIZE` | `1000` | Maximum IDs per inventory read, independent of capture batches |
+| `TAG_RECONCILIATION_MIN_PLANNING_BATCH_SIZE` | `25` | Inventory floor to amortize backend overhead, capped by the maximum |
 | `TAG_RECONCILIATION_LATENCY_BUDGET` | `0.10` | Target maximum increase against comparable search baselines |
 | `TAG_RECONCILIATION_QUIET_SECONDS` | `2` | Wait after foreground activity before resuming |
 | `TAG_RECONCILIATION_IDLE_SECONDS` | `15` | Quiet interval before faster idle pacing |
@@ -49,10 +50,17 @@ worker yields between captures and journal entries while these leases are live.
 One heartbeat per web process renews leases, and crashed readers expire after
 30 seconds. Passive progress polling does not register activity. After a quiet
 interval the worker resumes, then accelerates during longer idle periods.
+Every additional idle minute halves the effective slowdown, returning to normal
+idle speed after at most four minutes. Foreground activity immediately restores
+priority and the retained slowdown; a quiet server cannot remain throttled
+indefinitely by an old timing sample.
 
 Inventory batches adapt to measured backend response time. Meilisearch starts
 with smaller batches than Kvrocks; inventory size is independent of the number
-of captures parsed per batch. A runtime pacing upgrade retains existing frozen
+of captures parsed per batch. A minimum inventory size prevents fixed backend
+overhead from collapsing the scan to one ID per request; the duration target is
+therefore soft, even when that minimum is reached. A runtime pacing upgrade
+retains existing frozen
 rules and planning cursors: it does not change the parser/index fingerprint.
 
 The requested latency target is **at most +10%**. The controller compares a
