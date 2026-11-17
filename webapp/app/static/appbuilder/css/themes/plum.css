@@ -1,4 +1,4 @@
-@import url("readable.css");
+@import url("../../../vendor/bootswatch/readable.css");
 @import url("plum-components.css");
 
 /* A small visual layer over AppBuilder. Navigation and table behavior stay native.

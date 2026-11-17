@@ -100,6 +100,22 @@ PYLINTHOME=/tmp/pylint .venv/bin/pylint <changed-python-files>
 
 If a test cannot run because it needs external services or local data, state that explicitly with the reason. Do not silently skip relevant tests.
 
+### GUI themes and local assets
+
+- Keep `plum.css` as the default for new installations. Preserve explicit theme
+  and base-template choices in existing configurations.
+- GUI changes must identify affected template variants and verify Plum plus
+  affected original-template themes such as Readable/Flatly. Test rendering and
+  script loading, not only the presence of template or CSS files.
+- Prefer shared JavaScript and template partials for behavior used by multiple
+  themes; avoid separate implementations of the same controls.
+- For Plum, verify light/dark mode, navigation, keyboard controls and any changed
+  search helpers. Keep CSS, JavaScript and webfonts served locally; no CDN or
+  Google Fonts dependency at runtime. Retain licenses and provenance for assets.
+- Run `.venv/bin/python -m unittest test.test_ui_theme test.test_plum_offline_assets`
+  and relevant browser-side checks in addition to the full suite above. Report
+  which themes were checked and any remaining browser/runtime limitation.
+
 ## System Model
 
 ### Main entities

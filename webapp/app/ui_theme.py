@@ -14,6 +14,8 @@ def configure_ui_templates(app):
     if app.config.get("APP_THEME") != "plum.css":
         return
 
+    # Older configs predate this setting; FAB's default bypasses Plum's head JS.
+    app.config.setdefault("FAB_BASE_TEMPLATE", "plum_baselayout.html")
     original_loader = app.jinja_loader
     theme_directory = Path(app.root_path) / "templates" / "themes" / "plum"
     app.jinja_loader = ChoiceLoader(

@@ -2,6 +2,15 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Plum serves its Readable base CSS and original Raleway WOFF2 fonts locally,
+  retaining regular/bold text and Unicode subsets without Google Fonts requests.
+  Contributor instructions require shared GUI behavior, cross-theme regression
+  checks and local Plum assets; fresh installations retain Plum as default (#267).
+
+- Selecting Plum with an older config that lacks `FAB_BASE_TEMPLATE` now uses
+  Plum's base layout, loading the dark-mode control script. Explicit custom
+  layouts and other themes retain their configured behavior; restart the app.
+
 - Search JSON exports include normalized tags for each matching scan, including
   metadata-only entries when the Meilisearch document is missing (#257).
 

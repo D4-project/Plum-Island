@@ -218,6 +218,9 @@ JOB_SCAVENGE = 60
 
 
 # Theme configuration
+# Default for new installations: Plum templates, CSS and locally served fonts.
+APP_THEME = "plum.css"
+# Other supported themes use the original templates. Uncomment one to switch.
 # these are located on static/appbuilder/css/themes
 # you can create your own and easily use them placing them on the same dir structure to override
 # APP_THEME = "bootstrap-theme.css"  # default bootstrap
@@ -229,7 +232,6 @@ JOB_SCAVENGE = 60
 # APP_THEME = "journal.css"
 # Plum selects templates/themes/plum plus static/appbuilder/css/themes/plum.css.
 # Bundled themes (for example readable.css) use the original templates.
-APP_THEME = "plum.css"
 # APP_THEME = "readable.css"
 # APP_THEME = "simplex.css"
 # APP_THEME = "slate.css"

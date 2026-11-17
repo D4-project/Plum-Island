@@ -200,10 +200,18 @@ Views and URLs do not need to change. Other bundled themes use the originals.
 
 For future Plum UI changes, edit the HTML files in `templates/themes/plum/` and
 the stylesheets in `webapp/app/static/appbuilder/css/themes/`. `plum.css` imports
-the packaged Readable CSS and `plum-components.css`, then applies its global
+the local `static/vendor/bootswatch/readable.css` and `plum-components.css`, then applies its global
 visual styles. Exact static asset routes serve the two project stylesheets at
 AppBuilder's normal theme URLs. The original base template loads neither.
 Plum's tag renderer is also isolated in `webapp/app/static/themes/plum/`.
+
+Plum loads its CSS, JavaScript and fonts from the application, without a CDN or
+Google Fonts request. Its local Readable copy imports Raleway WOFF2 files from
+`static/vendor/raleway/`, preserving regular/bold weights and Unicode subsets.
+Font Awesome and Glyphicons are served from the installed Flask-AppBuilder
+assets. Licenses and source/update notes are retained with the vendored files.
+After updating assets, reload without cache (Ctrl+F5). Other themes retain their
+existing stylesheet configuration.
 
 The Plum navbar includes a Dark mode toggle. It follows the browser's system
 preference until the user chooses a mode, then remembers that choice in local
