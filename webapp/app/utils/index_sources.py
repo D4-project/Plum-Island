@@ -8,6 +8,10 @@ from app.utils.result_parser import is_external_ip
 class ExcludedSource(ValueError):
     """A valid source address is outside the frozen parser's indexing scope."""
 
+    def __init__(self, address):
+        self.address = address
+        super().__init__("Source address is excluded by the frozen parser")
+
 
 class SourceDocuments:
     """Keep Meilisearch retrieval unchanged and identify non-public addresses."""
@@ -29,5 +33,5 @@ class SourceDocuments:
         except ValueError:
             return source
         if not is_external_ip(address):
-            raise ExcludedSource("Source address is excluded by the frozen parser")
+            raise ExcludedSource(address)
         return source

@@ -19,6 +19,7 @@ from app.utils.index_reconciliation import (
     write_barrier,
 )
 from app.utils.index_sources import ExcludedSource, SourceDocuments
+from app.utils.index_source_recovery import SOURCE_CONFLICT, orphan_exclusion_metadata
 
 
 class LoadController:  # pylint: disable=too-many-instance-attributes
@@ -241,22 +242,18 @@ class PacedReconciliationWorker(ReconciliationWorker):
         self.load.wait(lambda: self.stopping)
         try:
             super().process_uid(uid)
-        except ExcludedSource:
-            self.exclude_source(uid)
+        except ExcludedSource as error:
+            self.exclude_source(uid, error.address)
 
-    def exclude_source(self, uid):
-        """Count only unindexed full-bootstrap exclusions; retain active data."""
+    def exclude_source(self, uid, address):
+        """Count unindexed exclusions, preserving detached historical dates."""
         with write_barrier():
-            base = GenerationClient(self.raw, self.job["parent"])
-            target = GenerationClient(self.raw, self.job["id"])
-            if not self.job["full"] or any(
-                client.exists(f"doc:{uid}") or client.sismember("all_uids", uid)
-                for client in (base, target)
-            ):
-                raise SnapshotInvalid(
-                    "Non-public source conflicts with indexed history or incremental "
-                    "work. Review source/index consistency before retrying."
-                )
+            metadata = orphan_exclusion_metadata(self.raw, self.job, uid, address)
+            if metadata is None:
+                raise SnapshotInvalid(SOURCE_CONFLICT)
+            if metadata:
+                target = GenerationClient(self.raw, self.job["id"], writable=True)
+                target.hset(f"doc:{uid}", mapping=metadata)
             key = CONTROL + "g:" + self.job["id"] + ":excluded_sources"
             pipe = self.raw.pipeline(transaction=True)
             pipe.sadd(key, uid)

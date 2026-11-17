@@ -12,6 +12,7 @@ from app.utils.index_reconciliation import (
     queue_snapshot,
     state_directory,
 )
+from app.utils.index_source_recovery import requeue_orphan_exclusion
 
 
 class IndexSupervisor:
@@ -50,7 +51,9 @@ class IndexSupervisor:
             and snapshot.get("revision") == processing_revision(job)
             and not self.raw.get(CONTROL + "force_full")
         ):
-            return
+            job = requeue_orphan_exclusion(self.raw, job)
+            if job.get("phase") == "blocked":
+                return
         if not pending and job.get("phase", "done") == "done":
             return
         if (
