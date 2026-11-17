@@ -14,6 +14,11 @@ from itsdangerous import BadData, URLSafeTimedSerializer
 from . import app, db
 from .models import CollectedHeaders
 from .utils.kvrocks import KVrocksIndexer
+from .utils.index_generations import (
+    lease_reader_generation,
+    reader_generation,
+    restore_reader_generation,
+)
 from .utils.tagrules import normalize_tags
 from .views import IPDetailView, KVSearchView, client
 
@@ -161,6 +166,7 @@ class DiscoveryApi(BaseApi):
                 "cursor_ts": None,
                 "window_days": 1,
             }
+        restore_reader_generation(app.config, state.get("generation"))
         result = KVSearchView().execute_search_page(
             state["query"],
             state["from_ts"],
@@ -173,8 +179,12 @@ class DiscoveryApi(BaseApi):
         if not result.get("status"):
             raise DiscoveryError(result.get("msg_error") or "Invalid query")
         pagination = result["pagination"]
+        state["generation"] = reader_generation(app.config)
         continuation = None
         if pagination["has_more"]:
+            state["generation_lease"] = lease_reader_generation(
+                app.config, CURSOR_TTL, state.get("generation_lease")
+            )
             seen = list(dict.fromkeys([*state["seen"], *result["results"]]))
             if len(seen) > MAX_SEEN_IPS:
                 raise DiscoveryError(

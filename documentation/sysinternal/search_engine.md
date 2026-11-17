@@ -1,5 +1,10 @@
 # Search engine: implementation and change contract
 
+Managed installations resolve these logical keys through pinned Kvrocks generations.
+See [automatic indexing](../automatic-indexing.md) for physical routing, journal/cutover
+semantics and legacy maintenance limits.
+
+
 Read this guide before modifying search parsing, Kvrocks reads/indexes, search
 pagination, exports, or tag matching. Update it in the same change when the
 documented behavior changes. Search matching loops were restored to commit

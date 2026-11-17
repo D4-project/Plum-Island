@@ -1,0 +1,18 @@
+<div class="well well-sm" data-tag-reconciliation
+     data-status-url="{{ url_for('TagRulesView.reindex_current') }}">
+    <div class="tagrule-reindex-actions">
+        <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
+            <i class="fa fa-save" aria-hidden="true"></i> Save to disk
+        </a>
+        <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
+            <i class="fa fa-download" aria-hidden="true"></i> Download ZIP
+        </a>
+    </div>
+    <p data-index-status role="status" aria-live="polite">Checking detection updates…</p>
+    <div class="progress tagrule-reindex-progress-wrap">
+        <div data-index-progress class="progress-bar progress-bar-info"
+             role="progressbar" aria-label="Detection update progress"
+             aria-valuemin="0" aria-valuemax="100"></div>
+    </div>
+    <p class="text-muted" data-index-detail></p>
+</div>

@@ -163,3 +163,13 @@ through the normal deployment procedure. Before returning to an older query
 parser, rewrite any newly grouped stored report/rule queries into its supported
 flat syntax. Stop/remove Virion registration and revoke its dedicated Discovery
 permissions if rolling back the controller API.
+
+
+## Automatic indexing (#271)
+
+Read [automatic indexing](automatic-indexing.md) before rollout. This migration
+adds managed Kvrocks generations/control metadata, not SQL tables. The scheduler
+bootstraps historical coverage in a separate generation and supervises the child
+process. Verify capacity and COPY support, retire legacy writers, and retain
+sources/history for recovery. The GUI now displays progress without reindex
+buttons. Validate latency and ingestion lag on representative staging data.

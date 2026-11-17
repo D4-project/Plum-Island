@@ -6,8 +6,10 @@ from functools import wraps
 
 try:
     from .search_query import tokenize_query
+    from .index_generations import GenerationClient
 except ImportError:
     from search_query import tokenize_query
+    from index_generations import GenerationClient
 
 
 def debug_requested(query):
@@ -96,6 +98,9 @@ class SearchDiagnostics:  # pylint: disable=too-many-instance-attributes
 
     def instrument(self, client):
         """Wrap this request's client; SCAN iterations use execute_command too."""
+        if isinstance(client, GenerationClient):
+            # Include physical routing/ownership lookups in command accounting.
+            client = client.raw
         execute_command = client.execute_command
         pipeline_factory = client.pipeline
 

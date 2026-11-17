@@ -14,11 +14,6 @@
                 <td><center>
                     <div class="tagrule-row-actions">
                         {{ lib.btn_crud(can_show, can_edit, can_delete, pk, modelview_name, filters) }}
-                        <button type="button" class="btn btn-xs btn-default tagrule-reindex"
-                                data-rule-id="{{pk}}" title="Reindex this rule"
-                                aria-label="Reindex this rule">
-                            <i class="fa fa-recycle" aria-hidden="true"></i>
-                        </button>
                     </div>
                 </center></td>
             {% endif %}

@@ -1,97 +1,13 @@
 {% extends "appbuilder/general/model/list.html" %}
 
 {% block list_list scoped %}
-    <div class="well well-sm">
-        <div class="tagrule-reindex-actions">
-            <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
-                <i class="fa fa-save"></i> Save to disk
-            </a>
-            <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
-                <i class="fa fa-download"></i> Download ZIP
-            </a>
-            <button type="button" id="tagrule-reindex-all" class="btn btn-sm btn-warning">
-                <i class="fa fa-refresh"></i> Reindex all active rules
-            </button>
-            <span id="tagrule-reindex-status" class="text-muted tagrule-reindex-status"></span>
-        </div>
-        <div class="progress tagrule-reindex-progress-wrap" title="No reindex progress yet">
-            <div id="tagrule-reindex-progress" class="progress-bar progress-bar-warning"
-                 role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">0%</div>
-        </div>
-    </div>
+    {% include 'tag_reconciliation_status.html' %}
     {{ super() }}
 {% endblock %}
 
 {% block tail_js %}
 {{ super() }}
-<script>
-(function () {
-    const startUrl = "{{ url_for('TagRulesView.reindex_start') }}";
-    const statusUrl = "{{ url_for('TagRulesView.reindex_status', job_id='JOB_ID') }}";
-    const status = document.getElementById('tagrule-reindex-status');
-    const progress = document.getElementById('tagrule-reindex-progress');
-    const progressWrap = progress.closest('.tagrule-reindex-progress-wrap');
-    let active = false;
-    function setButtons(disabled) {
-        document.querySelectorAll('.tagrule-reindex, #tagrule-reindex-all').forEach(b => {
-            b.disabled = disabled;
-            b.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-        });
-    }
-    function updateProgress(data) {
-        const processed = Number(data.processed);
-        const total = Number(data.total);
-        const errors = Number(data.errors || 0);
-        const hasCounts = Number.isFinite(processed) && Number.isFinite(total) && total > 0;
-        const indeterminate = data.status === 'running' && !hasCounts;
-        const pct = data.status === 'done'
-            ? 100
-            : hasCounts ? Math.min(100, Math.round(processed * 100 / total)) : 0;
-        const detail = hasCounts
-            ? `${processed}/${total}${errors > 0 ? `, ${errors} error${errors === 1 ? '' : 's'}` : ''}`
-            : data.status === 'done' ? 'Completed'
-            : indeterminate ? 'Reindex in progress'
-            : 'Progress unavailable';
-        progressWrap.title = detail;
-        progress.setAttribute('aria-label', detail);
-        progress.setAttribute('aria-valuenow', String(pct));
-        progress.style.width = (indeterminate ? 100 : pct) + '%';
-        progress.textContent = indeterminate ? '…' : pct + '%';
-        if (indeterminate) {
-            progress.classList.add('progress-bar-striped', 'active');
-        } else {
-            progress.classList.remove('progress-bar-striped', 'active');
-        }
-    }
-    function poll(jobId) {
-        fetch(statusUrl.replace('JOB_ID', jobId)).then(r => r.json()).then(data => {
-            updateProgress(data);
-            status.textContent = data.status === 'done' ? 'Reindex completed'
-                : data.status === 'error' ? (data.message || 'Reindex failed')
-                : data.status === 'running' ? 'Reindex in progress'
-                : data.status === 'queued' ? 'Reindex queued'
-                : (data.message || data.status);
-            if (data.status === 'queued' || data.status === 'running') return setTimeout(() => poll(jobId), 1500);
-            active = false; setButtons(false);
-        }).catch(() => { status.textContent = 'Unable to read reindex status'; active = false; setButtons(false); });
-    }
-    function start(ruleId) {
-        if (active) return;
-        active = true; setButtons(true); status.textContent = 'Starting reindex…';
-        const body = ruleId ? {rule_id: ruleId} : {};
-        fetch(startUrl, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})
-            .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Unable to start reindex'); return data; })
-            .then(data => poll(data.job_id)).catch(error => { status.textContent = error.message; active = false; setButtons(false); });
-    }
-    fetch("{{ url_for('TagRulesView.reindex_current') }}").then(r => r.json()).then(data => {
-        if (data.job_id && (data.status === 'queued' || data.status === 'running')) {
-            active = true; setButtons(true); poll(data.job_id);
-        }
-    }).catch(() => {});
-    document.getElementById('tagrule-reindex-all').addEventListener('click', () => start(null));
-    document.addEventListener('click', e => { const button = e.target.closest('.tagrule-reindex'); if (button) start(button.dataset.ruleId); });
-})();
-</script>
+<script src="{{ url_for('static', filename='js/tag_reconciliation.js') }}"></script>
 {% endblock %}
 
 {% block content %}

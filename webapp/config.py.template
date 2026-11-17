@@ -166,6 +166,13 @@ SCAN_DELAY = 12
 # How many time between job scheduling in minutes
 SCHEDULER_DELAY = 10
 
+# Scheduler-supervised background indexing. Initial tuning values, not latency
+# guarantees: measure on your workload before raising concurrency/batch sizes.
+TAG_RECONCILIATION_ENABLED = True
+TAG_RECONCILIATION_POLL_SECONDS = 30
+TAG_RECONCILIATION_BATCH_SIZE = 25
+TAG_RECONCILIATION_PAUSE_SECONDS = 0.1
+
 # Independent CIRCL enrichment worker: initial operational limits, tune to latency.
 NETWORK_LOOKUP_TIMEOUT_SECONDS = 10
 NETWORK_REFRESH_BATCH_SIZE = 32
