@@ -2,6 +2,9 @@
 
 Upgrade instructions: [v0.2610.0 to current main](documentation/migration-v0.2610.0-to-main.md).
 
+- Search JSON exports include normalized tags for each matching scan, including
+  metadata-only entries when the Meilisearch document is missing (#257).
+
 - Present search examples in seven equally sized cards explaining AND, OR,
   parentheses, AND NOT, prefix, substring and HTTP header-value searches before
   showing their clickable queries; adapt to narrow screens (#264).
