@@ -55,17 +55,27 @@ async function advance(value) {
     assert(classes.has('progress-bar-danger'));
     assert(!classes.has('active'));
     await advance({phase: 'planning', pacing: {mode: 'foreground'}});
-    assert.match(detail.textContent, /Waiting for search and ingestion/);
+    assert.equal(detail.textContent, 'Indexing paused for searches and imports');
     await advance({phase: 'planning', pacing: {mode: 'idle_boost', candidates: 1234}});
-    assert.match(detail.textContent, /Running faster/);
+    assert.match(detail.textContent, /Indexing faster while idle/);
     assert.match(detail.textContent, /1234 captures identified/);
     assert(!detail.textContent.includes('%'));
-    await advance({phase: 'planning', pacing: {mode: 'limited', comparable_samples: 4, observed_degradation: 0.12}});
-    assert.match(detail.textContent, /\+12%/);
+    await advance({phase: 'planning', pacing: {mode: 'limited', slowdown_factor: 2, comparable_samples: 4, observed_degradation: 0.71}});
+    assert.equal(detail.textContent, 'Indexing slowed to protect search performance');
+    // Idle acceleration can still be throttled; the effective factor wins.
+    await advance({phase: 'retagging', pacing: {mode: 'idle_boost', slowdown_factor: 2}});
+    assert.equal(detail.textContent, 'Indexing slowed to protect search performance');
+    // A retained timing sample must not label recovered idle throughput as slow.
+    await advance({phase: 'retagging', pacing: {mode: 'idle_boost', slowdown_factor: 1, comparable_samples: 4, observed_degradation: 0.71}});
+    assert.equal(detail.textContent, 'Indexing faster while idle');
+    await advance({phase: 'planning', pacing: {mode: 'limited', slowdown_factor: 1}});
+    assert.equal(detail.textContent, 'Indexing in the background');
+    await advance({phase: 'blocked', pacing: {mode: 'idle_boost', slowdown_factor: 1}});
+    assert.equal(detail.textContent, '');
     await advance({phase: 'up_to_date', pacing: {excluded_sources: 2}});
     assert.equal(bar.style.width, '100%');
     assert.equal(status.textContent, 'Detections up to date');
     assert.match(detail.textContent, /2 non-public source exclusions encountered/);
-    assert.equal(requests, 8);
+    assert.equal(requests, 12);
     console.log('Automatic detection progress checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

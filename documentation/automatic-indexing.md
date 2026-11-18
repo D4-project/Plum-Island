@@ -78,9 +78,11 @@ baseline catalogue are bounded. Telemetry failure cannot fail a foreground read.
 Scalar timestamp reads use a new timing namespace, so pre-upgrade timings cannot
 mask their lower baseline. New comparable baseline samples are collected normally.
 
-The progress page distinguishes waiting for activity from idle acceleration and
-shows an observed timing difference only when comparable samples exist. This is
-feedback toward the target, not a universal latency guarantee: an in-flight
+The progress page says whether indexing is paused for searches and imports,
+slowed to protect search performance, running faster while idle, or running in
+the background. Messages follow the current mode and effective slowdown; timing
+percentages remain available in status diagnostics. This is feedback toward the
+target, not a universal latency guarantee: an in-flight
 backend command cannot be preempted, cold caches and other server load still
 matter, and representative end-to-end measurements remain required.
 

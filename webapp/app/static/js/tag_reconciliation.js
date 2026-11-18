@@ -41,14 +41,17 @@
             if (data.phase === 'planning' && Number.isFinite(pacing.candidates)) {
                 notes.push(pacing.candidates + ' captures identified');
             }
-            if (!complete && ['foreground', 'quiet'].includes(pacing.mode)) {
-                notes.push('Waiting for search and ingestion activity to settle');
-            } else if (!complete && pacing.mode === 'idle_boost') {
-                notes.push('Running faster while the system is idle');
-            }
-            if (pacing.comparable_samples > 0 && Number.isFinite(pacing.observed_degradation)) {
-                const change = Math.round(pacing.observed_degradation * 100);
-                notes.push('Latest comparable search: ' + (change > 0 ? '+' : '') + change + '%');
+            const running = ['planning', 'scanning', 'reparsing', 'retagging', 'catching_up'].includes(data.phase);
+            if (running && ['foreground', 'quiet'].includes(pacing.mode)) {
+                notes.push('Indexing paused for searches and imports');
+            } else if (running && ['limited', 'idle_boost'].includes(pacing.mode)) {
+                if (Number(pacing.slowdown_factor) > 1) {
+                    notes.push('Indexing slowed to protect search performance');
+                } else if (pacing.mode === 'idle_boost') {
+                    notes.push('Indexing faster while idle');
+                } else {
+                    notes.push('Indexing in the background');
+                }
             }
             if (data.message) notes.push(data.message);
             detail.textContent = notes.join(' · ');

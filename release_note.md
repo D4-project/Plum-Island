@@ -1,5 +1,8 @@
 # Unreleased
 
+- Describe indexing pace with concise activity messages instead of an ambiguous
+  search slowdown percentage on the Tag Rules page (#271).
+
 - Keep long Meilisearch imports running beyond 15 minutes per batch, with periodic
   task progress. Persist submission intent and task UID so `--continue` waits for
   accepted work instead of resending it after a timeout or interruption.
