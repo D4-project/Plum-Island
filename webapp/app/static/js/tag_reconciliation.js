@@ -46,9 +46,9 @@
                 notes.push('Indexing paused for searches and imports');
             } else if (running && ['limited', 'idle_boost'].includes(pacing.mode)) {
                 if (Number(pacing.slowdown_factor) > 1) {
-                    notes.push('Indexing slowed to protect search performance');
+                    notes.push('Indexing slowed down to protect search performance');
                 } else if (pacing.mode === 'idle_boost') {
-                    notes.push('Indexing faster while idle');
+                    notes.push('Indexing running at full speed');
                 } else {
                     notes.push('Indexing in the background');
                 }

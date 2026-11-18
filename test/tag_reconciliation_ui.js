@@ -57,17 +57,17 @@ async function advance(value) {
     await advance({phase: 'planning', pacing: {mode: 'foreground'}});
     assert.equal(detail.textContent, 'Indexing paused for searches and imports');
     await advance({phase: 'planning', pacing: {mode: 'idle_boost', candidates: 1234}});
-    assert.match(detail.textContent, /Indexing faster while idle/);
+    assert.match(detail.textContent, /Indexing running at full speed/);
     assert.match(detail.textContent, /1234 captures identified/);
     assert(!detail.textContent.includes('%'));
     await advance({phase: 'planning', pacing: {mode: 'limited', slowdown_factor: 2, comparable_samples: 4, observed_degradation: 0.71}});
-    assert.equal(detail.textContent, 'Indexing slowed to protect search performance');
+    assert.equal(detail.textContent, 'Indexing slowed down to protect search performance');
     // Idle acceleration can still be throttled; the effective factor wins.
     await advance({phase: 'retagging', pacing: {mode: 'idle_boost', slowdown_factor: 2}});
-    assert.equal(detail.textContent, 'Indexing slowed to protect search performance');
+    assert.equal(detail.textContent, 'Indexing slowed down to protect search performance');
     // A retained timing sample must not label recovered idle throughput as slow.
     await advance({phase: 'retagging', pacing: {mode: 'idle_boost', slowdown_factor: 1, comparable_samples: 4, observed_degradation: 0.71}});
-    assert.equal(detail.textContent, 'Indexing faster while idle');
+    assert.equal(detail.textContent, 'Indexing running at full speed');
     await advance({phase: 'planning', pacing: {mode: 'limited', slowdown_factor: 1}});
     assert.equal(detail.textContent, 'Indexing in the background');
     await advance({phase: 'blocked', pacing: {mode: 'idle_boost', slowdown_factor: 1}});
