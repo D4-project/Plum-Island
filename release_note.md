@@ -1,5 +1,8 @@
 # Unreleased
 
+- Remove unused styles for the retired inline search examples in Plum light and
+  dark modes.
+
 - Describe indexing pace with concise activity messages instead of an ambiguous
   search slowdown percentage on the Tag Rules page (#271).
 

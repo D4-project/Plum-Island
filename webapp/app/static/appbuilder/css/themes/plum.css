@@ -174,8 +174,8 @@ code { color: #2c6867; background: #edf5f4; }
   :root[data-plum-color-mode="dark"] :is(.datepicker table tr td.old, .datepicker table tr td.new, .datepicker table tr td.disabled) { color: #7c8e9f; }
   :root[data-plum-color-mode="dark"] .form-control:focus { border-color: var(--plum-accent); box-shadow: 0 0 0 3px #69d5c425; }
   :root[data-plum-color-mode="dark"] code { background: #203a3a; color: #a8e0d7; }
-  :root[data-plum-color-mode="dark"] :is(.btn-default, .btn-outline-secondary, .table .btn-group > .btn-default, .search-date-field .input-group-btn .btn, .plum-list-filters .close-icon, .plum-search-examples > button, .ip-quick-link, .ip-port-link, .input-group-addon) { background: var(--plum-raised); color: var(--plum-ink); border-color: var(--plum-border); }
-  :root[data-plum-color-mode="dark"] :is(.btn-default:hover, .btn-default:focus, .btn-outline-secondary:hover, .btn-outline-secondary:focus, .table .btn-group > .btn-default:hover, .plum-search-examples > button:hover, .ip-quick-link:hover, .ip-port-link:hover) { background: var(--plum-accent-soft); color: var(--plum-accent); border-color: #4e8e86; }
+  :root[data-plum-color-mode="dark"] :is(.btn-default, .btn-outline-secondary, .table .btn-group > .btn-default, .search-date-field .input-group-btn .btn, .plum-list-filters .close-icon, .ip-quick-link, .ip-port-link, .input-group-addon) { background: var(--plum-raised); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.btn-default:hover, .btn-default:focus, .btn-outline-secondary:hover, .btn-outline-secondary:focus, .table .btn-group > .btn-default:hover, .ip-quick-link:hover, .ip-port-link:hover) { background: var(--plum-accent-soft); color: var(--plum-accent); border-color: #4e8e86; }
   :root[data-plum-color-mode="dark"] :is(.btn-primary, .btn-primary:hover, .btn-primary:focus, .btn-primary:active) { color: #102b27; }
   :root[data-plum-color-mode="dark"] .nav-tabs > li.active > a { background: var(--plum-card); color: var(--plum-accent); border-color: var(--plum-border); border-bottom-color: var(--plum-card); }
 

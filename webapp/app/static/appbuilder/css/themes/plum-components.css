@@ -1169,10 +1169,6 @@ body .search-date-field .input-group-btn .btn { height: 38px; border-color: #cfd
 body .search-summary { flex: 1 1 100%; min-width: 0; font-size: 13px; color: #4d6373; line-height: 1.6; white-space: normal; margin-top: 3px; }
 body .search-summary:empty { display: none; }
 .plum-search-help { font-size: 12px; line-height: 1.75; margin: 12px 0 0; color: var(--plum-muted, #777); }
-.plum-search-examples { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12px; color: var(--plum-muted, #777); margin-top: 14px; }
-.plum-search-examples > button { padding: 4px 9px; border: 1px solid #d6e3e3; border-radius: 4px; background: #fff; color: #376a69; font: inherit; cursor: pointer; }
-.plum-search-examples > button:hover { background: var(--plum-accent-soft, #edf3fd); border-color: #8cbdb7; }
-.plum-search-examples > span { margin-right: 3px; }
 body #load-more-container:empty { display: none; }
 body .tag-suggest-menu { border-color: #c6deda; box-shadow: 0 7px 20px #25334412; }
 body .tag-suggest-item:hover, body .tag-suggest-item:focus, body .tag-suggest-item.active { background: var(--plum-accent-soft, #edf3fd); color: #245956; }
