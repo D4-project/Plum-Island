@@ -324,7 +324,14 @@ Use `--progress` when you want percentage output:
 
 This counts importable JSON documents before sending anything to Meilisearch. On large dumps this makes startup slower.
 
-Every import now saves a checkpoint after each successfully completed batch:
+Imports wait until each Meilisearch task finishes, with its UID and wait progress
+printed every 30 seconds. There is no task-duration limit by default: a batch
+taking more than 15 minutes no longer aborts the import. HTTP requests retain a
+30-second timeout. To set an optional limit for each task wait, use
+`--task-timeout-ms MILLISECONDS`; `0` restores unlimited waiting.
+
+Every import saves submission intent, the accepted task UID, then confirmed
+progress after the batch succeeds. Resume with:
 
 ```bash
 .venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --continue --progress
@@ -337,13 +344,25 @@ destination URL and index before resuming. Keep the dump unchanged during import
 and do not run concurrent imports using the same checkpoint. Metadata validation
 does not hash file contents.
 
+Resume checks a saved task before sending anything else. If it is still running,
+the importer waits for that same task; if it succeeded while the importer was
+stopped, its progress is committed without sending the batch again. A configured
+wait timeout or Ctrl+C leaves the task UID in the checkpoint. A confirmed failed
+or canceled task leaves confirmed counters unchanged and allows a later retry.
+Missing tasks and backend errors retain pending state for investigation.
+
+If submission is interrupted before its UID can be saved, the checkpoint retains
+an unresolved submission intent. Automatic resume stops: inspect Meilisearch task
+history before recovering or restarting, because the server may have accepted it.
+Starting without `--continue` cannot overwrite a pending submission.
+
 Resume replays the confirmed prefix locally, including JSON parsing, but sends
-only remaining entries. An interrupted or failed batch is retried; stable document
-UIDs make uncertain submissions safe to replace. Parse errors count separately
+only remaining entries. Parse errors count separately
 and are skipped, as in a normal import. A successful import retains its checkpoint;
 resuming it submits nothing. Run without `--continue` to restart from the beginning.
-Imports interrupted before checkpoint support was installed cannot be resumed
-precisely. `--continue` requires an existing valid checkpoint and fails otherwise.
+Older checkpoints without a task UID remain supported at their last confirmed
+position; they cannot identify an unconfirmed batch accepted by an older importer.
+`--continue` requires an existing valid checkpoint and fails otherwise.
 
 ### `reintegrate_missing_meili.py`
 

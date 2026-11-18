@@ -8,13 +8,16 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from itertools import islice
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = BASE_DIR / "meili_dump"
 DEFAULT_BATCH_SIZE = 5000
-DEFAULT_TASK_TIMEOUT_MS = 900_000
+DEFAULT_TASK_TIMEOUT_MS = 0
+TASK_STATUS_INTERVAL_MS = 30_000
+COUNTERS = ("processed", "indexed", "errors")
 
 
 def load_config():
@@ -69,15 +72,15 @@ def parse_args():
         type=int,
         default=DEFAULT_TASK_TIMEOUT_MS,
         help=(
-            "Maximum wait for each Meilisearch batch task in milliseconds. "
-            f"Default: {DEFAULT_TASK_TIMEOUT_MS}"
+            "Maximum task wait in milliseconds; 0 waits until completion. "
+            "Default: 0 (unlimited). A timeout retains the task for --continue."
         ),
     )
     parser.add_argument(
         "--continue",
         dest="resume",
         action="store_true",
-        help="Resume after the last successfully indexed batch in the checkpoint.",
+        help="Resume any saved task, then import after the last confirmed batch.",
     )
     parser.add_argument(
         "--checkpoint",
@@ -168,7 +171,7 @@ def load_checkpoint(path, identity):
         raise SystemExit(
             "Checkpoint dump or destination differs; restart without --continue"
         )
-    counts = [state.get(key) for key in ("processed", "indexed", "errors")]
+    counts = [state.get(key) for key in COUNTERS]
     if any(
         not isinstance(value, int) or isinstance(value, bool) or value < 0
         for value in counts
@@ -176,17 +179,38 @@ def load_checkpoint(path, identity):
         raise SystemExit("Invalid checkpoint counters")
     if counts[0] != counts[1] + counts[2]:
         raise SystemExit("Inconsistent checkpoint counters")
-    return counts
+    pending = state.get("pending")
+    if pending is not None:
+        if not isinstance(pending, dict):
+            raise SystemExit("Invalid pending import task")
+        future = [pending.get(key) for key in COUNTERS]
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < before
+            for value, before in zip(future, counts)
+        ):
+            raise SystemExit("Invalid pending import counters")
+        if future[0] != future[1] + future[2] or future[1] <= counts[1]:
+            raise SystemExit("Inconsistent pending import counters")
+        uid = pending.get("task_uid")
+        if uid is not None and (
+            not isinstance(uid, int) or isinstance(uid, bool) or uid < 0
+        ):
+            raise SystemExit("Invalid pending Meilisearch task UID")
+    return state
 
 
-def save_checkpoint(path, identity, processed, indexed, errors):
-    """Atomically persist only positions whose submitted batches succeeded."""
+def save_checkpoint(  # pylint: disable=too-many-arguments
+    path, identity, processed, indexed, errors, *, pending=None
+):
+    """Persist confirmed counters separately from an unconfirmed task's position."""
     state = {
         "identity": identity,
         "processed": processed,
         "indexed": indexed,
         "errors": errors,
     }
+    if pending is not None:
+        state["pending"] = pending
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -202,6 +226,21 @@ def save_checkpoint(path, identity, processed, indexed, errors):
             temporary_path.unlink(missing_ok=True)
 
 
+def checkpoint_state(path, identity, resume):
+    """Load confirmed work or initialize an import without discarding pending work."""
+    if resume:
+        return load_checkpoint(path, identity)
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise SystemExit(f"Cannot read checkpoint {path}: {error}") from error
+        if isinstance(previous, dict) and previous.get("pending") is not None:
+            raise SystemExit("Checkpoint has a pending task; use --continue")
+    save_checkpoint(path, identity, 0, 0, 0)
+    return {key: 0 for key in COUNTERS}
+
+
 def format_progress(count, total_count):
     """
     Format count with percentage.
@@ -212,27 +251,105 @@ def format_progress(count, total_count):
     return str(count)
 
 
-def flush_batch(index, batch, task_timeout_ms):
-    """
-    Send one batch to Meilisearch and wait for its successful completion.
-    """
-    if not batch:
-        return 0
-
-    count = len(batch)
-    task_info = index.add_documents(batch)
-    task = index.wait_for_task(
-        task_info.task_uid,
-        timeout_in_ms=task_timeout_ms,
-        interval_in_ms=500,
+def wait_for_import_task(index, uid, task_timeout_ms):
+    """Poll one accepted task; a local wait timeout never submits another batch."""
+    from meilisearch.errors import (  # pylint: disable=import-outside-toplevel
+        MeilisearchTimeoutError,
     )
-    if task.status != "succeeded":
-        error = (task.error or {}).get("message", "no error details")
-        raise RuntimeError(
-            f"Meilisearch task {task.uid} failed with status {task.status}: {error}"
+
+    started = time.monotonic()
+    print(f"Waiting for Meilisearch task {uid}...", flush=True)
+    while True:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        if task_timeout_ms and elapsed_ms >= task_timeout_ms:
+            raise SystemExit(
+                f"Wait limit reached for task {uid}; checkpoint retains its UID. "
+                "Meilisearch may still be processing it. Resume with --continue."
+            )
+        wait_ms = TASK_STATUS_INTERVAL_MS
+        if task_timeout_ms:
+            wait_ms = min(wait_ms, task_timeout_ms - elapsed_ms)
+        try:
+            return index.wait_for_task(uid, timeout_in_ms=wait_ms, interval_in_ms=1000)
+        except MeilisearchTimeoutError:
+            elapsed = int(time.monotonic() - started)
+            print(
+                f"Task {uid}: still waiting after {elapsed}s; keeping the same task.",
+                flush=True,
+            )
+
+
+class ImportCheckpoint:
+    """Journal submission intent and task UID before advancing confirmed progress."""
+
+    def __init__(self, path, identity, state, task_timeout_ms=DEFAULT_TASK_TIMEOUT_MS):
+        self.path = path
+        self.identity = identity
+        self.state = state
+        self.task_timeout_ms = task_timeout_ms
+
+    def save(self, **changes):
+        """Publish in-memory state only after the atomic checkpoint write succeeds."""
+        state = dict(self.state, **changes)
+        save_checkpoint(
+            self.path,
+            self.identity,
+            *(state[key] for key in COUNTERS),
+            pending=state.get("pending"),
         )
-    batch.clear()
-    return count
+        self.state = state
+
+    def finish_pending(self, index):
+        """Confirm a retained task without resubmission, including after a restart."""
+        pending = self.state.get("pending")
+        if pending is None:
+            return
+        uid = pending.get("task_uid")
+        if uid is None:
+            raise SystemExit(
+                "Submission was interrupted before its task UID was saved. "
+                "Check Meilisearch tasks before restarting; no batch was resubmitted."
+            )
+        task = wait_for_import_task(index, uid, self.task_timeout_ms)
+        if task.status != "succeeded":
+            error = (task.error or {}).get("message", "no error details")
+            if task.status in ("failed", "canceled"):
+                # Only a confirmed terminal failure permits submission on retry.
+                self.save(pending=None)
+            raise RuntimeError(
+                f"Meilisearch task {uid} ended with status {task.status}: {error}. "
+                "Confirmed counters unchanged; use --continue to retry."
+            )
+        expected = pending["indexed"] - self.state["indexed"]
+        if (
+            task.uid != uid
+            or task.index_uid != self.identity["index"]
+            or task.type != "documentAdditionOrUpdate"
+            or (task.details or {}).get("receivedDocuments") != expected
+        ):
+            raise RuntimeError(
+                f"Task {uid} does not match the pending import batch; "
+                "checkpoint unchanged."
+            )
+        self.save(**{key: pending[key] for key in COUNTERS}, pending=None)
+
+    def flush(self, index, batch, processed, errors):
+        """Record intent before POST, then task UID before waiting for completion."""
+        if not batch:
+            return
+        if self.state.get("pending") is not None:
+            raise RuntimeError("Resolve the pending import task before submitting")
+        pending = {
+            "task_uid": None,
+            "processed": processed,
+            "indexed": self.state["indexed"] + len(batch),
+            "errors": errors,
+        }
+        self.save(pending=pending)
+        task_info = index.add_documents(batch)
+        self.save(pending=dict(pending, task_uid=task_info.task_uid))
+        self.finish_pending(index)
+        batch.clear()
 
 
 def active_indexing_tasks(client, index_name):
@@ -283,8 +400,8 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
     args = parse_args()
     if args.batch_size <= 0:
         raise SystemExit("--batch-size must be >= 1")
-    if args.task_timeout_ms <= 0:
-        raise SystemExit("--task-timeout-ms must be >= 1")
+    if args.task_timeout_ms < 0:
+        raise SystemExit("--task-timeout-ms must be >= 0")
 
     import meilisearch  # pylint: disable=import-outside-toplevel
 
@@ -296,7 +413,7 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
     if not meili_url:
         raise SystemExit("Missing OUT_MEILI_URL in tools/config.yaml")
 
-    client = meilisearch.Client(meili_url, meili_api_key)
+    client = meilisearch.Client(meili_url, meili_api_key, timeout=30)
     index = client.index(index_name)
 
     if args.stat:
@@ -327,22 +444,23 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
         flush=True,
     )
     identity = import_identity(json_files, input_dir, meili_url, index_name)
-    processed_count = indexed_count = error_count = 0
+    state = checkpoint_state(checkpoint, identity, args.resume)
+    journal = ImportCheckpoint(checkpoint, identity, state, args.task_timeout_ms)
+    journal.finish_pending(index)
+    processed_count, indexed_count, error_count = (
+        journal.state[key] for key in COUNTERS
+    )
     if args.resume:
-        processed_count, indexed_count, error_count = load_checkpoint(
-            checkpoint, identity
-        )
         print(
             f"Resuming: processed={processed_count}; indexed={indexed_count}; errors={error_count}",
             flush=True,
         )
-    else:
-        save_checkpoint(checkpoint, identity, 0, 0, 0)
 
     print(f"Reading JSON dump from {input_dir}", flush=True)
     print(f"Writing documents to {meili_url} / index={index_name}", flush=True)
     print(f"Batch size: {args.batch_size}", flush=True)
-    print(f"Task timeout: {args.task_timeout_ms} ms", flush=True)
+    timeout = f"{args.task_timeout_ms} ms" if args.task_timeout_ms else "unlimited"
+    print(f"Task timeout: {timeout}", flush=True)
     total_count = None
     if args.progress:
         print("Counting JSON documents...", flush=True)
@@ -373,10 +491,8 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
 
         batch.append(doc)
         if len(batch) >= args.batch_size:
-            indexed_count += flush_batch(index, batch, args.task_timeout_ms)
-            save_checkpoint(
-                checkpoint, identity, processed_count, indexed_count, error_count
-            )
+            journal.flush(index, batch, processed_count, error_count)
+            indexed_count = journal.state["indexed"]
             print(
                 f"Progress: processed={processed_count}; "
                 f"indexed={format_progress(indexed_count, total_count)}; "
@@ -384,8 +500,9 @@ def main():  # pylint: disable=too-many-locals,too-many-statements
                 flush=True,
             )
 
-    indexed_count += flush_batch(index, batch, args.task_timeout_ms)
-    save_checkpoint(checkpoint, identity, processed_count, indexed_count, error_count)
+    journal.flush(index, batch, processed_count, error_count)
+    indexed_count = journal.state["indexed"]
+    journal.save(processed=processed_count, errors=error_count)
     print(
         "Meilisearch import complete; every submitted batch succeeded: "
         f"processed={processed_count} "

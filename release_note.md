@@ -1,5 +1,9 @@
 # Unreleased
 
+- Keep long Meilisearch imports running beyond 15 minutes per batch, with periodic
+  task progress. Persist submission intent and task UID so `--continue` waits for
+  accepted work instead of resending it after a timeout or interruption.
+
 - Handle empty fields and deleted keys during Kvrocks generation copying across
   initial imports, background reparsing and live Plum ingestion. Preserve frozen
   jobs and published coverage across this storage-only fix (#271).
