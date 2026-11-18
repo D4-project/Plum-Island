@@ -1,5 +1,8 @@
 # Unreleased
 
+- Restore ascending and descending sorting by Rule Name and Updated on the Tag
+  Rules page in Plum and the original themes, retaining filters and pagination.
+
 - Remove unused styles for the retired inline search examples in Plum light and
   dark modes.
 

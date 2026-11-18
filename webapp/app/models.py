@@ -13,6 +13,7 @@ import re
 import shlex
 import uuid
 from flask_appbuilder import Model
+from flask_appbuilder.models.decorators import renders
 from markupsafe import Markup as Esc
 from sqlalchemy import (
     BigInteger,
@@ -822,6 +823,7 @@ class TagRules(Model):
         rendered += "</span>"
         return Esc(rendered)
 
+    @renders("name")
     def name_html(self):
         """
         Render the rule name with the description available on hover.
@@ -854,7 +856,9 @@ class TagRules(Model):
     def created_at_html(self):
         return self._datetime_html(self.created_at)
 
+    @renders("updated_at")
     def updated_at_html(self):
+        """Display the update timestamp while retaining database sorting."""
         return self._datetime_html(self.updated_at)
 
 
