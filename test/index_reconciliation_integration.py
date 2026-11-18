@@ -24,6 +24,7 @@ from app.utils.index_generations import (
     ACTIVE,
     CONTROL,
     GenerationClient,
+    generation_prefix,
     read_json,
     write_json,
 )
@@ -32,6 +33,7 @@ from app.utils.index_reconciliation import (
     SnapshotInvalid,
     index_for,
     ingest_sources,
+    ingest_indexer_sources,
     queue_snapshot,
     delete_capture,
     reconciliation_status,
@@ -118,6 +120,136 @@ class ReconciliationCase(unittest.TestCase):
         queue_snapshot(self.raw, state)
         self.worker().run()
         self.assertEqual(read_json(self.raw, "job")["phase"], "done")
+
+
+class GenerationCopyIntegrationTest(ReconciliationCase):
+    """Empty fields survive copying across imports, ingestion and recovery."""
+
+    def test_initial_import_with_empty_fields(self):
+        """Legacy import and first managed import accept captures without banners."""
+        legacy = index_for(GenerationClient(self.raw, "", writable=True))
+        legacy.add_documents_batch(
+            [{"uid": "empty", "ip": "1.1.1.1", "banner": [], "port": ["22"]}]
+        )
+        self.documents["empty"] = dict(source("empty", "22"), ip="1.1.1.1")
+        self.assertFalse(legacy.r.exists("banners:empty"))
+        self.publish(self.first)
+        current = GenerationClient(self.raw)
+        self.assertEqual(current.smembers("all_uids"), {"one", "empty"})
+        self.assertEqual(current.smembers("ports:empty"), {"22"})
+        self.assertFalse(current.exists("banners:empty"))
+
+    def test_parser_update_reimports_empty_fields_into_incremental_generation(self):
+        """A parent tombstone is normal, including during full document reparsing."""
+        self.publish(self.first)
+        parent = GenerationClient(self.raw, self.raw.get(ACTIVE))
+        self.assertFalse(parent.exists("banners:one"))
+        changed = snapshot([("a", "port:443", ["proto:https"])], {"server": True})
+        self.publish(changed)
+        current = GenerationClient(self.raw)
+        self.assertEqual(current.smembers("ports:one"), {"443"})
+        self.assertFalse(current.exists("banners:one"))
+        self.assertEqual(current.hget("doc:one", "first_seen"), "100")
+        self.assertFalse(parent.exists("banners:one"))
+
+    def test_ingestion_before_during_and_after_incremental_reparse(self):
+        """The scheduler's shared writer handles empty fields and journal replay."""
+        queue_snapshot(self.raw, self.first)
+        indexer = SimpleNamespace(raw=self.raw, accepts_source_documents=True)
+        self.assertTrue(ingest_indexer_sources(indexer, [source("early")]))
+        self.documents["early"] = source("early")
+        self.worker().run()
+        parent = GenerationClient(self.raw, self.raw.get(ACTIVE))
+        changed = snapshot([("a", "port:443", ["type:server"])], {"server": True})
+        queue_snapshot(self.raw, changed)
+        worker = self.worker()
+        worker.start()
+        self.scan(worker)
+        self.assertTrue(ingest_indexer_sources(indexer, [source("during")]))
+        while not worker.replay_batch():
+            pass
+        self.assertTrue(ingest_indexer_sources(indexer, [source("after")]))
+        # Existing capture inherits an absent field from the retained parent.
+        self.assertTrue(ingest_indexer_sources(indexer, [source("during", "22")]))
+        current = GenerationClient(self.raw)
+        self.assertEqual(
+            current.smembers("all_uids"), {"one", "early", "during", "after"}
+        )
+        self.assertEqual(current.smembers("ports:during"), {"22"})
+        self.assertEqual(parent.smembers("ports:during"), {"443"})
+        self.assertFalse(current.exists("banners:during"))
+
+    def test_missing_parent_key_clears_partial_copy_and_keeps_tombstone(self):
+        """Unowned leftovers cannot resurrect an empty field or mutate its parent."""
+        self.publish(self.first)
+        parent = GenerationClient(self.raw, writable=True)
+        generation = "test-child"
+        self.raw.set(f"{CONTROL}g:{generation}:parent", parent.chain()[0])
+        key = generation_prefix(generation) + "banners:one"
+        self.raw.sadd(key, "partial stale copy")
+        child = GenerationClient(self.raw, generation, writable=True)
+        child.delete("banners:one")
+        self.assertFalse(self.raw.exists(key))
+        self.assertTrue(self.raw.sismember(child.owned(generation), "banners:one"))
+        parent.sadd("banners:one", "later parent value")
+        self.assertFalse(child.exists("banners:one"))
+        self.assertEqual(parent.smembers("banners:one"), {"later parent value"})
+
+    def test_copy_error_preserves_ownership_and_retry(self):
+        """Real copy errors propagate; retry restores complete inherited metadata."""
+        self.publish(self.first)
+        generation = "test-child"
+        self.raw.set(f"{CONTROL}g:{generation}:parent", self.raw.get(ACTIVE))
+        child = GenerationClient(self.raw, generation, writable=True)
+        original = self.raw.pipeline
+
+        def failing_pipeline(*args, **kwargs):
+            pipe = original(*args, **kwargs)
+            execute = pipe.execute
+
+            def execute_copy():
+                if any(command[0][0] == "COPY" for command in pipe.command_stack):
+                    raise redis.ResponseError("storage unavailable")
+                return execute()
+
+            pipe.execute = execute_copy
+            return pipe
+
+        with patch.object(self.raw, "pipeline", failing_pipeline):
+            with self.assertRaisesRegex(redis.ResponseError, "storage unavailable"):
+                child.hset("doc:one", mapping={"last_seen": "9999999999"})
+        self.assertFalse(self.raw.sismember(child.owned(generation), "doc:one"))
+        child.hset("doc:one", mapping={"last_seen": "9999999999"})
+        self.assertEqual(child.hget("doc:one", "first_seen"), "100")
+        self.assertEqual(child.hget("doc:one", "last_seen"), "9999999999")
+        self.assertNotEqual(
+            GenerationClient(self.raw).hget("doc:one", "last_seen"), "9999999999"
+        )
+
+    def test_failed_copy_job_resumes_same_frozen_inputs(self):
+        """Recovery keeps its generation, candidates and rules despite later edits."""
+        self.publish(self.first)
+        changed = snapshot([("a", "port:443", ["type:server"])], {"server": True})
+        queue_snapshot(self.raw, changed)
+        worker = self.worker()
+        worker.start()
+        while not worker.job["candidates_ready"]:
+            worker.prepare_candidates_batch()
+        generation = worker.job["id"]
+        inputs = self.raw.get(f"{CONTROL}g:{generation}:inputs")
+        with patch.object(
+            GenerationClient,
+            "prepare_writes",
+            side_effect=redis.ResponseError("no such key"),
+        ):
+            with self.assertRaisesRegex(redis.ResponseError, "no such key"):
+                worker.run()
+        self.assertEqual(read_json(self.raw, "job")["phase"], "failed")
+        queue_snapshot(self.raw, snapshot([("a", "port:22", ["proto:ssh"])]))
+        self.worker().run()
+        self.assertEqual(self.raw.get(ACTIVE), generation)
+        self.assertEqual(self.raw.get(f"{CONTROL}g:{generation}:inputs"), inputs)
+        self.assertEqual(read_json(self.raw, "published"), changed)
 
 
 class ReconciliationIntegrationTest(ReconciliationCase):

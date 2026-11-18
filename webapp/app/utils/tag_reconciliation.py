@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 try:
+    from .index_revision_compat import compatible_code_revision
     from .search_query import iter_criteria
     from .tagrules import (
         analyze_header_dependencies,
@@ -19,6 +20,7 @@ try:
     )
     from .result_parser import has_indexed_tls_certificate
 except ImportError:
+    from index_revision_compat import compatible_code_revision
     from search_query import iter_criteria
     from tagrules import (
         analyze_header_dependencies,
@@ -38,7 +40,7 @@ def fingerprint(value):
 def code_revision():
     """Prevent resuming frozen work under a different parser/evaluator build."""
     root = Path(__file__).parent
-    return fingerprint(
+    revision = fingerprint(
         {
             name: (root / name).read_text(encoding="utf-8")
             for name in (
@@ -54,6 +56,7 @@ def code_revision():
             )
         }
     )
+    return compatible_code_revision(revision)
 
 
 def rule_snapshot(records, config, headers):

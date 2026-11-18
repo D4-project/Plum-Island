@@ -190,11 +190,23 @@ class GenerationClient:
             return {key: key for key in keys}
         resolved = self.resolve_many(keys)
         targets = {key: generation_prefix(self.generation) + key for key in keys}
+        inherited = [
+            (source, targets[key])
+            for key, source in resolved.items()
+            if source != targets[key]
+        ]
+        # Empty fields and tombstones own a logical key without a physical key.
+        # Kvrocks COPY raises for these; check in one batch under the write barrier.
         pipe = self.raw.pipeline(transaction=False)
-        for key, source in resolved.items():
-            if source != targets[key]:
-                pipe.delete(targets[key])
-                pipe.copy(source, targets[key], replace=True)
+        for source, _target in inherited:
+            pipe.exists(source)
+        present = pipe.execute()
+        pipe = self.raw.pipeline(transaction=False)
+        for (source, target), exists in zip(inherited, present):
+            # Discard an unowned partial copy even when the parent is now empty.
+            pipe.delete(target)
+            if exists:
+                pipe.copy(source, target, replace=True)
         pipe.execute()
         # On a failed COPY, leave ownership unchanged so a retry copies again.
         if keys:

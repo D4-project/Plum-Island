@@ -1,5 +1,9 @@
 # Unreleased
 
+- Handle empty fields and deleted keys during Kvrocks generation copying across
+  initial imports, background reparsing and live Plum ingestion. Preserve frozen
+  jobs and published coverage across this storage-only fix (#271).
+
 - Use batches of 5,000 documents by default in `tools/index_meili.py` to amortize
   Meilisearch index maintenance during dump imports.
 

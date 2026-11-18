@@ -156,6 +156,15 @@ they do not duplicate Meilisearch or copy the entire index for every edit.
 Full rebuilds produce an independent generation. Kvrocks must support `COPY`
 (available since 2.9.0 in the [official command catalogue](https://kvrocks.apache.org/docs/supported-commands/)).
 
+Empty fields and deletion markers may own a logical key without a physical
+Kvrocks key. Writers check source existence in batches under the shared write
+barrier, clear incomplete target copies and copy only existing sources before
+recording ownership. This applies to initial builds, incremental reparsing and
+normal source ingestion; backend copy failures still stop the write for retry.
+The missing-key COPY fix registers one exact compatible source fingerprint so
+existing frozen jobs and published parser coverage remain valid. Other code
+changes still receive a new fingerprint and cannot silently resume frozen work.
+
 The normal scheduler export passes source documents through the common ingestion
 writer. It applies the published rules and journals captures before updating the
 active index while a build is unfinished. Replay includes existing UID updates
