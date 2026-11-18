@@ -13,7 +13,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = BASE_DIR / "meili_dump"
-DEFAULT_BATCH_SIZE = 1000
+DEFAULT_BATCH_SIZE = 5000
 DEFAULT_TASK_TIMEOUT_MS = 900_000
 
 

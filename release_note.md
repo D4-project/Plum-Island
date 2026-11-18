@@ -1,5 +1,8 @@
 # Unreleased
 
+- Use batches of 5,000 documents by default in `tools/index_meili.py` to amortize
+  Meilisearch index maintenance during dump imports.
+
 - Preserve detached timestamp hashes left by legacy rebuilds when excluding
   non-public sources. Resume that specific blocked reconciliation once through
   the scheduler, keeping its frozen inputs and progress (#271).

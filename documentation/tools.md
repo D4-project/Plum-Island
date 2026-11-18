@@ -310,7 +310,7 @@ The script reads `tools/config.yaml` and writes to `OUT_MEILI_URL` / `OUT_MEILI_
 .venv/bin/python tools/index_meili.py --input-dir tools/meili_dump
 ```
 
-Batch size can be adjusted:
+Batch size defaults to 5,000 documents and can be adjusted:
 
 ```bash
 .venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --batch-size 500
