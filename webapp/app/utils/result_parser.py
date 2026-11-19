@@ -3,7 +3,6 @@ This module will parse json results an prepare required data for indexation.
 
 It use a parsing profile description.
 
-hsh:http-header.output
 get_http_cookies:http-header.output
 get_hosts:http-header.output
 get_http_server:http-header.output
@@ -55,8 +54,20 @@ def is_external_ip(value):
     return ip_addr.is_global and not ip_addr.is_multicast
 
 
+def _scan_body(document):
+    return (document or {}).get("body") or {}
+
+
+def _scan_ports(body):
+    return body.get("ports") or []
+
+
 def has_tls_certificate(document):
     """Return whether an Nmap document contains a populated SSL certificate."""
+    return _ports_have_tls_certificate(_scan_ports(_scan_body(document)))
+
+
+def _ports_have_tls_certificate(ports):
     certificate_fields = (
         "issuer",
         "subject",
@@ -66,7 +77,7 @@ def has_tls_certificate(document):
         "sha256",
         "pem",
     )
-    for port in (document or {}).get("body", {}).get("ports", []):
+    for port in ports:
         for script in port.get("scripts", []):
             if script.get("id") == "ssl-cert" and any(
                 script.get(field) for field in certificate_fields
@@ -111,31 +122,11 @@ default_parsing = [
     "get_favicon:p.http-mm-sha-favicon",
 ]
 
-# Authorised data harversting methods.
-ALLOW = [
-    "get_http_cookies",
-    "get_hosts",
-    "get_fqdn_requested",
-    "get_http_header",
-    "get_http_server",
-    "get_http_title",
-    "get_http_etag",
-    "get_banner",
-    "get_ssl_info",
-    "hsh",
-    "get_favicon",
-]
-
 CONFIG_AWARE_ACTIONS = {
     "get_fqdn_requested",
     "get_hosts",
     "get_http_header",
 }
-
-# Explicit dispatch table — avoids globals() lookup and documents the callable surface.
-# Must stay in sync with ALLOW.  Populated after all functions are defined; see
-# the bottom of this module.
-_PARSER_DISPATCH: dict = {}
 
 fqdn_regex = re.compile(
     r"""(?:^|[\s(\/<>|@'"=\:])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-_]{2,})+)(?=$|[\?\s#&\/<>'",)])""",
@@ -326,7 +317,8 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
     issuer_cns = []
     subject_cns = []
 
-    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+    ports = _scan_ports(_scan_body(raw_doc))
+    for port in ports:
         for script in port.get("scripts", []):
             if script.get("id") != "ssl-cert":
                 continue
@@ -362,19 +354,23 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
     if tag_rules is not None:
         indexed_doc.pop("tag", None)
         computed_tags = apply_tag_rules_to_document(indexed_doc, tag_rules=tag_rules)
-        if has_tls_certificate(raw_doc) and "proto:tls" not in computed_tags:
+        if _ports_have_tls_certificate(ports) and "proto:tls" not in computed_tags:
             computed_tags.append("proto:tls")
         if computed_tags:
             indexed_doc["tag"] = computed_tags
 
-    indexed_doc["port_protocol"] = port_protocol_values(raw_doc)
+    indexed_doc["port_protocol"] = _port_protocol_values(ports)
     return indexed_doc
 
 
 def port_protocol_values(raw_doc):
     """Return valid protocol/port pairs from a raw scan document."""
+    return _port_protocol_values(_scan_ports(_scan_body(raw_doc)))
+
+
+def _port_protocol_values(ports):
     values = set()
-    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+    for port in ports:
         protocol = port.get("protocol")
         portid = port.get("portid")
         if (
@@ -639,13 +635,6 @@ def get_http_header(data: dict, target: str, db_conf: dict):
     return {"http_header": http_header, "http_headval": http_headval}
 
 
-def hsh(data: dict, target: str):
-    """
-    Not yet implemented — returns empty result without crashing.
-    """
-    return {}
-
-
 def get_http_server(data: dict, target: str):
     """
     Parse the HTTP Server header value.
@@ -680,6 +669,20 @@ def fuse_dicts(d1, d2):
     return fused
 
 
+_PARSER_DISPATCH = {
+    "get_http_cookies": get_http_cookies,
+    "get_hosts": get_hosts,
+    "get_fqdn_requested": get_fqdn_requested,
+    "get_http_header": get_http_header,
+    "get_http_server": get_http_server,
+    "get_http_title": get_http_title,
+    "get_http_etag": get_http_etag,
+    "get_banner": get_banner,
+    "get_ssl_info": get_ssl_info,
+    "get_favicon": get_favicon,
+}
+
+
 def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-locals
     """
     Parse one Nmap-like document into the Kvrocks search fields.
@@ -688,8 +691,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         return None
 
     db_conf = normalize_db_conf(db_conf_local)
-    body = doc.get("body") or {}
-    ports = body.get("ports") or []
+    body = _scan_body(doc)
+    ports = _scan_ports(body)
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
@@ -708,16 +711,14 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         # print(f"doing action {action} on {target}")
 
         # Check if rules contains a legitimate parsing method
-        if action not in ALLOW:
-            raise TypeError(f"Action {action!r} is not in the allow list")
+        if action not in _PARSER_DISPATCH:
+            raise TypeError(f"Action {action!r} is not supported")
 
         parse_result = {}
         # print(f"Looking {target} for section >{section}<")
         if section == "b":
-            for script_key in body:
-                if script_key == script_name:  # If it is in the job list.
-                    script_data = body.get(script_key)
-                    parse_result = run_parser_action(action, script_data, target, db_conf)
+            if script_name in body:
+                parse_result = run_parser_action(action, body[script_name], target, db_conf)
 
         elif section == "p":
             for port in ports:  # for each ports,
@@ -746,27 +747,9 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
     }
 
     computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
-    if has_tls_certificate(doc) and "proto:tls" not in computed_tags:
+    if _ports_have_tls_certificate(ports) and "proto:tls" not in computed_tags:
         computed_tags.append("proto:tls")
     if computed_tags:
         final_result["tag"] = computed_tags
 
     return final_result
-
-
-# Populate the dispatch table now that all functions are defined.
-_PARSER_DISPATCH.update(
-    {
-        "get_http_cookies": get_http_cookies,
-        "get_hosts": get_hosts,
-        "get_fqdn_requested": get_fqdn_requested,
-        "get_http_header": get_http_header,
-        "get_http_server": get_http_server,
-        "get_http_title": get_http_title,
-        "get_http_etag": get_http_etag,
-        "get_banner": get_banner,
-        "get_ssl_info": get_ssl_info,
-        "hsh": hsh,
-        "get_favicon": get_favicon,
-    }
-)
