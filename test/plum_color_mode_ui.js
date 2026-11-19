@@ -36,7 +36,7 @@ function harness({saved = null, dark = false, blocked = false} = {}) {
         constructor(callback) { mutation = callback; }
         observe() {}
     }});
-    const viewer = () => ({theme: null, matches: selector => selector === 'vt-json',
+    const viewer = () => ({theme: null, matches: selector => selector.split(',').map(part => part.trim()).includes('vt-json'),
         setAttribute(_name, value) { this.theme = value; }});
     return {
         attributes, button, icon, system, values, events, viewers, viewer,

@@ -738,7 +738,7 @@
         <div id="ip-info-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading IP information…</div>
         <div id="ip-info-error" class="alert alert-warning" role="alert" style="display: none;"></div>
         <p id="ip-info-cache" class="text-muted" role="status"></p>
-        <div id="ip-info-results"></div>
+        <div id="ip-info-results" data-geolookup="{{ url_for('IPDetailView.geolookup', ip=ip) }}"></div>
     </div>
     <div class="ip-pdns-panel">
         <div class="ip-pdns-title"><span>Passive DNS</span>
@@ -760,12 +760,16 @@
 <div role="tabpanel" class="tab-pane" id="ip-whois">
     <div id="ip-whois-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Querying WHOIS registry…</div>
     <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
-    <p id="ip-whois-cache" class="text-muted" role="status"></p>
+    <div class="ip-whois-toolbar">
+        <p id="ip-whois-cache" class="text-muted" role="status"></p>
+        <button type="button" id="ip-whois-copy" class="btn btn-default btn-xs" hidden><span data-copy-feedback>Copy WHOIS response</span></button>
+    </div>
     <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>
 </div>
 </div>
 
 <script src="{{ url_for('static', filename='js/lookup_cache.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_detail_clipboard.js') }}"></script>
 <script nonce="{{ baselib.get_nonce() }}">
 (() => {
     const tab = document.querySelector('a[href="#ip-whois"]');
@@ -773,6 +777,32 @@
     const loading = document.getElementById('ip-whois-loading');
     const error = document.getElementById('ip-whois-error');
     const result = document.getElementById('ip-whois-result');
+    const copy = document.getElementById('ip-whois-copy');
+    // One WHOIS request per page, shared by this tab and the map card (ip_map.js).
+    let whoisRequest = null;
+    function loadWhois() {
+        if (!whoisRequest) {
+            whoisRequest = (async () => {
+                const response = await fetch(endpoint, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json' }
+                });
+                const isJson = (response.headers.get('content-type') || '').toLowerCase().includes('json');
+                if (!response.ok) {
+                    const fallback = response.status === 401 || response.status === 403
+                        ? 'WHOIS access denied or session expired.'
+                        : `WHOIS lookup failed (${response.status}).`;
+                    const data = isJson ? await response.json() : null;
+                    throw new Error(data?.error || fallback);
+                }
+                if (!isJson) throw new Error('WHOIS returned an unexpected response. Sign in and retry.');
+                return response.json();
+            })();
+            whoisRequest.catch(() => { whoisRequest = null; });
+        }
+        return whoisRequest;
+    }
+    if (typeof window !== 'undefined') window.PlumWhoisData = loadWhois;
     if (!tab || !loading || !error || !result) return;
     let started = false;
     $(tab).on('shown.bs.tab', async () => {
@@ -782,24 +812,31 @@
         loading.style.display = '';
         error.style.display = 'none';
         try {
-            const response = await fetch(endpoint, {
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json' }
-            });
-            const isJson = (response.headers.get('content-type') || '').toLowerCase().includes('json');
-            if (!response.ok) {
-                const fallback = response.status === 401 || response.status === 403
-                    ? 'WHOIS access denied or session expired.'
-                    : `WHOIS lookup failed (${response.status}).`;
-                const data = isJson ? await response.json() : null;
-                throw new Error(data?.error || fallback);
-            }
-            if (!isJson) throw new Error('WHOIS returned an unexpected response. Sign in and retry.');
-            const data = await response.json();
+            const data = await loadWhois();
             loading.style.display = 'none';
             result.style.display = 'block';
             result.textContent = data.result || 'No WHOIS record returned.';
+            if (data.result) {
+                copy.hidden = false;
+                copy.addEventListener('click', () => window.copyIpToClipboard(data.result, copy, 'WHOIS response'));
+            }
             if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-whois-cache', data.cache);
+            // Terminal-style rendering with Vitrine; the <pre> stays as fallback.
+            if (data.result && typeof window !== 'undefined' && window.customElements) {
+                customElements.whenDefined('vt-terminal').then(() => {
+                    const terminal = document.createElement('vt-terminal');
+                    terminal.setAttribute('variant', 'full');
+                    terminal.setAttribute('label', 'WHOIS');
+                    terminal.setAttribute('copy', 'false');
+                    terminal.setAttribute('command-copy', 'false');
+                    terminal.setAttribute('wrap', '');
+                    terminal.setAttribute('theme',
+                        document.documentElement.getAttribute('data-plum-color-mode') || 'light');
+                    terminal.className = 'ip-whois-terminal';
+                    terminal.content = `$ whois ${data.query || ''}\n${data.result}`;
+                    result.replaceWith(terminal);
+                });
+            }
         } catch (lookupError) {
             loading.style.display = 'none';
             error.textContent = lookupError.message || 'WHOIS lookup failed.';
@@ -813,6 +850,16 @@
 <script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_pdns_resolve.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_hostname_groups.js') }}"></script>
+{% if config is not defined or config.MAP_ENABLED is not defined or config.MAP_ENABLED %}
+<div id="ip-map-config" hidden
+        data-ip="{{ ip }}"
+        data-whois="{{ url_for('IPDetailView.whois_lookup', ip=ip) }}"></div>
+{% endif %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ip_map.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_map.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='vendor/vitrine/esm/vt-terminal.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
 <script>
 (function () {
     const ip = {{ ip | tojson }};
@@ -873,6 +920,9 @@
             : 'Ip Informations';
 
         appendInfoRow(grid, 'Country', countryInfo['Country']);
+        if (countryInfo['Country'] && window.PlumFlag && grid.lastElementChild) {
+            grid.lastElementChild.prepend(window.PlumFlag(country.iso_code || countryInfo['Alpha-2 code']));
+        }
         appendInfoRow(grid, 'ISO Code', country.iso_code || countryInfo['Alpha-2 code']);
         appendInfoRow(grid, 'Alpha-3', countryInfo['Alpha-3 code']);
         appendInfoRow(grid, 'Numeric Code', countryInfo['Numeric code']);
@@ -897,19 +947,24 @@
         loadingEl.style.display = '';
         pdnsLoadingEl.style.display = '';
         // Independent requests: Passive DNS must not delay IP information.
-        fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
+        const geoData = fetch(resultsEl.dataset.geolookup)
         .then((response) => {
             if (!response.ok) {
                 throw new Error(`Lookup failed (${response.status})`);
             }
             if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-info-cache', PlumLookupCache.headers(response));
             return response.json();
-        })
+        });
+        if (window.PlumShowLocation) window.PlumShowLocation(geoData);
+        geoData
         .then((payload) => {
             loadingEl.style.display = 'none';
             const entries = Array.isArray(payload) ? payload : [payload];
             if (!entries.length) {
-                resultsEl.innerHTML = '<div class="text-muted">No information returned.</div>';
+                const empty = document.createElement('div');
+                empty.className = 'text-muted';
+                empty.textContent = 'No information returned.';
+                resultsEl.appendChild(empty);
                 return;
             }
             entries.forEach((entry, index) => {
@@ -960,49 +1015,11 @@
         });
     }
 
-    function copyIpToClipboard(value, triggerEl) {
-        const markCopied = () => {
-            if (!triggerEl) {
-                return;
-            }
-            triggerEl.classList.add('copied');
-            triggerEl.setAttribute('aria-label', `Copied ${value}`);
-            setTimeout(() => {
-                triggerEl.classList.remove('copied');
-                triggerEl.setAttribute('aria-label', `Copy ${value}`);
-            }, 1500);
-        };
-
-        const fallbackCopy = () => {
-            const textarea = document.createElement('textarea');
-            textarea.value = value;
-            textarea.setAttribute('readonly', '');
-            textarea.style.position = 'absolute';
-            textarea.style.left = '-9999px';
-            document.body.appendChild(textarea);
-            textarea.select();
-            try {
-                document.execCommand('copy');
-                markCopied();
-            } catch (err) {
-                console.warn('Clipboard copy failed', err);
-            } finally {
-                document.body.removeChild(textarea);
-            }
-        };
-
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(value).then(markCopied).catch(fallbackCopy);
-        } else {
-            fallbackCopy();
-        }
-    }
-    window.copyIpToClipboard = copyIpToClipboard;
     const copyButton = document.getElementById('ip-copy-button');
     if (copyButton) {
         copyButton.title = `Copy ${ip}`;
         copyButton.setAttribute('aria-label', `Copy ${ip}`);
-        copyButton.addEventListener('click', () => copyIpToClipboard(ip, copyButton));
+        copyButton.addEventListener('click', () => window.copyIpToClipboard(ip, copyButton));
     }
 
     function formatUrlHost(hostValue) {

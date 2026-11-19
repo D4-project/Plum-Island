@@ -39,6 +39,7 @@ listeners.
        +-- SMTP ------> configured mail relay (optional report delivery)
 
  Plum-Agent -- configured scan traffic --> authorized targets
+ Browser    -- HTTPS :443 --------------> geo.circl.lu (optional map tiles)
  Browser    -- Open web service --------> selected target and scanned port
 ```
 
@@ -74,7 +75,7 @@ Account for these bindings in your deployment's access policy.
 | `ip.circl.lu` | HTTPS TCP 443 | `/geolookup/<ip>`; no API key; IP view, target enrichment and routing checks | Missing/stale target routing data can defer CIDR job creation; failed lookup is not ASN 0 |
 | `www.circl.lu` | HTTPS TCP 443 | `/pdns/query/<ip>`; `PASSIVE_USER`, `PASSIVE_PWD`; IP view and reports | Passive DNS enrichment unavailable; omitted when disabled |
 | Configured DNS resolver | UDP and TCP 53, for a conventional resolver | OS/container name resolution; Active DNS uses `dnspython` and the system resolver configuration | Hostname-based services and live A-record checks can fail |
-| `whois.iana.org` | TCP 43 | Initial WHOIS registry discovery | WHOIS unavailable |
+| `whois.iana.org` | TCP 43 | First hop for an uncached IP/CIDR lookup or a domain WHOIS query | Fresh WHOIS lookups fail |
 | `whois.afrinic.net`, `whois.apnic.net`, `whois.arin.net`, `whois.lacnic.net`, `whois.ripe.net` | TCP 43 | Network WHOIS, including inter-RIR referrals | Relevant network WHOIS lookups fail |
 | Domain registry returned by IANA | TCP 43 | FQDN WHOIS, after offline extraction of the registrable domain; validated public `whois.*` referral | Relevant domain WHOIS lookups fail; the five RIR hosts alone are insufficient |
 | Configured SMTP relay | TCP `REPORT_SMTP_PORT` (default 25) | `REPORT_SMTP_HOST`; STARTTLS or implicit TLS according to report configuration | Report email delivery fails; PDF generation is local |
@@ -83,20 +84,42 @@ SMTP ports such as 587 (STARTTLS) or 465 (implicit TLS) must be configured
 explicitly; enabling a TLS flag does not select a different port automatically.
 See [report mail configuration](reports.md).
 
-Successful target routing lookups are cached for 24 hours. ASN 0 is a successful
-"CIDR not announced" result and completes the scheduling state without scanning.
-A failed refresh with no fresh cache postpones scheduling instead. See
-[routing and refresh behavior](scanning.md#target-metadata-and-network-information).
-The IP view's geolookup is a separate on-demand request.
+Plum checks its shared Kvrocks cache before querying IP/AS information (default
+24 hours), IP/CIDR WHOIS (24 hours) or authenticated Passive DNS (12 hours).
+A fresh hit avoids the corresponding outbound lookup. Reports and the IP view
+reuse the same Passive DNS responses. Target routing uses the IP/AS lifetime
+to decide when to refresh. With no fresh routing data, a failed refresh defers
+scheduling. A successful ASN 0 means the CIDR is unannounced.
+See [cache internals](sysinternal/caching.md) and [target routing](scanning.md#target-metadata-and-network-information).
 
-Passive DNS, geolookup and WHOIS are fetched by Island, not directly by the
-browser. Active DNS also runs on the backend, through its resolver; it neither
-scans the resolved host nor writes the live result into historical scan data.
-Domain suffix extraction uses offline `pyfaup` data: no runtime IANA TLD-list
-download is required.
+### WHOIS for IPs, networks and domains
+
+The analyst’s browser calls Plum over its normal HTTP(S) endpoint. Only the
+Island server needs outbound TCP 43 and DNS resolution for registry hostnames.
+
+- **IP or CIDR.** The WHOIS tab and the enabled Location map share the IP
+  lookup. On a cache miss, Island sends the canonical network to
+  `whois.iana.org` and follows referrals to the regional registries listed
+  above. An address transfer can require a second regional registry.
+- **Domain target.** Island extracts the registrable domain locally, asks IANA
+  about the top-level domain, then queries the public `whois.*` host named in
+  the referral. This path does not use the IP/CIDR WHOIS cache.
+
+Active DNS uses Island’s configured resolver. Domain suffix extraction uses
+the bundled `pyfaup` data offline.
 
 ## Browser and scanner traffic
 
+- **Location map.** With **Security → Plum Settings → IP detail map → Show location
+  map** enabled (default), opening **Informations** on an IP page requests WHOIS
+  and IP/AS data from Island. The marker uses WHOIS `geoloc` when available,
+  then falls back to the country’s average coordinates. Once a position exists,
+  the **browser** fetches tile images from `https://geo.circl.lu/hot/{z}/{x}/{y}.png`
+  over **TCP 443**. The URL contains the zoom level and tile coordinates.
+  If a proxy enforces a Content Security Policy, allow `https://geo.circl.lu`
+  in `img-src`. Blocking tile access leaves the map background blank. Turning
+  the map off and restarting Plum-Agent removes the tile requirement. The WHOIS
+  tab and IP/AS panels remain available.
 - Clicking **Open web service** makes the browser contact the selected hostname
   or IP using the selected observation's HTTP(S) scheme and scanned port, which
   may differ from 80/443. This is not an Island-server fetch.
@@ -143,4 +166,8 @@ Check connectivity from the actual runtime network namespace (inside
 3. Check CIRCL routing enrichment, optional Passive DNS, DNS resolution, WHOIS
    and SMTP separately. HTTP proxies do not automatically carry DNS, WHOIS,
    Kvrocks or SMTP traffic.
-4. Confirm browser-originated target links work from the analyst's network.
+4. From the analyst’s browser, open **Informations** for an IP with coordinates.
+   In the Network panel, confirm image requests to `geo.circl.lu/hot/…` succeed.
+   Test WHOIS separately on its own tab. A fresh cached result verifies the UI
+   but does not exercise the server’s TCP 43 path.
+5. Confirm browser-originated target links work from the analyst’s network.

@@ -176,6 +176,19 @@ SECTIONS = (
         ),
     ),
     Section(
+        "IP detail map",
+        "Location card in the IP detail Informations tab.",
+        "Web application",
+        (
+            Setting(
+                "MAP_ENABLED",
+                "Show location map",
+                True,
+                "Display the location map card. When disabled, the other cards use the full width.",
+            ),
+        ),
+    ),
+    Section(
         "Connectivity to the mail server",
         "Deliver scheduled report summaries and PDF attachments through SMTP.",
         "Web application and scheduler",

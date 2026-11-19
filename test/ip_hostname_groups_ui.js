@@ -49,14 +49,18 @@ const {createCache} = require('../webapp/app/static/js/ip_hostname_groups.js');
     const source = require('node:fs').readFileSync(
         require('./ui_template_paths').templatePath('ip_detail.html'), 'utf8');
     const start = source.indexOf('    function loadInformation() {');
-    const end = source.indexOf('\n    function copyIpToClipboard', start);
+    const end = source.indexOf("\n    const copyButton = document.getElementById('ip-copy-button');", start);
     const element = () => ({style: {display: 'none'}, textContent: '', appendChild() {}});
     const loadingEl = element(), pdnsLoadingEl = element(), errorEl = element(), pdnsErrorEl = element();
     const enrichment = new Map();
+    const mapLoads = [];
     const context = {
         ip: '2001:db8::1', informationStarted: false,
+        document: {createElement: element},
+        window: {PlumShowLocation: geoData => mapLoads.push(geoData)},
         loadingEl, pdnsLoadingEl, errorEl, pdnsErrorEl,
-        resultsEl: element(), pdnsResultsEl: element(),
+        resultsEl: {...element(), dataset: {geolookup: '/plum/ip/geolookup/2001%3Adb8%3A%3A1'}},
+        pdnsResultsEl: element(),
         renderEntry: value => value,
         fetch: url => new Promise((resolve, reject) => enrichment.set(url, {resolve, reject}))
     };
@@ -70,8 +74,10 @@ const {createCache} = require('../webapp/app/static/js/ip_hostname_groups.js');
     assert.equal(require('./ui_template_paths').isHidden(pdnsLoadingEl), false);
     context.loadInformation();
     assert.equal(enrichment.size, 2);
-    enrichment.get('/ip/geolookup/2001%3Adb8%3A%3A1').resolve({ok: true, json: async () => []});
+    assert.equal(mapLoads.length, 1, 'Location shares the first IP lookup');
+    enrichment.get('/plum/ip/geolookup/2001%3Adb8%3A%3A1').resolve({ok: true, json: async () => []});
     await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(await mapLoads[0], []);
     assert.equal(require('./ui_template_paths').isHidden(loadingEl), true, 'geo completes independently');
     assert.equal(require('./ui_template_paths').isHidden(pdnsLoadingEl), false, 'PDNS spinner remains while pending');
     enrichment.get('/ip/pdns/2001%3Adb8%3A%3A1').reject(new Error('PDNS unavailable'));

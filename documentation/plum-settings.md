@@ -5,13 +5,18 @@ and background work. The configured Flask-AppBuilder administrator role is
 required for both the menu and direct requests; assigning the view's permissions
 to another role does not grant access.
 
-The page displays 52 Plum settings from `webapp/config.py.template`.
+The page displays 53 Plum settings from `webapp/config.py.template`.
 Authentication, themes, Flask/FAB options and SQLAlchemy configuration remain in
 `config.py`. Runtime clients and scheduler state are not editable.
 
 Lookup cache lifetimes are configurable in hours: WHOIS **24**, Passive DNS **12**,
 and combined IP/AS information **24**. See [cache internals](sysinternal/caching.md)
 for shared consumers, expiry and refresh behavior.
+
+Under **IP detail map**, **Show location map** (`MAP_ENABLED`, default **True**)
+controls the Location card in the IP detail **Informations** tab. Restart
+**Plum-Agent** after changing it. See [network requirements](network.md#browser-and-scanner-traffic)
+for the browser’s tile requests.
 
 ## Cards and field help
 
@@ -23,7 +28,7 @@ after saving a different value. Empty defaults say **Not set**; the insecure
 example Meilisearch key is never offered as a usable default.
 
 `SCAN_DELAY` is an inactive legacy setting: scan frequency belongs to scan
-profiles. It is explained and read-only; the remaining 51 fields are editable.
+profiles. It is explained and read-only; the remaining 52 fields are editable.
 The obsolete `LOG_ROTATION_DAYS` field is omitted: log files always rotate daily
 at local midnight. **Log retention** controls how long old log files are kept.
 Older `ONLINETLD`/`TLDS` flags are retired and remain ignored, as described in
@@ -136,6 +141,21 @@ For another deployment, mount a durable directory and set `PLUM_SETTINGS_DIR`
 before starting Plum. Read-only application code is supported when this separate
 directory is writable. Use the same path and service account for the controller,
 indexing workers and administrative tools.
+
+## Testing a different revision
+
+Give a preview its own private `PLUM_SETTINGS_DIR` before the first start, even
+when it uses the same `config.py` as the installed version. For example, run
+`PLUM_SETTINGS_DIR="$HOME/.local/state/plum/preview" python run.py` from a separate
+checkout’s `webapp` directory. With the variable unset, each checkout already
+uses its own `webapp/.plum-settings` directory.
+
+A version predating the location map rejects a saved `MAP_ENABLED` override.
+If you shared a settings directory, select **Use config.py value** for **Show
+location map** and save from the newer version before rolling back, or restore
+the matching backup as described below. Compare other edits made since the
+backup, including scheduler settings. When upgrading from an early map preview,
+Plum reads the map switch and ignores its retired tile URL and attribution.
 
 ## Offline recovery and rollback
 
