@@ -2,7 +2,7 @@
 
 # pylint: disable=protected-access
 import importlib.util
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -244,7 +244,10 @@ class NetworkPersistenceTest(unittest.TestCase):
     def test_unannounced_circl_response_is_saved_and_stays_fresh(self):
         """Parse real response shape through HTTP, persistence and display."""
         target_id = self.add_target("194.69.68.112/28")
-        with mock.patch.object(ip2asn.requests, "get") as get:
+        with mock.patch.object(ip2asn.requests, "get") as get, mock.patch(
+            "app.utils.lookup_cache.time.time",
+            return_value=NOW.replace(tzinfo=timezone.utc).timestamp(),
+        ):
             get.return_value.status_code = 200
             get.return_value.json.return_value = UNANNOUNCED_PAYLOAD
             self.assertEqual(self.refresh(target_id, force=True), "updated")
@@ -334,7 +337,8 @@ class NetworkPersistenceTest(unittest.TestCase):
         """A second worker skips the lease; independent writes can complete."""
         target_id = self.add_target()
 
-        def during_http(_value, timeout):
+        def during_http(_value, timeout, force=False):
+            self.assertFalse(force)
             self.assertGreater(timeout, 0)
             self.assertEqual(self.refresh(target_id), "busy")
             with self.factory() as session:
@@ -352,7 +356,8 @@ class NetworkPersistenceTest(unittest.TestCase):
         """Editing a CIDR while HTTP runs invalidates its claim and association."""
         target_id = self.add_target()
 
-        def change_value(_value, timeout):
+        def change_value(_value, timeout, force=False):
+            self.assertFalse(force)
             self.assertGreater(timeout, 0)
             with self.factory() as session:
                 session.get(Targets, target_id).value = "example.org"

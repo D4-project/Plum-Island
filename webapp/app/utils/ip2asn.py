@@ -4,8 +4,12 @@ import ipaddress
 import math
 import requests
 
+try:
+    from .circl_lookup import fetch_network_payload
+except ImportError:
+    from circl_lookup import fetch_network_payload
+
 INVALID_NETWORK_MESSAGE = "Network info unavailable for non-IP targets"
-CIRCL_LOOKUP_URL = "https://ip.circl.lu/geolookup/"
 
 
 def target_type(value):
@@ -94,18 +98,25 @@ def parse_network_information(payload):
     raise ValueError("No ASN information in CIRCL response")
 
 
-def lookup_network_information(value, timeout=10):
-    """Query the fixed HTTPS service; IP validation prevents URL injection."""
-    address = network_address(value)
-    response = requests.get(
-        CIRCL_LOOKUP_URL + address,
-        timeout=timeout,
-        allow_redirects=False,
-    )
-    response.raise_for_status()
-    if response.status_code != 200:
-        raise ValueError("Unexpected CIRCL response status")
-    return parse_network_information(response.json())
+class NetworkInformation(dict):
+    """Structured AS values with the original source timestamp attached."""
+
+    fetched_at = None
+
+
+def lookup_network_information(value, timeout=10, force=False):
+    """Reuse the same source response as the IP detail page."""
+    if not __package__:
+        return parse_network_information(fetch_network_payload(value, timeout))
+    # pylint: disable=import-outside-toplevel
+    from .enrichment_cache import (
+        ip_information,
+    )  # pylint: disable=import-outside-toplevel
+
+    cached = ip_information(value, timeout=timeout, force=force)
+    info = NetworkInformation(parse_network_information(cached["value"]))
+    info.fetched_at = cached["fetched_at"]
+    return info
 
 
 def get_asn_description_for_ip(net_or_ip):

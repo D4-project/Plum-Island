@@ -37,7 +37,13 @@ class IpWhoisReadOnlyTest(unittest.TestCase):
             "has_access",
             side_effect=lambda permission, view: (permission, view) in permissions,
         ) as access, patch(
-            "app.views.lookup_network_whois", return_value="WHOIS record"
+            "app.views.network_whois",
+            return_value={
+                "value": "WHOIS record",
+                "cached": True,
+                "fetched_at": 1,
+                "expires_at": 86401,
+            },
         ) as lookup:
             response = app.test_client().get("/ip/whois?ip=185.194.93.47")
 
@@ -49,7 +55,7 @@ class IpWhoisReadOnlyTest(unittest.TestCase):
     def test_user_without_whois_permission_is_denied(self):
         """Do not bypass FAB to make the asynchronous route work."""
         with patch.object(appbuilder.sm, "has_access", return_value=False), patch(
-            "app.views.lookup_network_whois"
+            "app.views.network_whois"
         ) as lookup:
             response = app.test_client().get("/ip/whois?ip=185.194.93.47")
         self.assertIn(response.status_code, (302, 403))
@@ -58,7 +64,7 @@ class IpWhoisReadOnlyTest(unittest.TestCase):
     def test_invalid_ip_still_returns_json_error(self):
         """Permission fix leaves server-side IP validation intact."""
         with patch.object(appbuilder.sm, "has_access", return_value=True), patch(
-            "app.views.lookup_network_whois"
+            "app.views.network_whois"
         ) as lookup:
             response = app.test_client().get("/ip/whois?ip=invalid")
         self.assertEqual(response.status_code, 400)

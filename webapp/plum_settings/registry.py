@@ -144,6 +144,38 @@ SECTIONS = (
         ),
     ),
     Section(
+        "External lookup caching",
+        "Share successful external responses between IP details, targets, reports and exports.",
+        "Plum-Agent",
+        (
+            Setting(
+                "WHOIS_CACHE_HOURS",
+                "WHOIS cache lifetime",
+                24,
+                "Keep successful WHOIS responses per IP or exact CIDR. Reads do not extend expiry.",
+                "hours",
+                minimum=1,
+            ),
+            Setting(
+                "PDNS_CACHE_HOURS",
+                "Passive DNS cache lifetime",
+                12,
+                "Reuse CIRCL observations before report filtering. Separate cache for each credential set.",
+                "hours",
+                minimum=1,
+            ),
+            Setting(
+                "IP_INFO_CACHE_HOURS",
+                "IP and AS information cache lifetime",
+                24,
+                "Reuse the combined CIRCL IP/AS response. Also controls target enrichment "
+                "freshness; manual refresh bypasses cache.",
+                "hours",
+                minimum=1,
+            ),
+        ),
+    ),
+    Section(
         "Connectivity to the mail server",
         "Deliver scheduled report summaries and PDF attachments through SMTP.",
         "Web application and scheduler",

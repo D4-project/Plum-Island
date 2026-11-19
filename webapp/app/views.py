@@ -32,6 +32,7 @@ from flask_appbuilder.api import expose
 from flask_appbuilder.filemanager import FileManager
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder.widgets import ListWidget
+from flask_appbuilder.security.decorators import permission_name
 from flask_login import current_user
 from flask_wtf import FlaskForm
 from flask_wtf.csrf import generate_csrf, validate_csrf
@@ -97,8 +98,15 @@ from .utils.search_plan import CandidatePlanner
 from .utils.search_timestamps import search_timestamps
 from .utils.resolved_export import write_resolved_csv
 from .utils.report_query import validate_report_query
-from .utils.network_enrichment import enrichment_due, refresh_target_network
-from .utils.ip_whois import WhoisLookupError, lookup_domain_whois, lookup_network_whois
+from .utils.network_enrichment import refresh_target_network
+from .utils.ip_whois import WhoisLookupError, lookup_domain_whois
+from .utils.enrichment_cache import (
+    network_whois,
+    passive_dns as cached_passive_dns,
+    ip_information,
+)
+from .utils.lookup_cache import cache_metadata, LookupBusy
+from .utils.ip2asn import parse_network_information, target_type
 from .utils.pdns_resolve import add_resolve_tokens, verify_resolve_token, resolve_a
 from .utils.tagrules import (
     compile_tag_rule_definition,
@@ -2677,11 +2685,16 @@ class IPDetailView(BaseView):
             except ValueError:
                 return jsonify(error="Enter a valid IP address or CIDR"), 400
             try:
-                result = lookup_network_whois(network.with_prefixlen)
+                cached = network_whois(network.with_prefixlen)
+                result = cached["value"]
             except WhoisLookupError as error:
                 logger.warning("WHOIS lookup failed for %s: %s", network, error)
                 return jsonify(error="WHOIS lookup failed; try again later"), 502
-            return jsonify(query=network.with_prefixlen, result=result)
+            return jsonify(
+                query=network.with_prefixlen,
+                result=result,
+                cache=cache_metadata(cached),
+            )
         return self.render_template("ip_whois_lookup.html", title="IP WHOIS")
 
     @expose("/whois", methods=["GET"])
@@ -2696,11 +2709,14 @@ class IPDetailView(BaseView):
         except ValueError:
             return jsonify(error="Enter a valid IP address or CIDR"), 400
         try:
-            result = lookup_network_whois(network.with_prefixlen)
+            cached = network_whois(network.with_prefixlen)
+            result = cached["value"]
         except WhoisLookupError as error:
             logger.warning("WHOIS lookup failed for %s: %s", network, error)
             return jsonify(error="WHOIS lookup failed; try again later"), 502
-        return jsonify(query=network.with_prefixlen, result=result)
+        return jsonify(
+            query=network.with_prefixlen, result=result, cache=cache_metadata(cached)
+        )
 
     @staticmethod
     def _safe_timestamp_to_iso(timestamp):
@@ -2787,24 +2803,6 @@ class IPDetailView(BaseView):
                 cleaned.append(entry)
         return cleaned
 
-    @staticmethod
-    def _parse_pdns_ndjson(payload):
-        """
-        Parse CIRCL Passive DNS NDJSON payload into a list of records.
-        """
-        records = []
-        for line in (payload or "").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(record, dict):
-                records.append(record)
-        return records
-
     @expose("/pdns/<string:ip>")
     @has_access
     def passive_dns(self, ip):
@@ -2827,23 +2825,19 @@ class IPDetailView(BaseView):
             return jsonify({"error": "Passive DNS password is not configured"}), 503
 
         try:
-            response = requests.get(
-                f"https://www.circl.lu/pdns/query/{ip}",
-                auth=(passive_user, passive_pwd),
-                headers={"dribble-disable-active-query": "1"},
-                timeout=15,
-            )
-            response.raise_for_status()
-        except requests.RequestException as error:
-            logger.warning("CIRCL passive DNS failed for %s: %s", ip, error)
+            cached = cached_passive_dns(ip, passive_user, passive_pwd)
+        except LookupError:
             return jsonify({"error": "Passive DNS lookup failed"}), 502
 
-        records = self._parse_pdns_ndjson(response.text)
+        records = cached["value"]
         payload = add_resolve_tokens(
             records, str(ipaddress.ip_address(ip)), app.secret_key
         )
         result = jsonify(payload)
         result.headers["Cache-Control"] = "no-store"
+        result.headers["X-Lookup-Cache"] = "hit" if cached["cached"] else "miss"
+        result.headers["X-Lookup-Fetched-At"] = str(cached["fetched_at"])
+        result.headers["X-Lookup-Expires-At"] = str(cached["expires_at"])
         return result
 
     @expose("/pdns/resolve/<string:ip>", methods=["POST"])
@@ -2891,22 +2885,15 @@ class IPDetailView(BaseView):
             return jsonify({"error": "Invalid IP"}), 400
 
         try:
-            response = requests.get(
-                f"https://ip.circl.lu/geolookup/{ip}",
-                timeout=10,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except requests.RequestException as error:
-            logger.warning("CIRCL geolookup failed for %s: %s", ip, error)
+            cached = ip_information(ip)
+        except (requests.RequestException, ValueError, LookupBusy):
             return jsonify({"error": "Lookup failed"}), 502
-        except ValueError as error:
-            logger.warning(
-                "CIRCL geolookup returned invalid JSON for %s: %s", ip, error
-            )
-            return jsonify({"error": "Invalid lookup response"}), 502
-
-        return jsonify(self._strip_geolookup_meta(payload))
+        result = jsonify(self._strip_geolookup_meta(cached["value"]))
+        result.headers["Cache-Control"] = "no-store"
+        result.headers["X-Lookup-Cache"] = "hit" if cached["cached"] else "miss"
+        result.headers["X-Lookup-Fetched-At"] = str(cached["fetched_at"])
+        result.headers["X-Lookup-Expires-At"] = str(cached["expires_at"])
+        return result
 
     @staticmethod
     def observation_scope(indexer, ip, selected_hostname=""):
@@ -3159,13 +3146,6 @@ class TargetsView(ModelView):
         "created_at",
         "target_type",
         "description",
-        "network_asn_display",
-        "network_as_name",
-        "network_country_alpha3",
-        "network_country_numeric",
-        "network_latitude",
-        "network_longitude",
-        "network_updated_at",
         "active",
         "working",
         "scanprofiles",
@@ -3204,19 +3184,32 @@ class TargetsView(ModelView):
     @expose("/show/<pk>")
     @has_access
     def show(self, pk):
-        """Refresh missing/stale CIDR AS data before rendering target details."""
-        item = self.datamodel.get(pk, self._base_filters)
-        if item is not None and enrichment_due(item):
-            target_id = item.id
-            db.session.rollback()
-            status = refresh_target_network(target_id)
-            db.session.expire_all()
-            if status in ("failed", "busy"):
-                flash(
-                    "Network information could not be refreshed; showing saved data.",
-                    "warning",
-                )
+        """Render immediately; the browser fetches external information separately."""
         return super().show(pk)
+
+    @expose("/network_info/<int:pk>", methods=["GET"])
+    @has_access
+    @permission_name("show")
+    def network_info(self, pk):
+        """Use show permissions and row filters for an asynchronous source lookup."""
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is None:
+            abort(404)
+        value = item.value
+        db.session.rollback()
+        if target_type(value) == "FQDN":
+            return jsonify(
+                disabled=True,
+                message="IP and AS information is unavailable for FQDN targets.",
+            )
+        try:
+            cached = ip_information(value)
+            info = parse_network_information(cached["value"])
+        except (requests.RequestException, ValueError, LookupBusy):
+            return jsonify(error="IP and AS lookup failed; try again later."), 502
+        response = jsonify(info=info, cache=cache_metadata(cached))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @expose("/scanprofiles_remote", methods=["GET"])
     @has_access
@@ -3317,7 +3310,12 @@ class TargetsView(ModelView):
             if item.target_type == "FQDN":
                 query, result = lookup_domain_whois(item.value)
             else:
-                query, result = item.value, lookup_network_whois(item.value)
+                cached = network_whois(item.value)
+                return jsonify(
+                    query=item.value,
+                    result=cached["value"],
+                    cache=cache_metadata(cached),
+                )
         except WhoisLookupError as error:
             logger.warning("WHOIS lookup failed for target %s: %s", pk, error)
             return jsonify(error="WHOIS lookup failed; try again later"), 502

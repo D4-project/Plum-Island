@@ -448,7 +448,7 @@ class ReportProtocolViewsTest(TestCase):
         self.assertGreaterEqual(pdf.count(b"/Type /Page\n"), 6)
         self.assertGreaterEqual(pdf.count(b"/Subtype /Link"), 4)
 
-    @patch("app.utils.reports.requests.get")
+    @patch("app.utils.enrichment_cache.requests.get")
     def test_passive_dns_retains_time_last_and_tolerates_failures(self, request_get):
         """CIRCL time_last is retained while request failures keep reports usable."""
         response = Mock()
@@ -456,7 +456,9 @@ class ReportProtocolViewsTest(TestCase):
             '{"rrtype":"A","rdata":"pdns.example","time_last":"1700000000"}\n'
             '{"rrtype":"A","rdata":"unknown.example","time_last":"invalid"}\n'
         )
-        request_get.return_value = response
+        response.status_code = 200
+        response.iter_content.return_value = [response.text.encode()]
+        request_get.return_value.__enter__.return_value = response
 
         records = collect_report_passive_dns_fqdns(
             {"PASSIVE_USER": "user", "PASSIVE_PWD": "password"},

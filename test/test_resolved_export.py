@@ -19,6 +19,7 @@ import requests
 from app import app, appbuilder
 from app import views
 from app.utils import resolved_export as resolved
+from app.utils import enrichment_cache as source
 from tools.initial_setup import load_role_definition, normalize_permission_label
 
 # pylint: disable=protected-access,missing-function-docstring
@@ -166,7 +167,7 @@ class ResolvedCsvTest(unittest.TestCase):
                 },
                 {"rrtype": kind, "rrname": "=cmd", "rdata": ip},
             ]
-            with patch.object(resolved.requests, "get") as get:
+            with patch.object(source.requests, "get") as get:
                 response = get.return_value.__enter__.return_value
                 response.status_code = 200
                 response.iter_content.return_value = [
@@ -185,7 +186,7 @@ class ResolvedCsvTest(unittest.TestCase):
         self.assertIsNone(resolved.pdns_hostname([], ipaddress.ip_address(IP)))
 
     def test_pdns_failures_and_size_limit_do_not_return_partial_data(self):
-        with patch.object(resolved.requests, "get") as get:
+        with patch.object(source.requests, "get") as get:
             get.side_effect = requests.Timeout("private upstream details")
             with self.assertRaisesRegex(LookupError, "timed out"):
                 resolved.lookup_pdns(IP, "user", "secret", TIME_RANGE)
@@ -199,7 +200,7 @@ class ResolvedCsvTest(unittest.TestCase):
             ):
                 response.status_code = status
                 response.iter_content.return_value = [body]
-                with patch.object(resolved, "PDNS_MAX_BYTES", 20), self.assertRaises(
+                with patch.object(source, "PDNS_MAX_BYTES", 20), self.assertRaises(
                     LookupError
                 ):
                     resolved.lookup_pdns(IP, "user", "secret", TIME_RANGE)
@@ -232,7 +233,7 @@ class ResolvedCsvTest(unittest.TestCase):
                 }
                 for name, first, last in intervals
             ]
-            with patch.object(resolved.requests, "get") as get:
+            with patch.object(source.requests, "get") as get:
                 response = get.return_value.__enter__.return_value
                 response.status_code = 200
                 response.iter_content.return_value = [

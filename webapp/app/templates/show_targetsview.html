@@ -2,6 +2,7 @@
 {% import 'appbuilder/general/lib.html' as lib %}
 
 {% block content %}
+<script src="{{ url_for('static', filename='js/lookup_cache.js') }}"></script>
 {{ lib.panel_begin(title, "show") }}
 
 <ul class="nav nav-tabs">
@@ -29,6 +30,16 @@
 {% block show_form %}
     <div id="Home" class="tab-pane active">
         {{ widgets.get('show')()|safe }}
+<div class="panel panel-default" data-target-network-url="{{ url_for('TargetsView.network_info', pk=pk) }}">
+  <div class="panel-heading">IP and AS information</div>
+  <div class="panel-body">
+    <p id="target-network-status" role="status"><i class="fa fa-spinner fa-spin" aria-hidden="true"></i> Loading IP and AS information…</p>
+    <p id="target-network-cache" class="text-muted"></p>
+    <dl id="target-network-result"></dl>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/target_network_info.js') }}"></script>
+
 
 {% if appbuilder.sm.has_access('can_refresh_network', 'TargetsView') %}
 <form class="plum-target-refresh-form" action="{{ url_for('TargetsView.refresh_network', pk=pk) }}" method="post" style="display:none;">
@@ -560,7 +571,8 @@ async function loadUid(uid, targetId) {
         <div class="panel-heading"><h4 class="panel-title">WHOIS</h4></div>
         <div class="panel-body" data-whois-url="{{ url_for('TargetsView.whois', pk=pk) }}">
           <p>Current registry record for <strong>{{ get_target_value(pk) }}</strong>.</p>
-          <pre id="target-whois-result" role="status" aria-live="polite">Select this tab to query the registry.</pre>
+          <p id="target-whois-cache" class="text-muted" role="status"></p>
+    <pre id="target-whois-result" role="status" aria-live="polite">Select this tab to query the registry.</pre>
         </div>
       </div>
     </div>
@@ -675,6 +687,7 @@ async function loadUid(uid, targetId) {
     if (loading || loaded) return;
     loading = true;
     result.textContent = 'Querying WHOIS registry...';
+        if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('target-whois-cache', null);
     try {
       const response = await fetch(panel.querySelector('[data-whois-url]').dataset.whoisUrl, {
         credentials: 'same-origin',
@@ -683,6 +696,7 @@ async function loadUid(uid, targetId) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'WHOIS lookup failed.');
       result.textContent = data.result || 'No WHOIS record returned.';
+            if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('target-whois-cache', data.cache);
       loaded = true;
     } catch (error) {
       result.textContent = error.message || 'WHOIS lookup failed. Try again.';

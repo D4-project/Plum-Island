@@ -229,6 +229,9 @@ class PdnsResolveRouteTest(unittest.TestCase):
                 '{"rrtype":"A","rrname":"www.example.org","rdata":"185.194.93.47",'
                 '"time_first":10,"time_last":20}\n'
             )
+            upstream = get.return_value.__enter__.return_value
+            upstream.status_code = 200
+            upstream.iter_content.return_value = [get.return_value.text.encode()]
             response = self.client.get(f"/ip/pdns/{IP}")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json[0]["time_last"], 20)

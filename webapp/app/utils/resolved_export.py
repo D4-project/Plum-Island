@@ -3,17 +3,12 @@
 import csv
 from datetime import datetime, timezone
 import ipaddress
-import json
 import math
-import time
-
-import requests
 
 from .pdns_resolve import normalize_hostname
 from .reports import collect_report_ptr_fqdns
+from .enrichment_cache import passive_dns as cached_passive_dns
 
-PDNS_TIMEOUT = 15.0
-PDNS_MAX_BYTES = 8 * 1024 * 1024
 CSV_HEADER = ("ip", "last seen", "ptr", "pdns")
 
 
@@ -76,45 +71,17 @@ def pdns_in_time_range(record, time_range):
     )
 
 
-def lookup_pdns(ip, username, password, time_range):
+def lookup_pdns(ip, username, password, time_range, config=None):
     """Read existing CIRCL records only; never follow redirects or active queries."""
     address = ipaddress.ip_address(ip)
-    deadline = time.monotonic() + PDNS_TIMEOUT
-    try:
-        with requests.get(
-            f"https://www.circl.lu/pdns/query/{address}",
-            auth=(username, password),
-            headers={"dribble-disable-active-query": "1"},
-            timeout=(5, PDNS_TIMEOUT),
-            allow_redirects=False,
-            stream=True,
-        ) as response:
-            if response.status_code != 200:
-                raise LookupError("Passive DNS lookup failed")
-            payload = bytearray()
-            for chunk in response.iter_content(chunk_size=65536):
-                if (
-                    time.monotonic() > deadline
-                    or len(payload) + len(chunk) > PDNS_MAX_BYTES
-                ):
-                    raise LookupError(
-                        "Passive DNS response exceeded time or size limit"
-                    )
-                payload.extend(chunk)
-    except requests.RequestException as error:
-        raise LookupError("Passive DNS lookup failed or timed out") from error
+    records = cached_passive_dns(ip, username, password, config)["value"]
     names = set()
-    try:
-        for line in payload.decode("utf-8").splitlines():
-            if line.strip():
-                record = json.loads(line)
-                if not pdns_in_time_range(record, time_range):
-                    continue
-                name = pdns_hostname(record, address)
-                if name:
-                    names.add(name)
-    except (ValueError, UnicodeError) as error:
-        raise LookupError("Passive DNS returned an invalid response") from error
+    for record in records:
+        if not pdns_in_time_range(record, time_range):
+            continue
+        name = pdns_hostname(record, address)
+        if name:
+            names.add(name)
     return sorted(names)
 
 
@@ -144,7 +111,9 @@ def write_resolved_csv(output, results, config, progress, warning, *, document_l
         ]
         if username and password:
             try:
-                names = lookup_pdns(ip, username, password, results["time_range"])
+                names = lookup_pdns(
+                    ip, username, password, results["time_range"], config
+                )
             except LookupError as error:
                 warning(f"{ip}: {error}")
         writer.writerow(

@@ -16,7 +16,6 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 
-import requests
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -25,6 +24,7 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .timeutils import ensure_utc_naive, utcnow_naive
 from .domains import parse_hostname
+from .enrichment_cache import passive_dns as cached_passive_dns
 
 logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
@@ -360,24 +360,6 @@ def collect_report_ptr_fqdns(
     return per_ip_ptrs
 
 
-def _parse_pdns_ndjson(payload):
-    """
-    Parse CIRCL Passive DNS NDJSON payload into dictionaries.
-    """
-    records = []
-    for line in (payload or "").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    return records
-
-
 def _extract_pdns_fqdn(record):
     """
     Extract a hostname from one CIRCL Passive DNS A record.
@@ -454,19 +436,12 @@ def collect_report_passive_dns_fqdns(
         seen = {str(fqdn).lower() for fqdn in requested_fqdns}
         pdns_fqdns = []
         try:
-            response = requests.get(
-                f"https://www.circl.lu/pdns/query/{ip}",
-                auth=(passive_user, passive_pwd),
-                headers={"dribble-disable-active-query": "1"},
-                timeout=15,
-            )
-            response.raise_for_status()
-        except requests.RequestException as error:
-            logger.warning("Report passive DNS failed for %s: %s", ip, error)
+            cached = cached_passive_dns(ip, passive_user, passive_pwd, app_config)
+        except LookupError:
             update_progress(done)
             continue
 
-        for record in _parse_pdns_ndjson(response.text):
+        for record in cached["value"]:
             fqdn = _extract_pdns_fqdn(record)
             if not fqdn or fqdn in seen:
                 continue

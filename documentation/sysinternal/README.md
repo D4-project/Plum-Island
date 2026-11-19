@@ -7,6 +7,8 @@ and [release notes](../../release_note.md).
 Implementation guides for contributors and coding agents. Read the relevant guide
 before modifying its subsystem, and update it alongside behavior changes.
 
+- [External lookup caching](caching.md): WHOIS, PDNS and IP/AS lifetimes, shared
+  consumers, Kvrocks keys, concurrency, failures and target snapshots.
 - [Search engine](search_engine.md): storage contracts, query execution, time
   filtering, pagination, known inconsistencies, and regression checks.
 

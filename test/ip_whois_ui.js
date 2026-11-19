@@ -59,3 +59,6 @@ async function runCase(response) {
     assert.equal(invalid.elements['ip-whois-error'].textContent, 'Invalid IP');
     assert.equal(invalid.parsed, true);
 })().catch((error) => { console.error(error); process.exitCode = 1; });
+
+// Also verify shared freshness labels and the asynchronous target panel.
+require('./lookup_cache_ui.js');

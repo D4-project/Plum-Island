@@ -44,6 +44,11 @@ KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
 PASSIVE_USER = ""
 PASSIVE_PWD = ""
 
+# Shared external lookup cache lifetimes (hours). Restart Plum-Agent after editing.
+WHOIS_CACHE_HOURS = 24
+PDNS_CACHE_HOURS = 12
+IP_INFO_CACHE_HOURS = 24
+
 # Weekly/monthly reports: short email summary plus complete PDF attachment.
 # See documentation/reports.md. Restart the application after configuration changes.
 # Leave REPORT_SMTP_HOST empty to disable report email sending.

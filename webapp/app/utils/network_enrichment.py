@@ -1,6 +1,6 @@
 """Durable per-target CIRCL refreshes, with HTTP outside SQL transactions."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import time
 from uuid import uuid4
@@ -16,7 +16,11 @@ from app.utils.ip2asn import lookup_network_information, target_type
 from app.utils.timeutils import ensure_utc_naive, utcnow_naive
 
 LOGGER = logging.getLogger(__name__)
-FRESHNESS = timedelta(hours=24)
+
+
+def freshness():
+    """Use the same lifetime as the shared IP/AS source cache."""
+    return timedelta(hours=int(db.app.config.get("IP_INFO_CACHE_HOURS", 24)))
 
 
 def enrichment_due(target, now=None):
@@ -27,7 +31,7 @@ def enrichment_due(target, now=None):
     return (
         target.network_asn is None
         or updated is None
-        or (now or utcnow_naive()) - updated > FRESHNESS
+        or (now or utcnow_naive()) - updated > freshness()
     )
 
 
@@ -99,7 +103,7 @@ def refresh_target_network(target_id, force=False, session_factory=None):
                 or_(
                     Targets.network_updated_at.is_(None),
                     Targets.network_asn.is_(None),
-                    Targets.network_updated_at < now - FRESHNESS,
+                    Targets.network_updated_at < now - freshness(),
                 ),
             )
         claimed = claim.update(
@@ -114,8 +118,8 @@ def refresh_target_network(target_id, force=False, session_factory=None):
             return "busy"
 
         try:
-            info = lookup_network_information(value, timeout=timeout)
-        except (requests.RequestException, ValueError, TypeError) as error:
+            info = lookup_network_information(value, timeout=timeout, force=force)
+        except (requests.RequestException, ValueError, TypeError, LookupError) as error:
             LOGGER.warning(
                 "Network enrichment failed for target %s: %s", target_id, error
             )
@@ -137,7 +141,11 @@ def refresh_target_network(target_id, force=False, session_factory=None):
             session.commit()
             return "failed"
 
-        completed_at = utcnow_naive()
+        completed_at = (
+            datetime.fromtimestamp(info.fetched_at, timezone.utc).replace(tzinfo=None)
+            if getattr(info, "fetched_at", None) is not None
+            else utcnow_naive()
+        )
         # Conditional write locks this target before updating shared AS data.
         retained = (
             session.query(Targets)

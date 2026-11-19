@@ -137,9 +137,9 @@ class PlumSettingsUiTest(unittest.TestCase):
             ):
                 self.app.jinja_env.cache.clear()
                 page = self.page()
-                self.assertEqual(page.count('<section class="settings-card"'), 9)
-                self.assertEqual(page.count("<strong>Default:</strong>"), 49)
-                self.assertEqual(page.count("<strong>Restart required:</strong>"), 48)
+                self.assertEqual(page.count('<section class="settings-card"'), 10)
+                self.assertEqual(page.count("<strong>Default:</strong>"), 52)
+                self.assertEqual(page.count("<strong>Restart required:</strong>"), 51)
                 self.assertNotIn("LOG_ROTATION_DAYS", page)
                 self.assertNotIn("Legacy rotation interval", page)
                 self.assertIn('name="LOG_RETENTION_DAYS"', page)

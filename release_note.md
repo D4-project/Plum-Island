@@ -1,5 +1,9 @@
 # Unreleased
 
+- Share configurable WHOIS (24 h), Passive DNS (12 h) and IP/AS (24 h) caches
+  across IP details, targets, reports and exports. Show source freshness and load
+  target network information asynchronously; document cache internals (#284).
+
 - Remove the obsolete rotation interval from Plum Settings; logging help explains
   daily rotation, with log retention remaining configurable (#283).
 

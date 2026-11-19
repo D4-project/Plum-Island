@@ -737,6 +737,7 @@
     <div class="ip-info-panel">
         <div id="ip-info-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading IP information…</div>
         <div id="ip-info-error" class="alert alert-warning" role="alert" style="display: none;"></div>
+        <p id="ip-info-cache" class="text-muted" role="status"></p>
         <div id="ip-info-results"></div>
     </div>
     <div class="ip-pdns-panel">
@@ -751,6 +752,7 @@
         <div class="ip-pdns-box">
             <div id="ip-pdns-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading Passive DNS…</div>
             <div id="ip-pdns-error" class="alert alert-warning" role="alert" style="display: none; margin-bottom: 0;"></div>
+            <p id="ip-pdns-cache" class="text-muted" role="status"></p>
             <div id="ip-pdns-results"></div>
         </div>
     </div>
@@ -758,10 +760,12 @@
 <div role="tabpanel" class="tab-pane" id="ip-whois">
     <div id="ip-whois-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Querying WHOIS registry…</div>
     <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
+    <p id="ip-whois-cache" class="text-muted" role="status"></p>
     <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>
 </div>
 </div>
 
+<script src="{{ url_for('static', filename='js/lookup_cache.js') }}"></script>
 <script nonce="{{ baselib.get_nonce() }}">
 (() => {
     const tab = document.querySelector('a[href="#ip-whois"]');
@@ -795,6 +799,7 @@
             loading.style.display = 'none';
             result.style.display = 'block';
             result.textContent = data.result || 'No WHOIS record returned.';
+            if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-whois-cache', data.cache);
         } catch (lookupError) {
             loading.style.display = 'none';
             error.textContent = lookupError.message || 'WHOIS lookup failed.';
@@ -897,6 +902,7 @@
             if (!response.ok) {
                 throw new Error(`Lookup failed (${response.status})`);
             }
+            if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-info-cache', PlumLookupCache.headers(response));
             return response.json();
         })
         .then((payload) => {
@@ -917,7 +923,10 @@
         });
 
     fetch(`/ip/pdns/${encodeURIComponent(ip)}`)
-        .then((response) => response.json().then((payload) => ({ ok: response.ok, payload, status: response.status })))
+        .then((response) => {
+            if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-pdns-cache', PlumLookupCache.headers(response));
+            return response.json().then((payload) => ({ ok: response.ok, payload, status: response.status }));
+        })
         .then(({ ok, payload, status }) => {
             pdnsLoadingEl.style.display = 'none';
             if (payload && payload.disabled) {
