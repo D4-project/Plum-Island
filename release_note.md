@@ -1,5 +1,8 @@
 # Unreleased
 
+- Remove the obsolete rotation interval from Plum Settings; logging help explains
+  daily rotation, with log retention remaining configurable (#283).
+
 - Simplify settings restart guidance to Plum-Agent and prefill unset fields with
   their documented defaults, preserving untouched inherited configuration. Show a
   persistent restart banner across all pages while changes are pending (#283).

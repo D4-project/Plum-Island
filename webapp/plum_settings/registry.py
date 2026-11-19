@@ -446,7 +446,7 @@ SECTIONS = (
     ),
     Section(
         "Logging",
-        "Set console verbosity and optional date-named application log files.",
+        "Set console verbosity and optional application log files, rotated daily at local midnight.",
         "Web application and indexing worker",
         (
             Setting(

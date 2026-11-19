@@ -84,6 +84,9 @@ def cards_for(runtime, desired):
     for section in SECTIONS:
         fields = []
         for field in section.fields:
+            # Keep the registry key compatible with existing worker snapshots.
+            if field.key == "LOG_ROTATION_DAYS":
+                continue
             value = values.get(field.key, default_value(field, WEBAPP_DIR))
             fields.append(
                 {
