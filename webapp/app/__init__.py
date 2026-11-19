@@ -88,7 +88,9 @@ appbuilder = AppBuilder(app, db.session, security_manager_class=CustomSecurityMa
 # pylint: disable=C0413
 from . import views
 from . import apis
-from .settings_view import PlumSettingsView
+from .settings_view import PlumSettingsView, settings_template_context
+
+app.context_processor(settings_template_context)
 
 appbuilder.add_view(
     PlumSettingsView,

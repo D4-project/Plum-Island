@@ -1,5 +1,9 @@
 # Unreleased
 
+- Simplify settings restart guidance to Plum-Agent and prefill unset fields with
+  their documented defaults, preserving untouched inherited configuration. Show a
+  persistent restart banner across all pages while changes are pending (#283).
+
 - Add administrator-only Plum Settings under Security, with explanatory cards,
   explicit defaults and per-field restart information. Persist validated private
   overrides, protect secrets and pin indexing children to their scheduler's

@@ -21,9 +21,9 @@
         {% if pending %}
         <strong>{{ pending|length }} setting{{ 's' if pending|length != 1 else '' }} pending restart</strong>
         {% else %}
-        <strong>No pending changes in this web process</strong>
+        <strong>No pending changes</strong>
         {% endif %}
-        <p>Saving does not restart services. Restart all affected processes to apply pending values.</p>
+        <p>Restart Plum-Agent to apply changes.</p>
       </div>
       <button type="submit" class="btn btn-primary"><i class="fa fa-save" aria-hidden="true"></i> Save settings</button>
     </div>
@@ -38,6 +38,9 @@
         {% for item in card.fields %}
           {% set field = item.definition %}
           <div class="settings-field{% if item.pending %} settings-pending{% endif %}">
+            {% if item.inherited and not field.secret and not field.inactive %}
+            <input type="hidden" name="prefilled_{{ field.key }}" value="true" data-prefilled-default="setting-{{ field.key }}">
+            {% endif %}
             <label for="setting-{{ field.key }}">{{ field.label }}{% if field.unit %} <span class="settings-unit">({{ field.unit }})</span>{% endif %}</label>
             {% if field.inactive %}
               <input id="setting-{{ field.key }}" class="form-control" value="{{ item.value }}" disabled aria-describedby="help-{{ field.key }}">
@@ -54,13 +57,11 @@
               </div>
             {% elif field.value_type == 'bool' %}
               <select id="setting-{{ field.key }}" name="{{ field.key }}" class="form-control" aria-describedby="help-{{ field.key }}">
-                {% if item.inherited %}<option value="" selected>Use runtime default</option>{% endif %}
                 <option value="true"{% if item.value == 'True' %} selected{% endif %}>True — enabled</option>
                 <option value="false"{% if item.value == 'False' %} selected{% endif %}>False — disabled</option>
               </select>
             {% elif field.kind == 'level' %}
               <select id="setting-{{ field.key }}" name="{{ field.key }}" class="form-control" aria-describedby="help-{{ field.key }}">
-                {% if item.inherited %}<option value="" selected>Use runtime default</option>{% endif %}
                 {% for level in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] %}<option{% if item.value == level %} selected{% endif %}>{{ level }}</option>{% endfor %}
               </select>
             {% elif field.kind == 'suffixes' %}
@@ -73,12 +74,11 @@
             <div id="help-{{ field.key }}" class="settings-help">
               <p>{{ field.help }}</p>
               <p class="settings-default"><strong>Default:</strong> {{ item.default }}{% if field.unit %} {{ field.unit }}{% endif %}</p>
-              {% if item.inherited and not field.inactive and not field.secret %}<p>Not set in config.py. Leave empty to keep the existing runtime fallback.</p>{% endif %}
-              <p class="settings-application">{% if field.inactive %}<strong>Inactive legacy setting</strong>{% else %}<strong>Restart required:</strong> {{ card.section.restart }}{% endif %}</p>
+              <p class="settings-application">{% if field.inactive %}<strong>Inactive legacy setting</strong>{% else %}<strong>Restart required:</strong> Plum-Agent{% endif %}</p>
               <p class="settings-key"><code>{{ field.key }}</code></p>
             </div>
             {% if item.pending %}
-            <p class="settings-pending-note"><strong>Pending restart.</strong>{% if not field.secret %} Applied in this process: <span>{{ item.applied or 'Not set' }}</span>{% else %} The active credential is unchanged in this process.{% endif %}</p>
+            <p class="settings-pending-note"><strong>Pending restart.</strong>{% if not field.secret %} Currently applied: <span>{{ item.applied or 'Not set' }}</span>{% else %} The active credential is unchanged.{% endif %}</p>
             {% endif %}
             {% if item.override and not field.secret and not field.inactive %}
             <label class="settings-reset"><input type="checkbox" name="reset_{{ field.key }}" value="true"> Use config.py value after restart</label>

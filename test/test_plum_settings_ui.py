@@ -56,6 +56,7 @@ class PlumSettingsUiTest(unittest.TestCase):
             KVROCKS_HOST="localhost",
         )
         self.runtime = apply_settings(self.app.config)
+        self.app.context_processor(SETTINGS_VIEW.settings_template_context)
         UI_THEME.configure_ui_templates(self.app)
         context = self.app.app_context()
         context.push()
@@ -139,6 +140,15 @@ class PlumSettingsUiTest(unittest.TestCase):
                 self.assertEqual(page.count('<section class="settings-card"'), 9)
                 self.assertEqual(page.count("<strong>Default:</strong>"), 50)
                 self.assertEqual(page.count("<strong>Restart required:</strong>"), 48)
+                self.assertIn("Restart Plum-Agent to apply changes.", page)
+                self.assertNotIn("Web application and scheduler", page)
+                self.assertNotIn("Use runtime default", page)
+                self.assertRegex(page, r'name="KVROCKS_PORT"[^>]*value="6666"')
+                self.assertRegex(
+                    page, r'name="MEILI_HTTP_TIMEOUT_SECONDS"[^>]*value="10"'
+                )
+                self.assertIn('<option value="false" selected>False', page)
+                self.assertIn("<option selected>WARNING</option>", page)
                 self.assertIn("Connectivity to Meilisearch", page)
                 self.assertIn("Default:</strong> 6666", page)
                 self.assertIn("Default:</strong> 10 seconds", page)
@@ -197,7 +207,9 @@ class PlumSettingsUiTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Pending restart.", response.data)
-        self.assertIn(b"Applied in this process: <span>Runtime fallback", response.data)
+        self.assertIn(
+            b"Currently applied: <span>Not explicitly configured", response.data
+        )
         self.assertIn(b"Default:</strong> 6666", response.data)
         saved = self.runtime.store.desired()
         self.assertEqual(saved["overrides"], {"KVROCKS_PORT": 7777})
@@ -274,6 +286,8 @@ class PlumSettingsUiTest(unittest.TestCase):
                 if field.secret:
                     form[f"secret_action_{field.key}"] = "keep"
                 else:
+                    if item["inherited"]:
+                        form[f"prefilled_{field.key}"] = "true"
                     form[field.key] = (
                         item["value"].lower()
                         if field.value_type == "bool"
@@ -282,3 +296,60 @@ class PlumSettingsUiTest(unittest.TestCase):
         response = self.client.post("/plumsettings/", data=form)
         self.assertEqual(response.status_code, 302, response.get_data(as_text=True))
         self.assertEqual(self.runtime.store.desired()["overrides"], {})
+
+    def test_restart_banner_persists_on_other_pages_and_clears_after_restart(self):
+        """Shared layouts show durable status to every role without exposing values."""
+        self.login(self.admin)
+        marker = b'id="plum-settings-restart-banner"'
+        self.assertNotIn(marker, self.client.get("/").data)
+        response = self.client.post(
+            "/plumsettings/", data={**self.form(), "KVROCKS_PORT": "7777"}
+        )
+        self.assertEqual(response.status_code, 302)
+        templates = ROOT / "webapp/app/templates"
+        for theme in ("plum.css", "readable.css", "flatly.css"):
+            loader = FileSystemLoader(templates)
+            base = "appbuilder/baselayout.html"
+            if theme == "plum.css":
+                loader = ChoiceLoader(
+                    [FileSystemLoader(templates / "themes/plum"), loader]
+                )
+                base = "plum_baselayout.html"
+            with self.subTest(theme=theme), patch.dict(
+                self.app.config, APP_THEME=theme
+            ), patch.object(self.app, "jinja_loader", loader), patch.object(
+                self.builder, "base_template", base
+            ):
+                self.app.jinja_env.cache.clear()
+                self.login(self.admin)
+                for path in ("/plumsettings/", "/", "/users/list/"):
+                    page = self.client.get(path)
+                    self.assertEqual(page.status_code, 200, path)
+                    self.assertEqual(page.data.count(marker), 1)
+                self.login(self.operator)
+                page = self.client.get("/")
+                self.assertEqual(page.status_code, 200)
+                self.assertIn(marker, page.data)
+                self.assertNotIn(b"hidden-meili-credential", page.data)
+        restarted = dict(self.runtime.baseline)
+        apply_settings(restarted)
+        self.app.config.update(restarted)
+        self.assertNotIn(marker, self.client.get("/").data)
+
+    def test_restart_banner_clears_when_pending_edits_are_reverted(self):
+        """Restoring the already-applied values removes the reminder without restart."""
+        self.login(self.admin)
+        saved = self.runtime.store.save(
+            "0", {"KVROCKS_PORT": 7777}, self.runtime.baseline
+        )
+        self.assertIn('id="plum-settings-restart-banner"', self.page())
+        self.runtime.store.save(saved["revision"], {}, self.runtime.baseline)
+        self.assertNotIn('id="plum-settings-restart-banner"', self.page())
+
+    def test_unreadable_settings_do_not_break_other_pages(self):
+        """Global rendering remains usable when the saved configuration needs recovery."""
+        self.login(self.operator)
+        self.runtime.store.write("settings.json", "invalid")
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Configuration status unavailable", response.data)

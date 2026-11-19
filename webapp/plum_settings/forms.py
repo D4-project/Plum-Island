@@ -13,7 +13,7 @@ def overrides_from_form(form, desired, baseline):
         if field.secret:
             allowed.update({f"secret_action_{key}", f"secret_value_{key}"})
         else:
-            allowed.update({key, f"reset_{key}"})
+            allowed.update({key, f"reset_{key}", f"prefilled_{key}"})
     if set(form) - allowed or any(len(values) != 1 for _, values in form.lists()):
         raise SettingsError("The form contains unsupported or repeated fields.")
     current = {**baseline, **desired["overrides"]}
@@ -26,12 +26,28 @@ def overrides_from_form(form, desired, baseline):
         elif form.get(f"reset_{key}") == "true":
             overrides.pop(key, None)
         elif key in form:
-            if key not in current and form[key] == "":
-                continue
-            parsed = parse_value(field, form[key])
-            if key not in current or parsed != current[key]:
+            changed, parsed = _changed_value(form, field, current)
+            if changed:
                 overrides[key] = parsed
     return overrides
+
+
+def _changed_value(form, field, current):
+    """Keep untouched defaults inherited while recognizing deliberate edits."""
+    key = field.key
+    if key not in current and form[key] == "":
+        return False, None
+    parsed = parse_value(field, form[key])
+    marker = form.get(f"prefilled_{key}")
+    if marker not in (None, "true", "false"):
+        raise SettingsError("The form contains an invalid default marker.")
+    if (
+        key not in current
+        and marker == "true"
+        and parsed == default_value(field, WEBAPP_DIR)
+    ):
+        return False, None
+    return key not in current or parsed != current[key], parsed
 
 
 def _secret_override(form, field, overrides):
@@ -68,7 +84,7 @@ def cards_for(runtime, desired):
     for section in SECTIONS:
         fields = []
         for field in section.fields:
-            value = values.get(field.key)
+            value = values.get(field.key, default_value(field, WEBAPP_DIR))
             fields.append(
                 {
                     "definition": field,
@@ -79,7 +95,7 @@ def cards_for(runtime, desired):
                         else (
                             display_value(field, applied[field.key])
                             if field.key in applied
-                            else "Runtime fallback (not set in config.py)"
+                            else "Not explicitly configured"
                         )
                     ),
                     "inherited": field.key not in values,

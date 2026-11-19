@@ -10,6 +10,19 @@ from plum_settings.registry import SettingsError
 from plum_settings.store import SettingsConflict
 
 
+def settings_template_context():
+    """Expose only restart status to shared page chrome, never configuration values."""
+    runtime = current_app.config.get("PLUM_SETTINGS_RUNTIME")
+    if runtime is None:
+        return {}
+    try:
+        pending = bool(runtime.pending(runtime.store.desired()))
+    except SettingsError:
+        # A damaged configuration must not prevent unrelated pages from rendering.
+        return {"plum_settings_unavailable": True}
+    return {"plum_restart_pending": pending}
+
+
 class PlumSettingsView(BaseView):
     """Keep configuration access restricted even if FAB grants are misassigned."""
 
@@ -37,13 +50,12 @@ class PlumSettingsView(BaseView):
                 )
                 if runtime.pending(updated):
                     flash(
-                        "Settings saved. Restart required; affected components are listed "
-                        "beside each pending field. No process was restarted.",
+                        "Settings saved. Restart Plum-Agent to apply changes.",
                         "info",
                     )
                 else:
                     flash(
-                        "Settings saved. No changes are pending in this web process.",
+                        "Settings saved. No pending changes.",
                         "success",
                     )
                 return self._private_response(

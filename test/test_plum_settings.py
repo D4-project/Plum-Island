@@ -128,7 +128,7 @@ class PlumSettingsTest(unittest.TestCase):
             if item["definition"].key == "MEILI_HTTP_TIMEOUT_SECONDS"
         )
         self.assertTrue(field["inherited"])
-        self.assertEqual(field["value"], "")
+        self.assertEqual(field["value"], "10")
         self.assertEqual(field["default"], "10")
         overrides = overrides_from_form(
             MultiDict({"MEILI_HTTP_TIMEOUT_SECONDS": "10"}), desired, self.baseline
@@ -138,6 +138,29 @@ class PlumSettingsTest(unittest.TestCase):
         restarted = dict(self.baseline)
         apply_settings(restarted)
         self.assertEqual(restarted["MEILI_HTTP_TIMEOUT_SECONDS"], 10)
+
+    def test_prefilled_defaults_only_become_overrides_when_edited(self):
+        """Saving another field must not pin every displayed default."""
+        desired = self.store.desired()
+        form = MultiDict(
+            {
+                "MEILI_HTTP_TIMEOUT_SECONDS": "10",
+                "prefilled_MEILI_HTTP_TIMEOUT_SECONDS": "true",
+            }
+        )
+        self.assertEqual(overrides_from_form(form, desired, self.baseline), {})
+        form["prefilled_MEILI_HTTP_TIMEOUT_SECONDS"] = "false"
+        self.assertEqual(
+            overrides_from_form(form, desired, self.baseline),
+            {"MEILI_HTTP_TIMEOUT_SECONDS": 10},
+        )
+        # No JavaScript: a changed value is still recognized by the server.
+        form["prefilled_MEILI_HTTP_TIMEOUT_SECONDS"] = "true"
+        form["MEILI_HTTP_TIMEOUT_SECONDS"] = "20"
+        self.assertEqual(
+            overrides_from_form(form, desired, self.baseline),
+            {"MEILI_HTTP_TIMEOUT_SECONDS": 20},
+        )
 
     def test_helper_import_does_not_publish_pending_backend(self):
         """Importing the app in an auxiliary tool is not a controller restart."""

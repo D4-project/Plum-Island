@@ -14,7 +14,7 @@ Authentication, themes, Flask/FAB options and SQLAlchemy configuration remain in
 Cards group connectivity to Meilisearch, Kvrocks, CIRCL services and SMTP;
 scheduling; background indexing; storage and retention; search, reports and
 domain parsing; and logging. Each field shows its purpose, unit, configuration
-key, **Default: …**, and affected restart components. Defaults remain visible
+key, **Default: …**, and **Restart required: Plum-Agent**. Defaults remain visible
 after saving a different value. Empty defaults say **Not set**; the insecure
 example Meilisearch key is never offered as a usable default.
 
@@ -35,11 +35,17 @@ can be removed with **Use config.py value**; this takes effect after restart.
 This release preserves startup-based configuration loading. **Save settings**
 persists changes; it does not modify a running service, start a second worker,
 restart a process, or reindex data. Fields whose saved values differ from the
-current web process show **Pending restart**, the applied non-secret value and
-the affected components. Secret changes show pending status without either value.
+current web process show **Pending restart** and the applied non-secret value.
+Secret changes show pending status without either value.
 
-Restart the affected Plum deployment processes together, using your normal
-process manager. In the shipped launcher, the scheduler runs inside the web
+Every page displays a persistent **Configuration changed. Restart Plum-Agent to
+apply changes.** banner while saved settings differ from the loaded configuration.
+It survives navigation and cannot be dismissed like a normal flash message. It
+disappears after restart, or when pending edits are reverted to the applied values.
+All roles see the reminder; it contains no configuration values or credentials.
+
+Restart **Plum-Agent**, using your normal process manager. This includes the web
+application and scheduler. In the shipped launcher, the scheduler runs inside the web
 application and owns its indexing child; it is not a separate service. Restarting
 only the indexing child is insufficient: it inherits its parent's already-applied
 configuration. The UI compares against the web process handling the request;
@@ -72,10 +78,10 @@ Flask to be started. Configuration precedence is:
 
 Missing overrides preserve the existing installation behavior. Displayed template
 defaults do not silently populate previously absent runtime settings on startup.
-An absent setting is shown as an empty field or **Use runtime default**; leaving
-it unchanged preserves the existing consumer fallback. Entering the documented
-default explicitly creates an override and marks it pending, even when a fallback
-may happen to have the same value.
+An absent setting is prefilled with its documented default, including numbers,
+toggles, lists and paths. Saving an untouched prefilled field preserves its existing
+runtime fallback; editing a field creates an explicit override. The default remains
+visible below the field after editing. Credentials remain blank and masked.
 Changing a value in `config.py` does not supersede a saved override: remove the
 override through the page or use offline recovery first.
 
