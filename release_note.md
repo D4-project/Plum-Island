@@ -1,8 +1,10 @@
 # Unreleased
 
 - Add a switchable location map to IP details in all themes. On large screens
-  the map takes half the row beside the IP and AS panels. Document browser
-  access to CIRCL tiles and server-side WHOIS connections (#285).
+  the map takes half the row beside the IP and AS panels. Its full-screen
+  button also exits full screen. The WHOIS tab can copy the full registry
+  response. Document browser access to CIRCL tiles and server-side WHOIS
+  connections (#285).
 
 - Share configurable WHOIS (24 h), Passive DNS (12 h) and IP/AS (24 h) caches
   across IP details, targets, reports and exports. Show source freshness and load

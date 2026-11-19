@@ -142,6 +142,21 @@ before starting Plum. Read-only application code is supported when this separate
 directory is writable. Use the same path and service account for the controller,
 indexing workers and administrative tools.
 
+## Testing a different revision
+
+Give a preview its own private `PLUM_SETTINGS_DIR` before the first start, even
+when it uses the same `config.py` as the installed version. For example, run
+`PLUM_SETTINGS_DIR="$HOME/.local/state/plum/preview" python run.py` from a separate
+checkout’s `webapp` directory. With the variable unset, each checkout already
+uses its own `webapp/.plum-settings` directory.
+
+A version predating the location map rejects a saved `MAP_ENABLED` override.
+If you shared a settings directory, select **Use config.py value** for **Show
+location map** and save from the newer version before rolling back, or restore
+the matching backup as described below. Compare other edits made since the
+backup, including scheduler settings. When upgrading from an early map preview,
+Plum reads the map switch and ignores its retired tile URL and attribution.
+
 ## Offline recovery and rollback
 
 If a saved backend or directory prevents startup:

@@ -49,7 +49,7 @@ const {createCache} = require('../webapp/app/static/js/ip_hostname_groups.js');
     const source = require('node:fs').readFileSync(
         require('./ui_template_paths').templatePath('ip_detail.html'), 'utf8');
     const start = source.indexOf('    function loadInformation() {');
-    const end = source.indexOf('\n    function copyIpToClipboard', start);
+    const end = source.indexOf("\n    const copyButton = document.getElementById('ip-copy-button');", start);
     const element = () => ({style: {display: 'none'}, textContent: '', appendChild() {}});
     const loadingEl = element(), pdnsLoadingEl = element(), errorEl = element(), pdnsErrorEl = element();
     const enrichment = new Map();

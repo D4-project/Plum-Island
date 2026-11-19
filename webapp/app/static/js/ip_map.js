@@ -128,20 +128,22 @@
     function fullscreenButton(target) {
         const button = el('button', 'btn btn-default btn-xs');
         button.type = 'button';
-        button.title = 'Full screen';
+        button.title = 'Show map full screen';
         button.setAttribute('aria-label', 'Show map full screen');
         const icon = el('i', 'fa fa-expand');
         icon.setAttribute('aria-hidden', 'true');
         button.appendChild(icon);
         button.addEventListener('click', () => {
-            if (document.fullscreenElement) {
+            if (document.fullscreenElement === target) {
                 document.exitFullscreen();
-            } else if (target.requestFullscreen) {
+            } else {
                 target.requestFullscreen();
             }
         });
         document.addEventListener('fullscreenchange', () => {
             const active = document.fullscreenElement === target;
+            button.title = active ? 'Exit full screen' : 'Show map full screen';
+            button.setAttribute('aria-label', button.title);
             icon.className = active ? 'fa fa-compress' : 'fa fa-expand';
             if (map) setTimeout(() => map.invalidateSize(), 50);
         });
@@ -149,16 +151,18 @@
     }
 
     function renderMap(location, precise, rows) {
-        const { title, box } = card('ip-map-entry', 'Location');
+        const { wrapper, title, box } = card('ip-map-entry', 'Location');
         const canvas = el('div', 'ip-map-canvas');
         const note = el('div', 'ip-map-note text-muted', precise
             ? 'Position from the WHOIS "geoloc" field.'
             : `Approximate: centre of ${location.country || 'the country'}, not the exact IP location.`);
         box.append(canvas, note);
-        title.appendChild(fullscreenButton(canvas));
         if (typeof window.L === 'undefined') {
             canvas.replaceWith(el('div', 'alert alert-warning', 'Map library failed to load.'));
             return;
+        }
+        if (document.fullscreenEnabled && wrapper.requestFullscreen) {
+            title.appendChild(fullscreenButton(wrapper));
         }
         // Single world copy, no panning past the edges, no endless zoom out.
         map = window.L.map(canvas, {

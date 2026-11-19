@@ -21,7 +21,16 @@
     min-height: 100%;
     background: #f2efe9;
 }
-.ip-map-canvas:fullscreen { height: 100vh; }
+.ip-map-entry:fullscreen { background: var(--plum-card, Canvas); }
+.ip-map-entry:fullscreen .ip-info-box {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.ip-map-entry:fullscreen .ip-map-canvas {
+    flex: 1;
+    min-height: 0;
+}
 .ip-map-note {
     padding: 0.5rem 0.9rem;
     font-size: 13px;
@@ -39,9 +48,15 @@
 }
 .plum-flag[hidden] { display: none; }
 
-/* WHOIS terminal: copy button always visible in the header, top right. */
+.ip-whois-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+}
+#ip-whois-copy[hidden] { display: none; }
+.ip-clipboard-fallback { position: fixed; left: -9999px; }
 .ip-whois-terminal { display: block; }
-.ip-whois-terminal::part(copy-button) { opacity: 1; visibility: visible; margin-left: auto; }
 
 /* Dark mode (Plum color mode). */
 @media screen {

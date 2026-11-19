@@ -17,9 +17,13 @@ async function runCase(response) {
     for (const id of ['ip-whois-loading', 'ip-whois-error', 'ip-whois-result']) {
         elements[id] = {style: {}, textContent: ''};
     }
+    let copied;
     let onShown;
+    const copy = {hidden: true, addEventListener: (_event, fn) => { copy.click = fn; }};
+    elements['ip-whois-copy'] = copy;
     let parsed = false;
     const context = vm.createContext({
+        window: {copyIpToClipboard: value => { copied = value; }},
         document: {
             querySelector: () => ({}),
             getElementById: (id) => elements[id]
@@ -40,16 +44,20 @@ async function runCase(response) {
     vm.runInContext(source, context);
     assert.equal(typeof onShown, 'function');
     await onShown();
-    return {elements, parsed};
+    if (!copy.hidden) copy.click();
+    return {elements, parsed, copied};
 }
 
 (async () => {
-    const success = await runCase({ok: true, status: 200, contentType: 'application/json', body: {result: 'WHOIS record'}});
-    assert.equal(success.elements['ip-whois-result'].textContent, 'WHOIS record');
+    const record = 'netname: WHOIS record\ngeoloc: 49.6 6.1';
+    const success = await runCase({ok: true, status: 200, contentType: 'application/json', body: {query: '185.194.93.47', result: record}});
+    assert.equal(success.elements['ip-whois-result'].textContent, record);
+    assert.equal(success.copied, record);
 
     const denied = await runCase({ok: false, status: 403, contentType: 'text/html', jsonError: true});
     assert.match(denied.elements['ip-whois-error'].textContent, /access denied/i);
     assert.equal(denied.parsed, false);
+    assert.equal(denied.elements['ip-whois-copy'].hidden, true);
 
     const login = await runCase({ok: true, status: 200, contentType: 'text/html', jsonError: true});
     assert.match(login.elements['ip-whois-error'].textContent, /unexpected response/i);

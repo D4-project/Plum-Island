@@ -760,12 +760,16 @@
 <div role="tabpanel" class="tab-pane" id="ip-whois">
     <div id="ip-whois-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Querying WHOIS registry…</div>
     <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
-    <p id="ip-whois-cache" class="text-muted" role="status"></p>
+    <div class="ip-whois-toolbar">
+        <p id="ip-whois-cache" class="text-muted" role="status"></p>
+        <button type="button" id="ip-whois-copy" class="btn btn-default btn-xs" hidden><span data-copy-feedback>Copy WHOIS response</span></button>
+    </div>
     <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>
 </div>
 </div>
 
 <script src="{{ url_for('static', filename='js/lookup_cache.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_detail_clipboard.js') }}"></script>
 <script nonce="{{ baselib.get_nonce() }}">
 (() => {
     const tab = document.querySelector('a[href="#ip-whois"]');
@@ -773,6 +777,7 @@
     const loading = document.getElementById('ip-whois-loading');
     const error = document.getElementById('ip-whois-error');
     const result = document.getElementById('ip-whois-result');
+    const copy = document.getElementById('ip-whois-copy');
     // One WHOIS request per page, shared by this tab and the map card (ip_map.js).
     let whoisRequest = null;
     function loadWhois() {
@@ -811,6 +816,10 @@
             loading.style.display = 'none';
             result.style.display = 'block';
             result.textContent = data.result || 'No WHOIS record returned.';
+            if (data.result) {
+                copy.hidden = false;
+                copy.addEventListener('click', () => window.copyIpToClipboard(data.result, copy, 'WHOIS response'));
+            }
             if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-whois-cache', data.cache);
             // Terminal-style rendering with Vitrine; the <pre> stays as fallback.
             if (data.result && typeof window !== 'undefined' && window.customElements) {
@@ -818,7 +827,8 @@
                     const terminal = document.createElement('vt-terminal');
                     terminal.setAttribute('variant', 'full');
                     terminal.setAttribute('label', 'WHOIS');
-                    terminal.setAttribute('copy', '');
+                    terminal.setAttribute('copy', 'false');
+                    terminal.setAttribute('command-copy', 'false');
                     terminal.setAttribute('wrap', '');
                     terminal.setAttribute('theme',
                         document.documentElement.getAttribute('data-plum-color-mode') || 'light');
@@ -1005,49 +1015,11 @@
         });
     }
 
-    function copyIpToClipboard(value, triggerEl) {
-        const markCopied = () => {
-            if (!triggerEl) {
-                return;
-            }
-            triggerEl.classList.add('copied');
-            triggerEl.setAttribute('aria-label', `Copied ${value}`);
-            setTimeout(() => {
-                triggerEl.classList.remove('copied');
-                triggerEl.setAttribute('aria-label', `Copy ${value}`);
-            }, 1500);
-        };
-
-        const fallbackCopy = () => {
-            const textarea = document.createElement('textarea');
-            textarea.value = value;
-            textarea.setAttribute('readonly', '');
-            textarea.style.position = 'absolute';
-            textarea.style.left = '-9999px';
-            document.body.appendChild(textarea);
-            textarea.select();
-            try {
-                document.execCommand('copy');
-                markCopied();
-            } catch (err) {
-                console.warn('Clipboard copy failed', err);
-            } finally {
-                document.body.removeChild(textarea);
-            }
-        };
-
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(value).then(markCopied).catch(fallbackCopy);
-        } else {
-            fallbackCopy();
-        }
-    }
-    window.copyIpToClipboard = copyIpToClipboard;
     const copyButton = document.getElementById('ip-copy-button');
     if (copyButton) {
         copyButton.title = `Copy ${ip}`;
         copyButton.setAttribute('aria-label', `Copy ${ip}`);
-        copyButton.addEventListener('click', () => copyIpToClipboard(ip, copyButton));
+        copyButton.addEventListener('click', () => window.copyIpToClipboard(ip, copyButton));
     }
 
     function formatUrlHost(hostValue) {

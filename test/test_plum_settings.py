@@ -233,6 +233,25 @@ class PlumSettingsTest(unittest.TestCase):
         apply_settings(restarted)
         self.assertEqual(restarted["MEILI_KEY"], "new-secret")
 
+    def test_map_preview_settings_and_pinned_workers_survive_upgrade(self):
+        """Keep the map switch and scheduler setting from an earlier preview."""
+        overrides = {"MAP_ENABLED": False, "SCHEDULER_DELAY": 7}
+        old = dict(overrides, MAP_TILE_URL="old URL", MAP_TILE_ATTRIBUTION="old text")
+        self.store.write(
+            "settings.json", {"version": 1, "revision": "0", "overrides": old}
+        )
+        self.assertEqual(self.store.desired()["overrides"], overrides)
+        runtime = apply_settings(dict(self.baseline))
+        self.assertFalse(runtime.applied["MAP_ENABLED"])
+        self.assertEqual(runtime.applied["SCHEDULER_DELAY"], 7)
+        snapshot = self.store.read(runtime.snapshot_name)
+        snapshot["values"].update(old)
+        self.store.write(runtime.snapshot_name, snapshot)
+        with patch.dict(os.environ, PLUM_SETTINGS_SNAPSHOT=runtime.snapshot_name):
+            self.assertEqual(apply_settings({}).applied, runtime.applied)
+        with self.assertRaises(SettingsError):
+            self.store.save("0", old, self.baseline)
+
     def test_corrupt_or_redirected_files_fail_closed(self):
         """Invalid JSON, unknown keys, symlinks and unsafe permissions are rejected."""
         path = self.directory / "settings.json"

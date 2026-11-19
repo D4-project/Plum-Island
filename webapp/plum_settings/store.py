@@ -43,6 +43,18 @@ def effective_values(baseline, overrides):
     return values
 
 
+def _stored_values(record, field):
+    """Read known keys, dropping the two provider overrides from the map preview."""
+    values = record.get(field)
+    if not isinstance(values, dict):
+        raise SettingsError("Settings values must be an object.")
+    values.pop("MAP_TILE_URL", None)
+    values.pop("MAP_TILE_ATTRIBUTION", None)
+    if values.keys() - SETTINGS.keys():
+        raise SettingsError("Settings file contains unsupported configuration keys.")
+    return values
+
+
 class SettingsStore:
     """Coordinate multiple writers without exposing passwords in errors."""
 
@@ -148,11 +160,7 @@ class SettingsStore:
             raise SettingsError(
                 "Unsupported settings file format; restore a valid backup."
             )
-        overrides = record.get("overrides")
-        if not isinstance(overrides, dict) or set(overrides) - SETTINGS.keys():
-            raise SettingsError(
-                "Settings file contains unsupported configuration keys."
-            )
+        overrides = _stored_values(record, "overrides")
         for key, value in overrides.items():
             if SETTINGS[key].inactive:
                 raise SettingsError(f"{key} is inactive and cannot be overridden.")
@@ -195,10 +203,9 @@ class SettingsStore:
             not isinstance(record, dict)
             or record.get("version") != 1
             or not re.fullmatch(r"0|[a-f0-9]{32}", str(record.get("revision", "")))
-            or not isinstance(record.get("values"), dict)
-            or set(record["values"]) - SETTINGS.keys()
         ):
             raise SettingsError("Invalid applied configuration snapshot.")
+        _stored_values(record, "values")
         return record
 
 
