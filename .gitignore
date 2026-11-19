@@ -17,6 +17,7 @@ external/
 *.pyc
 webapp/app.db-shm
 webapp/app.db-wal
+*.before-sql-update-*
 /webapp/app/static/uploads
 
 /webapp/app/index_state/

@@ -27,18 +27,14 @@ complete the appropriate [versioned migration](migration.md).
 
 ### Unique scan profile names
 
-Existing SQLite installations need migration 25 before enabling profile writes
-with this version. Stop Plum and back up the database. From the repository root,
-check the database you plan to upgrade, then run the migration:
+`./updisland.sh` applies migration 25 to the configured SQLite database before
+role synchronization. It also catches up migration 24 on an installation with the
+migration 23 schema. If migration 25 was already applied manually, the updater
+checks the existing unique index and records the migration.
 
-```sh
-python webapp/sql_upd/25_migrate_from_3cad0c465919df626c23c7b10bade36612b3ab59.py --db /path/to/app.db --dry-run
-python webapp/sql_upd/25_migrate_from_3cad0c465919df626c23c7b10bade36612b3ab59.py --db /path/to/app.db
-```
-
-If names collide, the script stops and lists the profile IDs grouped by duplicate
-name. Choose distinct names for those profiles and retry. Their IDs, associations
-and history are preserved. New databases get the index at creation.
+The updater prints the backup path and the final migration number. If names
+collide, it lists the profile IDs grouped by duplicate name and rolls back the
+pending batch. Give those profiles distinct names and rerun the updater.
 
 ## 1. Deploy code and synchronize roles
 
@@ -53,14 +49,15 @@ git pull --ff-only origin main
 git submodule sync --recursive
 git submodule update --init --recursive
 .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python tools/update_sql.py
 .venv/bin/python tools/initial_setup.py --roles-only
 git rev-parse HEAD
 ```
 
 These commands use the tag-rule submodule revision pinned by the selected main
-commit. `updisland.sh` is an alternative update path that also fetches the latest
-remote tag rules and synchronizes roles; it does not install dependencies or run
-the catalogue backfill below. Keep existing configuration files in place.
+commit. `updisland.sh` fetches the latest remote tag rules, runs the same SQLite
+updater and synchronizes roles. Install dependency changes and run the catalogue
+backfill below separately. Keep existing configuration files in place.
 
 The Read Only role gains the six `DiscoveryApi` method permissions. Custom roles
 require explicit grants for the operations they need; see the

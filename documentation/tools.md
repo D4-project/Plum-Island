@@ -197,6 +197,22 @@ path if it differs from `.venv`.
 Imported NSE files are copied into the Flask upload folder and stored in the DB with their filename and SHA-256 hash.
 If a script with the same filename already exists, it is updated only when the content hash changed.
 
+### `update_sql.py`
+
+`updisland.sh` runs this tool before synchronizing roles. It reads
+`SQLALCHEMY_DATABASE_URI` from `webapp/config.py`. To test a copy, run
+`.venv/bin/python tools/update_sql.py --db /path/to/copy.db`.
+The updater recognizes the migration 23 or 24 schema on first use. Earlier
+installations need the [versioned upgrade procedure](migration.md), which
+includes changes to search data outside SQLite.
+
+Before applying changes, it creates a private SQLite backup beside the database,
+including committed WAL contents. Pending migrations and their entries in
+`plum_schema_migrations` commit in one transaction. Concurrent updaters
+serialize through SQLite. Repeating a successful update reports the current
+version and skips the backup. Retain or remove old backups according to your
+backup policy.
+
 ### `tag_mgmt.py`
 
 Manage tag YAML import, DB rules, and Kvrocks tag indexes. Running it without a subcommand prints help and does nothing.

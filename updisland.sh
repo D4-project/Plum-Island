@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 git pull --ff-only origin main
 git submodule sync --recursive
@@ -10,9 +11,11 @@ git submodule update --init --recursive
 git submodule update --init --remote webapp/tags
 
 if [[ ! -x .venv/bin/python ]]; then
-    echo "ERROR: .venv/bin/python is required to synchronize security roles." >&2
+    echo "ERROR: .venv/bin/python is required to update the database and security roles." >&2
     exit 1
 fi
+
+.venv/bin/python tools/update_sql.py
 
 echo "Synchronizing configured security roles..."
 .venv/bin/python tools/initial_setup.py --roles-only

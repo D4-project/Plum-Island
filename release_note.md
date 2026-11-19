@@ -1,5 +1,8 @@
 # Unreleased
 
+- Apply pending SQLite migrations automatically during `./updisland.sh`, with a
+  backup before changes and a final migration number before roles synchronize.
+
 - Add authenticated scan profile CRUD with paginated summaries (#176).
 
 - Add a switchable location map to IP details in all themes. On large screens

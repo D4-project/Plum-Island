@@ -19,7 +19,8 @@ after completing the applicable release migration.
 - Follow the chosen guide's service and writer requirements; the older release
   migrations require stopping the web application, scheduler, agents and index writers.
 - Take restorable backups of SQLite, Meilisearch, Kvrocks, configuration and raw
-  scan data. Backups are operator-managed, not created by SQL migration scripts.
+  scan data. The current SQLite updater also takes a local SQLite snapshot before
+  applying pending changes.
 - Test on disposable copies. Meilisearch replacement and Kvrocks rebuilding are
   not a single transaction.
 - The guides targeting v0.2610.0 use that published tag and its pinned submodule.

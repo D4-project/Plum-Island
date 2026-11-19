@@ -37,12 +37,11 @@ Island and its Plum-Antibodies tag rules from the repository root with:
 
 This updates the application repository and fetches the latest Plum-Antibodies
 YAML tag rules into `webapp/tags/`, even when they are newer than the submodule
-commit pinned by Plum Island. It then uses `.venv/bin/python
-tools/initial_setup.py --roles-only` to synchronize configured security roles in
-SQL, so this is not a read-only repository update. Preserve local changes first;
-the script requires the existing virtual environment. It does not import tag
-rules, reindex tags, recreate the database or rewrite configuration, and is not
-a replacement for the version-specific migration guide or dependency updates.
+commit pinned by Plum Island. Using the existing virtual environment, it applies
+pending SQLite migrations, prints the current migration number, then synchronizes
+security roles. A backup is saved beside the configured database before the first
+tracked update and each later migration batch. For older releases and search-index
+upgrades, follow the [versioned migration guide](migration.md).
 
 ## Step 1 — Add a target
 

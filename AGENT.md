@@ -387,6 +387,11 @@ Keep the first-run installer aligned with the documented initial objects: TCP po
 
 ### SQL migration filenames (mandatory)
 
+For automatic updates, expose `migrate(connection)` in each new migration.
+Keep imports free of database writes. The runner owns the SQLite transaction:
+use the supplied connection, avoid commits and `executescript()`, and accept a
+schema already created by fresh setup or a previous manual migration.
+
 Every migration in `webapp/sql_upd/` must be named exactly
 `NN_migrate_from_<full-40-character-lowercase-git-SHA>.py`.
 

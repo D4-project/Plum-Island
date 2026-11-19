@@ -33,14 +33,16 @@ To refresh an existing clone, run this from the Plum-Island root:
 ```
 
 This fast-forwards Plum-Island `main`, initializes submodules, then fetches the
-remote tip of Plum-Antibodies (not just the pinned revision). It finally runs
-`.venv/bin/python tools/initial_setup.py --roles-only`, modifying configured SQL
-role permissions. Preserve local changes first and keep the existing virtualenv
-available. This does not import tag YAML into SQL, reindex tags, install new
-dependencies or apply numbered migrations. Follow the version-specific upgrade
-guide when those steps are needed. For a reproducible release deployment, use
-the selected application revision and its pinned submodule, not this remote-tip
-update convenience script.
+remote tip of Plum-Antibodies. It applies pending numbered SQLite migrations to
+the database configured in `webapp/config.py`, then synchronizes security roles.
+The updater prints the path of its private SQLite backup before applying changes.
+A repeat run reports the current migration number. If a migration fails, the
+pending changes roll back and role synchronization stops.
+
+Preserve local changes and keep the existing virtualenv available. See the
+[versioned upgrade guides](migration.md) for older releases, dependency changes
+and search-index backfills. Reproducible deployments use the selected release
+and its pinned submodules.
 
 On a fresh install, `setup.sh` (not `updisland.sh`) asks for backend settings:
 
