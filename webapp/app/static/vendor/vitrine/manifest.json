@@ -1,0 +1,60 @@
+{
+  "retrieved": "2026-11-12",
+  "source": "https://github.com/ecrou-exact/vitrine",
+  "files": [
+    {
+      "path": "esm/vt-json.js",
+      "sha256": "1945313d6d6208e55d7648bb3f4b85b85222410f48330993348fd25600096c47",
+      "bytes": 968,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/vt-json.js"
+    },
+    {
+      "path": "esm/chunks/chunk-6IVX3DJE.js",
+      "sha256": "44b9680bb49a2dacc393b0270f20cffa8afb80c42144c968132b45d95ec7bfe2",
+      "bytes": 83663,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-6IVX3DJE.js"
+    },
+    {
+      "path": "esm/chunks/chunk-R54KMXV6.js",
+      "sha256": "451a011f0f3aa210bee83dc16fe1e62a674fe2dbef3ec37b67b5af09b12aabf6",
+      "bytes": 333,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-R54KMXV6.js"
+    },
+    {
+      "path": "esm/chunks/chunk-TKLHRADK.js",
+      "sha256": "91022fee0ba67aec22c156355e2d465b2c73306551f3ad1abff11babc8cb6333",
+      "bytes": 89585,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-TKLHRADK.js"
+    },
+    {
+      "path": "esm/chunks/chunk-F2OAUOTN.js",
+      "sha256": "bfde5254ec9e0cacd6a0f819ec56b476725e3691a485edc78868c4849b6f683b",
+      "bytes": 5637,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-F2OAUOTN.js"
+    },
+    {
+      "path": "esm/chunks/chunk-TENZ3ECF.js",
+      "sha256": "0e2f9158d55045bc4c1956909ebb9820993081ae0beb48824e06eb92abcf7519",
+      "bytes": 5207,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-TENZ3ECF.js"
+    },
+    {
+      "path": "esm/chunks/chunk-QYPCRKJW.js",
+      "sha256": "8df7b444cff7817ec0a9d7b7c86cd07535c1cbe9db7a2c1335a4e1f3b6a610f6",
+      "bytes": 4378,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-QYPCRKJW.js"
+    },
+    {
+      "path": "esm/chunks/chunk-FQYA7JT4.js",
+      "sha256": "19fdc42f113294134ec3aee4e49dccc71a10f1083e827ae9bdac2a4e9293be0a",
+      "bytes": 9014,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-FQYA7JT4.js"
+    },
+    {
+      "path": "esm/chunks/chunk-JSK4NHLI.js",
+      "sha256": "c1b0f2cc570dce34366a911d6842ceed30f8c1e9eb83b12885aa2db48792a25d",
+      "bytes": 8629,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-JSK4NHLI.js"
+    }
+  ]
+}

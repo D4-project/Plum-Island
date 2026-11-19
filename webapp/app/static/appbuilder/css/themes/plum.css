@@ -1,0 +1,227 @@
+@import url("../../../vendor/bootswatch/readable.css");
+@import url("plum-components.css");
+
+/* A small visual layer over AppBuilder. Navigation and table behavior stay native.
+   Inspired by Vitrine's light theme: https://ecrou-exact.github.io/vitrine/ */
+:root {
+  --plum-accent: #087d76;
+  --plum-accent-hover: #06635e;
+  --plum-accent-soft: #eaf6f3;
+  --plum-ink: #253344;
+  --plum-muted: #627184;
+  --plum-border: #dce4e9;
+  --plum-surface: #f6f8fa;
+}
+
+body {
+  color: var(--plum-ink);
+  background: var(--plum-surface);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+h1, h2, h3, h4, h5, h6, .btn, .navbar, .label, .pagination, legend {
+  font-family: inherit;
+}
+a { color: var(--plum-accent); }
+a:hover, a:focus { color: var(--plum-accent-hover); }
+:focus-visible { outline: 3px solid #64b6b0; outline-offset: 3px; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--plum-accent); }
+
+/* Give wide screens more room while keeping the page and navigation aligned. */
+@media screen and (min-width: 1200px) {
+  body > .container, .top .navbar > .container, footer .container {
+    width: 92%;
+    min-width: 1170px;
+    max-width: 1600px;
+  }
+}
+
+/* Keep the existing horizontal menu, with quieter borders and clearer hover. */
+@media screen {
+  header.top { position: sticky; top: 0; z-index: 1030; }
+}
+.top .navbar { background: #fff; border: 0; border-bottom: 1px solid var(--plum-border); border-radius: 0; box-shadow: 0 1px 4px #25334404; }
+.navbar-brand a { color: var(--plum-accent); font-weight: 650; letter-spacing: .02em; }
+.navbar-brand.plum-brand { color: var(--plum-accent); font-weight: 650; letter-spacing: .02em; }
+.navbar .navbar-nav > li > a { color: #455468; font-size: 14px; }
+.navbar .navbar-nav > li > a:hover, .navbar .nav .open > a { background: var(--plum-accent-soft); color: var(--plum-accent-hover); border-color: #d0e6e2; }
+.navbar-toggle { border-color: var(--plum-border); }
+.navbar-toggle .icon-bar { background: #526a7a; }
+.navbar-toggle:hover, .navbar-toggle:focus { background: #edf5f3; }
+.dropdown-menu { border: 1px solid var(--plum-border); border-radius: 7px; padding: 5px; box-shadow: 0 8px 24px #25334412; }
+.dropdown-menu > li > a { border-radius: 4px; padding: 8px 13px; font-size: 14px; }
+.dropdown-menu > li > a:hover, .dropdown-menu > li > a:focus { background: var(--plum-accent-soft); color: var(--plum-accent-hover); }
+
+.panel { border: 1px solid var(--plum-border); border-radius: 8px; box-shadow: 0 2px 8px #25334404; }
+.panel-primary > .panel-heading { color: var(--plum-ink); background: #fff; border-color: var(--plum-border); padding: 18px 22px; border-radius: 7px 7px 0 0; }
+.panel-primary > .panel-heading > .panel-title { font-size: 20px; font-weight: 600; line-height: 1.35; }
+.panel-default > .panel-heading { color: var(--plum-ink); background: #f8fafb; border-color: var(--plum-border); border-radius: 7px 7px 0 0; }
+.panel-default > .panel-heading .panel-title { font-size: 14px; font-weight: 550; }
+.panel-heading a { color: inherit; }
+.panel-body { padding: 22px; }
+.panel-group .panel { border-radius: 7px; }
+.panel-group .panel > .panel-heading { border-radius: 6px 6px 0 0; }
+.well { background: #f8fafb; border-color: var(--plum-border); border-radius: 6px; box-shadow: none; }
+
+/* Preserve real table links, server sorting, pagination and bulk actions. */
+.table { font-size: 14px; font-variant-numeric: tabular-nums; }
+.table > thead > tr > th { padding: 13px 14px; background: #f2f6f8; border-bottom: 1px solid #cfdbe2; color: #46586b; font-size: 12px; font-weight: 600; vertical-align: middle; }
+.table > thead > tr > th a { color: inherit; display: block; }
+.table > thead > tr > th a:hover { color: var(--plum-accent); text-decoration: none; }
+.table > thead > tr > th a .fa { opacity: .55; margin: 3px 0 0 8px; }
+.table > tbody > tr > td { padding: 12px 14px; border-color: #e8edf1; vertical-align: middle; }
+.table-bordered { border-color: var(--plum-border); }
+.table-responsive > .table-bordered > thead > tr > th,
+.table-responsive > .table-bordered > tbody > tr > td { border-left: 0; border-right: 0; }
+.table-responsive > .table > tbody > tr:nth-child(even) { background: #fbfcfd; }
+.table-hover > tbody > tr:hover { background: #f0f7f6; }
+.table > tbody > tr:has(.action_check:checked) { background: #e6f3f0; }
+.table .action_check, .table .action_check_all { width: 16px; height: 16px; margin: 0; vertical-align: middle; cursor: pointer; }
+.table .action_checkboxes { width: 38px; }
+.table-responsive { border-radius: 6px; scrollbar-width: thin; }
+/* Let the scrolling container draw and clip one continuous rounded frame. */
+.table-responsive:has(> .table) { border: 1px solid var(--plum-border); margin-bottom: 20px; background: var(--plum-card, #fff); }
+.table-responsive > .table { border: 0; margin-bottom: 0; }
+.table-responsive > .table > :is(thead, tbody, tfoot):first-child > tr:first-child > :is(th, td) { border-top: 0; }
+.table-responsive > .table > :is(thead, tbody, tfoot):last-child > tr:last-child > :is(th, td) { border-bottom: 0; }
+/* Detail field labels retain their divider without a second outer border. */
+.table-responsive > .table-bordered > tbody > tr > th:first-child { border-left: 0; }
+.table-responsive > .table-bordered > tbody > tr > :is(th, td):last-child { border-right: 0; }
+.table .btn-group { white-space: nowrap; }
+.table .btn-group > .btn { padding: 5px 8px; }
+.table .btn-group > .btn-default { color: #617387; background: white; border-color: #dce4e9; }
+.table .btn-group > .btn-default:hover { color: var(--plum-accent); background: #edf6f4; }
+.table .btn-group > a[id^="btn-delete-"]:hover { color: #ac3744; background: #fceff0; }
+.pagination > li > a, .pagination > li > span { border-color: var(--plum-border); color: var(--plum-accent); font-size: 13px; }
+.pagination > .active > a, .pagination > .active > span { background: var(--plum-accent); border-color: var(--plum-accent); color: white; }
+
+.btn { border-radius: 5px; font-size: 14px; font-weight: 500; box-shadow: none; }
+.btn-primary { background: var(--plum-accent); border-color: var(--plum-accent); }
+.btn-primary:hover, .btn-primary:focus, .btn-primary:active, .btn-primary:active:focus { background: var(--plum-accent-hover); border-color: var(--plum-accent-hover); }
+.btn-default { background: #fff; color: #435569; border-color: #cfdae2; }
+.btn-default:hover, .btn-default:focus { background: #f2f7f8; color: var(--plum-ink); border-color: #a9bdc8; }
+.btn-sm, .btn-group-sm > .btn { font-size: 12px; }
+.btn-xs, .btn-group-xs > .btn { font-size: 11px; }
+.form-control, .select2-container--bootstrap .select2-selection { border-color: #cfdbe3; border-radius: 5px; color: var(--plum-ink); background: #fff; font-size: 14px; box-shadow: none; }
+.form-control:focus { border-color: #469e97; box-shadow: 0 0 0 3px #087d7617; }
+.form-control::placeholder { color: #7d8a98; }
+label, .control-label { font-weight: 550; font-size: 13px; }
+.help-block, .text-muted { color: var(--plum-muted); }
+.label { border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 1.5; }
+.label-default { background: #edf2f5; color: #53677b; border-color: #dfe7ed; }
+.label-success { background: #e4f3eb; color: #256446; }
+.label-warning { background: #fcf1d7; color: #805e13; }
+.label-danger { background: #fbe8eb; color: #a7354c; }
+.alert { border-radius: 6px; font-size: 14px; }
+pre { border-color: var(--plum-border); border-radius: 6px; background: #f7f9fb; color: #33485c; }
+code { color: #2c6867; background: #edf5f4; }
+.nav-tabs { border-color: var(--plum-border); }
+.nav-tabs > li > a { font-size: 14px; border-radius: 5px 5px 0 0; }
+.nav-tabs > li.active > a { color: var(--plum-accent); font-weight: 550; }
+.modal-content { border-color: var(--plum-border); border-radius: 9px; }
+
+@media (max-width: 767px) {
+  .panel-body { padding: 15px; }
+  .panel-primary > .panel-heading { padding: 15px 17px; }
+  .table > thead > tr > th, .table > tbody > tr > td { padding: 10px 12px; }
+}
+
+/* The preference lives on the root before the page renders. */
+:root { color-scheme: light; }
+.plum-navbar .navbar-nav > .plum-color-mode-item { display: flex; align-items: center; justify-content: flex-end; min-height: 64px; padding: 0 0 0 8px; }
+.plum-color-mode-toggle { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--plum-border); border-radius: 5px; background: transparent; color: var(--plum-muted); font-family: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.plum-color-mode-toggle:hover, .plum-color-mode-toggle[aria-pressed="true"] { background: var(--plum-accent-soft); color: var(--plum-accent); }
+@media (max-width: 767px) {
+  .plum-navbar .navbar-nav > .plum-color-mode-item { min-height: 44px; padding: 5px 15px; }
+}
+
+/* Screen-only overrides keep report printing in the light palette. */
+@media screen {
+  :root[data-plum-color-mode="dark"] {
+    color-scheme: dark;
+    --plum-accent: #69d5c4;
+    --plum-accent-hover: #9ae9dc;
+    --plum-accent-soft: #1b3c3b;
+    --plum-ink: #dce6ef;
+    --plum-muted: #a4b5c5;
+    --plum-border: #354657;
+    --plum-surface: #101923;
+    --plum-card: #192532;
+    --plum-raised: #223140;
+    --plum-field: #121e2a;
+  }
+
+  :root[data-plum-color-mode="dark"] :is(.top .navbar, .panel, .dropdown-menu, .modal-content, .ip-detail-toolbar, .ip-port-card > .panel-heading, .ip-info-entry, .ip-info-box, .ip-pdns-box, .stats-card, .kvrocks-table-wrapper, .kvrocks-table) { background: var(--plum-card); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.panel > .panel-heading, .well, .plum-filter-panel, .plum-search-surface, .ip-port-history, .ip-hosts-box, .ip-info-title, .ip-script-title, .ip-port-service, .ip-cert-raw-box) { background: var(--plum-raised); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.panel-footer, .modal-header, .modal-footer, .navbar-collapse, .nav-tabs, .plum-list-filters, .plum-filter-actions, .ip-detail-meta, .ip-port-observation-meta, .ip-script-block, .ip-pdns-row, hr) { border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.navbar .navbar-nav > li > a, .dropdown-menu > li > a, .nav-tabs > li > a, .ip-hosts-title, .ip-script-title, .ip-info-title, .ip-info-label, .ip-pdns-title, .ip-scan-filter label, .plum-filter-panel > summary, .plum-list-filters .remove-filter, .plum-search-description strong, .ip-summary-stat strong, legend) { color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] :is(.ip-summary-date strong, .ip-observation-dates strong, .ip-host-line, .ip-info-value, .search-summary, .timestamp-meta, .export-stats, .stats-label, .ip-port-observation-meta, .ip-port-extra, .ip-unmapped-meta, .plum-search-date > label, .ip-port-history-label, .tag-suggest-kind, .ip-pdns-resolution-status, .plum-filter-actions > span) { color: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] .plum-scan-search .search-status,
+  :root[data-plum-color-mode="dark"] .plum-scan-search #load-more-container [role="status"] { color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] :is(.navbar .navbar-nav > li > a:hover, .navbar .nav .open > a, .dropdown-menu > li > a:hover, .dropdown-menu > li > a:focus, .nav > li > a:hover, .nav > li > a:focus, .navbar-toggle:hover, .navbar-toggle:focus) { background: var(--plum-accent-soft); color: var(--plum-accent); }
+  :root[data-plum-color-mode="dark"] .dropdown-menu .divider { background: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] .navbar-toggle .icon-bar { background: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] .close { color: var(--plum-ink); opacity: .8; }
+
+  :root[data-plum-color-mode="dark"] :is(.form-control, .select2-container--bootstrap .select2-selection, .select2-dropdown, .select2-search__field, .datepicker, .datepicker-dropdown, pre, .ip-script-block > pre, .ip-script-block > .ip-cert-raw-box, vt-json:not(:defined)) { background: var(--plum-field); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.form-control[disabled], .form-control[readonly], .select2-container--disabled .select2-selection) { background: var(--plum-raised); color: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] :is(.form-control::placeholder, .select2-selection__placeholder) { color: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] :is(.select2-selection__rendered, .select2-results__option, .datepicker table tr td, .datepicker table tr th) { color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] :is(.select2-results__option[aria-selected="true"], .select2-results__option--highlighted, .datepicker table tr td.day:hover, .datepicker table tr th:hover) { background: var(--plum-accent-soft); color: var(--plum-accent); }
+  :root[data-plum-color-mode="dark"] .select2-selection__choice { background: var(--plum-raised); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] .datepicker table tr td.active { background: var(--plum-accent); color: var(--plum-field); }
+  :root[data-plum-color-mode="dark"] :is(.datepicker table tr td.old, .datepicker table tr td.new, .datepicker table tr td.disabled) { color: #7c8e9f; }
+  :root[data-plum-color-mode="dark"] .form-control:focus { border-color: var(--plum-accent); box-shadow: 0 0 0 3px #69d5c425; }
+  :root[data-plum-color-mode="dark"] code { background: #203a3a; color: #a8e0d7; }
+  :root[data-plum-color-mode="dark"] :is(.btn-default, .btn-outline-secondary, .table .btn-group > .btn-default, .search-date-field .input-group-btn .btn, .plum-list-filters .close-icon, .ip-quick-link, .ip-port-link, .input-group-addon) { background: var(--plum-raised); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.btn-default:hover, .btn-default:focus, .btn-outline-secondary:hover, .btn-outline-secondary:focus, .table .btn-group > .btn-default:hover, .ip-quick-link:hover, .ip-port-link:hover) { background: var(--plum-accent-soft); color: var(--plum-accent); border-color: #4e8e86; }
+  :root[data-plum-color-mode="dark"] :is(.btn-primary, .btn-primary:hover, .btn-primary:focus, .btn-primary:active) { color: #102b27; }
+  :root[data-plum-color-mode="dark"] .nav-tabs > li.active > a { background: var(--plum-card); color: var(--plum-accent); border-color: var(--plum-border); border-bottom-color: var(--plum-card); }
+
+  /* Detail widgets put field labels in tbody th cells, not a thead. */
+  :root[data-plum-color-mode="dark"] :is(.table, .table > :is(thead, tbody, tfoot) > tr > :is(th, td), .table-responsive, .kvrocks-table th, .kvrocks-table td) { border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.table-bordered, .table .table) { background: var(--plum-card); color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] .table > :is(tbody, tfoot) > tr > th { background: var(--plum-raised); color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] .table .fa-black { color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] :is(.table > thead > tr > th, .kvrocks-table th) { background: var(--plum-raised); color: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] :is(.table-responsive > .table > tbody > tr:nth-child(even), .kvrocks-table tbody tr:nth-child(even)) { background: #1d2a38; }
+  :root[data-plum-color-mode="dark"] .kvrocks-table tbody tr:nth-child(odd) { background: var(--plum-card); }
+  :root[data-plum-color-mode="dark"] :is(.table-hover > tbody > tr:hover, .kvrocks-table tbody tr:hover, .table > tbody > tr:has(.action_check:checked)) { background: var(--plum-accent-soft); }
+  :root[data-plum-color-mode="dark"] :is(.kvrocks-table td, #search-tag-table td) { color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.kvrocks-table td:first-child, .kvrocks-table td:nth-child(4)) { color: var(--plum-accent); }
+  :root[data-plum-color-mode="dark"] :is(.pagination > li > a, .pagination > li > span) { background: var(--plum-card); color: var(--plum-accent); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.pagination > .active > a, .pagination > .active > span) { background: var(--plum-accent); color: var(--plum-field); }
+  :root[data-plum-color-mode="dark"] :is(.pagination > .disabled > a, .pagination > .disabled > span) { background: var(--plum-raised); color: var(--plum-muted); }
+
+  :root[data-plum-color-mode="dark"] :is(.tag-suggest-menu, .tag-suggest-item) { background: var(--plum-card); color: var(--plum-ink); border-color: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] :is(.tag-suggest-item:hover, .tag-suggest-item:focus, .tag-suggest-item.active) { background: var(--plum-accent-soft); color: var(--plum-accent); }
+  :root[data-plum-color-mode="dark"] :is(.plum-filter-count, .ip-port-protocol) { background: var(--plum-accent-soft); color: var(--plum-accent); border-color: #35675e; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag, .tagrules-tag) { --tag-fg: #c8d5e2; --tag-bg: #293a4a; --tag-border: #43576b; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-vuln, .tagrules-tag-vuln) { --tag-fg: #ffb9c5; --tag-bg: #482b36; --tag-border: #764251; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-vendor, .tagrules-tag-vendor) { --tag-fg: #dfc3ff; --tag-bg: #3b2e50; --tag-border: #64517f; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-product, .tagrules-tag-product) { --tag-fg: #a1e5d7; --tag-bg: #213f3b; --tag-border: #3b6b61; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-type, .tagrules-tag-type) { --tag-fg: #ebd098; --tag-bg: #403923; --tag-border: #6e5e37; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-proto, .tagrules-tag-proto) { --tag-fg: #b8d6ff; --tag-bg: #293b53; --tag-border: #49688e; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-lang, .tagrules-tag-lang) { --tag-fg: #b8e5b1; --tag-bg: #2c402d; --tag-border: #4e6f4e; }
+  :root[data-plum-color-mode="dark"] :is(.ip-detail-tag-cpe, .tagrules-tag-cpe) { --tag-fg: #c9d3df; --tag-bg: #303b49; --tag-border: #4f5f71; }
+  :root[data-plum-color-mode="dark"] .tagrules-tag { background: var(--tag-bg); color: var(--tag-fg); }
+  :root[data-plum-color-mode="dark"] .label-default { background: var(--plum-raised); color: var(--plum-ink); }
+  :root[data-plum-color-mode="dark"] :is(.alert-info, .label-info) { background: #203b50; color: #b8dcf4; border-color: #3b647e; }
+  :root[data-plum-color-mode="dark"] :is(.alert-success, .label-success) { background: #234237; color: #b7e8ce; border-color: #3d715b; }
+  :root[data-plum-color-mode="dark"] :is(.alert-warning, .label-warning) { background: #433b25; color: #f0daa6; border-color: #78663a; }
+  :root[data-plum-color-mode="dark"] :is(.alert-danger, .label-danger) { background: #4a2c36; color: #ffc1cb; border-color: #7d4656; }
+  :root[data-plum-color-mode="dark"] .progress { background: var(--plum-field); }
+  :root[data-plum-color-mode="dark"] .report-preview-step { color: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] .report-preview-step.is-running { color: #9dc4ff; }
+  :root[data-plum-color-mode="dark"] .report-preview-step.is-done { color: #91dfb8; }
+  :root[data-plum-color-mode="dark"] .ip-timeline-label { fill: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] .ip-timeline-axis { stroke: var(--plum-border); }
+  :root[data-plum-color-mode="dark"] .ip-timeline-dot { stroke: var(--plum-raised); }
+  :root[data-plum-color-mode="dark"] .ip-timeline-point[aria-pressed="true"] .ip-timeline-dot { fill: var(--plum-accent); stroke: var(--plum-accent); }
+  :root[data-plum-color-mode="dark"] .ip-timeline-point:hover .ip-timeline-dot { fill: var(--plum-accent-hover); }
+  :root[data-plum-color-mode="dark"] .ip-pdns-live-dot { fill: #ff9eac; }
+  :root[data-plum-color-mode="dark"] .ip-pdns-live-range { stroke: #ff9eac; }
+  :root[data-plum-color-mode="dark"] :is(.ip-section-loading, #scan-group-status[data-state="loading"]) { color: var(--plum-muted); }
+  :root[data-plum-color-mode="dark"] :is(.ip-section-loading, #scan-group-status[data-state="loading"])::before { border-color: var(--plum-border); border-top-color: var(--plum-accent); }
+}

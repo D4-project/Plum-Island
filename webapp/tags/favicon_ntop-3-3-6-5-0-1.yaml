@@ -1,6 +1,0 @@
-description: ntop 3.3.6-5.0.1
-query: http_favicon_md5:11ABB4301D06DCCC36D1B5F6DCAD093E
-tags:
-- product:ntop-3-3-6-5-0-1
-- vendor:ntop
-version: 20260520T133458Z

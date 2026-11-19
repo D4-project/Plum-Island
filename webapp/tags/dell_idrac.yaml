@@ -1,7 +1,0 @@
-description: Dell Idrac
-query: http_title.lk:restgui/index.html OR http_title.lk:restgui/start.html or x509_subject.bg:idrac-
-tags:
-- type:supervision
-- vendor:dell
-- product:idrac
-version: 20260520T133458Z

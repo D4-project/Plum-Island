@@ -1,7 +1,0 @@
-description: Arris
-query: http_favicon_mmhash:-1477563858
-tags:
-- vendor:arris
-- type:router
-- product:arris
-version: 20260520T133458Z

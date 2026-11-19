@@ -1,8 +1,0 @@
-description: Bitvise SSH Server
-query: banner.lk:"bitvise ssh server" OR banner.lk:winsshd OR banner.lk:flowssh
-tags:
-- product:bitvise-ssh-server
-- proto:ssh
-- product:sftp
-- vendor:windows
-version: 20260520T133458Z

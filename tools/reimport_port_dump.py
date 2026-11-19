@@ -105,6 +105,14 @@ def parse_args(argv=None):
         help="Do not rebuild OUT Kvrocks; only replace OUT Meilisearch.",
     )
     parser.add_argument(
+        "--allow-history-loss",
+        action="store_true",
+        help=(
+            "Allow missing/invalid .time companions when rebuilding Kvrocks. "
+            "Affected reports fall back to JSON scan dates and lose historical bounds."
+        ),
+    )
+    parser.add_argument(
         "--areyousure_yes",
         action="store_true",
         help=(
@@ -253,40 +261,92 @@ def format_progress(count, total_count):
     return f"{count}/{total_count} ({percentage:.1f}%) todo={todo}"
 
 
-def load_time_snapshot(input_dir):
+def dump_document_uid(json_file):
+    """Read the UID used by the parser, rather than assuming the filename."""
+    try:
+        with open(json_file, encoding="utf-8") as json_handle:
+            document = json.load(json_handle)
+        uid = document.get("id") if isinstance(document, dict) else None
+        if (
+            isinstance(uid, bool)
+            or not isinstance(uid, (str, int))
+            or not str(uid).strip()
+        ):
+            raise ValueError("expected one JSON document with a nonempty id")
+        return uid
+    except (OSError, ValueError) as error:
+        raise SystemExit(f"Invalid dump document {json_file}: {error}") from error
+
+
+def complete_seen_range(data):
+    """Require both finite, nonnegative bounds; never invent a missing bound."""
+    if not isinstance(data, dict):
+        raise ValueError("expected a timestamp object")
+    bounds = []
+    for name in ("first_seen", "last_seen"):
+        value = data.get(name)
+        if isinstance(value, bool):
+            raise ValueError(f"invalid {name}")
+        normalized = index_kvrocks.KVrocksIndexer.normalize_timestamp(value)
+        if normalized is None:
+            raise ValueError(f"missing or invalid {name}")
+        bounds.append(normalized)
+    if bounds[0] > bounds[1]:
+        raise ValueError("first_seen is later than last_seen")
+    return bounds[0], bounds[1]
+
+
+def load_time_snapshot(input_dir, allow_history_loss=False):
     """
-    Load .time companion files into index_kvrocks seen_snapshot shape.
+    Validate all dump history before replacement; retain it for the rebuild.
     """
     snapshot = {}
     missing = 0
     invalid = 0
+    examples = []
 
     for json_file in iter_json_files(input_dir):
+        uid = dump_document_uid(json_file)
         time_file = json_file.with_suffix(".time")
         if not time_file.is_file():
             missing += 1
+            if len(examples) < 3:
+                examples.append(str(time_file))
             continue
 
         try:
             with open(time_file, "r", encoding="utf-8") as time_handle:
                 data = json.load(time_handle)
-            first_seen, last_seen = index_kvrocks.KVrocksIndexer.normalize_seen_range(
-                data.get("first_seen"), data.get("last_seen")
-            )
-        except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+            first_seen, last_seen = complete_seen_range(data)
+        except (OSError, TypeError, ValueError, OverflowError):
             invalid += 1
+            if len(examples) < 3:
+                examples.append(str(time_file))
             continue
 
-        if first_seen is None or last_seen is None:
-            invalid += 1
-            continue
-        snapshot[json_file.stem] = (first_seen, last_seen)
+        previous = snapshot.get(uid, (first_seen, last_seen))
+        snapshot[uid] = (min(previous[0], first_seen), max(previous[1], last_seen))
 
     print(
         "Loaded .time companions: "
         f"usable={len(snapshot)} missing={missing} invalid={invalid}",
         flush=True,
     )
+    if missing or invalid:
+        message = (
+            f"Incomplete dump history: missing={missing} invalid={invalid}. "
+            f"Examples: {', '.join(examples)}."
+        )
+        if not allow_history_loss:
+            raise SystemExit(
+                f"{message} Refusing replacement. Restore complete .time companions "
+                "or explicitly use --allow-history-loss to fall back to JSON scan dates."
+            )
+        print(
+            f"[WARN] {message} --allow-history-loss enabled: historical bounds may be lost.",
+            file=sys.stderr,
+            flush=True,
+        )
     return snapshot
 
 
@@ -505,28 +565,60 @@ def create_import_index(
         f"Creating temporary Meilisearch index {import_index_name}",
         flush=True,
     )
-    wait_for_task(
-        client,
-        client.create_index(import_index_name, {"primaryKey": primary_key}),
-        f"create temporary index {import_index_name}",
-        timeout_ms,
-        interval_ms,
-    )
-
-    import_index = client.index(import_index_name)
-    if settings:
-        print(
-            f"Copying settings to temporary Meilisearch index {import_index_name}",
-            flush=True,
-        )
+    try:
         wait_for_task(
             client,
-            import_index.update_settings(settings),
-            f"copy settings to {import_index_name}",
+            client.create_index(import_index_name, {"primaryKey": primary_key}),
+            f"create temporary index {import_index_name}",
             timeout_ms,
             interval_ms,
         )
+
+        import_index = client.index(import_index_name)
+        if settings:
+            print(
+                f"Copying settings to temporary Meilisearch index {import_index_name}",
+                flush=True,
+            )
+            wait_for_task(
+                client,
+                import_index.update_settings(settings),
+                f"copy settings to {import_index_name}",
+                timeout_ms,
+                interval_ms,
+            )
+    except (KeyboardInterrupt, SystemExit):
+        cleanup_import_index(client, import_index_name, timeout_ms, interval_ms)
+        raise
     return import_index_name, import_index
+
+
+def cleanup_import_index(client, import_index_name, timeout_ms, interval_ms):
+    """
+    Best-effort cleanup for a temporary Meilisearch import index.
+    """
+    if not import_index_name:
+        return
+    print(
+        f"Cleaning temporary Meilisearch index {import_index_name}",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        wait_for_task(
+            client,
+            client.delete_index(import_index_name),
+            f"delete temporary index {import_index_name}",
+            timeout_ms,
+            interval_ms,
+        )
+    except (Exception, SystemExit) as error:  # pylint: disable=broad-exception-caught
+        print(
+            f"[WARN] Unable to delete temporary Meilisearch index "
+            f"{import_index_name}: {error}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def swap_import_index(client, index_name, import_index_name, timeout_ms, interval_ms):
@@ -599,20 +691,32 @@ def replace_meili_from_dump(
     primary_key, settings = target_index_metadata(
         client, index_name, target_index, timeout_ms, interval_ms
     )
-    import_index_name, import_index = create_import_index(
-        client, index_name, primary_key, settings, timeout_ms, interval_ms
-    )
-    result = import_meili_documents_to_index(
-        client,
-        import_index,
-        input_dir,
-        batch_size,
-        total_count,
-        timeout_ms,
-        interval_ms,
-        queue_depth,
-    )
-    swap_import_index(client, index_name, import_index_name, timeout_ms, interval_ms)
+    import_index_name = None
+    swap_started = False
+    try:
+        import_index_name, import_index = create_import_index(
+            client, index_name, primary_key, settings, timeout_ms, interval_ms
+        )
+        result = import_meili_documents_to_index(
+            client,
+            import_index,
+            input_dir,
+            batch_size,
+            total_count,
+            timeout_ms,
+            interval_ms,
+            queue_depth,
+        )
+        if result[2] or result[1] != total_count:
+            raise SystemExit("Incomplete Meilisearch import; refusing index swap")
+        swap_started = True
+        swap_import_index(
+            client, index_name, import_index_name, timeout_ms, interval_ms
+        )
+    except (KeyboardInterrupt, SystemExit):
+        if not swap_started:
+            cleanup_import_index(client, import_index_name, timeout_ms, interval_ms)
+        raise
     return result
 
 
@@ -634,18 +738,14 @@ def prepare_index_kvrocks_runtime():
     index_kvrocks.load_runtime_dependencies(retag=True)
     index_kvrocks.suppress_connection_debug_logs()
 
-    if index_kvrocks.PARSER_CONF["ONLINETLD"]:
-        index_kvrocks.PARSER_CONF["TLDS"] = index_kvrocks.fetch_tlds()
-    else:
-        index_kvrocks.PARSER_CONF["TLDS"] = index_kvrocks.config.get(
-            "TLDS", index_kvrocks.config.get("PARSER_TLDS", [])
-        )
     index_kvrocks.PARSER_CONF["HTTP_HEADER_COLLECTION"] = (
         index_kvrocks.load_collected_header_collection()
     )
 
 
-def rebuild_kvrocks_from_dump(input_dir, batch_size, workers, total_count):
+def rebuild_kvrocks_from_dump(
+    input_dir, batch_size, workers, total_count, seen_snapshot=None
+):
     """
     Rebuild OUT Kvrocks from port-scoped dump and .time companions.
     """
@@ -660,7 +760,8 @@ def rebuild_kvrocks_from_dump(input_dir, batch_size, workers, total_count):
         index_kvrocks.KVROCKS_HOST,
         index_kvrocks.KVROCKS_PORT,
     )
-    seen_snapshot = load_time_snapshot(input_dir)
+    if seen_snapshot is None:
+        seen_snapshot = load_time_snapshot(input_dir)
 
     index_kvrocks.rebuild_kvrocks(indexer, include_tags=True)
     deleted_doc_keys = index_kvrocks.delete_keys_by_pattern(indexer.r, "doc:*")
@@ -730,8 +831,12 @@ def main(argv=None):
         skip_kvrocks=args.skip_kvrocks,
     )
 
+    seen_snapshot = None
     if not args.skip_kvrocks:
         prepare_index_kvrocks_runtime()
+        seen_snapshot = load_time_snapshot(
+            input_dir, allow_history_loss=args.allow_history_loss
+        )
     if not args.skip_meili:
         replace_meili_from_dump(
             input_dir,
@@ -743,7 +848,17 @@ def main(argv=None):
             args.meili_replace_mode,
         )
     if not args.skip_kvrocks:
-        rebuild_kvrocks_from_dump(input_dir, batch_size, args.workers, total_count)
+        result = rebuild_kvrocks_from_dump(
+            input_dir,
+            batch_size,
+            args.workers,
+            total_count,
+            seen_snapshot=seen_snapshot,
+        )
+        if result[2] or result[1] != total_count:
+            raise SystemExit(
+                "Incomplete Kvrocks rebuild; inspect errors before retrying"
+            )
 
     print("Port dump re-import complete", flush=True)
 

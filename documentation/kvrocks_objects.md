@@ -1,5 +1,12 @@
 # Kvrocks Objects
 
+Managed installations resolve these logical keys through pinned Kvrocks generations.
+See [automatic indexing](automatic-indexing.md) for physical routing, journal/cutover
+semantics and legacy maintenance limits.
+
+
+Contributor reference: [search engine internals and change contract](sysinternal/search_engine.md).
+
 Plum Island uses Kvrocks as the fast search index for parsed scan documents.
 The full scan document remains in Meilisearch; Kvrocks stores compact reverse indexes that map searchable values to document UIDs.
 
@@ -90,9 +97,10 @@ Current generic fields:
 | `host` | yes | yes | Host/subdomain part |
 | `domain` | yes | yes | Parsed registered domain |
 | `domain_requested` | yes | yes | Requested domain |
-| `tld` | yes | yes | Top-level domain |
+| `tld` | yes | yes | pyfaup public suffix (may contain multiple labels, e.g. `co.uk`) |
 | `tag` | yes | no | Computed tags, e.g. `product:gitlab` |
 | `port` | yes | no | Open port as string |
+| `port_protocol` | yes | no | Open protocol/port pair, e.g. `tcp/443` or `udp/53`; used by InfoIP |
 | `http_title` | yes | yes | HTML title |
 | `http_favicon_path` | yes | yes | Favicon path/source |
 | `http_favicon_mmhash` | yes | no | Favicon MurmurHash/mmh3 value |
@@ -103,17 +111,40 @@ Current generic fields:
 | `http_header` | yes | yes | Configured HTTP header name presence |
 | `http_headval` | yes | value only | Configured HTTP header value stored as `header:value` |
 | `http_server` | yes | yes | HTTP Server header |
-| `x509_issuer` | yes | yes | TLS issuer |
+| `x509_issuer` | yes | yes | Serialized issuer DN when structured attributes are available |
+| `x509_issuer_cn` | yes | yes | TLS issuer common name |
 | `x509_md5` | yes | no | TLS certificate MD5 |
 | `x509_sha1` | yes | no | TLS certificate SHA-1 |
 | `x509_sha256` | yes | no | TLS certificate SHA-256 |
-| `x509_subject` | yes | yes | TLS subject |
+| `x509_subject` | yes | yes | Serialized subject DN when structured attributes are available |
+| `x509_subject_cn` | yes | yes | TLS subject common name |
 | `x509_san` | yes | yes | TLS SAN values |
 | `banner` | yes | yes | Service banner |
 
 `http_header` and `http_headval` are populated only from the configured `collected_headers` rows. Header names and values are lowercased before ingestion. `http_headval` keeps the header name exact and applies prefix/substring matching only to the value through queries such as `http_headval:x-powered-by.lk:php`.
 
+The certificate CN/DN split is applied by `prepare_kvrocks_document()` after
+`parse_json()`, before indexing. Existing CN-only rules/report queries and old
+indexes need a coordinated [certificate migration](../migration_full_cert.md).
+Raw Meilisearch documents remain unchanged. Without structured DN attributes,
+the parsed fallback value is retained; a rebuild cannot recover absent source data.
+
 ## Tag-specific updates
+
+`tag_catalogue` is a set of observed canonical tag values (for example
+`product:nginx`), maintained by both document ingestion and tag-only replacement.
+One deduplicated `SADD` per nonempty tagged batch makes replay safe. It contains
+candidates, not counters or UID lists; `SCARD tag:{value}` remains authoritative.
+The search helper reads candidate names and positive counts in pipelines of at
+most 500 commands, with a 60-second per-worker cache. It never scans keys or
+loads reverse UID sets while displaying the catalogue.
+
+Retagged/deleted values may remain as zero-count candidates; readers do not prune
+them, avoiding races with concurrent writers. Full tag flush/rebuild clears the
+set; rebuilds preserving tags keep it. Normal retries repair an interrupted
+batch; the explicit [backfill tool](tools.md#backfill_tag_cataloguepy) can reseed
+existing or incomplete catalogues without a full reindex. No extra counters
+require reconciliation. The catalogue is global, independent of search dates.
 
 Tag reindexing does not rebuild the whole Kvrocks index.
 `tools/tag_mgmt.py reindex` uses `replace_field_values_batch("tag", docs)` to replace only:
@@ -137,9 +168,12 @@ tag:*
 tags:*
 ```
 
+It also deletes `tag_catalogue`. Single-tag removal leaves its candidate in place;
+the zero reverse count hides it after the web cache expires.
+
 ## Date filtering
 
-The search UI applies date filtering by intersecting two sorted-set queries:
+Full search and exports apply date filtering by intersecting two sorted-set queries:
 
 ```text
 last_seen_index >= from_ts
@@ -148,7 +182,7 @@ first_seen_index <= to_ts
 
 This selects documents whose observation interval overlaps the requested search interval.
 
-For last-seen-only filtering, Plum reads:
+Initial UI page discovery instead selects each backward `last_seen` window with:
 
 ```text
 ZRANGEBYSCORE last_seen_index from_ts to_ts
@@ -176,6 +210,12 @@ Then each candidate key is tested in Python:
 The result set is built by intersecting fields inside one query group.
 `OR` queries are evaluated as separate groups and unioned by the caller.
 
+Standalone `NOT field:value` subtracts matching UIDs from its positive AND group
+before the OR union. For example, router UIDs minus MikroTik UIDs implements
+`tag:type:router AND NOT tag:vendor:mikrotik`. Exclusions reuse existing indexes;
+they do not create new keys. The view layer handles the compiled negation marker,
+and passes ordinary field criteria plus the remaining UID scope to the indexer.
+
 ## Rebuild behavior
 
 `tools/index_kvrocks.py --rebuild` deletes known Plum keys before reimporting dumped Meilisearch JSON documents.
@@ -194,7 +234,6 @@ last_seen_index
 Deleted pattern keys:
 
 ```text
-doc:*
 uid:*
 ip:*
 {field}:*
@@ -203,7 +242,19 @@ ip:*
 
 for every generic field listed above. Without `--retag`, `tag:*` and `tags:*` are skipped so existing tag indexes are preserved. With `--retag`, tag keys are deleted and rebuilt from the parsed active Tag Rules.
 
-Before deleting `doc:*`, the rebuild takes an in-memory snapshot of existing `first_seen` and `last_seen` values. During reimport, it preserves the earliest known `first_seen` and latest known `last_seen`.
+The standard rebuild preserves `doc:{uid}` hashes in place. During reimport,
+`add_documents_batch()` reads each existing hash and merges the earliest known
+`first_seen` and latest known `last_seen`, then rebuilds their sorted-set indexes.
+No global in-memory timestamp snapshot is needed. Metadata hashes for UIDs absent
+from the rebuild source remain, but their rebuilt search indexes are not restored.
+
+`tools/reimport_port_dump.py` is a different, full-replacement operation: it
+deletes `doc:*` and restores history from the dump's `.time` companions. Before
+replacing either backend, it requires complete valid `first_seen` and `last_seen`
+for every input document. Missing or invalid companions abort the import unless
+`--allow-history-loss` explicitly permits fallback to JSON scan dates. The loaded
+history is associated with JSON document IDs and reused during the rebuild.
+`--skip-kvrocks` does not require these companions because it leaves Kvrocks intact.
 
 During indexing, progress output includes processed/indexed counts, the total document count when known, and a percentage. `--rebuild-from-meili` gets the total from Meilisearch; dump-based imports count JSON files in the input directory. Parsing uses multiprocessing by default with CPU count minus one worker; `--workers 1` disables multiprocessing.
 
@@ -252,6 +303,14 @@ count,value
 ```
 
 `count` is the cardinality of `{field}:{value}`, i.e. the number of UIDs currently attached to that value.
+
+The search candidate planner reuses `SCARD` on these reverse sets to order exact
+predicates and estimate indexed CIDR scopes. These are per-value counts, not one
+count per field type or a new stored statistics object. Counts are global (not
+date-scoped), read per execution and used only as ordering hints. Modifiers have
+unknown estimates; `/24` parent counts bound narrower CIDRs. No schema migration,
+new counter maintenance or index rebuild is needed. See
+[candidate planning](sysinternal/search_engine.md#candidate-planning-254).
 
 ## Notes on the old store document
 

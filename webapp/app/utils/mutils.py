@@ -4,10 +4,30 @@ Generic utils library
 
 import uuid
 import ipaddress
-import re
-import requests
+
+try:
+    from .domains import is_hostname_syntax, parse_hostname
+except ImportError:
+    from domains import is_hostname_syntax, parse_hostname
 
 MAX_SCAN_UNIT_COUNT = 2**63 - 1
+
+
+def classify_target_is_ip_cidr(value):
+    """Classify stored syntax, independently of public-IP admission policy.
+
+    Retain legacy/private-suffix hostnames; reject unclassifiable values rather
+    than silently treating corrupt IP strings as FQDNs. Never normalize here.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError("Target must be an IP, CIDR or FQDN")
+    try:
+        ipaddress.ip_network(value, strict=False)
+        return True
+    except ValueError:
+        if is_hostname_syntax(value):
+            return False
+        raise ValueError("Target must be an IP, CIDR or FQDN") from None
 
 
 def is_valid_uuid(value):
@@ -21,24 +41,9 @@ def is_valid_uuid(value):
         return False
 
 
-def is_valid_fqdn(hostname):
-    """
-    Validate a fully qualified domain name (FQDN).
-    Only the Form do not test it.
-    Need a "big" list of common tld.... one day.
-    """
-    if len(hostname) > 253:
-        return False
-
-    # Remove trailing dot if present
-    if hostname.endswith("."):
-        hostname = hostname[:-1]
-
-    # Regex for valid FQDN
-    fqdn_regex = re.compile(
-        r"^(?=.{1,253}$)(?!-)(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}$"
-    )
-    return bool(fqdn_regex.match(hostname))
+def is_valid_fqdn(hostname, extra_suffixes=()):
+    """Validate a hostname with the shared pyfaup parser."""
+    return parse_hostname(hostname, extra_suffixes) is not None
 
 
 def is_valid_ip(value):
@@ -148,23 +153,6 @@ def flat_marsh_error(err_msg):
     for key, value in err_msg.items():
         if isinstance(value, list) and len(value) > 0:
             return f"{value[0]} in {key}"
-
-
-def fetch_tlds():
-    """
-    Download the file from IANA and load into an ARRAY
-    """
-    response = requests.get("https://data.iana.org/TLD/tlds-alpha-by-domain.txt")
-    response.raise_for_status()
-
-    tld_list = []
-    for line in response.text.splitlines():
-        # Skip comments or blank lines
-        if line.startswith("#") or not line.strip():
-            continue
-        # Append lowercase TLD to list
-        tld_list.append(line.strip().lower())
-    return tld_list
 
 
 def package_list(source, size):

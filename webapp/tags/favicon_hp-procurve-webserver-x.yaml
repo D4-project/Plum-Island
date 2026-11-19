@@ -1,6 +1,0 @@
-description: HP ProCurve Webserver x
-query: http_favicon_md5:6C18A6E983F64B6A6ED0A32C9E8A19B6
-tags:
-- product:hp-procurve-webserver-x
-- vendor:hp
-version: 20260520T133458Z

@@ -1,8 +1,0 @@
-description: FortiGate
-query: x509_subject.bg:FG OR x509_subject.lk:fortigate OR x509_issuer.bg:fortinet
-  OR http_title.lk:fortigate OR http_etag.bg:"83-6"
-tags:
-- product:fortigate
-- vendor:fortinet
-- type:firewall
-version: 20260520T133458Z

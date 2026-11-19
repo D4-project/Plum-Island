@@ -7,28 +7,60 @@
     display: inline-flex;
     flex-wrap: wrap;
     gap: 2px;
-    max-width: 22rem;
     vertical-align: middle;
 }
 .tagrules-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
     display: inline-block;
+    font-size: 0.92rem;
+    font-weight: 600;
     max-width: 16rem;
     overflow: hidden;
-    padding: 0.15em 0.35em;
+    padding: 0.2rem 0.5rem;
     text-overflow: ellipsis;
     vertical-align: middle;
+    white-space: nowrap;
+}
+.tagrules-tag-vuln { background: #d9534f; }
+.tagrules-tag-vendor { background: #6f42c1; }
+.tagrules-tag-product { background: #2f6f73; }
+.tagrules-tag-type { background: #b45f06; }
+.tagrules-tag-proto { background: #337ab7; }
+.tagrules-tag-lang { background: #5cb85c; }
+.tagrules-tag-cpe { background: #777; }
+.tagrule-reindex-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+}
+.tagrule-reindex-status {
+    margin-left: 0.5em;
+}
+.tagrule-reindex-progress-wrap {
+    margin-top: 1em;
+    width: 100%;
+}
+.tagrule-row-actions {
+    align-items: center;
+    display: inline-flex;
+    gap: 2px;
+}
+.tagrule-reindex:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
 }
 </style>
 {% endblock %}
 
 {% block list_list scoped %}
-    <div class="well well-sm">
-        <a href="{{ url_for('TagRulesView.export_all') }}" class="btn btn-sm btn-success">
-            <i class="fa fa-save"></i> Save to disk
-        </a>
-        <a href="{{ url_for('TagRulesView.export_zip') }}" class="btn btn-sm btn-primary">
-            <i class="fa fa-download"></i> Download ZIP
-        </a>
-    </div>
+    {% include 'tag_reconciliation_status.html' %}
     {{ super() }}
+{% endblock %}
+
+{% block tail_js %}
+{{ super() }}
+<script src="{{ url_for('static', filename='js/tag_reconciliation.js') }}"></script>
 {% endblock %}

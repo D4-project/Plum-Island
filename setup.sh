@@ -13,6 +13,15 @@ if [ ! -d "webapp" ]; then
   echo "ERROR: This script should be launched in the project directory."
   exit 1
   fi
+
+# Tag rules are maintained in the Plum-Antibodies Git submodule. Synchronize
+# its configured URL and initialize it so a regular `git clone` is sufficient
+# for a fresh installation.
+if ! git submodule sync --recursive || ! git submodule update --init --recursive; then
+  echo "ERROR: Could not initialize the Plum-Antibodies tag submodule."
+  exit 1
+fi
+
 if [  -f "webapp/app.db" ]; then
   echo "ERROR: The Database has already been created, remove app.db if you want to reset the instance."
   exit 1
@@ -25,6 +34,14 @@ if [  -f "webapp/$CONFIG_FILE" ]; then
 python3 -m venv .venv
 VENV_PYTHON="$PWD/.venv/bin/python"
 "$VENV_PYTHON" -m pip install -r requirements.txt
+if ! "$VENV_PYTHON" -c "import reportlab"; then
+  echo "ERROR: ReportLab PDF support installation failed."
+  exit 1
+fi
+if ! "$VENV_PYTHON" -c "from plum_antibodies import validate_tag"; then
+  echo "ERROR: Plum-Antibodies tag validation library installation failed."
+  exit 1
+fi
 key=`head -c32 /dev/urandom | base64`
 csrf=`head -c32 /dev/urandom | base64`
 cd webapp
@@ -85,6 +102,12 @@ echo ""
 echo "Loading initial TCP ports, HTTP header tagging, tag rules, NSE scripts and default scan profile..."
 if ! "$VENV_PYTHON" tools/initial_setup.py; then
   echo "ERROR: Initial TCP ports/tag/NSE setup failed."
+  exit 1
+fi
+echo ""
+echo "Creating feeder API role..."
+if ! "$VENV_PYTHON" webapp/sql_upd/17_migrate_from_d7c3198bc3b3a7d6cf0ae39860fd1cfb58c1a4e3.py; then
+  echo "ERROR: Feeder API role setup failed."
   exit 1
 fi
 echo ""

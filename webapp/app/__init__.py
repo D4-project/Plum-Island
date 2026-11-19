@@ -5,19 +5,54 @@ This is the init module of the flask appbuilder application.
 import logging
 import os
 import sqlite3
-from flask import Flask
+from flask import Flask, g
 from flask_appbuilder import AppBuilder, SQLA
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+from plum_settings import apply_settings
 from .security import CustomSecurityManager  # Custom Security menu
-
-# Loggin configuration
-logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
-logging.getLogger().setLevel(logging.DEBUG)
+from .logging_config import configure_logging
+from .ui_theme import configure_ui_templates
+from .ui_assets import configure_icon_assets
+from .utils.index_generations import READER_SCOPE
 
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+apply_settings(app.config)
+configure_ui_templates(app)
+configure_icon_assets(app)
+
+
+@app.before_request
+def pin_request_index():
+    """All structured reads within a request share the same index generation."""
+    g.index_generation_token = READER_SCOPE.set({})
+
+
+@app.teardown_request
+def release_request_index(_error=None):
+    """Release the context without deleting generations used by other readers."""
+    token = g.pop("index_generation_token", None)
+    if token is not None:
+        READER_SCOPE.reset(token)
+
+
+# AppBuilder's static blueprint otherwise looks only in its packaged themes.
+app.add_url_rule(
+    "/static/appbuilder/css/themes/plum.css",
+    endpoint="plum_theme",
+    view_func=app.send_static_file,
+    defaults={"filename": "appbuilder/css/themes/plum.css"},
+)
+app.add_url_rule(
+    "/static/appbuilder/css/themes/plum-components.css",
+    endpoint="plum_theme_components",
+    view_func=app.send_static_file,
+    defaults={"filename": "appbuilder/css/themes/plum-components.css"},
+)
+logging.basicConfig(format="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
+configure_logging(app.config)
 
 
 @event.listens_for(Engine, "connect")
@@ -53,6 +88,17 @@ appbuilder = AppBuilder(app, db.session, security_manager_class=CustomSecurityMa
 # pylint: disable=C0413
 from . import views
 from . import apis
+from .settings_view import PlumSettingsView, settings_template_context
+
+app.context_processor(settings_template_context)
+
+appbuilder.add_view(
+    PlumSettingsView,
+    "Plum Settings",
+    category="Security",
+    icon="fa-sliders",
+    menu_cond=appbuilder.sm.is_plum_settings_admin,
+)
 
 # Scheduler: should only start in main process once
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true":

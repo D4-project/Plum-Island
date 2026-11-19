@@ -1,7 +1,0 @@
-description: Icecast2 / ICY streaming protocols
-query: banner.bg:"ICY 200 OK" OR banner.lk:"icy-name:" OR banner.lk:"icy-br:" OR banner.lk:"icy-metaint:" OR banner.lk:"icy-metadata-version:"
-tags:
-- proto:icy
-- proto:icecast2
-- proto:streaming
-version: 20260520T133458Z

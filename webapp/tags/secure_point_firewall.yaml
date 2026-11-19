@@ -1,7 +1,0 @@
-description: Securepoint UTM
-query: http_title.bg:"Securepoint UTM v"
-tags:
-- product:firewall
-- product:securepoint
-- vendor:securepoint
-version: 20260520T133458Z

@@ -1,7 +1,0 @@
-description: UBNT Router UI
-query: http_favicon_mmhash:-1677255344
-tags:
-- product:ubnt
-- type:router
-- vendor:ubnt
-version: 20260520T133458Z

@@ -4,6 +4,8 @@
 {% block content %}
 {{ lib.panel_begin(title, "Query Scans") }}
 
+<script src="{{ url_for('static', filename='js/ip_tag_enrichment.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+{% include 'search_query_helpers.html' %}
 <script>
 let lastSuccessfulSearch = null;
 let exportStatusPoller = null;
@@ -12,8 +14,73 @@ let searchPageUnloading = false;
 let activeSearchAbortController = null;
 const SEARCH_PAGE_SIZE = 100;
 const MAX_SEARCH_WINDOW_DAYS = 4096;
-const TAG_SUGGEST_DEBOUNCE_MS = 120;
+const MAX_DEBUG_PAGES = 100;
+let searchDebugReport = null;
+let searchDebugStarted = 0;
+
+function resetSearchDebug() {
+    searchDebugReport = null;
+    searchDebugStarted = performance.now();
+    document.getElementById('search-debug').hidden = true;
+    document.getElementById('search-debug-report').textContent = '';
+}
+
+function recordSearchDebug(data, requestMs, renderMs, controller) {
+    if (!data.debug || activeSearchAbortController !== controller) return;
+    if (!searchDebugReport) {
+        searchDebugReport = {
+            schema_version: 1,
+            page_count: 0,
+            request_ms: 0,
+            server_ms: 0,
+            pages: []
+        };
+    }
+    searchDebugReport.page_count += 1;
+    searchDebugReport.request_ms += requestMs;
+    searchDebugReport.server_ms += data.debug.total_ms;
+    if (searchDebugReport.page_count === 1) {
+        searchDebugReport.first_response_ms = performance.now() - searchDebugStarted - renderMs;
+    }
+    if (data.debug.counts.returned_ips > 0 && searchDebugReport.first_results_dom_ms === undefined) {
+        searchDebugReport.first_results_dom_ms = performance.now() - searchDebugStarted;
+    }
+    searchDebugReport.pages.push({
+        page: searchDebugReport.page_count,
+        received_at: new Date().toISOString(),
+        request_ms: requestMs,
+        render_ms: renderMs,
+        status: data.status,
+        pagination: data.pagination,
+        ...data.debug
+    });
+    if (searchDebugReport.pages.length > MAX_DEBUG_PAGES) searchDebugReport.pages.shift();
+    document.getElementById('search-debug').hidden = false;
+    document.getElementById('search-debug-summary').textContent =
+        `Performance: ${searchDebugReport.page_count} responses, latest ${formatProcessingTime(requestMs)}`;
+    document.getElementById('search-debug-report').textContent = JSON.stringify(searchDebugReport, null, 2);
+}
+
+function downloadSearchDebug() {
+    if (!searchDebugReport) return;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(searchDebugReport, null, 2)], {type: 'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'search-debug.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const EXPORT_CONFIGS = {
+    resolved: {
+        title: 'Preparing Resolved Export',
+        counterUnit: 'IPs',
+        initialText: 'Finding matching IPs...',
+        runningText: 'Reading stored PTR records and collecting Passive DNS...',
+        startUrl: '/kvsearchview/export_resolved_start',
+        statusUrl: '/kvsearchview/export_resolved_status',
+        downloadUrl: '/kvsearchview/export_resolved_download'
+    },
     ips: {
         title: 'Preparing IP Export',
         counterUnit: 'IPs',
@@ -33,13 +100,14 @@ const EXPORT_CONFIGS = {
         downloadUrl: '/kvsearchview/export_full_download'
     }
 };
-let tagSuggestAbortController = null;
-let tagSuggestDebounceTimer = null;
-let tagSuggestItems = [];
-let tagSuggestSelectedIndex = -1;
-let tagSuggestContext = null;
 let manualTimeRangeSnapshot = null;
 let sinceDirectiveModeActive = false;
+let ipTagEnricher = null;
+let pendingIpExpansions = new Map();
+let ipExpansionTimer = null;
+let activeIpExpansionAbortController = null;
+let ipExpansionInFlight = false;
+let ipExpansionGeneration = 0;
 
 window.addEventListener('pagehide', () => {
     searchPageUnloading = true;
@@ -54,6 +122,119 @@ function abortActiveSearch() {
     if (activeSearchAbortController) {
         activeSearchAbortController.abort();
     }
+    if (ipTagEnricher) {
+        ipTagEnricher.abort();
+    }
+    if (activeIpExpansionAbortController) {
+        activeIpExpansionAbortController.abort();
+    }
+}
+
+function resetTagLookups() {
+    if (ipTagEnricher) {
+        ipTagEnricher.reset();
+    }
+    ipExpansionGeneration += 1;
+    pendingIpExpansions.clear();
+    if (ipExpansionTimer) {
+        clearTimeout(ipExpansionTimer);
+        ipExpansionTimer = null;
+    }
+    if (activeIpExpansionAbortController) {
+        activeIpExpansionAbortController.abort();
+        activeIpExpansionAbortController = null;
+    }
+    ipExpansionInFlight = false;
+}
+
+function renderIpTags(ip, tags) {
+    const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
+    window.renderIpTagBadges(target, tags);
+}
+
+function updateIpTimestamps(ip, timestampData) {
+    const target = document.querySelector(`[data-search-ip-timestamps="${CSS.escape(ip)}"]`);
+    if (!target || !timestampData) {
+        return;
+    }
+    const replacement = buildTimestampMeta(timestampData.min_seen, timestampData.max_seen);
+    if (!replacement) {
+        return;
+    }
+    replacement.dataset.searchIpTimestamps = ip;
+    target.replaceWith(replacement);
+}
+
+function queueTagsForSearchChunk(results, timeRange) {
+    ipTagEnricher.queue(results, timeRange);
+}
+
+function scheduleIpExpansion() {
+    if (ipExpansionTimer || ipExpansionInFlight || pendingIpExpansions.size === 0) {
+        return;
+    }
+    ipExpansionTimer = setTimeout(() => {
+        ipExpansionTimer = null;
+        processIpExpansionQueue();
+    }, 0);
+}
+
+async function processIpExpansionQueue() {
+    if (ipExpansionInFlight || pendingIpExpansions.size === 0) {
+        return;
+    }
+    const generation = ipExpansionGeneration;
+    const batch = [...pendingIpExpansions.keys()].slice(0, 200);
+    const config = pendingIpExpansions.get(batch[0]);
+    for (const ip of batch) {
+        pendingIpExpansions.delete(ip);
+    }
+    ipExpansionInFlight = true;
+    const controller = new AbortController();
+    activeIpExpansionAbortController = controller;
+    try {
+        const res = await fetch('/kvsearchview/expand_ips', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                ips: batch,
+                query: config.query,
+                from_ts: config.fromTs,
+                to_ts: config.toTs
+            }),
+            signal: controller.signal
+        });
+        const data = await readJsonResponse(res);
+        if (generation !== ipExpansionGeneration) {
+            return;
+        }
+        for (const [ip, uids] of Object.entries(data.results || {})) {
+            appendUidPanels(ip, uids, (data.uid_timestamps || {})[ip] || {});
+            updateIpTimestamps(ip, (data.timestamps || {})[ip]);
+        }
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
+            console.warn('IP search expansion failed', error);
+        }
+    } finally {
+        if (activeIpExpansionAbortController === controller) {
+            activeIpExpansionAbortController = null;
+        }
+        ipExpansionInFlight = false;
+        scheduleIpExpansion();
+    }
+}
+
+function queueIpExpansionForSearchChunk(results, timeRange, query) {
+    const config = {
+        query,
+        fromTs: timeRange?.from_ts ?? null,
+        toTs: timeRange?.to_ts ?? null
+    };
+    for (const ip of Object.keys(results || {})) {
+        pendingIpExpansions.set(ip, config);
+    }
+    scheduleIpExpansion();
 }
 
 function isSearchNavigationAbort(error) {
@@ -64,7 +245,7 @@ function isSearchNavigationAbort(error) {
 
 function bindSearchNavigationAbort() {
     document.addEventListener('click', (event) => {
-        const link = event.target.closest('.ip-detail-link');
+        const link = event.target.closest('.ip-address-link');
         if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
             return;
         }
@@ -83,6 +264,12 @@ async function readJsonResponse(res) {
     const snippet = rawText.trim().slice(0, 300) || `HTTP ${res.status}`;
     throw new Error(snippet);
 }
+
+ipTagEnricher = window.createIpTagEnricher({
+    readJsonResponse,
+    renderTags: renderIpTags,
+    renderTimestamps: updateIpTimestamps
+});
 
 function formatTimestamp(ts) {
     if (ts === null || ts === undefined) {
@@ -111,21 +298,38 @@ function hasTimestampValue(value) {
 
 function buildTimestampMeta(first, last) {
     if (!hasTimestampValue(first) && !hasTimestampValue(last)) {
-        return '';
+        return null;
     }
     const firstDisplay = hasTimestampValue(first) ? formatTimestampWithRaw(first) : 'N/A';
     const lastDisplay = hasTimestampValue(last) ? formatTimestampWithRaw(last) : 'N/A';
-    return `<span class="timestamp-meta">
-        <span class="timestamp-chip timestamp-first">
-            <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
-            ${firstDisplay}
-        </span>
-        <span class="timestamp-separator">|</span>
-        <span class="timestamp-chip timestamp-last">
-            ${lastDisplay}
-            <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
-        </span>
-    </span>`;
+
+    const meta = document.createElement('span');
+    meta.className = 'timestamp-meta';
+
+    const firstChip = document.createElement('span');
+    firstChip.className = 'timestamp-chip timestamp-first';
+    const firstIcon = document.createElement('i');
+    firstIcon.className = 'fa-solid fa-backward-step';
+    firstIcon.setAttribute('aria-hidden', 'true');
+    firstChip.appendChild(firstIcon);
+    firstChip.appendChild(document.createTextNode(` ${firstDisplay}`));
+
+    const separator = document.createElement('span');
+    separator.className = 'timestamp-separator';
+    separator.textContent = '|';
+
+    const lastChip = document.createElement('span');
+    lastChip.className = 'timestamp-chip timestamp-last';
+    lastChip.appendChild(document.createTextNode(`${lastDisplay} `));
+    const lastIcon = document.createElement('i');
+    lastIcon.className = 'fa-solid fa-forward-step';
+    lastIcon.setAttribute('aria-hidden', 'true');
+    lastChip.appendChild(lastIcon);
+
+    meta.appendChild(firstChip);
+    meta.appendChild(separator);
+    meta.appendChild(lastChip);
+    return meta;
 }
 
 function copyIpToClipboard(ip, triggerEl) {
@@ -194,6 +398,16 @@ function setDownloadButtonState(enabled) {
     fullButton.innerHTML = '<i class="fa-solid fa-file-arrow-down" aria-hidden="true"></i>';
     fullButton.addEventListener('click', startFullExport);
     container.appendChild(fullButton);
+
+    const resolvedButton = document.createElement('button');
+    resolvedButton.type = 'button';
+    resolvedButton.id = 'download-resolved-btn';
+    resolvedButton.className = 'btn btn-outline-secondary w-100 mt-2';
+    resolvedButton.title = 'Download resolved (CSV)';
+    resolvedButton.setAttribute('aria-label', 'Download resolved (CSV)');
+    resolvedButton.innerHTML = '<i class="fa-solid fa-network-wired" aria-hidden="true"></i>';
+    resolvedButton.addEventListener('click', () => startExport(EXPORT_CONFIGS.resolved));
+    container.appendChild(resolvedButton);
 }
 
 function setSearchLoading(isLoading, showSpinner = true) {
@@ -530,255 +744,6 @@ function buildSearchParams(query, timeRange, cursorTs = null, searchId = null, l
     return params;
 }
 
-function getTagSuggestMenu() {
-    return document.getElementById('query-tag-suggest');
-}
-
-function hideTagSuggestions() {
-    if (tagSuggestAbortController) {
-        tagSuggestAbortController.abort();
-        tagSuggestAbortController = null;
-    }
-    if (tagSuggestDebounceTimer) {
-        clearTimeout(tagSuggestDebounceTimer);
-        tagSuggestDebounceTimer = null;
-    }
-    const menu = getTagSuggestMenu();
-    if (menu) {
-        menu.style.display = 'none';
-        menu.innerHTML = '';
-    }
-    tagSuggestItems = [];
-    tagSuggestSelectedIndex = -1;
-    tagSuggestContext = null;
-}
-
-function getQueryTagContext() {
-    const input = document.getElementById('query');
-    if (!input) {
-        return null;
-    }
-    const caretStart = input.selectionStart;
-    const caretEnd = input.selectionEnd;
-    if (caretStart === null || caretEnd === null || caretStart !== caretEnd) {
-        return null;
-    }
-
-    const value = input.value || '';
-    let tokenStart = caretStart;
-    while (tokenStart > 0 && !/\s/.test(value.charAt(tokenStart - 1))) {
-        tokenStart -= 1;
-    }
-
-    let tokenEnd = caretStart;
-    while (tokenEnd < value.length && !/\s/.test(value.charAt(tokenEnd))) {
-        tokenEnd += 1;
-    }
-
-    const token = value.slice(tokenStart, tokenEnd);
-    const lowerToken = token.toLowerCase();
-    if (!lowerToken.startsWith('tag:') && !lowerToken.startsWith('http_headval:')) {
-        return null;
-    }
-    if (lowerToken.startsWith('http_headval:')) {
-        const headerFragment = lowerToken.slice('http_headval:'.length);
-        if (headerFragment.includes(':')) {
-            return null;
-        }
-    }
-
-    const suggestType = lowerToken.startsWith('http_headval:') ? 'header' : 'tag';
-    if (suggestType === 'header' && token.includes(' ')) {
-        return null;
-    }
-
-    return {
-        input,
-        token,
-        suggestType,
-        tokenStart,
-        tokenEnd
-    };
-}
-
-function updateTagSuggestionSelection(nextIndex) {
-    const menu = getTagSuggestMenu();
-    if (!menu || !tagSuggestItems.length) {
-        tagSuggestSelectedIndex = -1;
-        return;
-    }
-    const buttons = [...menu.querySelectorAll('.tag-suggest-item')];
-    if (!buttons.length) {
-        tagSuggestSelectedIndex = -1;
-        return;
-    }
-
-    const boundedIndex = Math.max(0, Math.min(nextIndex, buttons.length - 1));
-    tagSuggestSelectedIndex = boundedIndex;
-    buttons.forEach((button, index) => {
-        button.classList.toggle('active', index === boundedIndex);
-    });
-    buttons[boundedIndex].scrollIntoView({ block: 'nearest' });
-}
-
-function applyTagSuggestion(index) {
-    if (!tagSuggestContext || !tagSuggestItems[index]) {
-        return;
-    }
-
-    const suggestion = tagSuggestItems[index];
-    const input = tagSuggestContext.input;
-    const currentValue = input.value || '';
-    const before = currentValue.slice(0, tagSuggestContext.tokenStart);
-    const after = currentValue.slice(tagSuggestContext.tokenEnd);
-    const needsTrailingSpace = suggestion.kind === 'tag' && (after === '' || !/^\s/.test(after));
-    const replacement = `${suggestion.value}${needsTrailingSpace ? ' ' : ''}`;
-    input.value = `${before}${replacement}${after}`;
-    const nextCaret = before.length + replacement.length;
-    input.focus();
-    input.setSelectionRange(nextCaret, nextCaret);
-
-    if (suggestion.kind === 'namespace') {
-        scheduleTagSuggestionFetch();
-        return;
-    }
-    hideTagSuggestions();
-}
-
-function renderTagSuggestions(suggestions, context) {
-    const menu = getTagSuggestMenu();
-    if (!menu) {
-        return;
-    }
-    if (!suggestions.length) {
-        hideTagSuggestions();
-        return;
-    }
-
-    tagSuggestItems = suggestions;
-    tagSuggestContext = context;
-    menu.innerHTML = suggestions
-        .map((suggestion, index) => `
-            <button
-                type="button"
-                class="tag-suggest-item"
-                data-index="${index}"
-            >
-                <span class="tag-suggest-label">${escapeHtml(suggestion.label)}</span>
-                <span class="tag-suggest-kind">${escapeHtml(suggestion.kind)}</span>
-            </button>
-        `)
-        .join('');
-    menu.style.display = 'block';
-
-    [...menu.querySelectorAll('.tag-suggest-item')].forEach((button) => {
-        button.addEventListener('mousedown', (event) => {
-            event.preventDefault();
-        });
-        button.addEventListener('click', () => {
-            applyTagSuggestion(Number(button.dataset.index));
-        });
-    });
-    updateTagSuggestionSelection(0);
-}
-
-async function fetchTagSuggestions(context) {
-    if (tagSuggestAbortController) {
-        tagSuggestAbortController.abort();
-    }
-    tagSuggestAbortController = new AbortController();
-
-    try {
-        const params = new URLSearchParams();
-        params.set('term', context.token);
-        const suggestPath = context.suggestType === 'header' ? 'header_suggest' : 'tag_suggest';
-        const res = await fetch(`/kvsearchview/${suggestPath}?${params.toString()}`, {
-            signal: tagSuggestAbortController.signal
-        });
-        const data = await readJsonResponse(res);
-        const latestContext = getQueryTagContext();
-        if (!latestContext || latestContext.token !== context.token || latestContext.tokenStart !== context.tokenStart) {
-            return;
-        }
-        renderTagSuggestions(data.suggestions || [], latestContext);
-    } catch (error) {
-        if (error?.name === 'AbortError') {
-            return;
-        }
-        hideTagSuggestions();
-    }
-}
-
-function scheduleTagSuggestionFetch() {
-    if (tagSuggestDebounceTimer) {
-        clearTimeout(tagSuggestDebounceTimer);
-    }
-
-    const context = getQueryTagContext();
-    if (!context) {
-        hideTagSuggestions();
-        return;
-    }
-
-    tagSuggestDebounceTimer = setTimeout(() => {
-        fetchTagSuggestions(context);
-    }, TAG_SUGGEST_DEBOUNCE_MS);
-}
-
-function handleQueryKeydown(event) {
-    if (event.isComposing) {
-        return;
-    }
-
-    const menu = getTagSuggestMenu();
-    const isOpen = menu && menu.style.display !== 'none' && tagSuggestItems.length > 0;
-    if (!isOpen) {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            search();
-        }
-        return;
-    }
-
-    if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        updateTagSuggestionSelection(tagSuggestSelectedIndex + 1);
-    } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        updateTagSuggestionSelection(tagSuggestSelectedIndex - 1);
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault();
-        applyTagSuggestion(tagSuggestSelectedIndex >= 0 ? tagSuggestSelectedIndex : 0);
-    } else if (event.key === 'Escape') {
-        event.preventDefault();
-        hideTagSuggestions();
-    }
-}
-
-function bindQueryTagHelper() {
-    const input = document.getElementById('query');
-    if (!input) {
-        return;
-    }
-
-    input.addEventListener('input', () => {
-        scheduleTagSuggestionFetch();
-        syncSinceDirectiveState();
-    });
-    input.addEventListener('click', scheduleTagSuggestionFetch);
-    input.addEventListener('keydown', handleQueryKeydown);
-    input.addEventListener('blur', () => {
-        setTimeout(() => {
-            const activeElement = document.activeElement;
-            const menu = getTagSuggestMenu();
-            if (menu && menu.contains(activeElement)) {
-                return;
-            }
-            hideTagSuggestions();
-        }, 120);
-    });
-}
-
 function buildExportPayload() {
     if (!lastSuccessfulSearch) {
         return null;
@@ -790,10 +755,16 @@ function buildExportPayload() {
     };
 }
 
-function escapeHtml(value) {
-    const div = document.createElement('div');
-    div.textContent = value === null || value === undefined ? '' : String(value);
-    return div.innerHTML;
+function setAlertMessage(container, message, alertClass = 'alert-danger', extraClass = 'mt-2') {
+    if (!container) {
+        return;
+    }
+    container.textContent = '';
+    const alert = document.createElement('div');
+    alert.className = ['alert', alertClass, extraClass].filter(Boolean).join(' ');
+    alert.setAttribute('role', 'alert');
+    alert.textContent = message === null || message === undefined ? '' : String(message);
+    container.appendChild(alert);
 }
 
 function resetExportModal(config) {
@@ -831,24 +802,39 @@ function updateExportWarnings(data) {
     const warnings = data.warnings || [];
     const warningCount = Number(data.warning_count || warnings.length || 0);
     if (warningCount <= 0) {
-        warningEl.innerHTML = '';
+        warningEl.textContent = '';
         return;
     }
 
-    const visibleWarnings = warnings
-        .map((warning) => `<li>${escapeHtml(warning)}</li>`)
-        .join('');
     const hiddenCount = Math.max(0, warningCount - warnings.length);
-    const hiddenText = hiddenCount > 0
-        ? `<p class="mb-0">${hiddenCount} additional warnings not shown.</p>`
-        : '';
-    warningEl.innerHTML = `
-        <div class="alert alert-warning mt-2" role="alert">
-            <strong>${warningCount} warning${warningCount > 1 ? 's' : ''}</strong>
-            ${visibleWarnings ? `<ul class="mb-0">${visibleWarnings}</ul>` : ''}
-            ${hiddenText}
-        </div>
-    `;
+    warningEl.textContent = '';
+    const alert = document.createElement('div');
+    alert.className = 'alert alert-warning mt-2';
+    alert.setAttribute('role', 'alert');
+
+    const title = document.createElement('strong');
+    title.textContent = `${warningCount} warning${warningCount > 1 ? 's' : ''}`;
+    alert.appendChild(title);
+
+    if (warnings.length) {
+        const list = document.createElement('ul');
+        list.className = 'mb-0';
+        warnings.forEach((warning) => {
+            const item = document.createElement('li');
+            item.textContent = warning;
+            list.appendChild(item);
+        });
+        alert.appendChild(list);
+    }
+
+    if (hiddenCount > 0) {
+        const hiddenText = document.createElement('p');
+        hiddenText.className = 'mb-0';
+        hiddenText.textContent = `${hiddenCount} additional warnings not shown.`;
+        alert.appendChild(hiddenText);
+    }
+
+    warningEl.appendChild(alert);
 }
 
 function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.json) {
@@ -875,7 +861,7 @@ function updateExportModal(data, config = activeExportConfig || EXPORT_CONFIGS.j
         statusEl.textContent = 'Export ready. Starting download...';
     } else if (data.status === 'error') {
         statusEl.textContent = 'Export failed';
-        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(data.error || 'Unexpected error')}</div>`;
+        setAlertMessage(errorEl, data.error || 'Unexpected error');
     }
 }
 
@@ -907,7 +893,7 @@ async function pollExport(jobId, config) {
         stopExportPolling();
         const errorEl = document.getElementById('export-error');
         document.getElementById('export-status-text').textContent = 'Export failed';
-        errorEl.innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(error?.message || 'Unexpected error')}</div>`;
+        setAlertMessage(errorEl, error?.message || 'Unexpected error');
         return 'error';
     }
 }
@@ -934,7 +920,8 @@ async function startExport(config) {
         const res = await fetch(config.startUrl, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.getElementById('download-buttons-container').dataset.csrf
             },
             body: JSON.stringify(payload)
         });
@@ -950,7 +937,7 @@ async function startExport(config) {
         }
     } catch (error) {
         document.getElementById('export-status-text').textContent = 'Export failed';
-        document.getElementById('export-error').innerHTML = `<div class="alert alert-danger mt-2" role="alert">${escapeHtml(error?.message || 'Unexpected error')}</div>`;
+        setAlertMessage(document.getElementById('export-error'), error?.message || 'Unexpected error');
     }
 }
 
@@ -1039,6 +1026,55 @@ async function loadMoreResults() {
     await runSearchPage(lastSuccessfulSearch.nextCursor, true);
 }
 
+function appendUidPanels(ip, uids, timestamps) {
+    const uidsDiv = document.querySelector(`[data-search-ip-uids="${CSS.escape(ip)}"]`);
+    if (!uidsDiv) {
+        return;
+    }
+    const resultIndex = uidsDiv.dataset.resultIndex;
+    const existing = new Set(
+        [...uidsDiv.querySelectorAll('[data-search-uid]')].map((element) => element.dataset.searchUid)
+    );
+    let uidIndex = uidsDiv.children.length;
+    for (const uid of (uids || [])) {
+        const uidLabel = String(uid);
+        if (existing.has(uidLabel)) {
+            continue;
+        }
+        existing.add(uidLabel);
+        const uidPanel = document.createElement('div');
+        uidPanel.className = 'panel panel-info';
+        const uidTimestamp = timestamps && timestamps[uidLabel] ? timestamps[uidLabel] : null;
+        const uidHeading = document.createElement('div');
+        uidHeading.className = 'panel-heading';
+        const uidTitle = document.createElement('h5');
+        uidTitle.className = 'panel-title';
+        const uidLink = document.createElement('a');
+        uidLink.href = '#';
+        uidLink.dataset.uid = uidLabel;
+        uidLink.dataset.searchUid = uidLabel;
+        uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
+        uidLink.textContent = uidLabel;
+        uidLink.addEventListener('click', (event) => {
+            event.preventDefault();
+            loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+        });
+        uidTitle.appendChild(uidLink);
+        if (uidTimestamp) {
+            uidTitle.appendChild(buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen));
+        }
+        uidHeading.appendChild(uidTitle);
+        uidPanel.appendChild(uidHeading);
+        const uidBody = document.createElement('div');
+        uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
+        uidBody.className = 'panel-body';
+        uidBody.style.display = 'none';
+        uidPanel.appendChild(uidBody);
+        uidsDiv.appendChild(uidPanel);
+        uidIndex += 1;
+    }
+}
+
 function renderSearchChunk(data, baseIndex, hitsDiv) {
     const returnedIps = Object.keys(data.results || {});
     const requestedHostnames = data.requested_hostnames || {};
@@ -1058,54 +1094,73 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         const requestedHostname = findRequestedHostnameForUids(sortedUids, requestedHostnames);
         const detailUrl = buildIpDetailUrl(ipLabel, requestedHostname);
 
-        // IP accordion
-        ipPanel.innerHTML = `
-            <div class="panel-heading">
-                <h4 class="panel-title">
-                    <a data-toggle="collapse" data-parent="#hits" href="#collapse-ip-${resultIndex}">
-                        ${ipLabel}
-                    </a>
-                    <a class="ip-detail-link" href="${detailUrl}" title="Open details for ${ipLabel}">
-                        <i class="fa fa-info-circle" aria-hidden="true"></i>
-                    </a>
-                    <button type="button" class="ip-quick-link" onclick="copyIpToClipboard('${ipLabel}', this)" title="Copy ${ipLabel}">
-                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
-                    </button>
-                    ${ipMeta}
-                </h4>
-            </div>
-            <div id="collapse-ip-${resultIndex}" class="panel-collapse collapse">
-                <div class="panel-body" id="uids-${resultIndex}">
-                    <!-- UID panels will go here -->
-                </div>
-            </div>
-        `;
+        const heading = document.createElement('div');
+        heading.className = 'panel-heading';
+        const title = document.createElement('h4');
+        title.className = 'panel-title';
+
+        const collapseLink = document.createElement('a');
+        collapseLink.className = 'ip-address-link';
+        collapseLink.href = detailUrl;
+        collapseLink.title = `Open details for ${ipLabel}`;
+        collapseLink.textContent = ipLabel;
+        title.appendChild(collapseLink);
+
+        const detailLink = document.createElement('a');
+        detailLink.className = 'ip-detail-link';
+        detailLink.setAttribute('data-toggle', 'collapse');
+        detailLink.setAttribute('data-parent', '#hits');
+        detailLink.href = `#collapse-ip-${resultIndex}`;
+        detailLink.title = `Expand scan reports for ${ipLabel}`;
+        const detailIcon = document.createElement('i');
+        detailIcon.className = 'fa fa-info-circle';
+        detailIcon.setAttribute('aria-hidden', 'true');
+        detailLink.appendChild(detailIcon);
+        title.appendChild(detailLink);
+
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.className = 'ip-quick-link';
+        copyButton.dataset.ip = ipLabel;
+        copyButton.title = `Copy ${ipLabel}`;
+        copyButton.addEventListener('click', () => copyIpToClipboard(copyButton.dataset.ip, copyButton));
+        const copyIcon = document.createElement('i');
+        copyIcon.className = 'fa-regular fa-copy';
+        copyIcon.setAttribute('aria-hidden', 'true');
+        copyButton.appendChild(copyIcon);
+        title.appendChild(copyButton);
+
+        const tagContainer = document.createElement('span');
+        tagContainer.className = 'search-ip-tags';
+        tagContainer.dataset.searchIpTags = ipLabel;
+        tagContainer.hidden = true;
+        title.appendChild(tagContainer);
+
+        if (ipMeta) {
+            ipMeta.dataset.searchIpTimestamps = ipLabel;
+            title.appendChild(ipMeta);
+        }
+
+        heading.appendChild(title);
+        ipPanel.appendChild(heading);
+
+        const collapse = document.createElement('div');
+        collapse.id = `collapse-ip-${resultIndex}`;
+        collapse.className = 'panel-collapse collapse';
+        const uidsDiv = document.createElement('div');
+        uidsDiv.className = 'panel-body';
+        uidsDiv.id = `uids-${resultIndex}`;
+        uidsDiv.dataset.searchIpUids = ipLabel;
+        uidsDiv.dataset.resultIndex = resultIndex;
+        collapse.appendChild(uidsDiv);
+        ipPanel.appendChild(collapse);
         hitsDiv.appendChild(ipPanel);
 
-        const uidsDiv = document.getElementById(`uids-${resultIndex}`);
-
-        sortedUids.forEach((uid, uidIndex) => {
-            const uidPanel = document.createElement('div');
-            uidPanel.className = 'panel panel-info';
-            const uidTimestamp = ipTimestamps && ipTimestamps[uid] ? ipTimestamps[uid] : null;
-            const uidLabel = uid;
-            const uidMeta = uidTimestamp
-                ? buildTimestampMeta(uidTimestamp.first_seen, uidTimestamp.last_seen)
-                : '';
-            uidPanel.innerHTML = `
-                <div class="panel-heading">
-                    <h5 class="panel-title">
-                        <a href="#" onclick="loadUid('${uid}', 'uid-body-${resultIndex}-${uidIndex}'); return false;">
-                            ${uidLabel}
-                        </a>
-                        ${uidMeta}
-                    </h5>
-                </div>
-                <div id="uid-body-${resultIndex}-${uidIndex}" class="panel-body" style="display:none;"></div>
-            `;
-            uidsDiv.appendChild(uidPanel);
-        });
+        appendUidPanels(ipLabel, sortedUids, ipTimestamps);
     });
+
+    queueTagsForSearchChunk(data.results || {}, data.time_range || {});
+    queueIpExpansionForSearchChunk(data.results || {}, data.time_range || {}, document.getElementById('query').value || '');
 
     return returnedIps;
 }
@@ -1149,6 +1204,8 @@ async function runSearchPage(cursorTs, append) {
         setLoadMoreLoading(true);
     }
     if (!append) {
+        resetSearchDebug();
+        resetTagLookups();
         lastSuccessfulSearch = null;
         setDownloadButtonState(false);
         hitsDiv.innerHTML = '';
@@ -1163,8 +1220,8 @@ async function runSearchPage(cursorTs, append) {
     try {
         timeRange = getSearchTimeRange();
     } catch (error) {
-        errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(error?.message || 'Invalid time range')}</div>`;
-        infoDiv.innerHTML = '';
+        setAlertMessage(errorDiv, error?.message || 'Invalid time range', 'alert-warning', '');
+        infoDiv.textContent = '';
         if (!append) {
             hitsDiv.innerHTML = '';
         }
@@ -1198,10 +1255,12 @@ async function runSearchPage(cursorTs, append) {
                 remaining,
                 windowDays
             );
+            const requestStarted = performance.now();
             const res = await fetch(`/kvsearchview/query?${params.toString()}`, {
                 signal: searchAbortController.signal
             });
             const data = await readJsonResponse(res);
+            const requestMs = performance.now() - requestStarted;
             lastData = data;
             searchId = data.search_id || searchId;
 
@@ -1210,12 +1269,15 @@ async function runSearchPage(cursorTs, append) {
             scannedDays += Number(pagination.scanned_days || 0);
 
             if (data.status === false) {
-                errorDiv.innerHTML = `<div class="alert alert-warning" role="alert">${escapeHtml(data.msg_error)}</div>`;
+                recordSearchDebug(data, requestMs, 0, searchAbortController);
+                setAlertMessage(errorDiv, data.msg_error || '', 'alert-warning', '');
                 hasMore = false;
                 break;
             }
 
+            const renderStarted = performance.now();
             const returnedIps = renderSearchChunk(data, renderedCount, hitsDiv);
+            recordSearchDebug(data, requestMs, performance.now() - renderStarted, searchAbortController);
             if (returnedIps.length > 0) {
                 renderedCount += returnedIps.length;
                 addedThisRun += returnedIps.length;
@@ -1248,9 +1310,9 @@ async function runSearchPage(cursorTs, append) {
                 ? `${totalDays} days`
                 : `${effectiveScannedDays}/${totalDays} days`;
             if (hasMore && renderedCount > 0) {
-                infoDiv.innerHTML = `Showing first ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
+                infoDiv.textContent = `Showing first ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
             } else {
-                infoDiv.innerHTML = `Showing ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
+                infoDiv.textContent = `Showing ${renderedCount} results in ${time} for ${daySummary} out of ${data.uid_count} scans on ${data.ip_count} hosts.`;
             }
 
             if (!hasMore) {
@@ -1272,8 +1334,8 @@ async function runSearchPage(cursorTs, append) {
             return;
         }
         console.error('KV search failed', error);
-        errorDiv.innerHTML = `<div class="alert alert-danger" role="alert">Search failed: ${escapeHtml(error?.message || 'Unexpected error')}</div>`;
-        infoDiv.innerHTML = '';
+        setAlertMessage(errorDiv, `Search failed: ${error?.message || 'Unexpected error'}`, 'alert-danger', '');
+        infoDiv.textContent = '';
         if (!append) {
             hitsDiv.innerHTML = '';
         }
@@ -1289,7 +1351,7 @@ async function runSearchPage(cursorTs, append) {
 async function loadUid(uid, targetId) {
     const target = document.getElementById(targetId);
     if (target.style.display === 'none' || target.innerHTML === '') {
-        const res = await fetch(`/meilisearchview/getuid?uid=${uid}`);
+        const res = await fetch(`/meilisearchview/getuid?uid=${encodeURIComponent(uid)}`);
         const data = await readJsonResponse(res);
         let json = JSON.stringify(data, null, 2);
         // garde l'indentation devant les lignes ajoutées
@@ -1310,6 +1372,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindDateInput('time-from');
     bindDateInput('time-to');
     bindQueryTagHelper();
+    bindSearchKeywordHelpers();
     bindSearchNavigationAbort();
     setDefaultTimeRange();
     syncSinceDirectiveState();
@@ -1317,15 +1380,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
 </script>
 <style>
+.panel-title {
+    align-items: flex-start;
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+}
+.panel-title > a,
+.panel-title > button {
+    flex: 0 0 auto;
+}
 .timestamp-meta {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    flex: 0 0 auto;
     margin-left: auto;
     font-size: 0.85em;
     font-family: "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
     color: #6c757d;
-    float: right;
+    float: none;
     text-align: right;
 }
 .timestamp-chip {
@@ -1333,6 +1407,50 @@ document.addEventListener('DOMContentLoaded', () => {
     align-items: center;
     gap: 0.25rem;
     white-space: nowrap;
+}
+.search-ip-tags {
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    gap: 0.25rem;
+    min-width: 0;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+.ip-detail-tag {
+    background: #337ab7;
+    border-radius: 999px;
+    color: #fff;
+    display: inline-flex;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.2rem 0.5rem;
+}
+.search-ip-tag {
+    white-space: nowrap;
+}
+.ip-detail-tag-vuln {
+    background: #d9534f;
+}
+.ip-detail-tag-vendor {
+    background: #6f42c1;
+}
+.ip-detail-tag-product {
+    background: #2f6f73;
+}
+.ip-detail-tag-type {
+    background: #b45f06;
+}
+.ip-detail-tag-proto {
+    background: #337ab7;
+}
+.ip-detail-tag-lang {
+    background: #5cb85c;
+}
+.ip-detail-tag-cpe {
+    background: #777;
 }
 .timestamp-separator {
     font-weight: 600;
@@ -1450,6 +1568,41 @@ document.addEventListener('DOMContentLoaded', () => {
     padding: 0;
     border: none;
     color: transparent;
+}
+.search-keyword {
+    color: inherit;
+    cursor: pointer;
+    text-decoration: none;
+}
+.search-helper-toggle {
+    float: right;
+    padding: 0 0.25rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+}
+.kvrocks-table[hidden] { display: none; }
+#search-tag-table { table-layout: fixed; }
+#search-tag-table td {
+    vertical-align: top;
+    font-weight: normal;
+    color: #24527a;
+    padding: 0.6rem 0.85rem;
+    border-left: 1px solid rgba(51, 122, 183, 0.25);
+}
+.search-tag-list { list-style: none; padding: 0; margin: 0; }
+.search-tag-list button {
+    border: 0;
+    background: transparent;
+    padding: 0.2rem 0;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+.search-helper-toggle:focus-visible, .search-tag-list button:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
 }
 .export-stats {
     display: flex;
@@ -1630,8 +1783,8 @@ document.addEventListener('DOMContentLoaded', () => {
     <div class="search-toolbar">
         <div class="search-toolbar-input">
             <div class="search-query-wrapper">
-                <input type="text" id="query" class="form-control" placeholder="Query {{ total_scan_count }} Ports scans...">
-                <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Tag suggestions"></div>
+                <input type="text" id="query" class="form-control" aria-describedby="scan-query-help" placeholder="Query {{ total_scan_count }} Ports scans...">
+                <div id="query-tag-suggest" class="tag-suggest-menu" role="listbox" aria-label="Search suggestions"></div>
             </div>
             <div class="search-time-range">
                 <div class="input-group search-date-field">
@@ -1654,16 +1807,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
                 <div id="info" class="search-summary"></div>
             </div>
-            <div class="text-muted mt-1" style="font-size: 0.9em;">
-                Use implicit <code>AND</code> inside one group and explicit <code>OR</code> between groups.
-            </div>
         </div>
         <div class="search-toolbar-actions">
             <button type="button" id="search-btn" class="btn btn-primary" onclick="search()">Search</button>
-            <div id="download-buttons-container" class="mt-2"></div>
+            <div id="download-buttons-container" class="mt-2" data-csrf="{{ csrf_token() }}"></div>
         </div>
     </div>
 </div>
+
+<details id="search-debug" hidden>
+    <summary id="search-debug-summary">Performance diagnostics</summary>
+    <p>Available after each response. Includes search pages only; history, tags and document loading run separately.</p>
+    <button type="button" class="btn btn-default" onclick="downloadSearchDebug()">Download JSON</button>
+    <pre id="search-debug-report" style="max-height: 28em; overflow: auto;"></pre>
+</details>
 
 <div id="info-spinner" class="search-status mt-1" role="status" aria-live="polite" style="display:none;">
     <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
@@ -1708,7 +1865,8 @@ document.addEventListener('DOMContentLoaded', () => {
 </div>
 
 <div class="kvrocks-table-wrapper">
-    <table class="kvrocks-table">
+    {% include 'search_query_examples.html' %}
+    <table class="kvrocks-table" id="search-keyword-table">
         <thead>
             <tr>
                 <th>Keyword</th>
@@ -1716,55 +1874,61 @@ document.addEventListener('DOMContentLoaded', () => {
                 <th>Description</th>
                 <th>Keyword</th>
                 <th>Modifier</th>
-                <th>Description</th>
+                <th>Description
+                    <button type="button" class="search-helper-toggle" data-search-helper-toggle
+                            title="Show tags" aria-label="Show tags" aria-controls="search-tag-table">
+                        <i class="fa fa-exchange" aria-hidden="true"></i>
+                    </button>
+                    {% include 'search_examples_toggle.html' %}
+                </th>
             </tr>
         </thead>
         <tbody>
             <tr>
-                <td>ip</td>
+                <td><span class="search-keyword" data-search-keyword="ip" role="button" tabindex="0">ip</span></td>
                 <td></td>
                 <td>IP of the host</td>
-                <td>http_title</td>
+                <td><span class="search-keyword" data-search-keyword="http_title" role="button" tabindex="0">http_title</span></td>
                 <td>lk, bg</td>
                 <td>HTML title tag</td>
             </tr>
             <tr>
-                <td>net</td>
+                <td><span class="search-keyword" data-search-keyword="net" role="button" tabindex="0">net</span></td>
                 <td></td>
                 <td>CIDR network, from /16 to /24</td>
-                <td>http_cookiename</td>
+                <td><span class="search-keyword" data-search-keyword="http_cookiename" role="button" tabindex="0">http_cookiename</span></td>
                 <td>lk, bg</td>
                 <td>HTTP Set-Cookie key name</td>
             </tr>
             <tr>
-                <td>fqdn</td>
+                <td><span class="search-keyword" data-search-keyword="fqdn" role="button" tabindex="0">fqdn</span></td>
                 <td>lk, bg</td>
                 <td>Fully qualified domain name found</td>
-                <td>http_etag</td>
+                <td><span class="search-keyword" data-search-keyword="http_etag" role="button" tabindex="0">http_etag</span></td>
                 <td>lk, bg</td>
                 <td>HTTP ETag value</td>
             </tr>
             <tr>
-                <td>fqdn_requested</td>
+                <td><span class="search-keyword" data-search-keyword="fqdn_requested" role="button" tabindex="0">fqdn_requested</span></td>
                 <td>lk, bg</td>
                 <td>FQDN given to scanner</td>
-                <td>http_server</td>
+                <td><span class="search-keyword" data-search-keyword="http_server" role="button" tabindex="0">http_server</span></td>
                 <td>lk, bg</td>
                 <td>HTTP server header</td>
             </tr>
             <tr>
-                <td>domain_requested</td>
+                <td><span class="search-keyword" data-search-keyword="domain_requested" role="button" tabindex="0">domain_requested</span></td>
                 <td>lk, bg</td>
                 <td>Domain given to scanner</td>
-                <td>http_header</td>
+                <td><span class="search-keyword" data-search-keyword="http_header" role="button" tabindex="0">http_header</span></td>
                 <td>lk, bg</td>
                 <td>Collected HTTP header presence, e.g. <code>http_header:cache-control</code></td>
             </tr>
             <tr>
-                <td>host</td>
+                <td><span class="search-keyword" data-search-keyword="host" role="button" tabindex="0">host</span></td>
                 <td>lk, bg</td>
                 <td>Hostname, the subdomain part</td>
-                <td>http_headval</td>
+                <td><span class="search-keyword" data-search-keyword="http_headval" role="button" tabindex="0">http_headval</span></td>
                 <td>header.lk, header.bg</td>
                 <td>Collected HTTP header value, e.g. <code>http_headval:x-powered-by:php</code></td>
             </tr>
@@ -1772,63 +1936,79 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td>http_favicon_path</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_path" role="button" tabindex="0">http_favicon_path</span></td>
                 <td>lk, bg</td>
                 <td>Favicon source path</td>
             </tr>
             <tr>
-                <td>domain</td>
+                <td><span class="search-keyword" data-search-keyword="domain" role="button" tabindex="0">domain</span></td>
                 <td>lk, bg</td>
                 <td>DNS domain</td>
-                <td>http_favicon_mmhash</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_mmhash" role="button" tabindex="0">http_favicon_mmhash</span></td>
                 <td></td>
                 <td>Favicon MurmurHash value</td>
             </tr>
             <tr>
-                <td>tld</td>
+                <td><span class="search-keyword" data-search-keyword="tld" role="button" tabindex="0">tld</span></td>
                 <td>lk, bg</td>
                 <td>Top level domain</td>
-                <td>http_favicon_md5</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_md5" role="button" tabindex="0">http_favicon_md5</span></td>
                 <td></td>
                 <td>Favicon MD5 hash</td>
             </tr>
             <tr>
-                <td>port</td>
+                <td><span class="search-keyword" data-search-keyword="port" role="button" tabindex="0">port</span></td>
                 <td></td>
                 <td>Open port</td>
-                <td>http_favicon_sha256</td>
+                <td><span class="search-keyword" data-search-keyword="http_favicon_sha256" role="button" tabindex="0">http_favicon_sha256</span></td>
                 <td></td>
                 <td>Favicon SHA256 hash</td>
             </tr>
             <tr>
-                <td>banner</td>
+                <td><span class="search-keyword" data-search-keyword="banner" role="button" tabindex="0">banner</span></td>
                 <td>lk, bg</td>
                 <td>Service banner value</td>
-                <td>x509_issuer</td>
+                <td><span class="search-keyword" data-search-keyword="x509_issuer" role="button" tabindex="0">x509_issuer</span></td>
                 <td>lk, bg</td>
-                <td>TLS certificate issuer</td>
+                <td>TLS certificate issuer DN</td>
             </tr>
             <tr>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td>x509_subject</td>
+                <td><span class="search-keyword" data-search-keyword="x509_issuer_cn" role="button" tabindex="0">x509_issuer_cn</span></td>
                 <td>lk, bg</td>
-                <td>TLS certificate common name</td>
+                <td>TLS certificate issuer common name</td>
             </tr>
             <tr>
-                <td>tag</td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_subject" role="button" tabindex="0">x509_subject</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate subject DN</td>
+            </tr>
+            <tr>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="x509_subject_cn" role="button" tabindex="0">x509_subject_cn</span></td>
+                <td>lk, bg</td>
+                <td>TLS certificate subject common name</td>
+            </tr>
+            <tr>
+                <td><span class="search-keyword" data-search-keyword="tag" role="button" tabindex="0">tag</span></td>
                 <td></td>
                 <td>tagged devices</td>
-                <td>x509_san</td>
+                <td><span class="search-keyword" data-search-keyword="x509_san" role="button" tabindex="0">x509_san</span></td>
                 <td>lk, bg</td>
                 <td>TLS certificate subject alternative names</td>
             </tr>
             <tr>
-                <td>since</td>
+                <td><span class="search-keyword" data-search-keyword="since" role="button" tabindex="0">since</span></td>
                 <td></td>
                 <td>set the time range in days</td>
-                <td>x509_md5</td>
+                <td><span class="search-keyword" data-search-keyword="x509_md5" role="button" tabindex="0">x509_md5</span></td>
                 <td></td>
                 <td>MD5 of the TLS certificate public signature</td>
             </tr>
@@ -1836,7 +2016,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td>x509_sha1</td>
+                <td><span class="search-keyword" data-search-keyword="x509_sha1" role="button" tabindex="0">x509_sha1</span></td>
                 <td></td>
                 <td>SHA1 of the TLS certificate public signature</td>
             </tr>
@@ -1844,12 +2024,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
                 <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td>x509_sha256</td>
+                <td><span class="search-keyword" data-search-keyword="x509_sha256" role="button" tabindex="0">x509_sha256</span></td>
                 <td></td>
                 <td>SHA256 of the TLS certificate public signature</td>
             </tr>
         </tbody>
     </table>
+    {% include 'search_tag_catalogue.html' %}
 </div>
 
 {% endblock content %}

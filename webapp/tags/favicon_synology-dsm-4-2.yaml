@@ -1,6 +1,0 @@
-description: Synology DSM 4.2
-query: http_favicon_md5:531E652A15BC0AD59B6AF05019B1834A
-tags:
-- product:synology-dsm-4-2
-- vendor:synology
-version: 20260520T133458Z

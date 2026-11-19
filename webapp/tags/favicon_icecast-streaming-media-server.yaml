@@ -1,6 +1,0 @@
-description: Icecast Streaming Media Server
-query: http_favicon_mmhash:1424295654
-tags:
-- product:icecast-streaming-media-server
-- vendor:icecast
-version: 20260520T133458Z

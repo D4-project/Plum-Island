@@ -47,27 +47,14 @@ def resolve_input_path(raw_value):
     raise FileNotFoundError(f"Input file not found: {raw_value}")
 
 
-def build_parser_config(app_config, fetch_tlds, header_collection=None):
+def build_parser_config(app_config, header_collection=None):
     """
     Rebuild the parser config used by the application.
     """
     parser_config = {
-        "ONLINETLD": bool(app_config.get("ONLINETLD", False)),
-        "TLDS": list(app_config.get("TLDS", []) or []),
         "TLDADD": list(app_config.get("TLDADD", []) or []),
         "HTTP_HEADER_COLLECTION": dict(header_collection or {}),
     }
-
-    if parser_config["ONLINETLD"] and not parser_config["TLDS"]:
-        parser_config["TLDS"] = fetch_tlds()
-
-    existing_tlds = set(parser_config["TLDS"])
-    for tld in parser_config["TLDADD"]:
-        candidate = str(tld).strip().lower()
-        if not candidate or candidate in existing_tlds:
-            continue
-        existing_tlds.add(candidate)
-        parser_config["TLDS"].append(candidate)
 
     return parser_config
 
@@ -88,7 +75,6 @@ def main():
         CollectedHeaders,
         TagRules,
     )
-    from app.utils.mutils import fetch_tlds  # pylint: disable=import-outside-toplevel
     from app.utils.result_parser import (
         parse_json,
     )  # pylint: disable=import-outside-toplevel
@@ -104,7 +90,6 @@ def main():
         }
         parser_config = build_parser_config(
             app.config,
-            fetch_tlds,
             header_collection=header_collection,
         )
         compiled_rules = []

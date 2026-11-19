@@ -1,0 +1,21 @@
+{# Shared by Plum and the original FAB layouts, including non-admin pages. #}
+{% if plum_restart_pending %}
+<div id="plum-settings-restart-banner" class="alert alert-warning" role="status">
+  <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+  <strong>Configuration changed.</strong> Restart Plum-Agent to apply changes.
+</div>
+{% elif plum_settings_unavailable %}
+<div class="alert alert-warning" role="status">
+  Configuration status unavailable. Check Plum-Agent settings.
+</div>
+{% endif %}
+
+{# Preserve FAB's normal, dismissible flash messages. The restart banner persists. #}
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+  <div class="alert alert-{{ category or 'info' }}">
+    <button type="button" class="close" data-dismiss="alert">&times;</button>
+    {{ message }}
+  </div>
+  {% endfor %}
+{% endwith %}

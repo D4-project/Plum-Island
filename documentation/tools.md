@@ -26,7 +26,123 @@ Important settings:
 - `OUT_KVROCKS_HOST`, `OUT_KVROCKS_PORT`: Kvrocks output used by some export helpers
 - `PLUMISLAND`, `PLUMAPIUSER`, `PLUMAPIPWD`: API access for webapp import helpers
 
+## API import role
+
+### `Feeder`
+
+`Feeder` is the least-privilege role for automated target import tools.
+Fresh installs create it automatically, and migration `17` adds it on upgraded instances.
+
+The role only grants:
+
+- `can_post` on `PublicTargetsApi`: required by `tools/import_whois_ranges.py`
+- `can_bulk_import` on `TargetsApi`: required by `tools/import_fqdns.py`
+
+Use a dedicated Plum user with only the `Feeder` role for automated imports.
+Do not reuse an admin account in tool configuration files.
+
+## Date-only duplicate migration
+
+`migrate_smarthash.py` prepares a new port-scoped dump using the installed
+`nmap2json.smarthash`. It recalculates hashes and UUIDs, merges duplicate history
+with minimum `first_seen` / maximum `last_seen`, and retains the raw report with
+the newest `body.endtime` (source `last_seen` when endtime is absent). Equal-time
+ties use serialized document order for deterministic selection. Other meaningful
+content changes remain separate. Original source files are not modified.
+
+Prerequisites:
+
+- Install the nmap2json revision containing the volatile-date fix in the same
+  environment as the tools. A separate source checkout is not sufficient. The
+  tool checks SMTP, HTTP and RTSP date normalization before processing input.
+- Export the **complete** Meilisearch index, not a filtered subset. Pause scan
+  ingestion/indexing during export and replacement, and deploy the same hashing
+  version on scanners before resuming. The tool cannot establish snapshot
+  completeness or coordinate running scanners.
+- Preserve both observation bounds per old ID: by default, the migration reads
+  `doc:<old-id>` from `IN_KVROCKS_HOST` / `IN_KVROCKS_PORT` in `tools/config.yaml`.
+  `IN_KVROCKS_PASSWORD` is used when set. Alternatively, pass
+  `--use-time-companions` for one JSON object per file with a sibling `.time`
+  file. JSON arrays require source Kvrocks lookup.
+  When a Kvrocks bound is absent, the tool uses JSON `body.starttime` for
+  `first_seen` or `body.endtime` for `last_seen` (the other JSON scan time if
+  only one exists) and prints a fallback count. This is scan-time evidence, not
+  recovered historical state. Invalid or reversed bounds still abort. In
+  `--use-time-companions` mode, `.time` bounds remain mandatory. Use a source
+  account restricted to reads where available.
+- Use a new, nonexistent output directory, outside the input tree. Temporary
+  deduplication storage is SQLite on disk, not an application DB. Allow disk
+  space for unique payloads plus the output; `--work-dir` selects its parent.
+  Input is loaded one JSON file at a time, so prefer per-document exports.
+- Backups remain operator-managed; there is no mandatory backup argument.
+
+Simulation (reads source history, writes temporary scratch files only):
+
+```bash
+.venv/bin/python tools/migrate_smarthash.py \
+  --input-dir tools/meili_dump --output-dir tools/meili_dump_rehashed \
+  --dry-run
+```
+
+Remove `--dry-run` to prepare files only. Use `--use-time-companions` when valid
+`.time` companions are already present. Port hashes run in worker processes;
+`--workers` defaults to one fewer than the logical CPU count (minimum one), and
+`--workers 1` runs serially. The parent process alone reads IN Kvrocks and merges
+results in SQLite, with at most two pending reports per worker. Progress is
+printed every five seconds during input processing, followed by source/port/unique/merged counts. Output includes
+one `.json` and `.time` per new UUID, an audit `uid-map.jsonl`, and a
+`migration.manifest` completion marker written last. A failed preparation must
+not be imported; rerun into a fresh directory after fixing its cause.
+
+To prepare **and replace** OUT Meilisearch/Kvrocks, add `--apply-out` instead of
+`--dry-run`. It calls `reimport_port_dump.py` with Meilisearch swap mode only
+after successful preparation. Targets come from `tools/config.yaml`; check
+`OUT_MEILI_URL`, `OUT_KVROCKS_HOST`, `OUT_KVROCKS_PORT` and `INDEX_NAME` first.
+For an already prepared and reviewed dump, run:
+
+```bash
+.venv/bin/python tools/reimport_port_dump.py \
+  --input-dir tools/meili_dump_rehashed --meili-replace-mode swap --areyousure_yes
+```
+
+**Replacement removes old IDs.** A plain incremental import or Kvrocks-only
+rebuild cannot perform this migration. Meilisearch swap and Kvrocks rebuild are
+not one atomic transaction: keep ingestion paused and retain the prepared dump
+if rebuilding fails, then retry the existing importer. Incomplete Meilisearch
+imports do not swap; incomplete Kvrocks rebuilds exit with failure. Only data in
+the complete input dump can be restored. Source-only Kvrocks UIDs absent from
+Meilisearch require separate recovery before migration.
+
+Before modifying either backend, the importer validates every `.time` companion
+when Kvrocks is being rebuilt. Both `first_seen` and `last_seen` must be valid,
+nonnegative timestamps, with `first_seen <= last_seen`. Missing, partial, malformed
+or non-finite bounds abort the import. The snapshot uses each JSON document's ID,
+not its filename, and merges bounds if several files have the same ID. Keep the
+dump unchanged throughout the operation; the validated snapshot is reused after
+Meilisearch replacement.
+
+`--allow-history-loss` explicitly allows unavailable/invalid history and prints a
+warning. Affected reports use JSON scan dates, which cannot restore accumulated
+historical bounds. `--areyousure_yes` alone does not bypass the history check.
+`--skip-kvrocks` leaves Kvrocks history untouched and does not require `.time` files.
+
+The legacy `split_meili_dump_by_port.py` does not merge colliding `.time` files;
+use this migration tool for date-only deduplication instead.
+
 ## Tag tools
+
+For existing CN-based certificate rules/report queries, first follow the
+[certificate migration](../migration_full_cert.md). `tools/migrate_full_cert.py`
+converts SQL queries with a durable marker; use an empty `--yaml-dir` for SQL-only
+operation. Review its limitations before applying. Then rebuild certificate
+fields with retagging (or use the full replacement import in the upgrade guide).
+A tag-only reindex cannot reconstruct missing CN/DN fields.
+
+The YAML rules are maintained in the
+[Plum-Antibodies repository](https://github.com/D4-project/Plum-Antibodies),
+with their format and version policy documented in its
+[tagging guide](https://github.com/D4-project/Plum-Antibodies/blob/main/documentation/tagging.md).
+The checked-out submodule exposes them under `webapp/tags/tags/`.
 
 ### `initial_setup.py`
 
@@ -36,11 +152,17 @@ Load initial database content after the Flask database has been created.
 It performs these actions:
 
 - create/update security roles from `webapp/security_roles/*.yaml`
-- create the default TCP protocol and TCP ports
+- create the default TCP protocol and TCP ports, using conventional names from `/etc/services` when available (for example `TCP/655 (tinc)`); unknown ports retain `TCP/<number>` and existing names are not overwritten
 - create the default HTTP header tagging collection from `webapp/app/models.py`
-- import YAML tag rules from `webapp/tags/` into the application database
-- clone/update `https://github.com/D4-project/Plum-Rules-NSE` into `external/Plum-Rules-NSE` and import every `.nse` file into the `nses` table
-- create an all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
+- import YAML tag rules from `webapp/tags/tags/` into the application database
+- clone/update `https://github.com/D4-project/Plum-Rules-NSE` into `external/Plum-Rules-NSE` and import every `.nse` file into the `nses` table; default scripts absent from that repository are imported from the bundled `nse/` directory
+- create an all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `http-headers.nse`, `http-title.nse`, `ssl-cert.nse`, `ssh-hostkey.nse`, `tls-alpn.nse`, `banner.nse`, `modbus.nse` and `http-mm-sha-favicon.nse` (`http-favicon.nse` is not selected)
+
+Service labels are conventional port assignments, not detected services; `/ip`
+displays service names reported by Nmap. A missing `/etc/services` file does not
+prevent setup. Rerunning profile seeding synchronizes the named default profile's
+ports and scripts to these defaults; use `--skip-profiles` to preserve edits.
+Missing required NSE scripts abort profile creation with their names.
 
 Manual run:
 
@@ -58,12 +180,19 @@ Useful options:
 .venv/bin/python tools/initial_setup.py --skip-tags
 .venv/bin/python tools/initial_setup.py --skip-nse
 .venv/bin/python tools/initial_setup.py --skip-profiles
+.venv/bin/python tools/initial_setup.py --roles-only
 .venv/bin/python tools/initial_setup.py --role-file webapp/security_roles/read_only.yaml
 .venv/bin/python tools/initial_setup.py --nse-repo-dir /path/to/Plum-Rules-NSE
 ```
 
 The default role file creates a `Read Only` role from `webapp/security_roles/read_only.yaml`.
 The file is intentionally plain YAML so permissions can be maintained without editing Python code.
+Use `--roles-only` during deployments to synchronize role permissions in an existing database
+without reseeding ports, headers, tag rules, NSE scripts, or scan profiles.
+After deploying a change to `webapp/security_roles/read_only.yaml`, run
+`.venv/bin/python tools/initial_setup.py --roles-only` from the repository root
+to apply it to existing Read Only users. Use the deployment's Python environment
+path if it differs from `.venv`.
 
 Imported NSE files are copied into the Flask upload folder and stored in the DB with their filename and SHA-256 hash.
 If a script with the same filename already exists, it is updated only when the content hash changed.
@@ -72,7 +201,7 @@ If a script with the same filename already exists, it is updated only when the c
 
 Manage tag YAML import, DB rules, and Kvrocks tag indexes. Running it without a subcommand prints help and does nothing.
 
-Import YAML tag rules from `webapp/tags/` into the SQLite application database:
+Import YAML tag rules from `webapp/tags/tags/` into the SQLite application database:
 
 ```bash
 .venv/bin/python tools/tag_mgmt.py import --all
@@ -83,47 +212,38 @@ Useful import options:
 ```bash
 .venv/bin/python tools/tag_mgmt.py import --all --dry-run
 .venv/bin/python tools/tag_mgmt.py import --id 42
-.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/hashicorp_vault.yaml
-.venv/bin/python tools/tag_mgmt.py import --all --tags-dir webapp/tags
+.venv/bin/python tools/tag_mgmt.py import --tags-file webapp/tags/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py import --all --tags-dir webapp/tags/tags
 .venv/bin/python tools/tag_mgmt.py delete --all
 .venv/bin/python tools/tag_mgmt.py delete --id 42
-.venv/bin/python tools/tag_mgmt.py delete --tags-file webapp/tags/hashicorp_vault.yaml
+.venv/bin/python tools/tag_mgmt.py delete --tags-file webapp/tags/tags/hashicorp_vault.yaml
 .venv/bin/python tools/tag_mgmt.py flush-tag tag:proto:ssh
 ```
 
 Version policy:
 
+- a YAML rule's mandatory UUID is its database identity; rule names and filenames may repeat
 - new rules are inserted
 - existing rules are replaced only when the YAML version is newer than the DB timestamp
 - YAML rules without `version` do not replace existing DB rules
 
 Recompute tags in Kvrocks after tag rule changes.
 
-Reindex all active rules:
+Rule changes are reconciled automatically by a scheduler-supervised subprocess.
+The Tag Rules page shows shared CLI/GUI progress; it has no manual update button.
+
+Compatibility commands enqueue work instead of starting another indexer:
 
 ```bash
 .venv/bin/python tools/tag_mgmt.py reindex --allrules
-```
-
-Reindex from one tag rule id:
-
-```bash
 .venv/bin/python tools/tag_mgmt.py reindex 42
-```
-
-Flush existing tag indexes before recomputing:
-
-```bash
+# Force a full background reconstruction; preserve the active generation:
 .venv/bin/python tools/tag_mgmt.py reindex --allrules --flush
 ```
 
-List complete tag values currently indexed in Kvrocks:
-
-```bash
-.venv/bin/python tools/tag_mgmt.py list-tags
-```
-
-`tools/import_tags.py` and `tools/reindex_tagrule.py` remain as compatibility wrappers.
+`tools/import_tags.py` and `tools/reindex_tagrule.py` remain compatibility wrappers.
+See [automatic indexing](automatic-indexing.md) for coverage, process lifecycle,
+progress, resource settings, migration, recovery and generation cleanup.
 
 ## Search and dump tools
 
@@ -163,7 +283,7 @@ It is useful as an example for exact, prefix, substring, IP, network, and port c
 Parse one Meilisearch JSON document and print the parsed structure with computed tags.
 
 ```bash
-.venv/bin/python tools/test_parse.py meili_dump/a/<uid>.json
+.venv/bin/python test/test_parse.py tools/meili_dump/a/<uid>.json
 ```
 
 ## Indexing tools
@@ -177,7 +297,7 @@ Run from `tools/` because the script reads `config.yaml` from the current direct
 
 ```bash
 cd tools
-../.venv/bin/python dump_meilidb.py
+../.venv/bin/python dump_meilidb.py --do-export
 ```
 
 ### `index_meili.py`
@@ -190,7 +310,7 @@ The script reads `tools/config.yaml` and writes to `OUT_MEILI_URL` / `OUT_MEILI_
 .venv/bin/python tools/index_meili.py --input-dir tools/meili_dump
 ```
 
-Batch size can be adjusted:
+Batch size defaults to 5,000 documents and can be adjusted:
 
 ```bash
 .venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --batch-size 500
@@ -204,7 +324,80 @@ Use `--progress` when you want percentage output:
 
 This counts importable JSON documents before sending anything to Meilisearch. On large dumps this makes startup slower.
 
+Imports wait until each Meilisearch task finishes, with its UID and wait progress
+printed every 30 seconds. There is no task-duration limit by default: a batch
+taking more than 15 minutes no longer aborts the import. HTTP requests retain a
+30-second timeout. To set an optional limit for each task wait, use
+`--task-timeout-ms MILLISECONDS`; `0` restores unlimited waiting.
+
+Every import saves submission intent, the accepted task UID, then confirmed
+progress after the batch succeeds. Resume with:
+
+```bash
+.venv/bin/python tools/index_meili.py --input-dir tools/meili_dump --continue --progress
+```
+
+The default checkpoint is `<input-dir>/.index-meili-checkpoint`; override it with
+`--checkpoint PATH` (do not use a `.json` extension). Progress remains cumulative.
+The importer verifies the dump path, ordered file names, sizes, modification times,
+destination URL and index before resuming. Keep the dump unchanged during import
+and do not run concurrent imports using the same checkpoint. Metadata validation
+does not hash file contents.
+
+Resume checks a saved task before sending anything else. If it is still running,
+the importer waits for that same task; if it succeeded while the importer was
+stopped, its progress is committed without sending the batch again. A configured
+wait timeout or Ctrl+C leaves the task UID in the checkpoint. A confirmed failed
+or canceled task leaves confirmed counters unchanged and allows a later retry.
+Missing tasks and backend errors retain pending state for investigation.
+
+If submission is interrupted before its UID can be saved, the checkpoint retains
+an unresolved submission intent. Automatic resume stops: inspect Meilisearch task
+history before recovering or restarting, because the server may have accepted it.
+Starting without `--continue` cannot overwrite a pending submission.
+
+Resume replays the confirmed prefix locally, including JSON parsing, but sends
+only remaining entries. Parse errors count separately
+and are skipped, as in a normal import. A successful import retains its checkpoint;
+resuming it submits nothing. Run without `--continue` to restart from the beginning.
+Older checkpoints without a task UID remain supported at their last confirmed
+position; they cannot identify an unconfirmed batch accepted by an older importer.
+`--continue` requires an existing valid checkpoint and fails otherwise.
+
+### `reintegrate_missing_meili.py`
+
+Recover Kvrocks-only UIDs into Meilisearch from retained raw job JSON files.
+See [Search Index Recovery](recovery-tools.md) for dry-run, apply, validation,
+failure handling, and complete Kvrocks-from-Meilisearch rebuild procedures.
+
+### `backfill_tag_catalogue.py`
+
+Initialize the search helper's observed-tag catalogue for an existing index:
+
+```bash
+.venv/bin/python tools/backfill_tag_catalogue.py
+```
+
+Reads `OUT_KVROCKS_HOST` / `OUT_KVROCKS_PORT` from `tools/config.yaml`, or an
+alternative `--config PATH`. Scans existing `tag:*` keys once, reads cardinalities
+in batches (`--batch-size`, default 500), and adds nonempty values to
+`tag_catalogue`. It never reads document UID memberships or rule SQL rows.
+Progress is printed before/during maintenance. Safe to repeat during normal
+ingestion: it only adds candidates and never replaces the catalogue. Do not run
+it concurrently with a destructive tag flush/rebuild.
+
+New document imports and retagging maintain the catalogue automatically. Before
+backfill, only newly encountered tags appear. Existing web workers may retain
+their previous catalogue for up to 60 seconds; reload afterwards. This changes
+no scan documents, query semantics, SQL schema or tag counters.
+
 ### `index_kvrocks.py`
+
+**Managed installations:** `--rebuild-from-meili` now queues a full background
+rebuild through the controller scheduler. It does not delete the active index.
+The controller owns batch/resource settings for this path. Existing dump-based
+maintenance paths below are for isolated or legacy, unmanaged indexes only;
+they cannot write into a managed generation. See [automatic indexing](automatic-indexing.md).
 
 Build or rebuild the Kvrocks search indexes from Meilisearch documents.
 Kvrocks stores compact reverse indexes used by structured search; Meilisearch remains the source for full scan documents.
@@ -225,7 +418,9 @@ Use a rebuild from a dump when you want to clean stale Kvrocks keys but prefer t
 .venv/bin/python tools/index_kvrocks.py --rebuild --input-dir tools/meili_dump
 ```
 
-This deletes known Plum Kvrocks keys, then imports every JSON document from the dump. Before deleting `doc:*`, it snapshots existing `first_seen` and `last_seen` values in memory and applies them during reimport.
+This deletes known Plum Kvrocks search keys, preserves existing `doc:{uid}`
+timestamp hashes, then imports every JSON document from the dump. Preserved
+timestamps are merged during reimport.
 
 Use a rebuild directly from Meilisearch when you want the cleanest operational path and do not need an intermediate dump directory:
 
@@ -253,12 +448,16 @@ Search time bounds (`from` / `to`) are evaluated from Kvrocks only. They depend 
 
 Without `--rebuild`, existing `doc:{uid}` timestamps are kept for UIDs already present in Kvrocks. New UIDs get timestamps from the parsed scan document.
 
-With `--rebuild` or `--rebuild-from-meili`, the script snapshots existing `doc:{uid}` timestamps before deleting keys. During reimport, it preserves:
+With `--rebuild` or `--rebuild-from-meili`, the script keeps existing
+`doc:{uid}` timestamp hashes in place while deleting and rebuilding search keys.
+During reimport, it preserves:
 
 - earliest known `first_seen`
 - latest known `last_seen`
 
-This protects timestamps for documents that are present in the rebuild source. If a document exists only in Kvrocks and is missing from the dump or Meilisearch source, it will not be recreated after a rebuild.
+This protects timestamps for documents that are present in the rebuild source.
+For UIDs absent from that source, the metadata hash remains but rebuilt search
+indexes are not restored.
 
 For extra safety before a full clean rebuild, export `first_seen` to CSV, rebuild, then import the CSV:
 
@@ -332,13 +531,75 @@ The import updates `doc:{uid}.first_seen` and `first_seen_index`.
 It does not overwrite `last_seen`.
 The tool prints the expected total first, then progress every 1000 processed records.
 
-### `index_meili.py`
-
-Import JSON documents from `meili_dump/` into Meilisearch.
-This is a low-level recovery helper with hardcoded connection defaults in the script.
-Review the script before use.
-
 ## Target and FQDN tools
+
+### `import_whois_ranges.py`
+
+Download RIR WHOIS sources, find records matching configured countries or words, convert matching `inetnum` ranges to CIDR, reduce locally covered CIDRs, and import them into Plum through the API.
+
+The tool reads `tools/range_import.yaml`.
+Start from the sample:
+
+```bash
+cp tools/range_import.yaml.sample tools/range_import.yaml
+chmod 600 tools/range_import.yaml
+```
+
+Example:
+
+```yaml
+base_url: "http://localhost:5000"
+country:
+  - "LU"
+words:
+  - "luxembourg"
+username: "feeder-user"
+password: "..."
+```
+
+Run a parse-only check:
+
+```bash
+.venv/bin/python tools/import_whois_ranges.py --dry-run
+```
+
+Run and import into Plum:
+
+```bash
+.venv/bin/python tools/import_whois_ranges.py
+```
+
+Useful options:
+
+```bash
+.venv/bin/python tools/import_whois_ranges.py --forcedownload
+.venv/bin/python tools/import_whois_ranges.py --debug
+```
+
+Behavior and safety:
+
+- active sources are hardcoded in the script; disabled sources are ignored
+- downloads are stored under `tools/tmp/`
+- cached source files older than 24 hours are downloaded again
+- `--forcedownload` ignores the 24-hour cache freshness check
+- compressed downloads are written atomically via `.part` files
+- compressed download size is capped at 512 MiB
+- gzip sources are decompressed while parsing
+- country matching is case-insensitive after normalization
+- `words` matching is case-insensitive and can match any line in a record
+- duplicate CIDRs are removed
+- CIDRs already covered by a wider CIDR in the local import set are skipped
+- CIDRs are imported through the Plum API, never by direct DB writes
+- `netname` is used as target description when available
+- logs are written to `tools/log/import_whois_ranges.log`
+- log files rotate daily and keep 14 days
+
+Security notes:
+
+- use a dedicated user with the `Feeder` role
+- keep `tools/range_import.yaml` out of git
+- keep `tools/range_import.yaml` mode `600`; the tool warns when it is too open
+- `base_url` must be HTTPS unless it points to localhost/loopback
 
 ### `import_fqdns.py`
 
@@ -350,27 +611,72 @@ The input file can contain FQDNs, IPs, and CIDR ranges.
 ```
 
 The tool authenticates with `PLUMISLAND`, `PLUMAPIUSER`, and `PLUMAPIPWD` from `tools/config.yaml`.
+Use a dedicated Plum user with the `Feeder` role for this tool.
 
 ### `last_fqdns.py`
 
-Extract uniqure FQDNs seen during the last N hours from Kvocks.
+Extract unique FQDNs seen during the last N hours from Kvrocks.
+This is useful when Plum receives passive DNS observations from a sensor and you want to resolve recently observed names.
 
 ```bash
-cd tools
-../.venv/bin/python last_fqdns.py --hours 24
+.venv/bin/python tools/last_fqdns.py --hours 24
 ```
 
 Optionally resolve every FQDN:
 
 ```bash
-cd tools
-../.venv/bin/python last_fqdns.py --hours 24 --resolve yes
+.venv/bin/python tools/last_fqdns.py --hours 24 --resolve yes
 ```
 
-This tool currently expects to be executed from `tools/` because it reads `config.yaml` and imports utility modules with relative paths.
+Resolution results are logged, not printed to stdout.
+With `--debug`, each successful or failed FQDN resolution is shown on the console.
+FQDNs are logged at debug level, not printed.
+At the end of the run, the tool logs a short summary with found, resolved, and newly created Plum FQDN target counts.
+
+The tool reads `tools/config.yaml` and logs to `tools/log/last_fqdns.log`.
+Log files rotate daily and keep 14 days.
+Use `--debug` to show debug logs on the console.
+
+Learning mode can add recently seen FQDNs back into Plum targets.
+It is intended for focused learning on domains or TLDs you explicitly care about, for example a country TLD, an owned zone, or a watched customer domain.
+Configure regexes in `tools/config.yaml`:
+
+```yaml
+last_fqdns_learn:
+  - ".lu$"
+  - "(^|\\.)example\\.com$"
+```
+
+Then run:
+
+```bash
+.venv/bin/python tools/last_fqdns.py --hours 24 --learn
+```
+
+With `--learn`, all listed FQDNs are resolved.
+Only FQDNs matching at least one `last_fqdns_learn` regex are imported, and only when they return at least one address.
+The regexes do not limit resolution; they only decide which successfully resolved names are learned as Plum targets.
+Imports use the Plum API credentials from `PLUMISLAND`, `PLUMAPIUSER`, and `PLUMAPIPWD`.
+Without `--learn`, no target import is performed.
 
 ## Notes
 
 - `tools/config.yaml` can contain credentials. Do not commit production secrets.
 - `tools/q` and `tools/title` are local scratch files, not maintained CLI tools.
 - Prefer `--dry-run` when available before writing to the database or indexes.
+
+## Target imports and network metadata
+
+`import_whois_ranges.py` (single-target API) and `import_fqdns.py` (bulk API) use
+the same server-side target defaults: real UTC insertion timestamp, persisted
+`is_ip_cidr` classification derived from the stored value, and durable
+CIDR enrichment queue. No new credentials, client-side CIRCL lookup or timestamp
+arguments are required. Import descriptions remain unchanged. FQDN targets are
+inserted normally with AS enrichment unavailable; the existing optional FQDN
+resolution mode is unrelated and retains its behavior.
+
+Network failures do not roll back imports. Automatic lookups run in Plum's
+dedicated scheduler job; the target's detail button and list action force a
+lookup immediately. See [target metadata](scanning.md#target-metadata-and-network-information)
+and [migration 23](migration-v0.2604.0-to-v0.2610.0.md#target-network-metadata-migration-23) for history
+backfill, permissions and recovery.

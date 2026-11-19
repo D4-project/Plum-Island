@@ -1,7 +1,0 @@
-description: Barracuda CloudGen Firewall
-query: http_server.bg:"barracuda cloudgen firewall"
-tags:
-- vendor:barracuda
-- product:barracuda-cloudgen-firewall
-- type:firewall
-version: 20260520T133458Z

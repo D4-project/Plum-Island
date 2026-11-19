@@ -29,6 +29,7 @@ INDEX_FIELDS = [
     "tld",
     "tag",
     "port",
+    "port_protocol",
     "http_title",
     "http_favicon_path",
     "http_favicon_mmhash",
@@ -40,10 +41,12 @@ INDEX_FIELDS = [
     "http_headval",
     "http_server",
     "x509_issuer",
+    "x509_issuer_cn",
     "x509_md5",
     "x509_sha1",
     "x509_sha256",
     "x509_subject",
+    "x509_subject_cn",
     "x509_san",
     "banner",
 ]
@@ -62,7 +65,7 @@ BATCH_SIZE = DEFAULT_BATCH_SIZE
 PARSER_CONF = {}
 KVrocksIndexer = None
 parse_json = None
-fetch_tlds = None
+prepare_kvrocks_document = None
 TAG_RUNTIME = {}
 WORKER_SEEN_SNAPSHOT = None
 WORKER_TAG_RULES = None
@@ -118,8 +121,6 @@ def load_config():
     KVROCKS_HOST = config.get("OUT_KVROCKS_HOST")
     BATCH_SIZE = int(config.get("KVROCKS_BATCH_SIZE", DEFAULT_BATCH_SIZE))
     PARSER_CONF = {
-        "ONLINETLD": config.get("ONLINETLD", config.get("PARSER_ONLINETLD", False)),
-        "TLDS": [],
         "TLDADD": config.get("TLDADD", config.get("PARSER_TLDADD", ["local"])),
         "HTTP_HEADER_COLLECTION": {},
     }
@@ -129,7 +130,7 @@ def load_runtime_dependencies(retag=False):
     """
     Import runtime dependencies after help handling.
     """
-    global KVrocksIndexer, TAG_RUNTIME, parse_json, fetch_tlds
+    global KVrocksIndexer, TAG_RUNTIME, parse_json, prepare_kvrocks_document
 
     if retag:
         sys.path.insert(0, str(WEBAPP_DIR))
@@ -139,11 +140,9 @@ def load_runtime_dependencies(retag=False):
         from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
             KVrocksIndexer as RuntimeKVrocksIndexer,
         )
-        from app.utils.mutils import (  # pylint: disable=import-outside-toplevel
-            fetch_tlds as runtime_fetch_tlds,
-        )
         from app.utils.result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
+            prepare_kvrocks_document as runtime_prepare_kvrocks_document,
         )
         from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
             compile_tag_rule_records,
@@ -159,18 +158,16 @@ def load_runtime_dependencies(retag=False):
         from kvrocks import (  # pylint: disable=import-outside-toplevel
             KVrocksIndexer as RuntimeKVrocksIndexer,
         )
-        from mutils import (  # pylint: disable=import-outside-toplevel
-            fetch_tlds as runtime_fetch_tlds,
-        )
         from result_parser import (  # pylint: disable=import-outside-toplevel
             parse_json as runtime_parse_json,
+            prepare_kvrocks_document as runtime_prepare_kvrocks_document,
         )
 
         TAG_RUNTIME = {}
 
     KVrocksIndexer = RuntimeKVrocksIndexer
     parse_json = runtime_parse_json
-    fetch_tlds = runtime_fetch_tlds
+    prepare_kvrocks_document = runtime_prepare_kvrocks_document
 
 
 def get_config_value(*names, default=None):
@@ -238,8 +235,10 @@ def json_import(json_file, seen_snapshot=None, tag_rules=None):
     with open(json_file, "r", encoding="utf-8") as json_handle:
         doc = json.loads(json_handle.read())
         parsed_doc = parse_json(doc, PARSER_CONF, tag_rules=tag_rules)
+        if parsed_doc is None:
+            return None
         apply_seen_snapshot(parsed_doc, seen_snapshot)
-        return parsed_doc
+        return prepare_kvrocks_document(doc, parsed_doc, tag_rules=tag_rules)
 
 
 def parse_meili_document(doc, seen_snapshot=None, tag_rules=None):
@@ -247,8 +246,10 @@ def parse_meili_document(doc, seen_snapshot=None, tag_rules=None):
     Parse one Meilisearch document for Kvrocks indexing.
     """
     parsed_doc = parse_json(dict(doc), PARSER_CONF, tag_rules=tag_rules)
+    if parsed_doc is None:
+        return None
     apply_seen_snapshot(parsed_doc, seen_snapshot)
-    return parsed_doc
+    return prepare_kvrocks_document(doc, parsed_doc, tag_rules=tag_rules)
 
 
 def init_parse_worker(parser_conf, seen_snapshot, tag_rules):
@@ -448,7 +449,7 @@ def clean_tag_indexes(indexer):
     Remove existing tag indexes before recomputing tags for parsed documents.
     """
     print("Deleting existing Plum Kvrocks tag indexes", flush=True)
-    deleted = 0
+    deleted = indexer.r.delete(indexer.TAG_CATALOGUE_KEY)
     for pattern in ("tag:*", "tags:*"):
         deleted_for_pattern = delete_keys_by_pattern(indexer.r, pattern)
         deleted += deleted_for_pattern
@@ -476,6 +477,8 @@ def rebuild_kvrocks(indexer, include_tags=False):
         "first_seen_index",
         "last_seen_index",
     )
+    if include_tags:
+        deleted += indexer.r.delete(indexer.TAG_CATALOGUE_KEY)
     patterns = list(REBUILD_KEY_PATTERNS)
     for field in INDEX_FIELDS:
         if field == "tag" and not include_tags:
@@ -774,6 +777,8 @@ def index_documents_with_errors(
                     error_count += 1
                     print(error, flush=True)
                     continue
+                if parsed_doc is None:
+                    continue
                 yield parsed_doc
         finally:
             close_iterator = getattr(documents_with_errors, "close", None)
@@ -797,6 +802,8 @@ def main():
     """
     suppress_connection_debug_logs()
     args = parse_args()
+    global STOP_REQUESTED
+    STOP_REQUESTED = False
     load_config()
     if args.batch_size is None:
         args.batch_size = BATCH_SIZE
@@ -804,16 +811,17 @@ def main():
     suppress_connection_debug_logs()
 
     input_dir = Path(args.input_dir)
+    if args.rebuild_from_meili:
+        from tag_mgmt import (  # pylint: disable=import-outside-toplevel
+            request_reconciliation,
+        )  # pylint: disable=import-outside-toplevel
+
+        request_reconciliation(full=True, endpoint=(KVROCKS_HOST, int(KVROCKS_PORT)))
+        print("Full rebuild queued for the scheduler; follow progress on Tag Rules")
+        return
     indexer = KVrocksIndexer(KVROCKS_HOST, KVROCKS_PORT)
-    meili_index = None
-    first_meili_results = None
-    total_count = None
     tag_rules = None
 
-    if PARSER_CONF["ONLINETLD"]:
-        PARSER_CONF["TLDS"] = fetch_tlds()
-    else:
-        PARSER_CONF["TLDS"] = config.get("TLDS", config.get("PARSER_TLDS", []))
     PARSER_CONF["HTTP_HEADER_COLLECTION"] = load_collected_header_collection()
 
     if args.retag:
@@ -824,48 +832,18 @@ def main():
             flush=True,
         )
 
-    if args.rebuild_from_meili:
-        meili_url, index_name, meili_index = build_meili_index()
-        print(
-            f"Reading source documents from {meili_url} / index={index_name}",
-            flush=True,
-        )
-        first_meili_results, total_count = fetch_meili_page(
-            meili_index,
-            args.batch_size,
-            0,
-        )
-        if not first_meili_results:
-            raise SystemExit(
-                "Meilisearch returned no documents; refusing to rebuild Kvrocks"
-            )
-
     seen_snapshot = (
-        rebuild_kvrocks(indexer, include_tags=args.retag)
-        if args.rebuild or args.rebuild_from_meili
-        else None
+        rebuild_kvrocks(indexer, include_tags=args.retag) if args.rebuild else None
     )
-
-    if args.rebuild_from_meili:
-        source_docs = parsed_documents_from_meili(
-            meili_index,
-            seen_snapshot,
-            args.batch_size,
-            first_results=first_meili_results,
-            tag_rules=tag_rules,
-            workers=args.workers,
-        )
-        progress_label = "Meili documents"
-    else:
-        total_count = sum(1 for _json_file in iter_json_files(input_dir))
-        source_docs = parsed_documents_from_files(
-            input_dir,
-            seen_snapshot,
-            tag_rules=tag_rules,
-            workers=args.workers,
-            batch_size=args.batch_size,
-        )
-        progress_label = "files"
+    total_count = sum(1 for _json_file in iter_json_files(input_dir))
+    source_docs = parsed_documents_from_files(
+        input_dir,
+        seen_snapshot,
+        tag_rules=tag_rules,
+        workers=args.workers,
+        batch_size=args.batch_size,
+    )
+    progress_label = "files"
 
     install_graceful_interrupt_handler()
     processed_count, indexed_count, error_count = index_documents_with_errors(

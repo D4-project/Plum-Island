@@ -7,4 +7,17 @@ dev-*
 tools/meili_dump
 tools/meili_dump_port
 tools/config.yaml
+tools/range_import.yaml
+tools/log/
+log/
+tools/tmp/
 external/
+/Plan/
+/plan/
+*.pyc
+webapp/app.db-shm
+webapp/app.db-wal
+/webapp/app/static/uploads
+
+/webapp/app/index_state/
+/webapp/.plum-settings/

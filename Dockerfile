@@ -1,6 +1,6 @@
 FROM python:3.13-slim
 
-LABEL org.opencontainers.image.version="unreleased" \
+LABEL org.opencontainers.image.version="v0.2610.0" \
       org.opencontainers.image.source="https://github.com/D4-project/Plum-Island" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /plum
 
 COPY requirements.txt .
+# requirements.txt installs Plum-Antibodies as an editable local package.
+COPY webapp/tags/ ./webapp/tags/
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY webapp/ ./webapp/
@@ -24,6 +26,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /plum/webapp
+ENV PLUM_SETTINGS_DIR=/plum/data/settings
 EXPOSE 5000
 
 ENTRYPOINT ["docker-entrypoint.sh"]

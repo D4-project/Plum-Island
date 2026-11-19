@@ -1,7 +1,0 @@
-description: Karma Alertmanager UI
-query: http_headval:www-authenticate.lk:"karma alertmanager ui"
-tags:
-- product:karma-alertmanager
-- type:supervision
-- vendor:karma
-version: 20260520T133458Z

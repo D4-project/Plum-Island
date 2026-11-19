@@ -1,0 +1,1365 @@
+#!/usr/bin/env python3
+"""Regression tests for scheduler job recovery."""
+
+# pylint: disable=wrong-import-position,protected-access,duplicate-code,too-many-public-methods
+
+import importlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from unittest import TestCase, mock
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(BASE_DIR, "webapp"))
+
+
+class StalledJobWatchdogTest(TestCase):
+    """Tests for the scheduler's two-hour stalled-job watchdog."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Import scheduler with external services mocked."""
+        with mock.patch("meilisearch.Client") as client, mock.patch(
+            "app.utils.kvrocks.KVrocksIndexer"
+        ) as kvrocks_indexer:
+            client.return_value.index.return_value.get_searchable_attributes.return_value = (
+                []
+            )
+            cls.scheduler = importlib.import_module("app.scheduler")
+            cls.meili_client_constructor = client
+            cls.kvrocks_indexer_constructor = kvrocks_indexer
+
+    def _export_context(self, meili_index, kvrocks_index):
+        """Build isolated export dependencies for state-machine tests."""
+        return self.scheduler.ExportContext(
+            meili_idx=meili_index,
+            kvrocks_idx=kvrocks_index,
+            input_dir="/tmp",
+            parser_config={},
+            active_tag_rules=[],
+        )
+
+    def test_timeout_is_exactly_two_hours(self):
+        """A job at the two-hour boundary is eligible for release."""
+        now = datetime(2026, 7, 29, 12, 0, 0)
+        self.assertEqual(
+            now - self.scheduler.STALLED_JOB_TIMEOUT,
+            datetime(2026, 7, 29, 10, 0, 0),
+        )
+
+    def _routing_fixture(self):
+        """Create real scheduler states in a disposable database."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.Targets.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        now = self.scheduler.utcnow_naive()
+        profile = models.ScanProfiles(
+            name="Routing test", scan_cycle_minutes=60, apply_to_all=True
+        )
+        cycle = models.ScanProfileCycles(
+            scanprofile=profile, started_at=now, status="running", max_target_id=3
+        )
+        zero = models.AutonomousSystems(asn=0, name="Not routed")
+        states = [
+            models.TargetScanStates(
+                scanprofile=profile,
+                target=models.Targets(
+                    id=index,
+                    value=value,
+                    autonomous_system=zero,
+                    network_updated_at=now,
+                ),
+            )
+            for index, value in enumerate(
+                ("192.0.2.0/24", "2001:db8::/120", "example.org"), start=1
+            )
+        ]
+        session.add_all([cycle, *states])
+        session.commit()
+        return models, session, profile, cycle, states
+
+    def test_cached_unannounced_jobs_finish_without_scanner_or_export(self):
+        """Fresh ASN zero completes IPv4/IPv6 while FQDN work stays queued."""
+        models, session, profile, cycle, states = self._routing_fixture()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(self.scheduler, "refresh_target_network") as refresh:
+            ready, skipped, deferred = self.scheduler._prepare_routing_states(
+                states, float("inf")
+            )
+            self.assertEqual(ready, [states[2]])
+            self.assertEqual(skipped, states[:2])
+            self.assertFalse(deferred)
+            refresh.assert_not_called()
+            with session.no_autoflush:
+                count, completed = self.scheduler._complete_unannounced_states(
+                    profile, skipped, "80", "", cycle, max_jobs=10
+                )
+                self.scheduler._stage_jobs_for_profile(
+                    profile, ready, "80", "", cycle, max_jobs=10
+                )
+            session.commit()
+            self.assertEqual(count, 2)
+            self.assertEqual(completed, {states[0].id, states[1].id})
+            jobs = session.query(models.Jobs).all()
+            done = [job for job in jobs if job.finished]
+            self.assertEqual(len(done), 2)
+            for job in done:
+                self.assertTrue(job.exported)
+                self.assertFalse(job.active)
+                self.assertIsNone(job.bot_id)
+                self.assertIsNone(job.job_start)
+                self.assertEqual(job.meili_documents_total, 0)
+                self.assertLessEqual(job.scan_unit_count, 256)
+            self.assertEqual(
+                [job.job for job in jobs if not job.finished], ["example.org"]
+            )
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id, cycle, prune_history=False
+            )
+            self.assertEqual(cycle.completed_target_count, 2)
+            self.assertEqual(cycle.status, "running")
+            self.assertFalse(states[0].working)
+            self.assertTrue(states[2].working)
+
+    def test_stale_routing_is_rechecked_and_failure_is_deferred(self):
+        """A newly routed CIDR scans; lookup failure never completes a target."""
+        models, session, _, _, states = self._routing_fixture()
+        for state in states[:2]:
+            state.target.network_updated_at -= timedelta(hours=25)
+        session.commit()
+
+        def refresh(target_id):
+            self.assertFalse(session.in_transaction())
+            if target_id == 1:
+                session.get(models.Targets, target_id).autonomous_system = (
+                    models.AutonomousSystems(asn=64500, name="Routed")
+                )
+                session.get(models.Targets, target_id).network_updated_at = (
+                    self.scheduler.utcnow_naive()
+                )
+                session.commit()
+                return "updated"
+            return "failed"
+
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "refresh_target_network", side_effect=refresh
+        ) as lookup:
+            ready, skipped, deferred = self.scheduler._prepare_routing_states(
+                states, float("inf")
+            )
+        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(ready, [states[0], states[2]])
+        self.assertFalse(skipped)
+        self.assertEqual(deferred, {states[1].id})
+        self.assertIsNone(states[1].last_scan)
+        self.assertFalse(states[1].working)
+
+    def test_routing_deadline_defers_stale_checks_without_http(self):
+        """Queue generation stops starting lookups after its time budget."""
+        _, session, _, _, states = self._routing_fixture()
+        states[0].target.network_updated_at = None
+        session.commit()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(self.scheduler, "refresh_target_network") as lookup:
+            ready, skipped, deferred = self.scheduler._prepare_routing_states(states, 0)
+        lookup.assert_not_called()
+        self.assertEqual(ready, [states[2]])
+        self.assertEqual(skipped, [states[1]])
+        self.assertEqual(deferred, {states[0].id})
+
+    def test_all_unannounced_cycle_finishes_and_next_cycle_rechecks(self):
+        """Full scheduler tick closes a skipped cycle and resumes when routed."""
+        models, session, profile, cycle, states = self._routing_fixture()
+        states[2].target.active = False
+        profile.current_cycle_id = cycle.id
+        session.commit()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_should_run_orphan_state_release", return_value=False
+        ), mock.patch.object(
+            self.scheduler, "_sync_missing_scan_states", return_value=0
+        ), mock.patch.object(
+            self.scheduler, "_serialize_profile_ports", return_value="80"
+        ), mock.patch.object(
+            self.scheduler, "_serialize_profile_nses", return_value=""
+        ), mock.patch.object(
+            self.scheduler, "refresh_target_network"
+        ) as refresh:
+            summary = self.scheduler.task_create_jobs()
+            refresh.assert_not_called()
+            self.assertEqual(summary["jobs_created"], 0)
+            self.assertEqual(summary["unannounced_jobs_completed"], 2)
+            self.assertEqual(cycle.status, "finished")
+            self.assertEqual(cycle.completed_target_count, 2)
+            self.assertEqual(cycle.completed_scan_unit_count, 512)
+            with mock.patch.object(session, "remove", create=True):
+                self.assertFalse(self.scheduler._load_export_job_states())
+            self.assertEqual(self.scheduler.task_create_jobs()["jobs_created"], 0)
+            self.assertEqual(session.query(models.Jobs).count(), 2)
+
+            # The next due cycle must consult CIRCL again after cache expiry.
+            for state in states[:2]:
+                state.last_scan -= timedelta(hours=25)
+                state.target.network_updated_at -= timedelta(hours=25)
+            session.commit()
+
+            def routed(target_id):
+                target = session.get(models.Targets, target_id)
+                target.autonomous_system = models.AutonomousSystems(
+                    asn=64500 + target_id, name="Now routed"
+                )
+                target.network_updated_at = self.scheduler.utcnow_naive()
+                session.commit()
+                return "updated"
+
+            refresh.side_effect = routed
+            summary = self.scheduler.task_create_jobs()
+            self.assertEqual(refresh.call_count, 2)
+            self.assertEqual(summary["jobs_created"], 2)
+            self.assertEqual(summary["unannounced_jobs_completed"], 0)
+
+    def test_watchdog_updates_only_stalled_job_state(self):
+        """Watchdog clears claim fields and preserves unfinished state."""
+        session = mock.Mock()
+        query = session.query.return_value
+        query.filter.return_value.update.return_value = 2
+        with mock.patch.object(self.scheduler.db, "session", session):
+            summary = self.scheduler.task_release_stalled_jobs(
+                datetime(2026, 7, 29, 12, 0, 0)
+            )
+
+        self.assertEqual(summary, {"stalled_jobs_released": 2})
+        session.commit.assert_called_once_with()
+        updates = query.filter.return_value.update.call_args.args[0]
+        self.assertFalse(updates[self.scheduler.Jobs.active])
+        self.assertIsNone(updates[self.scheduler.Jobs.bot_id])
+        self.assertIsNone(updates[self.scheduler.Jobs.job_start])
+
+    def test_watchdog_does_not_commit_when_no_job_matches(self):
+        """No-op watchdog tick does not create an unnecessary transaction."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.update.return_value = 0
+        with mock.patch.object(self.scheduler.db, "session", session):
+            summary = self.scheduler.task_release_stalled_jobs()
+
+        self.assertEqual(summary, {"stalled_jobs_released": 0})
+        session.commit.assert_not_called()
+
+    def test_timeout_is_timedelta(self):
+        """Timeout remains a fixed two-hour duration, not scheduler interval."""
+        self.assertEqual(self.scheduler.STALLED_JOB_TIMEOUT, timedelta(hours=2))
+
+    def test_backend_clients_have_finite_request_timeouts(self):
+        """An unavailable search backend cannot occupy the scheduler forever."""
+        self.assertEqual(
+            self.meili_client_constructor.call_args.kwargs["timeout"],
+            10,
+        )
+        self.assertEqual(
+            self.kvrocks_indexer_constructor.call_args.kwargs["socket_timeout"],
+            10,
+        )
+
+    def test_backend_maintenance_has_an_independent_scheduler_slot(self):
+        """A stuck maintenance run cannot suppress scan orchestration ticks."""
+        jobs = {job.id: job for job in self.scheduler.scheduler.get_jobs()}
+
+        self.assertIn("scan_orchestration", jobs)
+        self.assertIn("scheduler_maintenance", jobs)
+        self.assertIs(
+            jobs["scan_orchestration"].func,
+            self.scheduler.task_master_of_puppets,
+        )
+        self.assertIs(
+            jobs["scheduler_maintenance"].func,
+            self.scheduler.task_scheduler_maintenance,
+        )
+
+    def test_maintenance_tick_runs_queue_watchdog_independently(self):
+        """The one-minute maintenance slot observes a stuck orchestration slot."""
+        call_order = []
+        session = mock.Mock()
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler,
+            "_log_queue_generation_watchdog",
+            side_effect=lambda: call_order.append("queue_watchdog") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_export_to_dbs",
+            side_effect=lambda: call_order.append("export") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_run_due_reports",
+            side_effect=lambda: call_order.append("reports") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_cleanup_jobs",
+            side_effect=lambda: call_order.append("cleanup_jobs") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_cleanup_search_sessions",
+            side_effect=lambda: call_order.append("cleanup_search") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_cleanup_export_jobs",
+            side_effect=lambda: call_order.append("cleanup_export") or {},
+        ):
+            self.scheduler.task_scheduler_maintenance()
+
+        self.assertEqual(
+            call_order,
+            [
+                "queue_watchdog",
+                "export",
+                "reports",
+                "cleanup_jobs",
+                "cleanup_search",
+                "cleanup_export",
+            ],
+        )
+
+    def test_queue_generation_watchdog_reports_exact_stage_after_five_minutes(self):
+        """Maintenance can diagnose create_jobs while its next ticks are skipped."""
+        with self.scheduler._queue_generation_lock:
+            original_progress = dict(self.scheduler._queue_generation_progress)
+        try:
+            with mock.patch.object(
+                self.scheduler.time, "perf_counter", return_value=100.0
+            ):
+                self.scheduler._begin_queue_generation()
+            with mock.patch.object(
+                self.scheduler.time, "perf_counter", return_value=110.0
+            ):
+                self.scheduler._mark_queue_generation_stage(
+                    "due_state_selection",
+                    profile="Common Web",
+                    profile_index=1,
+                    profile_total=13,
+                    cycle_id=20,
+                    max_target_id=96520,
+                    batch=1,
+                    phase="never_scanned",
+                    limit=256,
+                    queue_waiting=0,
+                    queue_target=256,
+                )
+
+            with mock.patch.object(self.scheduler.logger, "error") as early_error:
+                early_status = self.scheduler._log_queue_generation_watchdog(now=399.0)
+            self.assertFalse(early_status["stalled"])
+            early_error.assert_not_called()
+
+            with mock.patch.object(self.scheduler.logger, "error") as error_log:
+                status = self.scheduler._log_queue_generation_watchdog(now=401.0)
+
+            self.assertTrue(status["active"])
+            self.assertTrue(status["stalled"])
+            self.assertEqual(status["stage"], "due_state_selection")
+            logged_values = error_log.call_args.args
+            self.assertIn("Common Web", logged_values)
+            self.assertIn("never_scanned", logged_values)
+            self.assertIn(96520, logged_values)
+            self.assertIn(256, logged_values)
+        finally:
+            with self.scheduler._queue_generation_lock:
+                self.scheduler._queue_generation_progress.clear()
+                self.scheduler._queue_generation_progress.update(original_progress)
+
+    def test_queue_generation_watchdog_reports_five_zero_output_ticks(self):
+        """Repeated completed ticks with no jobs produce a periodic diagnostic."""
+        with self.scheduler._queue_generation_lock:
+            original_progress = dict(self.scheduler._queue_generation_progress)
+        try:
+            for finished_at in (100.0, 160.0, 220.0, 280.0, 340.0):
+                with mock.patch.object(
+                    self.scheduler.time, "perf_counter", return_value=finished_at
+                ):
+                    self.scheduler._begin_queue_generation()
+                    self.scheduler._finish_queue_generation(
+                        {
+                            "jobs_created": 0,
+                            "profiles_total": 13,
+                            "profiles_full": 0,
+                            "profiles_without_due_states": 13,
+                        }
+                    )
+
+            with mock.patch.object(self.scheduler.logger, "warning") as warning_log:
+                status = self.scheduler._log_queue_generation_watchdog(now=401.0)
+
+            self.assertFalse(status["active"])
+            self.assertEqual(status["zero_output_ticks"], 5)
+            self.assertEqual(status["zero_output_seconds"], 301)
+            self.assertIn(
+                "profiles_without_due_states=13",
+                " ".join(str(value) for value in warning_log.call_args.args),
+            )
+        finally:
+            with self.scheduler._queue_generation_lock:
+                self.scheduler._queue_generation_progress.clear()
+                self.scheduler._queue_generation_progress.update(original_progress)
+
+    def test_scan_tick_generates_jobs_without_entering_backend_maintenance(self):
+        """The scan tick cannot call a slow export path before creating jobs."""
+        call_order = []
+
+        with mock.patch.object(
+            self.scheduler,
+            "task_release_stalled_jobs",
+            side_effect=lambda: call_order.append("watchdog") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_create_jobs",
+            side_effect=lambda: call_order.append("create_jobs") or {"jobs_created": 1},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_sync_queued_profile_jobs",
+            side_effect=lambda: call_order.append("profile_sync") or {},
+        ), mock.patch.object(
+            self.scheduler,
+            "task_export_to_dbs",
+            side_effect=AssertionError("scan tick entered backend export"),
+        ):
+            self.scheduler.task_master_of_puppets()
+
+        self.assertEqual(call_order, ["watchdog", "create_jobs", "profile_sync"])
+
+    def test_due_state_query_applies_cycle_target_boundary(self):
+        """Targets above current cycle high-water mark remain for next cycle."""
+        session = mock.Mock()
+        session.execute.return_value.fetchall.return_value = []
+        profile = SimpleNamespace(
+            id=7,
+            scan_cycle_minutes=60,
+            apply_to_all=True,
+        )
+
+        with mock.patch.object(self.scheduler.db, "session", session):
+            states = self.scheduler._load_due_states_for_profile(
+                profile,
+                datetime(2026, 8, 20, 12, 0, 0),
+                state_limit=256,
+                max_target_id=123,
+                cycle_started_at=datetime(2026, 8, 19, 12, 0, 0),
+            )
+
+        self.assertEqual(states, [])
+        self.assertEqual(session.execute.call_count, 2)
+        never_scanned_call, expired_call = session.execute.call_args_list
+        never_scanned_sql, never_scanned_params = never_scanned_call.args
+        expired_sql, expired_params = expired_call.args
+        self.assertIn("t.id <= :max_target_id", str(never_scanned_sql))
+        self.assertIn("tss.last_scan IS NULL", str(never_scanned_sql))
+        self.assertIn("tss.last_scan <= :cutoff", str(expired_sql))
+        self.assertIn("tss.last_scan < :cycle_started_at", str(expired_sql))
+        self.assertNotIn("CASE", str(never_scanned_sql))
+        self.assertNotIn("CASE", str(expired_sql))
+        self.assertEqual(never_scanned_params["max_target_id"], 123)
+        self.assertEqual(expired_params["max_target_id"], 123)
+
+        connection = sqlite3.connect(":memory:")
+        try:
+            connection.executescript("""
+                CREATE TABLE targets (
+                    id INTEGER PRIMARY KEY,
+                    active BOOLEAN NOT NULL
+                );
+                CREATE TABLE target_scan_states (
+                    id INTEGER PRIMARY KEY,
+                    target_id INTEGER NOT NULL,
+                    scanprofile_id INTEGER NOT NULL,
+                    working BOOLEAN DEFAULT 0,
+                    last_scan DATETIME
+                );
+                CREATE INDEX idx_target_scan_states_due
+                    ON target_scan_states(
+                        scanprofile_id,
+                        working,
+                        last_scan,
+                        target_id
+                    );
+                """)
+            for sql_clause, params in (
+                (never_scanned_sql, never_scanned_params),
+                (expired_sql, expired_params),
+            ):
+                plan = " ".join(
+                    row[3]
+                    for row in connection.execute(
+                        f"EXPLAIN QUERY PLAN {sql_clause}", params
+                    )
+                )
+                self.assertIn("idx_target_scan_states_due", plan)
+                self.assertNotIn("TEMP B-TREE", plan)
+        finally:
+            connection.close()
+
+    def test_long_cycle_excludes_completed_targets_and_drains_existing_jobs(self):
+        """A cycle longer than the rescan delay drains, survives restart and closes."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.ScanProfiles.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        now = datetime(2026, 9, 21, 12)
+        started_at = datetime(2026, 8, 19, 7, 41)
+        profile = models.ScanProfiles(
+            id=7,
+            name="Common Web",
+            scan_cycle_minutes=1440,
+            apply_to_all=True,
+            current_cycle_id=20,
+        )
+        cycle = models.ScanProfileCycles(
+            id=20,
+            scanprofile=profile,
+            started_at=started_at,
+            status="running",
+            max_target_id=5,
+        )
+        states = [
+            models.TargetScanStates(
+                target=models.Targets(id=number, value=f"192.0.2.{number}"),
+                scanprofile=profile,
+                last_scan=last_scan,
+                working=number == 5,
+            )
+            for number, last_scan in enumerate(
+                [
+                    started_at + timedelta(days=1),
+                    started_at,
+                    started_at - timedelta(days=1),
+                    None,
+                    started_at + timedelta(days=1),
+                ],
+                start=1,
+            )
+        ]
+        jobs = [
+            models.Jobs(
+                uid=f"cycle-drain-{number}",
+                job="192.0.2.5",
+                scanprofile=profile,
+                scanprofile_cycle=cycle,
+                targets=[states[4].target],
+                active=bool(number),
+                finished=False,
+            )
+            for number in range(2)
+        ]
+        session.add_all([cycle, *states, *jobs])
+        session.commit()
+
+        with mock.patch.object(self.scheduler.db, "session", session):
+            # Expired completed targets and the exact start boundary stay excluded.
+            # Repeat with explicit profile membership and after reloading DB state.
+            for apply_to_all in (True, False):
+                profile.apply_to_all = apply_to_all
+                profile.targets = [state.target for state in states]
+                session.commit()
+                session.expire_all()
+                due = self.scheduler._load_due_states_for_profile(
+                    profile,
+                    now,
+                    256,
+                    cycle.max_target_id,
+                    cycle.started_at,
+                )
+                self.assertEqual([state.target_id for state in due], [4, 3])
+
+            # The remaining first-pass scans finish, while old repeated jobs drain.
+            for state in due:
+                state.last_scan = now
+            session.commit()
+            self.assertEqual(
+                self.scheduler._load_due_states_for_profile(
+                    profile,
+                    now,
+                    256,
+                    cycle.max_target_id,
+                    cycle.started_at,
+                ),
+                [],
+            )
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id,
+                cycle=cycle,
+                now=now,
+                prune_history=False,
+            )
+            self.assertEqual(cycle.status, "running")
+            self.assertEqual(cycle.completed_target_count, 4)
+            self.assertEqual(cycle._job_blocker_counts(), (1, 1))
+
+            jobs[0].finished = True
+            session.commit()
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id,
+                cycle=cycle,
+                now=now,
+                prune_history=False,
+            )
+            self.assertEqual(cycle.status, "running")
+
+            jobs[1].finished = True
+            states[4].working = False
+            states[4].last_scan = now
+            session.commit()
+            self.scheduler.reconcile_scanprofile_cycle(
+                profile.id,
+                cycle=cycle,
+                now=now,
+                prune_history=False,
+            )
+            self.assertEqual(cycle.status, "finished")
+            self.assertEqual(cycle.completed_target_count, 5)
+            self.assertIsNone(profile.current_cycle_id)
+            self.assertEqual(session.query(models.Jobs).count(), 2)
+
+            # Next-cycle eligibility still uses each target's 24-hour rescan delay.
+            due = self.scheduler._load_due_states_for_profile(
+                profile,
+                now,
+                256,
+                cycle.max_target_id,
+            )
+            self.assertEqual([state.target_id for state in due], [2, 1])
+
+    def test_large_ipv4_target_is_split_directly_into_atomic_24_jobs(self):
+        """A /16 becomes 256 /24 jobs without losing part of the target."""
+        target = SimpleNamespace(id=1, value="8.8.0.0/16")
+        state = SimpleNamespace(id=1, target=target)
+
+        range_chunks, small_ranges, hostname_records = (
+            self.scheduler._classify_due_states_for_chunks(
+                [state],
+                max_large_range_jobs=1,
+            )
+        )
+
+        self.assertEqual(len(range_chunks), 256)
+        self.assertEqual(range_chunks[0]["cidrs"], ["8.8.0.0/24"])
+        self.assertEqual(range_chunks[-1]["cidrs"], ["8.8.255.0/24"])
+        self.assertEqual(small_ranges, [])
+        self.assertEqual(hostname_records, [])
+
+    def test_unknown_suffix_hostname_does_not_enter_ip_network_parser(self):
+        """Stored hostnames remain schedulable after suffix data changes."""
+        hostname = SimpleNamespace(id=2, value="com.unrwa.encd")
+        invalid = SimpleNamespace(id=3, value="-sV")
+        ip_targets = [
+            SimpleNamespace(id=4, value="8.8.8.8"),
+            SimpleNamespace(id=5, value="2606:4700:4700::1111"),
+            SimpleNamespace(id=6, value="8.8.8.0/30"),
+            SimpleNamespace(id=7, value="2001:4860::/126"),
+        ]
+        states = [
+            SimpleNamespace(id=2, target=hostname),
+            SimpleNamespace(id=3, target=invalid),
+        ] + [SimpleNamespace(id=target.id, target=target) for target in ip_targets]
+        with self.assertLogs("flask_appbuilder", level="WARNING") as logs:
+            ranges, small, hosts = self.scheduler._classify_due_states_for_chunks(
+                states
+            )
+        self.assertEqual(ranges, [])
+        self.assertEqual(
+            [record["target"].value for record in small],
+            [target.value for target in ip_targets],
+        )
+        self.assertEqual([len(record["ips"]) for record in small], [1, 1, 4, 4])
+        self.assertEqual(hosts[0]["hosts"], ["com.unrwa.encd"])
+        self.assertEqual(len(hosts), 1)
+        self.assertIn("Skipping invalid target id=3", logs.output[0])
+
+    def test_large_ipv4_target_queues_all_256_jobs_as_one_atomic_target(self):
+        """The soft one-job limit cannot leave a /16 only partly scheduled."""
+
+        class FakeJob:  # pylint: disable=too-few-public-methods
+            """Minimal job object used to inspect scheduler staging."""
+
+            def __init__(self):
+                self.targets = []
+
+        profile = SimpleNamespace(
+            id=7,
+            name="profile",
+            priority=2,
+            nmap_additional_params="-4",
+        )
+        target = SimpleNamespace(id=1, value="8.8.0.0/16", working=False)
+        state = SimpleNamespace(id=1, target=target, working=False)
+        session = mock.Mock()
+
+        with mock.patch.object(self.scheduler, "Jobs", FakeJob), mock.patch.object(
+            self.scheduler.db, "session", session
+        ):
+            summary = self.scheduler._stage_jobs_for_profile(
+                profile,
+                [state],
+                "80",
+                "",
+                SimpleNamespace(id=3),
+                max_jobs=1,
+            )
+
+        queued_jobs = [call.args[0] for call in session.add.call_args_list]
+        self.assertEqual(summary["range_jobs"], 256)
+        self.assertEqual(len(queued_jobs), 256)
+        self.assertEqual(queued_jobs[0].job, "8.8.0.0/24")
+        self.assertEqual(queued_jobs[-1].job, "8.8.255.0/24")
+        self.assertTrue(target.working)
+        self.assertTrue(state.working)
+
+    def test_fqdn_transaction_builds_one_full_256_host_job(self):
+        """One bounded transaction yields one complete FQDN job."""
+        hostname_records = []
+        for index in range(self.scheduler.DEFAULT_QUEUE_STATE_BATCH_SIZE):
+            hostname_records.append(
+                {
+                    "hosts": [f"host-{index}.example"],
+                    "targets": [SimpleNamespace(id=index)],
+                    "states": [SimpleNamespace(id=index)],
+                }
+            )
+        hostname_chunks = []
+
+        added = self.scheduler._merge_hostnames_into_chunks(
+            hostname_records,
+            hostname_chunks,
+            max_chunks=1,
+        )
+
+        self.assertEqual(added, 1)
+        self.assertEqual(len(hostname_chunks), 1)
+        self.assertEqual(
+            len(hostname_chunks[0]["hosts"]),
+            self.scheduler.JOB_TARGET_CHUNK_SIZE,
+        )
+
+    def test_state_sync_commits_even_when_every_state_already_exists(self):
+        """A no-op state search never starts a SQLite write transaction."""
+        session = mock.Mock()
+        session.execute.return_value.fetchall.return_value = []
+        session.query.return_value.filter.return_value.order_by.return_value.all.return_value = (
+            []
+        )
+
+        with mock.patch.object(self.scheduler.db, "session", session):
+            inserted = self.scheduler._sync_missing_scan_states()
+
+        self.assertEqual(inserted, 0)
+        self.assertEqual(session.commit.call_count, 2)
+        executed_sql = [str(call.args[0]) for call in session.execute.call_args_list]
+        self.assertTrue(executed_sql)
+        self.assertTrue(all("INSERT" not in sql.upper() for sql in executed_sql))
+
+    def test_state_sync_closes_read_before_bounded_insert(self):
+        """Missing-state discovery cannot retain a snapshot into its write."""
+        session = mock.Mock()
+        select_result = mock.Mock()
+        select_result.fetchall.return_value = [(10, 7)]
+        insert_result = mock.Mock(rowcount=1)
+        events = []
+
+        def execute(statement, _params):
+            operation = str(statement).strip().split(None, 1)[0].upper()
+            events.append(operation)
+            return select_result if operation == "SELECT" else insert_result
+
+        session.execute.side_effect = execute
+        session.commit.side_effect = lambda: events.append("COMMIT")
+        session.query.return_value.filter.return_value.order_by.return_value.all.return_value = (
+            []
+        )
+
+        with mock.patch.object(self.scheduler.db, "session", session):
+            inserted = self.scheduler._sync_missing_scan_states()
+
+        self.assertEqual(inserted, 1)
+        self.assertEqual(events[:4], ["SELECT", "COMMIT", "INSERT", "COMMIT"])
+
+    def test_profile_rotation_follows_query_order_instead_of_numeric_id(self):
+        """Time-bounded ticks resume after the prior priority-ordered profile."""
+        profiles = [
+            SimpleNamespace(id=9),
+            SimpleNamespace(id=1),
+            SimpleNamespace(id=2),
+        ]
+        previous_cursor = self.scheduler.db.app.config.get(
+            "scheduler_profile_cursor_id"
+        )
+        self.scheduler.db.app.config["scheduler_profile_cursor_id"] = 9
+        try:
+            rotated = self.scheduler._rotate_profiles_for_tick(profiles)
+        finally:
+            self.scheduler.db.app.config["scheduler_profile_cursor_id"] = (
+                previous_cursor
+            )
+
+        self.assertEqual([profile.id for profile in rotated], [1, 2, 9])
+
+    def test_queue_generation_yields_after_one_committed_profile_batch(self):
+        """An expired time budget preserves completed work and defers the rest."""
+        profiles = [
+            SimpleNamespace(
+                id=9,
+                name="high",
+                priority=3,
+                scan_cycle_minutes=60,
+                apply_to_all=True,
+                nmap_additional_params=None,
+            ),
+            SimpleNamespace(
+                id=1,
+                name="normal",
+                priority=2,
+                scan_cycle_minutes=60,
+                apply_to_all=True,
+                nmap_additional_params=None,
+            ),
+        ]
+        cycle = SimpleNamespace(
+            max_target_id=100, status="running", started_at=datetime(2026, 8, 19)
+        )
+        session = mock.MagicMock()
+        session.query.return_value.order_by.return_value.all.return_value = profiles
+        config_values = {
+            "SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE": 256,
+            "SCHEDULER_QUEUE_STATE_BATCH_SIZE": 4096,
+            "SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK": 1024,
+            "SCHEDULER_QUEUE_TIME_BUDGET_SECONDS": 45,
+        }
+        previous_cursor = self.scheduler.db.app.config.get(
+            "scheduler_profile_cursor_id"
+        )
+        self.scheduler.db.app.config["scheduler_profile_cursor_id"] = 0
+        try:
+            with mock.patch.object(
+                self.scheduler.db, "session", session
+            ), mock.patch.object(
+                self.scheduler, "_should_run_orphan_state_release", return_value=False
+            ), mock.patch.object(
+                self.scheduler, "_sync_missing_scan_states", return_value=0
+            ), mock.patch.object(
+                self.scheduler,
+                "_get_scheduler_int_config",
+                side_effect=lambda name, _default, minimum=1: max(
+                    config_values[name], minimum
+                ),
+            ), mock.patch.object(
+                self.scheduler, "_get_waiting_job_counts_by_profile", return_value={}
+            ), mock.patch.object(
+                self.scheduler, "_serialize_profile_ports", return_value="80"
+            ), mock.patch.object(
+                self.scheduler, "_serialize_profile_nses", return_value=""
+            ), mock.patch.object(
+                self.scheduler, "get_running_scanprofile_cycle", return_value=cycle
+            ), mock.patch.object(
+                self.scheduler, "reconcile_scanprofile_cycle", return_value=cycle
+            ) as reconcile_cycle, mock.patch.object(
+                self.scheduler,
+                "_load_due_states_for_profile",
+                return_value=[SimpleNamespace(id=1)],
+            ), mock.patch.object(
+                self.scheduler, "get_or_create_running_cycle", return_value=cycle
+            ), mock.patch.object(
+                self.scheduler,
+                "_stage_jobs_for_profile",
+                return_value={
+                    "scheduled_states": 256,
+                    "range_jobs": 1,
+                    "host_jobs": 0,
+                },
+            ) as stage_jobs, mock.patch.object(
+                self.scheduler,
+                "_queue_time_budget_reached",
+                side_effect=lambda _deadline, jobs_created: jobs_created > 0,
+            ):
+                summary = self.scheduler.task_create_jobs()
+        finally:
+            self.scheduler.db.app.config["scheduler_profile_cursor_id"] = (
+                previous_cursor
+            )
+
+        self.assertEqual(summary["jobs_created"], 1)
+        self.assertTrue(summary["time_budget_exhausted"])
+        stage_jobs.assert_called_once()
+        self.assertFalse(reconcile_cycle.call_args.kwargs["prune_history"])
+        self.assertEqual(session.commit.call_count, 2)
+
+    def test_queue_generation_commits_every_256_state_batch(self):
+        """Result writers get a transaction boundary between queue batches."""
+        profile = SimpleNamespace(
+            id=9,
+            name="high",
+            priority=3,
+            scan_cycle_minutes=60,
+            apply_to_all=True,
+            nmap_additional_params=None,
+        )
+        cycle = SimpleNamespace(
+            max_target_id=100, status="running", started_at=datetime(2026, 8, 19)
+        )
+        session = mock.MagicMock()
+        session.query.return_value.order_by.return_value.all.return_value = [profile]
+        config_values = {
+            "SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE": 2,
+            # Simulate a stale production value from the earlier implementation.
+            "SCHEDULER_QUEUE_STATE_BATCH_SIZE": 4096,
+            "SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK": 10,
+            "SCHEDULER_QUEUE_TIME_BUDGET_SECONDS": 45,
+        }
+        previous_cursor = self.scheduler.db.app.config.get(
+            "scheduler_profile_cursor_id"
+        )
+        self.scheduler.db.app.config["scheduler_profile_cursor_id"] = 0
+        try:
+            with mock.patch.object(
+                self.scheduler.db, "session", session
+            ), mock.patch.object(
+                self.scheduler, "_should_run_orphan_state_release", return_value=False
+            ), mock.patch.object(
+                self.scheduler, "_sync_missing_scan_states", return_value=0
+            ), mock.patch.object(
+                self.scheduler,
+                "_get_scheduler_int_config",
+                side_effect=lambda name, _default, minimum=1: max(
+                    config_values[name], minimum
+                ),
+            ), mock.patch.object(
+                self.scheduler, "_get_waiting_job_counts_by_profile", return_value={}
+            ), mock.patch.object(
+                self.scheduler, "_serialize_profile_ports", return_value="80"
+            ), mock.patch.object(
+                self.scheduler, "_serialize_profile_nses", return_value=""
+            ), mock.patch.object(
+                self.scheduler, "get_running_scanprofile_cycle", return_value=cycle
+            ), mock.patch.object(
+                self.scheduler, "reconcile_scanprofile_cycle", return_value=cycle
+            ), mock.patch.object(
+                self.scheduler,
+                "_load_due_states_for_profile",
+                return_value=[SimpleNamespace(id=1)],
+            ) as load_states, mock.patch.object(
+                self.scheduler,
+                "_stage_jobs_for_profile",
+                return_value={
+                    "scheduled_states": 256,
+                    "range_jobs": 0,
+                    "host_jobs": 1,
+                },
+            ) as stage_jobs, mock.patch.object(
+                self.scheduler,
+                "_queue_time_budget_reached",
+                return_value=False,
+            ):
+                with self.assertLogs("flask_appbuilder", level="INFO") as logs:
+                    summary = self.scheduler.task_create_jobs()
+        finally:
+            self.scheduler.db.app.config["scheduler_profile_cursor_id"] = (
+                previous_cursor
+            )
+
+        self.assertEqual(summary["jobs_created"], 2)
+        generation_logs = "\n".join(logs.output)
+        self.assertIn(
+            "jobs_generated=1 range_jobs=0 host_jobs=1",
+            generation_logs,
+        )
+        self.assertIn("queue=2/2 tick_jobs=2/10", generation_logs)
+        self.assertEqual(stage_jobs.call_count, 2)
+        self.assertTrue(
+            all(
+                call.kwargs["cycle_started_at"] == cycle.started_at
+                for call in load_states.call_args_list
+            )
+        )
+        self.assertEqual(session.commit.call_count, 3)
+        self.assertEqual(
+            [call.args[2] for call in load_states.call_args_list],
+            [self.scheduler.JOB_TARGET_CHUNK_SIZE] * 2,
+        )
+        self.assertEqual(
+            [call.kwargs["max_jobs"] for call in stage_jobs.call_args_list],
+            [2, 1],
+        )
+        self.assertEqual(session.no_autoflush.__enter__.call_count, 3)
+
+    def test_persisted_pending_task_never_writes_kvrocks(self):
+        """Queued task remains attached to job without Kvrocks mutation."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.get_task.return_value = SimpleNamespace(
+            status="enqueued",
+            error=None,
+        )
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": 42,
+            "submitted": 1,
+            "total": 1,
+        }
+
+        result = self.scheduler._process_persisted_meili_task(
+            self._export_context(meili_index, kvrocks_index),
+            42,
+            [job_state],
+        )
+
+        self.assertEqual(result["status"], "enqueued")
+        self.assertEqual(job_state["task_uid"], 42)
+        self.assertFalse(job_state["exported"])
+        meili_index.add_documents.assert_not_called()
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_new_task_is_persisted_without_polling_or_kvrocks(self):
+        """Submission yields immediately so export cannot occupy the scheduler."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.add_documents.return_value = SimpleNamespace(task_uid=45)
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": None,
+            "submitted": 1,
+            "total": 1,
+        }
+        batch_state = {
+            "documents": [{"id": "one"}],
+            "jobs": [job_state],
+            "ready_documents": 0,
+            "ready_jobs": 0,
+        }
+        persisted_task_uids = []
+
+        def persist(states):
+            persisted_task_uids.append(states[0]["task_uid"])
+
+        with mock.patch.object(
+            self.scheduler,
+            "_persist_meili_export_states",
+            side_effect=persist,
+        ):
+            summary = self.scheduler._submit_meili_export_batch(
+                self._export_context(meili_index, kvrocks_index),
+                1,
+                batch_state,
+            )
+
+        self.assertEqual(persisted_task_uids, [45])
+        self.assertEqual(job_state["task_uid"], 45)
+        self.assertEqual(summary["meili_tasks_pending"], 1)
+        self.assertEqual(summary["documents_submitted"], 1)
+        self.assertEqual(summary["documents_integrated"], 0)
+        meili_index.get_task.assert_not_called()
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_export_counts_scanner_json_and_split_documents(self):
+        """Count raw scan records and port splits before parser filtering."""
+        with tempfile.TemporaryDirectory() as directory:
+            result_dir = Path(directory) / "a"
+            result_dir.mkdir()
+            (result_dir / "a-job.json").write_text(
+                json.dumps([{"addr": "192.0.2.1"}, {"addr": "192.0.2.2"}]),
+                encoding="utf-8",
+            )
+            context = self.scheduler.ExportContext(
+                meili_idx=mock.Mock(),
+                kvrocks_idx=mock.Mock(),
+                input_dir=directory,
+                parser_config={},
+                active_tag_rules=[],
+            )
+            counters = {
+                "scanner_json_files_read": 0,
+                "scan_results_read": 0,
+                "port_documents_split": 0,
+            }
+            with mock.patch.object(
+                self.scheduler,
+                "_split_scan_result_by_port",
+                side_effect=[
+                    [{"id": "one"}, {"id": "two"}],
+                    [{"id": "three"}],
+                ],
+            ), mock.patch.object(
+                self.scheduler,
+                "parse_json",
+                side_effect=[{"parsed": 1}, None, {"parsed": 3}],
+            ), mock.patch.object(
+                self.scheduler,
+                "prepare_kvrocks_document",
+                return_value={"indexed": True},
+            ):
+                meili_docs, kvrocks_docs = self.scheduler._load_job_export_documents(
+                    context, "a-job", counters=counters
+                )
+
+        self.assertEqual(counters["scanner_json_files_read"], 1)
+        self.assertEqual(counters["scan_results_read"], 2)
+        self.assertEqual(counters["port_documents_split"], 3)
+        self.assertEqual(len(meili_docs), 2)
+        self.assertEqual(len(kvrocks_docs), 2)
+
+    def test_export_summary_includes_pending_scanner_json_files(self):
+        """Report the durable backlog separately from files read this tick."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.scalar.return_value = 7
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_build_export_context", return_value=mock.Mock()
+        ), mock.patch.object(
+            self.scheduler, "_load_pending_meili_task_uids", return_value=[]
+        ), mock.patch.object(
+            self.scheduler,
+            "_advance_new_meili_export",
+            return_value=self.scheduler._export_summary(0),
+        ):
+            summary = self.scheduler.task_export_to_dbs()
+
+        self.assertEqual(summary["scanner_json_files_pending"], 7)
+        self.assertEqual(summary["scanner_json_files_read"], 0)
+        self.assertEqual(summary["documents_integrated"], 0)
+
+    def test_empty_export_tick_does_not_reset_reconciliation_idle_time(self):
+        """No queued tasks or loaded jobs means no foreground ingestion lease."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.scalar.return_value = 0
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_build_export_context", return_value=mock.Mock()
+        ), mock.patch.object(
+            self.scheduler, "_load_pending_meili_task_uids", return_value=[]
+        ), mock.patch.object(
+            self.scheduler, "_load_export_job_states", return_value=[]
+        ), mock.patch(
+            "app.utils.index_activity.monitor_for"
+        ) as monitor:
+            summary = self.scheduler.task_export_to_dbs()
+        monitor.assert_not_called()
+        self.assertEqual(summary["documents_integrated"], 0)
+        session.remove.assert_called_once_with()
+
+    def test_loaded_export_has_priority_even_after_empty_backlog_count(self):
+        """Use the actual loaded batch so new arrivals cannot miss priority."""
+        session = mock.Mock()
+        session.query.return_value.filter.return_value.scalar.return_value = 0
+        states = [{"uid": "arrived-after-count"}]
+        with mock.patch.object(
+            self.scheduler.db, "session", session
+        ), mock.patch.object(
+            self.scheduler, "_build_export_context", return_value=mock.Mock()
+        ), mock.patch.object(
+            self.scheduler, "_load_pending_meili_task_uids", return_value=[]
+        ), mock.patch.object(
+            self.scheduler, "_load_export_job_states", return_value=states
+        ), mock.patch(
+            "app.utils.index_activity.monitor_for"
+        ) as monitor, mock.patch.object(
+            self.scheduler, "_prepare_meili_export_batch"
+        ) as prepare, mock.patch.object(
+            self.scheduler,
+            "_submit_meili_export_batch",
+            return_value=self.scheduler._export_summary(1),
+        ):
+
+            def preparing(_context, loaded):
+                monitor.return_value.begin.assert_called_once_with("ingestion", None)
+                monitor.return_value.begin.return_value.finish.assert_not_called()
+                self.assertEqual(loaded, states)
+                return {"documents": [{"id": "one"}]}
+
+            prepare.side_effect = preparing
+            self.scheduler.task_export_to_dbs()
+        monitor.return_value.begin.return_value.finish.assert_called_once_with()
+
+    def test_pending_export_failure_releases_ingestion_priority(self):
+        """Existing tasks still acquire and release priority if recovery fails."""
+        with mock.patch(
+            "app.utils.index_activity.monitor_for"
+        ) as monitor, mock.patch.object(
+            self.scheduler, "_load_export_job_states", side_effect=RuntimeError("test")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "test"):
+                self.scheduler._resume_persisted_export(mock.Mock(), [42])
+        monitor.return_value.begin.assert_called_once_with("ingestion", None)
+        monitor.return_value.begin.return_value.finish.assert_called_once_with()
+
+    def test_succeeded_persisted_task_writes_kvrocks_after_status(self):
+        """Confirmed Meili success precedes Kvrocks and job completion."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        calls = []
+        meili_index.get_task.side_effect = lambda *args, **kwargs: (
+            calls.append("meili") or SimpleNamespace(status="succeeded", error=None)
+        )
+        kvrocks_index.add_documents_batch.side_effect = lambda _docs: calls.append(
+            "kvrocks"
+        )
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": 42,
+            "submitted": 1,
+            "total": 1,
+        }
+        with mock.patch.object(
+            self.scheduler,
+            "_load_job_export_documents",
+            side_effect=lambda *_args: (
+                calls.append("load") or ([{"id": "one"}], [{"uid": "one"}])
+            ),
+        ):
+            result = self.scheduler._process_persisted_meili_task(
+                self._export_context(meili_index, kvrocks_index),
+                42,
+                [job_state],
+            )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["documents_exported"], 1)
+        self.assertEqual(calls, ["meili", "load", "kvrocks"])
+        self.assertTrue(job_state["exported"])
+        self.assertIsNone(job_state["task_uid"])
+        self.assertEqual(job_state["submitted"], 0)
+        meili_index.get_task.assert_called_once_with(42)
+
+    def test_partial_job_waits_for_all_meili_batches_before_kvrocks(self):
+        """One successful chunk cannot expose incomplete job in Kvrocks."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.get_task.return_value = SimpleNamespace(
+            status="succeeded",
+            error=None,
+        )
+        job_state = {
+            "id": 1,
+            "uid": "large-job",
+            "exported": False,
+            "task_uid": 46,
+            "submitted": 2500,
+            "total": 3000,
+        }
+
+        result = self.scheduler._process_persisted_meili_task(
+            self._export_context(meili_index, kvrocks_index),
+            46,
+            [job_state],
+        )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(result["documents_exported"], 0)
+        self.assertIsNone(job_state["task_uid"])
+        self.assertEqual(job_state["submitted"], 2500)
+        self.assertFalse(job_state["exported"])
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+    def test_failed_meili_export_never_writes_kvrocks(self):
+        """Rejected task resets durable state and leaves Kvrocks untouched."""
+        meili_index = mock.Mock()
+        kvrocks_index = mock.Mock()
+        meili_index.get_task.return_value = SimpleNamespace(
+            status="failed",
+            error={"message": "bad document"},
+        )
+        job_state = {
+            "id": 1,
+            "uid": "job-one",
+            "exported": False,
+            "task_uid": 43,
+            "submitted": 1,
+            "total": 1,
+        }
+
+        result = self.scheduler._process_persisted_meili_task(
+            self._export_context(meili_index, kvrocks_index),
+            43,
+            [job_state],
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(job_state["task_uid"])
+        self.assertEqual(job_state["submitted"], 0)
+        self.assertIsNone(job_state["total"])
+        kvrocks_index.add_documents_batch.assert_not_called()
+
+
+class MeiliExportStateMigrationTest(TestCase):
+    """Validate durable scheduler state migration for existing jobs."""
+
+    @classmethod
+    def setUpClass(cls):
+        migration_path = (
+            Path(__file__).resolve().parents[1]
+            / "webapp"
+            / "sql_upd"
+            / "21_migrate_from_c1ef29af4ac597787b67d99982f9baade1817222.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "meili_export_state_migration",
+            migration_path,
+        )
+        cls.migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.migration)
+
+    def setUp(self):
+        self.connection = sqlite3.connect(":memory:")
+        self.cursor = self.connection.cursor()
+        self.cursor.executescript("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                uid VARCHAR(36) NOT NULL,
+                exported BOOLEAN NOT NULL DEFAULT 0
+            );
+            INSERT INTO jobs (id, uid, exported) VALUES (1, 'job-one', 0);
+            """)
+
+    def tearDown(self):
+        self.connection.close()
+
+    def test_migration_adds_idempotent_pending_task_state(self):
+        """Existing jobs start with no task and zero submitted documents."""
+        self.migration.migrate(self.cursor)
+        self.migration.migrate(self.cursor)
+
+        columns = {
+            row[1] for row in self.cursor.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        state = self.cursor.execute(
+            "SELECT meili_task_uid, meili_documents_submitted, "
+            "meili_documents_total FROM jobs WHERE id = 1"
+        ).fetchone()
+        self.assertTrue(
+            {
+                "meili_task_uid",
+                "meili_documents_submitted",
+                "meili_documents_total",
+            }.issubset(columns)
+        )
+        self.assertEqual(state, (None, 0, None))

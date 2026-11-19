@@ -1,7 +1,0 @@
-description: OpenSearch Security
-query: http_headval:www-authenticate.lk:"opensearch security"
-tags:
-- product:opensearch-security
-- type:database
-- vendor:opensearch
-version: 20260520T133458Z

@@ -27,7 +27,16 @@ TCP_PORT_MAX = 65534
 PORT_INSERT_BATCH_SIZE = 1000
 DEFAULT_SCAN_PROFILE_NAME = "Default banner scan"
 DEFAULT_SCAN_PROFILE_PORTS = (22, 80, 443)
-DEFAULT_SCAN_PROFILE_NSES = ("banner.nse",)
+DEFAULT_SCAN_PROFILE_NSES = (
+    "http-headers.nse",
+    "http-title.nse",
+    "ssl-cert.nse",
+    "ssh-hostkey.nse",
+    "tls-alpn.nse",
+    "banner.nse",
+    "modbus.nse",
+    "http-mm-sha-favicon.nse",
+)
 DEFAULT_SCAN_PROFILE_PRIORITY = 0
 
 
@@ -69,6 +78,11 @@ def parse_args():
         help="Do not create default scan profiles.",
     )
     parser.add_argument(
+        "--roles-only",
+        action="store_true",
+        help="Synchronize configured security roles, then skip all other seeds.",
+    )
+    parser.add_argument(
         "--role-file",
         default=str(DEFAULT_ROLE_FILE),
         help=f"Security role YAML file. Default: {DEFAULT_ROLE_FILE}",
@@ -108,7 +122,7 @@ def import_tag_rules(dry_run=False):
     from tag_mgmt import import_rules  # pylint: disable=import-outside-toplevel
 
     args = SimpleNamespace(
-        tags_dir=str(WEBAPP_DIR / "tags"),
+        tags_dir=str(WEBAPP_DIR / "tags" / "tags"),
         tags_file=None,
         all=True,
         rule_id=None,
@@ -126,6 +140,35 @@ def import_tag_rules(dry_run=False):
     )
 
 
+def load_tcp_service_names(path=Path("/etc/services")):
+    """Read conventional TCP service names once, without network lookups."""
+    names = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return names
+    for line in lines:
+        fields = line.partition("#")[0].split()
+        if len(fields) < 2:
+            continue
+        number, separator, protocol = fields[1].partition("/")
+        if not separator or protocol.lower() != "tcp":
+            continue
+        try:
+            port = int(number)
+        except ValueError:
+            continue
+        if 1 <= port <= 65535:
+            names.setdefault(port, fields[0])
+    return names
+
+
+def default_tcp_port_name(port, service_names):
+    """Label a new port with its conventional service, not a detected service."""
+    service = service_names.get(port)
+    return f"TCP/{port} ({service})"[:256] if service else f"TCP/{port}"
+
+
 def seed_tcp_ports(dry_run=False):
     """
     Ensure TCP exists and all TCP ports from 1 to 65534 are available.
@@ -137,6 +180,7 @@ def seed_tcp_ports(dry_run=False):
 
     inserted = 0
     skipped = 0
+    service_names = load_tcp_service_names()
     with app.app_context():
         tcp_proto = (
             db.session.query(Protos)
@@ -175,7 +219,7 @@ def seed_tcp_ports(dry_run=False):
             pending.append(
                 Ports(
                     value=port,
-                    name=f"TCP/{port}",
+                    name=default_tcp_port_name(port, service_names),
                     proto_id=tcp_proto_id,
                     proto_to_port=f"{port}:{tcp_proto_id}",
                 )
@@ -219,7 +263,9 @@ def seed_http_header_collection(dry_run=False):
             .all()
         }
         inserted = sum(
-            1 for header_name in DEFAULT_COLLECTED_HEADERS if header_name not in existing
+            1
+            for header_name in DEFAULT_COLLECTED_HEADERS
+            if header_name not in existing
         )
         enabled_values = sum(
             1
@@ -276,11 +322,12 @@ def seed_default_scan_profile(dry_run=False):
         port_values = {port.value for port in ports}
         missing_ports = sorted(set(DEFAULT_SCAN_PROFILE_PORTS) - port_values)
         created_ports = 0
+        service_names = load_tcp_service_names()
         for port in missing_ports:
             ports.append(
                 Ports(
                     value=port,
-                    name=f"TCP/{port}",
+                    name=default_tcp_port_name(port, service_names),
                     proto=tcp_proto,
                     proto_to_port=f"{port}:{tcp_proto.id or 0}",
                 )
@@ -382,10 +429,16 @@ def clone_or_update_repo(repo_url, repo_dir):
 
 def iter_nse_files(repo_path):
     """
-    Iterate NSE files from a cloned repository.
+    Read repository scripts, then bundled defaults absent from the repository.
     """
+    seen = set()
     for path in sorted(Path(repo_path).rglob("*.nse")):
         if ".git" not in path.parts and path.is_file():
+            seen.add(path.name)
+            yield path
+    for name in DEFAULT_SCAN_PROFILE_NSES:
+        path = BASE_DIR / "nse" / name
+        if name not in seen and path.is_file():
             yield path
 
 
@@ -588,6 +641,9 @@ def main():
 
     if not args.skip_roles:
         sync_security_role(args.role_file, dry_run=args.dry_run)
+
+    if args.roles_only:
+        return
 
     if not args.skip_ports:
         seed_tcp_ports(dry_run=args.dry_run)

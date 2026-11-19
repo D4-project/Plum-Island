@@ -45,6 +45,158 @@ For each `target/profile` pair, Plum tracks:
 - `last_previous_scan`: completion time of the previous finished scan cycle for this target/profile
 - `cycle`: time delta between `last_scan` and `last_previous_scan`
 
+## Target metadata and network information
+
+Target details show insertion time (UTC), IPv4 CIDR / IPv6 CIDR / FQDN type,
+and structured AS information separately from the editable description. Bare IPs
+are host networks. AS records are shared by ASN; coordinates are **country
+averages**, not host or AS geolocation. Legacy `as_bgp`, `as_description` and
+`as_country` Python accessors read this shared record; old SQL columns are retained
+only for rollback and are no longer authoritative.
+
+`Targets.is_ip_cidr` is persisted for SQL filtering: `true` for IPv4/IPv6
+addresses or CIDRs, `false` for FQDNs. It is derived from `value` on assignment
+and ORM insert/update, never independently editable in forms or API payloads.
+API read responses expose it. Existing databases require migration 24; fresh
+databases create the non-null column directly. This classification does not
+change normalization, public-IP validation, coverage checks or scan scheduling.
+
+FQDN validation and registered-domain extraction use `pyfaup-rs` offline. This
+handles public suffixes such as `co.uk`; optional `TLDADD` in `webapp/config.py`
+and `tools/config.yaml` accepts private suffixes such as `local`. The old
+`ONLINETLD`/`TLDS` settings are ignored. The target's WHOIS tab queries the
+registered domain for FQDNs, or the network for IP/CIDR targets, only when opened.
+Unknown/private suffixes have no public domain WHOIS lookup.
+
+Network WHOIS uses the first IP to discover inter-registry transfers (including
+APNIC transfer stubs), then queries the original CIDR at the destination registry.
+ARIN retains its address-based `n` query to avoid ambiguous CIDR searches.
+Only the five known RIR servers are allowed; referral loops are rejected.
+This lookup does not modify CIRCL ASN information.
+
+New CIDRs automatically queue enrichment. Every accepted scan receipt checks each
+associated target and queues a lookup when its data is missing or its last
+successful lookup is **older than 24 hours**. Exactly 24 hours is still fresh.
+The dedicated `network_enrichment` scheduler job consumes this durable queue at
+`SCHEDULER_DELAY`, independently of scan orchestration and export. FQDNs are never
+resolved or enriched by this feature. Editing the target value clears old network
+metadata and schedules a new lookup only if the new value is a CIDR/IP.
+
+Opening `/targetsview/show/<id>` also checks missing/stale CIDR AS information
+and calls the same refresh helper before rendering. Fresh information, including
+ASN `0`, is reused. This automatic detail-view refresh is not a forced refresh:
+leases/backoff still apply. A failed or busy refresh displays saved data and a
+warning. WHOIS remains a separate, on-demand tab lookup.
+
+Requests use `https://ip.circl.lu/geolookup/<network-address>`: only the first
+address of the CIDR, including IPv6. The ASN-bearing response entry determines the
+AS for the entire CIDR, even if other addresses belong to another AS.
+
+Before scheduling a CIDR job, Plum checks that target's CIRCL information. A
+successful lookup is reused for 24 hours, including ASN `0`; missing or older
+data is refreshed before any job is queued. ASN `0` means `CIDR not announced`:
+Plum creates finished, inactive jobs without assigning a scanner. These jobs are
+excluded from result export because no scan JSON was produced. Routed targets
+and FQDNs continue through normal scheduling. A failed, busy or time-budget-deferred
+lookup with no fresh data postpones scheduling; it never counts as completion.
+
+Skipped CIDRs advance target/profile completion timestamps (`last_scan` and
+`last_previous_scan`) and cycle progress, so they are checked again when next
+due. These timestamps therefore include routing-based completion without a scan.
+Logs record `Scan skipped` with target/profile IDs and lookup timestamp; scheduler summaries
+report `unannounced_jobs_completed`, `unannounced_states_completed` and
+`routing_states_deferred`. A CIDR that becomes routed is scanned at its next due
+programming after the cache expires. Existing queued jobs are not rewritten.
+No additional database migration is required.
+
+The detail button and list **Refresh Network informations** action force an
+immediate lookup regardless of age/backoff. If a lookup is already running, the
+action reports `busy` instead of duplicating it. Both actions require a form POST
+with CSRF protection and their FAB permission: `can_refresh_network` and the
+existing `mulresolvehwois`, respectively, on `TargetsView`. The configured role
+seed grants the detail action alongside its existing list action; administrators
+should grant the new permission to equivalent custom roles. Unauthorized controls
+are hidden and direct requests are checked server-side.
+
+The configurable HTTP timeout is `NETWORK_LOOKUP_TIMEOUT_SECONDS` (initially 10 s,
+matching the existing geolookup proxy); `NETWORK_REFRESH_BATCH_SIZE` (initially 32)
+limits each automatic pass. The worker also uses the existing queue-generation
+time budget between lookups. These are initial operational settings, not throughput
+guarantees; tune with production latency. No HTTP request holds a SQL write
+transaction. A durable per-target lease lasts three timeout intervals and allows
+recovery after a process restart. Failures keep previous data and successful-refresh
+time and log a warning. Missing or stale data is retried no earlier than the next
+scheduler interval; a failed forced refresh does not invalidate still-fresh data.
+Insertion and scan receipt never depend on a successful CIRCL response.
+
+For existing installations apply migration 23 before starting this code; see
+[migration instructions](migration-v0.2604.0-to-v0.2610.0.md#target-network-metadata-migration-23).
+
+## Scan-profile cycle boundaries
+
+Each scan-profile cycle stores `max_target_id`, the highest `Targets.id`
+visible when the scheduler starts that cycle. The current cycle schedules and
+reconciles only active applicable targets whose ID is at or below this bound.
+
+Targets created later have a higher ID and wait for the next cycle. Continuous
+target imports therefore do not extend a running cycle indefinitely. An older
+target associated with an explicit profile during a cycle may still join the
+current cycle because target ID is the only membership boundary.
+
+Within a running cycle, targets with `last_scan >= cycle.started_at` are not
+scheduled again, even if their rescan delay has elapsed. Never-scanned targets
+and targets last scanned before the cycle started remain eligible under the
+normal rescan-delay rules. This boundary uses persisted timestamps and survives
+restarts. Once the cycle finishes, the next cycle can schedule targets whose
+rescan delay has elapsed.
+
+This correction requires no database migration or manual state reset. Existing
+queued and active jobs finish normally; the cycle closes when all applicable
+targets are complete and no unfinished job remains. A running cycle at 100%
+shows `finalizing` until those conditions are met.
+
+The Scan Profiles list tooltip and profile detail page expose incomplete target,
+queued job, and active job counts when a cycle remains running. A stalled active
+job is requeued by the scheduler watchdog after two hours; orphaned working
+states are released by the existing bounded repair sweep.
+
+During migration, existing running cycles receive the current maximum target
+ID. Their queued and active jobs, target state, and progress remain unchanged.
+
+## Search export ordering
+
+Finished scan results are always exported to Meilisearch before Kvrocks. The
+scheduler submits at most one 2,500-document Meilisearch batch, stores its task
+UID and per-job document position in SQLite, then immediately yields so scan job
+generation cannot be delayed by Meilisearch indexing.
+
+Scan orchestration and search-backend maintenance use independent scheduled
+jobs. A slow export or report tick therefore cannot consume the
+`scan_orchestration` job's single running-instance slot.
+
+If the task remains `enqueued` or `processing`, the scheduler does not write
+Kvrocks and does not mark jobs exported. On later ticks it checks the same task
+UID once without resubmitting the batch. Only `succeeded` permits the matching
+Kvrocks documents to be written. A multi-batch job is written to Kvrocks only
+after every Meilisearch batch for that job has succeeded.
+
+A failed or canceled Meilisearch task clears the saved submission position. The
+job remains unexported and is safely upserted again on a later scheduler tick.
+Individual Meilisearch HTTP requests are bounded by
+`MEILI_HTTP_TIMEOUT_SECONDS`, and Kvrocks socket operations by
+`KVROCKS_SOCKET_TIMEOUT_SECONDS`; both default to 10 seconds.
+
+The `/bot_api/sndjob` log reports one accepted scanner JSON file and its number
+of top-level scan results after the job commits. The scheduler's
+`finished export_to_dbs` line reports `scanner_json_files_pending` (finished
+jobs awaiting complete export at the start of the tick), `scanner_json_files_read` and
+`scan_results_read` for this tick, `port_documents_split` (per-port documents
+generated before parser filtering), `documents_submitted` (sent to Meilisearch),
+and `documents_integrated` (confirmed in Meilisearch and written to Kvrocks).
+Submission and integration normally happen on different ticks. Split/read counts
+measure work performed in that tick, so retries or multi-batch jobs can repeat
+them; they are not lifetime unique totals.
+
 ## Scan execution parameters
 
 Ports and NSE scripts are resolved exclusively from the effective `ScanProfile`.
@@ -54,6 +206,9 @@ When an agent fetches a job:
 
 - `nmap_ports` comes only from the job/profile
 - `nmap_nse` comes only from the job/profile
+- `nmap_additional_params` is an optional profile snapshot containing shell-free Nmap argv tokens
+- profile parameters are empty by default; older agents ignore this additive payload field
+- agents that support the field may use duplicate options to override their defaults
 - NSE files are synchronized to the agent by filename and SHA-256 hash
 - the file body is transferred only when the agent cache does not already have the expected hash
 

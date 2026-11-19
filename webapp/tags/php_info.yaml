@@ -1,6 +1,0 @@
-description: PHP Info
-query: http_title.lk:phpinfo()
-tags:
-- vuln:phpinfo
-- lang:php
-version: 20260520T133458Z
