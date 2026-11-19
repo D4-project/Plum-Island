@@ -1,0 +1,490 @@
+#!/usr/bin/env python3
+"""Regression coverage for protocol-grouped Markdown reports."""
+
+from pathlib import Path
+import sys
+from datetime import datetime
+from types import SimpleNamespace
+from unittest import TestCase, main
+from unittest.mock import Mock, patch
+
+import requests
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR / "webapp"))
+
+from app.utils.reports import (  # pylint: disable=wrong-import-position
+    build_report_markdown,
+    collect_report_passive_dns_fqdns,
+    generate_report_pdf,
+    render_report_markdown_html,
+    send_report_markdown,
+)
+
+REPORT = SimpleNamespace(
+    name="Protocol report",
+    description="",
+    query="port:443",
+    schedule_type="monthly",
+)
+
+
+class ReportProtocolViewsTest(TestCase):
+    """Verify report protocol sections and Passive DNS metadata rendering."""
+
+    def test_protocol_views_include_overlaps_and_skip_empty_sections(self):
+        """Web and mail overlap while Other retains only unclassified hosts."""
+        markdown = build_report_markdown(
+            REPORT,
+            {
+                "results": {
+                    "192.0.2.1": {"web"},
+                    "192.0.2.2": {"mail"},
+                    "192.0.2.3": {"both"},
+                    "192.0.2.4": {"other"},
+                    "192.0.2.5": {"remote"},
+                }
+            },
+            {"192.0.2.1": ["443"]},
+            {},
+            None,
+            None,
+            per_ip_tags={
+                "192.0.2.1": [
+                    "product:apache",
+                    "vendor:apache",
+                    "vendor:ubuntu",
+                    "domain:circl.lu",
+                    "proto:http",
+                ],
+                "192.0.2.2": ["proto:imap"],
+                "192.0.2.3": ["proto:https", "proto:smtp"],
+                "192.0.2.4": ["vendor:example"],
+                "192.0.2.5": ["type:vpn"],
+            },
+        )
+
+        web_section = markdown.split("## Webservices related host", 1)[1].split(
+            "## Mail related", 1
+        )[0]
+        mail_section = markdown.split("## Mail related", 1)[1].split(
+            "## Remote access", 1
+        )[0]
+        remote_section = markdown.split("## Remote access", 1)[1].split("## Other", 1)[
+            0
+        ]
+        other_section = markdown.split("## Other", 1)[1].split(
+            "## Full report dump", 1
+        )[0]
+        self.assertIn("- 192.0.2.1", web_section)
+        self.assertIn("Hosts with at least one exposed web service.", web_section)
+        self.assertIn("product:apache, vendor:ubuntu, proto:http", web_section)
+        self.assertNotIn("vendor:apache", web_section)
+        self.assertNotIn("domain:circl.lu", web_section)
+        self.assertIn("- 192.0.2.3", web_section)
+        self.assertIn("- 192.0.2.2", mail_section)
+        self.assertIn("Hosts with at least one exposed mail service.", mail_section)
+        self.assertIn("- 192.0.2.3", mail_section)
+        self.assertIn("- 192.0.2.5", remote_section)
+        self.assertIn(
+            "Hosts with at least one exposed VPN, SSH, Telnet, or RDP service.",
+            remote_section,
+        )
+        self.assertIn("- 192.0.2.4", other_section)
+        self.assertNotIn("- 192.0.2.1", other_section)
+        self.assertLess(
+            markdown.index("## Other"), markdown.index("## Full report dump")
+        )
+        self.assertLess(
+            markdown.index("## Full report dump"), markdown.index("## Disclaimer")
+        )
+
+        web_only = build_report_markdown(
+            REPORT,
+            {"results": {"192.0.2.1": {"web"}}},
+            {},
+            {},
+            None,
+            None,
+            per_ip_tags={"192.0.2.1": ["proto:http"]},
+        )
+        self.assertIn("## Webservices related host", web_only)
+        self.assertNotIn("## Mail related", web_only)
+        self.assertNotIn("## Remote access", web_only)
+        self.assertNotIn("## Other", web_only)
+
+    def test_fqdn_sources_and_pdns_timestamps_are_rendered(self):
+        """PTR, requested, and PDNS names retain precedence and timestamps."""
+        markdown = build_report_markdown(
+            REPORT,
+            {"results": {"192.0.2.1": {"web"}}},
+            {},
+            {},
+            None,
+            None,
+            per_ip_tags={"192.0.2.1": ["proto:https"]},
+            per_ip_requested_fqdns={"192.0.2.1": ["requested.example"]},
+            per_ip_ptr_fqdns={"192.0.2.1": ["ptr.example"]},
+            per_ip_pdns_fqdns={
+                "192.0.2.1": [
+                    {"fqdn": "pdns.example", "last_seen": 1700000000},
+                    {"fqdn": "unknown.example", "last_seen": None},
+                ]
+            },
+        )
+
+        hosts = markdown.split("## Full report dump", 1)[1]
+        self.assertLess(
+            hosts.index("ptr.example (ptr)"), hosts.index("requested.example")
+        )
+        self.assertLess(
+            hosts.index("requested.example"), hosts.index("pdns.example (pdns)")
+        )
+        self.assertIn("last seen: 2023-11-14 22:13:20 UTC", hosts)
+        self.assertIn("unknown.example (pdns) — last seen: N/A", hosts)
+
+    def test_global_fqdn_sections_are_domain_sorted_and_separate_pdns(self):
+        """Detected and Passive DNS FQDNs remain separate sorted sections."""
+        markdown = build_report_markdown(
+            REPORT,
+            {"results": {"192.0.2.1": {"web"}}},
+            {},
+            {},
+            None,
+            datetime(2023, 11, 15),
+            per_ip_requested_fqdns={
+                "192.0.2.1": ["www.example.com", "mail.alpha.net"],
+                "192.0.2.2": ["www.example.com"],
+            },
+            per_ip_ptr_fqdns={"192.0.2.1": ["api.example.com"]},
+            per_ip_pdns_fqdns={
+                "192.0.2.1": [
+                    {"fqdn": "legacy.example.com", "last_seen": 1700000000},
+                    {"fqdn": "old.alpha.net", "last_seen": None},
+                ],
+                "192.0.2.2": [
+                    {"fqdn": "legacy.example.com", "last_seen": 1699999999},
+                ],
+            },
+        )
+
+        detected = markdown.split("## FQDN detected", 1)[1].split(
+            "## FQDN discovered in Passive DNS", 1
+        )[0]
+        passive_dns = markdown.split("## FQDN discovered in Passive DNS", 1)[1].split(
+            "## Other", 1
+        )[0]
+        self.assertLess(
+            detected.index("api.example.com"), detected.index("www.example.com")
+        )
+        self.assertLess(
+            detected.index("www.example.com"), detected.index("mail.alpha.net")
+        )
+        self.assertNotIn("legacy.example.com", detected)
+        self.assertIn(
+            "FQDNs (Fully Qualified domain names) detected from scanned hosts. "
+            "These hostnames can be collected from any scan result fields, "
+            "including records within certificates.",
+            detected,
+        )
+        self.assertIn("www.example.com (192.0.2.1, 192.0.2.2)", detected)
+        self.assertIn(
+            "legacy.example.com (192.0.2.1, 192.0.2.2) — last seen: "
+            "2023-11-14 22:13:20 UTC",
+            passive_dns,
+        )
+        self.assertNotIn("old.alpha.net", passive_dns)
+        self.assertIn(
+            "Additional Passive DNS records not detected, observed within the last "
+            "90 days.",
+            passive_dns,
+        )
+        self.assertLess(
+            markdown.index("## New opened port"), markdown.index("## FQDN detected")
+        )
+        self.assertLess(
+            markdown.index("## FQDN detected"), markdown.index("## Full report dump")
+        )
+
+    def test_global_ip_summaries_link_to_full_report_dump_hosts(self):
+        """Summary IPs link to their corresponding Full report dump host."""
+        markdown = build_report_markdown(
+            REPORT,
+            {"results": {"192.0.2.1": {"web"}}},
+            {},
+            {},
+            None,
+            datetime(2023, 11, 15),
+            per_ip_requested_fqdns={"192.0.2.1": ["www.example.com"]},
+            per_ip_pdns_fqdns={
+                "192.0.2.1": [{"fqdn": "legacy.example.com", "last_seen": 1700000000}]
+            },
+            new_open_ports={"192.0.2.1": ["443"]},
+        )
+        html = render_report_markdown_html(markdown)
+
+        self.assertIn('<li id="host-192-0-2-1">192.0.2.1', html)
+        self.assertGreaterEqual(html.count('href="#host-192-0-2-1"'), 3)
+
+    def test_ipv6_summary_links_to_full_report_dump_host(self):
+        """IPv6 literals retain a safe, stable Full report dump anchor."""
+        html = render_report_markdown_html(
+            "## FQDN detected\n\n"
+            "- ipv6.example (2001:db8::1)\n\n"
+            "## Full report dump\n\n"
+            "- 2001:db8::1\n"
+        )
+
+        self.assertIn('href="#host-2001-db8--1">2001:db8::1</a>', html)
+        self.assertIn('<li id="host-2001-db8--1">2001:db8::1', html)
+
+    def test_new_open_ports_are_grouped_by_port(self):
+        """Newly opened ports summarize numerically sorted affected hosts."""
+        markdown = build_report_markdown(
+            REPORT,
+            {"results": {}},
+            {},
+            {},
+            None,
+            None,
+            new_open_ports={
+                "192.0.2.20": ["443", "80"],
+                "192.0.2.3": ["80"],
+                "192.0.2.10": ["443"],
+            },
+        )
+
+        section = markdown.split("## New opened port", 1)[1].split(
+            "## Full report dump", 1
+        )[0]
+        self.assertIn(
+            "This section summarizes the total number of hosts exposing each open "
+            "port during the report period.",
+            markdown,
+        )
+        self.assertIn(
+            "Ports newly observed as open during this report period, compared with "
+            "the preceding equivalent period.",
+            section,
+        )
+        self.assertIn("- **80**\n  - 192.0.2.3\n  - 192.0.2.20", section)
+        self.assertIn("- **443**\n  - 192.0.2.10\n  - 192.0.2.20", section)
+        self.assertLess(section.index("- **80**"), section.index("- **443**"))
+        self.assertNotIn("New ports:", section)
+
+    def test_report_title_is_a_top_level_heading(self):
+        """Generated reports identify their scope in a top-level heading."""
+        markdown = build_report_markdown(REPORT, {"results": {}}, {}, {}, None, None)
+
+        self.assertTrue(markdown.startswith("# Report for Protocol report.\n"))
+        self.assertNotIn("- Title:", markdown)
+
+    def test_report_description_is_omitted(self):
+        """Description must not appear above the report heading."""
+        report = SimpleNamespace(
+            name="domain circl",
+            description="Incident",
+            query="domain:circl.lu",
+            schedule_type="monthly",
+        )
+        markdown = build_report_markdown(report, {"results": {}}, {}, {}, None, None)
+
+        self.assertTrue(markdown.startswith("# Report for Domain circl.\n"))
+        self.assertNotIn("Incident", markdown)
+        self.assertEqual(markdown.count("domain:circl.lu"), 1)
+        self.assertLess(
+            markdown.index("# Report for Domain circl."), markdown.index("- Query:")
+        )
+
+    def test_report_heading_uppercases_user_title_first_character(self):
+        """Report heading normalizes the first character of the configured title."""
+        report = SimpleNamespace(
+            name="domain circl",
+            description="",
+            query="port:443",
+            schedule_type="monthly",
+        )
+        markdown = build_report_markdown(report, {"results": {}}, {}, {}, None, None)
+        self.assertTrue(markdown.startswith("# Report for Domain circl.\n"))
+
+    def test_html_renderer_escapes_content_and_adds_index_anchors(self):
+        """Rendered HTML keeps report text inert and headings navigable."""
+        html = render_report_markdown_html(
+            "# <script>alert(1)</script>\n\n"
+            "## Summary\n\n"
+            "- Host: <img src=x onerror=alert(1)>\n"
+            "  - Query: `port:<script>`\n\n"
+            "## Summary\n"
+        )
+
+        self.assertIn('<h1 id="script-alert-1-script">', html)
+        self.assertIn('<h2 id="summary">Summary</h2>', html)
+        self.assertIn('<h2 id="summary-2">Summary</h2>', html)
+        self.assertIn('href="#summary"', html)
+        self.assertIn('href="#summary-2"', html)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html)
+        self.assertIn("&lt;img src=x onerror=alert(1)&gt;", html)
+        self.assertIn("<code>port:&lt;script&gt;</code>", html)
+        self.assertIn("<strong>bold</strong>", render_report_markdown_html("**bold**"))
+        self.assertIn(
+            "Tag: <code>product:nginx</code> <code>proto:http</code>",
+            render_report_markdown_html("- Tag: product:nginx, proto:http"),
+        )
+        self.assertNotIn("<script>", html)
+        self.assertNotIn("<img ", html)
+        self.assertIn("<ul><li>Host:", html)
+        self.assertIn("<ul><li>Query:", html)
+
+        ordered_html = render_report_markdown_html(
+            "# Report for Domain circl.\n\n- Query: `domain:circl.lu`\n"
+            "- Matching IPs: 77\n\n## Open ports\n"
+        )
+        self.assertLess(
+            ordered_html.index("Report for Domain circl"),
+            ordered_html.index("Query:"),
+        )
+        self.assertLess(ordered_html.index("Query:"), ordered_html.index("<nav"))
+        self.assertLess(ordered_html.index("<nav"), ordered_html.index("Open ports"))
+
+    @patch("app.utils.reports.generate_report_pdf", wraps=generate_report_pdf)
+    @patch("app.utils.reports.smtplib.SMTP")
+    def test_email_contains_summary_and_full_pdf(self, smtp_class, pdf_generator):
+        """Mail contains only summary sections and attaches the complete PDF."""
+        report = SimpleNamespace(
+            name="Unsafe <report>", emails_list=lambda: ["analyst@example.test"]
+        )
+        markdown = (
+            "# Report for Unsafe <report>.\n\n- Query: `port:443`\n"
+            "- Period: 2026-09-01 to 2026-10-01\n"
+            "- Matching IPs: 1\n- Matching scans: 2\n\n"
+            "## Open ports\n\nPort totals for the report period.\n\n"
+            "- 443: 1 host\n\n## New opened port\n\n- 192.0.2.1\n\n"
+            "## FQDN detected\n\n- example.test (192.0.2.1)\n\n"
+            "## Full report dump\n\n- 192.0.2.1\n\n"
+            "## Disclaimer\n\nThis report is provided as-is."
+        )
+        send_report_markdown(
+            {"REPORT_SMTP_HOST": "smtp.example.test"}, report, markdown
+        )
+
+        message = smtp_class.return_value.__enter__.return_value.send_message.call_args[
+            0
+        ][0]
+        self.assertTrue(message.is_multipart())
+        self.assertEqual(message.get_content_type(), "multipart/mixed")
+        plain = message.get_body(("plain",)).get_content()
+        html = message.get_body(("html",)).get_content()
+        for body in (plain, html):
+            for expected in (
+                "Query:",
+                "port:443",
+                "Period:",
+                "Matching IPs: 1",
+                "Matching scans: 2",
+                "Open ports",
+                "443: 1 host",
+                "Port totals for the report period.",
+                "Disclaimer",
+                "This report is provided as-is.",
+                "available in the attached PDF",
+            ):
+                self.assertIn(expected, body)
+            for excluded in (
+                "Full report dump",
+                "New opened port",
+                "FQDN detected",
+                "192.0.2.1",
+            ):
+                self.assertNotIn(excluded, body)
+        self.assertIn("Unsafe &lt;report&gt;.", html)
+        self.assertNotIn("<nav", html)
+        pdf_generator.assert_called_once_with(report.name, markdown)
+        attachments = list(message.iter_attachments())
+        self.assertEqual(len(attachments), 1)
+        self.assertEqual(attachments[0].get_content_type(), "application/pdf")
+        self.assertEqual(attachments[0].get_filename(), "Unsafe_report.pdf")
+        self.assertTrue(attachments[0].get_payload(decode=True).startswith(b"%PDF-"))
+
+    @patch("app.utils.reports.smtplib.SMTP")
+    @patch(
+        "app.utils.reports.generate_report_pdf", side_effect=ValueError("PDF failed")
+    )
+    def test_pdf_failure_prevents_email_delivery(self, pdf_generator, smtp_class):
+        """Never send a partial report when the full attachment cannot be built."""
+        report = SimpleNamespace(name="Report", emails_list=lambda: ["a@example.test"])
+        with self.assertRaisesRegex(ValueError, "PDF failed"):
+            send_report_markdown({"REPORT_SMTP_HOST": "smtp.example.test"}, report, "")
+        pdf_generator.assert_called_once()
+        smtp_class.assert_not_called()
+
+    def test_preview_template_has_print_control_and_rendered_html(self):
+        """Completed preview exposes print and PDF download controls."""
+        template = (ROOT_DIR / "webapp/app/templates/report_preview.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("{{ report_html }}", template)
+        self.assertIn("window.print()", template)
+        self.assertIn("Download PDF", template)
+        self.assertIn("{{ pdf_url }}", template)
+        self.assertIn("@media print", template)
+        self.assertIn(".report-preview-toolbar", template)
+
+    def test_report_pdf_has_cover_index_and_section_page_breaks(self):
+        """PDF includes cover, linked index, then starts every H2 on a new page."""
+        pdf = generate_report_pdf(
+            "domain circl",
+            "# Report for Domain circl.\n\n"
+            "- Query: `domain:circl.lu`\n\n"
+            "## FQDN detected\n\n"
+            "- www.example.com (192.0.2.1)\n\n"
+            "## Open ports\n\n"
+            "- 443: 1 host\n\n"
+            "## Full report dump\n\n"
+            "- 192.0.2.1\n",
+        )
+
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        self.assertIn(b"/Title (Domain circl)", pdf)
+        self.assertGreaterEqual(pdf.count(b"/Type /Page\n"), 6)
+        self.assertGreaterEqual(pdf.count(b"/Subtype /Link"), 4)
+
+    @patch("app.utils.enrichment_cache.requests.get")
+    def test_passive_dns_retains_time_last_and_tolerates_failures(self, request_get):
+        """CIRCL time_last is retained while request failures keep reports usable."""
+        response = Mock()
+        response.text = (
+            '{"rrtype":"A","rdata":"pdns.example","time_last":"1700000000"}\n'
+            '{"rrtype":"A","rdata":"unknown.example","time_last":"invalid"}\n'
+        )
+        response.status_code = 200
+        response.iter_content.return_value = [response.text.encode()]
+        request_get.return_value.__enter__.return_value = response
+
+        records = collect_report_passive_dns_fqdns(
+            {"PASSIVE_USER": "user", "PASSIVE_PWD": "password"},
+            ["192.0.2.1"],
+            {},
+        )
+        self.assertEqual(
+            records,
+            {
+                "192.0.2.1": [
+                    {"fqdn": "pdns.example", "last_seen": 1700000000},
+                    {"fqdn": "unknown.example", "last_seen": None},
+                ]
+            },
+        )
+
+        request_get.side_effect = requests.RequestException("offline")
+        self.assertEqual(
+            collect_report_passive_dns_fqdns(
+                {"PASSIVE_USER": "user", "PASSIVE_PWD": "password"},
+                ["192.0.2.1"],
+                {},
+            ),
+            {},
+        )
+
+
+if __name__ == "__main__":
+    main()

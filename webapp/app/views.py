@@ -25,23 +25,27 @@ import zipfile
 import yaml
 
 from flask import render_template, redirect, make_response, send_file, flash, url_for
-from flask import request, jsonify
+from flask import request, jsonify, abort
 from flask_appbuilder import BaseView
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
 from flask_appbuilder.filemanager import FileManager
 from flask_appbuilder.models.sqla.interface import SQLAInterface
+from flask_appbuilder.widgets import ListWidget
+from flask_appbuilder.security.decorators import permission_name
 from flask_login import current_user
 from flask_wtf import FlaskForm
+from flask_wtf.csrf import generate_csrf, validate_csrf
 from flask_wtf.file import FileField, FileAllowed
 from markupsafe import Markup, escape
 from meilisearch import Client
 from meilisearch.errors import MeilisearchApiError
 import requests
+from redis.exceptions import RedisError
 
 from netaddr import IPNetwork
 from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.security import generate_password_hash
 from wtforms import (
     BooleanField,
@@ -70,12 +74,40 @@ from .models import (
     TargetScanStates,
     ScanProfileCycles,
     ensure_default_collected_headers,
+    ensure_rule_required_headers,
     is_valid_http_header_name,
 )
 from .utils.mutils import is_valid_uuid, is_valid_ip, is_valid_cidr
-from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn, lowercase_dict
+from .utils.mutils import is_valid_ip_or_cidr, is_valid_fqdn
 from .utils.kvrocks import KVrocksIndexer
-from .utils.ip2asn import get_asn_description_for_ip
+from .utils.index_generations import (
+    generation_identity,
+    reader_generation,
+    restore_reader_generation,
+)
+from .utils.index_activity import (
+    prioritized_read as pinned_read,
+    prioritized_search,
+    pacing_status,
+)
+from .utils.index_reconciliation import reconciliation_status
+from .utils.ip_links import port_web_scheme
+from .utils.search_debug import profile_search_page
+from .utils.search_query import compile_query, tokenize_query
+from .utils.search_plan import CandidatePlanner
+from .utils.search_timestamps import search_timestamps
+from .utils.resolved_export import write_resolved_csv
+from .utils.report_query import validate_report_query
+from .utils.network_enrichment import refresh_target_network
+from .utils.ip_whois import WhoisLookupError, lookup_domain_whois
+from .utils.enrichment_cache import (
+    network_whois,
+    passive_dns as cached_passive_dns,
+    ip_information,
+)
+from .utils.lookup_cache import cache_metadata, LookupBusy
+from .utils.ip2asn import parse_network_information, target_type
+from .utils.pdns_resolve import add_resolve_tokens, verify_resolve_token, resolve_a
 from .utils.tagrules import (
     compile_tag_rule_definition,
     normalize_tags,
@@ -94,7 +126,9 @@ from .utils.reports import (
     compute_report_ptr_cutoff,
     compute_previous_report_interval,
     datetime_to_epoch,
+    generate_report_pdf,
     normalize_report_fields,
+    render_report_markdown_html,
     send_report_markdown,
 )
 from .utils.scan_cycles import (
@@ -109,11 +143,53 @@ from . import appbuilder, db
 logger = logging.getLogger("flask_appbuilder")
 EXPORT_JOB_STATES = {}
 EXPORT_JOB_STATES_LOCK = threading.Lock()
+RESOLVED_EXPORT_SLOTS = threading.BoundedSemaphore(2)
 SEARCH_SESSION_STATES = {}
 SEARCH_SESSION_STATES_LOCK = threading.Lock()
 REPORT_PREVIEW_STATES = {}
 REPORT_PREVIEW_STATES_LOCK = threading.Lock()
 REPORT_PREVIEW_RETENTION_SECONDS = 1800
+TAG_REINDEX_STATES = {}
+TAG_REINDEX_STATES_LOCK = threading.Lock()
+TAG_REINDEX_STALE_SECONDS = 300
+
+
+def _tag_reindex_owner_alive(state):
+    """Return whether the process recorded for a reindex is still alive."""
+    try:
+        pid = int(state.get("pid") or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _tag_reindex_is_stale(state):
+    """Detect an interrupted shared reindex without trusting its stale flag."""
+    if not state or state.get("status") != "running":
+        return False
+    if not _tag_reindex_owner_alive(state):
+        return True
+    heartbeat = state.get("heartbeat_at")
+    if not heartbeat:
+        return False
+    try:
+        heartbeat_at = datetime.fromisoformat(str(heartbeat).replace("Z", "+00:00"))
+        if heartbeat_at.tzinfo is None:
+            heartbeat_at = heartbeat_at.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - heartbeat_at).total_seconds()
+    except (TypeError, ValueError):
+        return False
+    return age > TAG_REINDEX_STALE_SECONDS
 
 
 def cleanup_report_preview_states():
@@ -400,7 +476,7 @@ def get_target_requested_hostname(pk):
         return ""
 
     target_value = str(result).strip().rstrip(".").lower()
-    if is_valid_fqdn(target_value):
+    if is_valid_fqdn(target_value, app.config.get("TLDADD", ())):
         return target_value
     return ""
 
@@ -516,6 +592,8 @@ def get_scanprofile_cycle_rows(pk):
                 "finished_at": _format_datetime_for_ui(cycle.finished_at),
                 "duration": cycle.duration_html(),
                 "progress": cycle.progress_html(),
+                "max_target_id": cycle.max_target_id,
+                "blockers": cycle.blocker_summary(),
             }
         )
 
@@ -524,7 +602,7 @@ def get_scanprofile_cycle_rows(pk):
 
 def get_target_search_time_range(pk):
     """
-    Return a search range starting one day before the oldest target scan stat.
+    Return a search range from the oldest displayed target scan stat through now.
     """
     timestamps = []
     states = (
@@ -541,7 +619,7 @@ def get_target_search_time_range(pk):
     if not timestamps:
         return {}
 
-    from_date = min(timestamps) - timedelta(days=1)
+    from_date = min(timestamps)
     to_date = datetime.now(timezone.utc)
     return {
         "from_ts": int(from_date.replace(tzinfo=timezone.utc).timestamp()),
@@ -551,6 +629,7 @@ def get_target_search_time_range(pk):
 
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
+app.jinja_env.globals["csrf_token"] = generate_csrf
 app.jinja_env.globals["get_target_value"] = get_target_value
 app.jinja_env.globals["get_target_requested_hostname"] = get_target_requested_hostname
 app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
@@ -632,9 +711,14 @@ class KVSearchView(BaseView):
     SEARCH_PAGE_LIMIT = 100
     SEARCH_WINDOW_SECONDS = 24 * 60 * 60
     MAX_EXPORT_WARNINGS = 20
+    EXPORT_TAG_BATCH_SIZE = 500
     SEARCH_SESSION_TTL_SECONDS = 3600
     TAG_SUGGEST_LIMIT = 12
     TAG_SUGGEST_SCAN_LIMIT = 4096
+    TAG_CATALOGUE_TTL_SECONDS = 60
+    _tag_catalogue_cache = None
+    _tag_catalogue_lock = threading.Lock()
+    TAG_LOOKUP_BATCH_LIMIT = 200
     HTTP_HEADER_SUGGEST_LIMIT = 128
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
     SINCE_PREFIX = "since:"
@@ -705,7 +789,7 @@ class KVSearchView(BaseView):
         Extract one optional `since:N` directive from a user query.
         """
         try:
-            parts = shlex.split(query or "")
+            parts = [token.value for token in tokenize_query(query)]
         except ValueError as error:
             return None, False, f"Invalid query syntax: {error}"
 
@@ -766,36 +850,8 @@ class KVSearchView(BaseView):
 
     @staticmethod
     def _build_timestamp_array(indexer, results_ip):
-        """
-        Build per-IP timestamp metadata for a search result map.
-        """
-        timestamp_array = {}
-        for ip in results_ip:
-            ip_timestamps = indexer.get_timestamp_for_ip(ip)
-            filtered_timestamps = {
-                uid: ip_timestamps[uid]
-                for uid in results_ip[ip]
-                if uid in ip_timestamps
-            }
-
-            min_seen = None
-            max_seen = None
-            for uid_data in filtered_timestamps.values():
-                first_seen = uid_data.get("first_seen")
-                last_seen = uid_data.get("last_seen")
-                if first_seen is not None:
-                    min_seen = (
-                        first_seen if min_seen is None else min(min_seen, first_seen)
-                    )
-                if last_seen is not None:
-                    max_seen = (
-                        last_seen if max_seen is None else max(max_seen, last_seen)
-                    )
-
-            filtered_timestamps["min_seen"] = min_seen
-            filtered_timestamps["max_seen"] = max_seen
-            timestamp_array[ip] = filtered_timestamps
-        return timestamp_array
+        """Read matching capture timestamps with bounded scalar replies."""
+        return search_timestamps(indexer, results_ip)
 
     @staticmethod
     def _build_requested_hostname_array(indexer, results_ip):
@@ -842,6 +898,47 @@ class KVSearchView(BaseView):
                 seen.add(candidate)
                 tags.append(candidate)
         return tags
+
+    @classmethod
+    def _collect_tag_catalogue(cls):
+        """Group observed indexed tags, cached per backend for sixty seconds."""
+        endpoint = (db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"])
+        indexer = KVrocksIndexer(*endpoint, socket_timeout=5)
+        cache_key = (*endpoint, generation_identity(indexer.r))
+        # Serialize refreshes within each worker to avoid a request stampede.
+        with cls._tag_catalogue_lock:
+            cached = cls._tag_catalogue_cache
+            if (
+                cached is None
+                or cached[0] != cache_key
+                or cached[1] <= time.monotonic()
+            ):
+                tags = tuple(indexer.get_observed_tags())
+                cls._tag_catalogue_cache = (
+                    cache_key,
+                    time.monotonic() + cls.TAG_CATALOGUE_TTL_SECONDS,
+                    tags,
+                )
+            else:
+                tags = cached[2]
+        columns = [
+            {"namespace": namespace, "label": label, "tags": []}
+            for namespace, label in (
+                ("proto", "Proto"),
+                ("type", "Type"),
+                ("product", "Products"),
+                ("vendor", "Vendors"),
+                ("vuln", "Vulns"),
+            )
+        ]
+        groups = {column["namespace"]: column["tags"] for column in columns}
+        for tag in sorted(set(tags)):
+            namespace = tag.partition(":")[0]
+            if namespace in groups:
+                groups[namespace].append(
+                    {"label": tag, "term": "tag:" + shlex.quote(tag)}
+                )
+        return columns
 
     @classmethod
     def _collect_tag_suggestion_values(cls, prefix=""):
@@ -1030,21 +1127,13 @@ class KVSearchView(BaseView):
             for header in headers
         ]
 
-    def _get_matching_uids(self, indexer, criteria_groups, scoped_uids=None):
-        """
-        Resolve OR query groups into one UID set before time slicing.
-        """
-        matching_uids = set()
-        for criteria in criteria_groups:
-            criteria = lowercase_dict(criteria)
-            logger.debug(criteria)
-            if scoped_uids is None:
-                matching_uids.update(indexer.get_uids_by_criteria(criteria))
-            else:
-                matching_uids.update(
-                    indexer.get_uids_by_criteria_scoped(criteria, scoped_uids)
-                )
-        return matching_uids
+    def _get_matching_uids(
+        self, indexer, criteria_groups, scoped_uids=None, diagnostics=None
+    ):
+        """Plan equivalent UID predicates using request-local cardinalities."""
+        return CandidatePlanner(
+            indexer, criteria_groups, scoped_uids, diagnostics
+        ).execute()
 
     @staticmethod
     def _get_export_jobs_folder():
@@ -1076,6 +1165,7 @@ class KVSearchView(BaseView):
                 "from_ts": from_ts,
                 "to_ts": to_ts,
                 "seen_ips": [],
+                "generation": reader_generation(app.config),
                 "created_ts": now_ts,
                 "updated_ts": now_ts,
             }
@@ -1251,6 +1341,20 @@ class KVSearchView(BaseView):
         return KVSearchView._timestamp_to_iso(timestamp)
 
     @staticmethod
+    def _iter_export_tags(indexer, uids):
+        """Read tags only for matching UIDs, using bounded Kvrocks pipelines."""
+        uids = list(uids)
+        for offset in range(0, len(uids), KVSearchView.EXPORT_TAG_BATCH_SIZE):
+            batch = uids[offset : offset + KVSearchView.EXPORT_TAG_BATCH_SIZE]
+            with indexer.r.pipeline(transaction=False) as pipeline:
+                for uid in batch:
+                    pipeline.smembers(f"tags:{uid}")
+                tag_sets = pipeline.execute()
+            for uid, tags in zip(batch, tag_sets):
+                yield uid, sorted(normalize_tags(tags), key=str.lower)
+
+    @staticmethod
+    @pinned_read
     def _run_full_export_job(job_id):
         with app.app_context():
             job_state = KVSearchView._get_job_state(job_id)
@@ -1282,10 +1386,13 @@ class KVSearchView(BaseView):
 
             processed_uids = 0
             try:
+                indexer = KVrocksIndexer(
+                    db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+                )
                 for ip, uids in sorted(results["results"].items()):
                     ip_timestamps = results["timestamps"].get(ip, {})
                     export_payload["results"][ip] = []
-                    for uid in uids:
+                    for uid, tags in KVSearchView._iter_export_tags(indexer, uids):
                         document, warning, warning_message = (
                             KVSearchView._load_meili_document(index, uid)
                         )
@@ -1295,6 +1402,7 @@ class KVSearchView(BaseView):
 
                         export_entry = {
                             "uid": uid,
+                            "tags": tags,
                             "first_seen": ip_timestamps.get(uid, {}).get("first_seen"),
                             "last_seen": ip_timestamps.get(uid, {}).get("last_seen"),
                             "document": document,
@@ -1388,30 +1496,76 @@ class KVSearchView(BaseView):
                     error=str(error),
                 )
 
-    def split_query_groups(self, query):
-        """
-        Split a query into AND groups separated by explicit OR tokens.
-        """
-        if isinstance(query, (list, tuple)):
-            parts = list(query)
-        else:
-            parts = shlex.split(query or "")
-        if not parts:
-            return [[]]
+    @staticmethod
+    def _run_resolved_export_job(job_id):
+        """Enrich the full filtered IP set, with a bounded worker and atomic file."""
+        tmp_path = None
+        try:
+            with app.app_context():
+                state = KVSearchView._get_job_state(job_id)
+                if not state:
+                    return
+                KVSearchView._set_job_state(job_id, status="running", error="")
+                results = KVSearchView().execute_search(
+                    state["query"], state.get("from_ts"), state.get("to_ts")
+                )
+                if not results["status"]:
+                    KVSearchView._set_job_state(
+                        job_id, status="error", error="Invalid search query"
+                    )
+                    return
+                total = len(results["results"])
+                KVSearchView._set_job_state(job_id, total_uids=total, processed_uids=0)
+                index = client.index("plum")
 
-        groups = []
-        current_group = []
-        for part in parts:
-            normalized_part = part.upper()
-            if normalized_part == "OR":
-                groups.append(current_group)
-                current_group = []
-            elif normalized_part == "AND":
-                continue
-            else:
-                current_group.append(part)
-        groups.append(current_group)
-        return groups
+                def load_document(uid):
+                    document, warning, _ = KVSearchView.load_meili_document(index, uid)
+                    if warning:
+                        KVSearchView._add_job_warning(
+                            job_id,
+                            "A matching scan document is missing; its stored PTR names are unavailable.",
+                        )
+                    return document
+
+                file_path = os.path.join(
+                    KVSearchView._get_export_jobs_folder(), f"{job_id}.csv"
+                )
+                tmp_path = file_path + ".tmp"
+                with open(tmp_path, "w", encoding="utf-8", newline="") as output:
+                    write_resolved_csv(
+                        output,
+                        results,
+                        app.config,
+                        progress=lambda done: KVSearchView._set_job_state(
+                            job_id, processed_uids=done
+                        ),
+                        warning=lambda message: KVSearchView._add_job_warning(
+                            job_id, message
+                        ),
+                        document_loader=load_document,
+                    )
+                os.replace(tmp_path, file_path)
+                tmp_path = None
+                KVSearchView._set_job_state(
+                    job_id,
+                    status="done",
+                    processed_uids=total,
+                    file_path=file_path,
+                    finished_at=utcnow_iso(),
+                )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # Never expose upstream credentials, raw query or exception text.
+            logger.error("Resolved export failed (%s)", type(error).__name__)
+            KVSearchView._set_job_state(
+                job_id, status="error", error="Resolved export failed; please retry."
+            )
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    logger.warning("Temporary resolved export could not be removed")
+            RESOLVED_EXPORT_SLOTS.release()
 
     @staticmethod
     def _parse_http_headval_term(part):
@@ -1463,14 +1617,10 @@ class KVSearchView(BaseView):
         value = f"{header_expr}:{header_value}"
         return key, value, True, None
 
-    def parse_query_group(self, query):
-        """
-        This function parse one AND-only query group.
-        It validate if we got a good syntax and use only authorised keyywords.
-
-        """
-
-        valid_keywords = [
+    @staticmethod
+    def search_keywords():
+        """Expose the same supported fields to the parser and read API."""
+        return [
             "ip",
             "net",
             # "as",
@@ -1500,10 +1650,12 @@ class KVSearchView(BaseView):
             "http_server",
             # "email",
             "x509_issuer",
+            "x509_issuer_cn",
             "x509_md5",
             "x509_sha1",
             "x509_sha256",
             "x509_subject",
+            "x509_subject_cn",
             "x509_san",
             # "time_filter_before_after",
             # "ssh_fingerprint",
@@ -1512,6 +1664,16 @@ class KVSearchView(BaseView):
             "banner",
         ]
 
+    @classmethod
+    def _search_suggestion_keywords(cls):
+        """Expose parser fields and separately handled directives to the UI."""
+        return sorted(
+            set(cls.search_keywords()) | {"http_headval", cls.SINCE_PREFIX[:-1]}
+        )
+
+    def parse_query_group(self, query):
+        """Validate one AND-only group using the shared field catalogue."""
+        valid_keywords = self.search_keywords()
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
         exact_only_keywords = {"tag"}
 
@@ -1572,50 +1734,45 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
-    def parse_query(self, query, allow_since_directive=False):
-        """
-        Parse the full query, supporting explicit OR between AND groups.
-        """
-        if not (query or "").strip():
-            return [], False, "Empty query"
-
-        try:
-            query_parts = shlex.split(query or "")
-        except ValueError as error:
-            return [], False, f"Invalid query syntax: {error}"
-
-        if allow_since_directive:
-            filtered_parts = []
-            for part in query_parts:
-                if str(part).lower().startswith(self.SINCE_PREFIX):
-                    continue
-                filtered_parts.append(part)
-            query_parts = filtered_parts
-
-        if not query_parts:
-            return [], False, "Empty query"
-
-        try:
-            query_groups = self.split_query_groups(query_parts)
-        except ValueError as error:
-            return [], False, f"Invalid query syntax: {error}"
-        parsed_groups = []
-        error_messages = []
-
-        for idx, group in enumerate(query_groups, start=1):
-            if not group:
-                error_messages.append(f"Empty query group around OR at segment {idx}")
-                continue
-
-            criteria, status, msg_error = self.parse_query_group(group)
+    def _parse_query_group_with_not(self, parts, allow_negative_only=False):
+        """Compile unary NOT terms separately from the existing positive AND group."""
+        positive_parts = []
+        negative_parts = []
+        tokens = iter(parts)
+        for part in tokens:
+            if part.upper() == "NOT":
+                negative = next(tokens, None)
+                if negative is None or negative.upper() in {"AND", "OR", "NOT"}:
+                    return {}, False, "NOT must be followed by a field:value term"
+                negative_parts.append(negative)
+            else:
+                positive_parts.append(part)
+        if negative_parts and not positive_parts and not allow_negative_only:
+            return {}, False, "Each OR group with NOT requires a positive search term"
+        result, status, error = self.parse_query_group(positive_parts)
+        if not status:
+            return result, status, error
+        for part in negative_parts:
+            negative, status, error = self.parse_query_group([part])
             if not status:
-                error_messages.append(msg_error or f"Invalid query group {idx}")
-                continue
-            parsed_groups.append(criteria)
+                return {}, False, error
+            for field, values in negative.items():
+                if field.rsplit(".", 1)[-1] in {"not", "nt"}:
+                    return (
+                        {},
+                        False,
+                        "Use NOT with an exact, like or begin term, not .not/.nt",
+                    )
+                result.setdefault(f"!{field}", []).extend(values)
+        return result, True, ""
 
-        status = len(error_messages) == 0
-        return parsed_groups, status, " | ".join(error_messages)
+    def parse_query(
+        self, query, allow_since_directive=False, allow_debug_directive=False
+    ):
+        """Compile flat queries or one-level parentheses without backend I/O."""
+        return compile_query(self, query, allow_since_directive, allow_debug_directive)
 
+    @prioritized_search
     def execute_search(self, query, from_ts=None, to_ts=None):
         """
         Shared search executor used by both JSON and export endpoints.
@@ -1643,7 +1800,7 @@ class KVSearchView(BaseView):
             }
 
         criteria_groups, status, msg_error = self.parse_query(
-            query, allow_since_directive=True
+            query, allow_since_directive=True, allow_debug_directive=True
         )
         results_ip = {}
         timestamp_array = {}
@@ -1700,6 +1857,8 @@ class KVSearchView(BaseView):
             "search_id": None,
         }
 
+    @profile_search_page
+    @prioritized_search
     def execute_search_page(
         self,
         query,
@@ -1709,6 +1868,7 @@ class KVSearchView(BaseView):
         seen_ips=None,
         limit=None,
         window_days=None,
+        _diagnostics=None,
     ):
         """
         Fast UI search: inspect one last_seen window backwards from cursor_ts.
@@ -1726,7 +1886,12 @@ class KVSearchView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
+        if _diagnostics:
+            _diagnostics.instrument(indexer.r)
+            _diagnostics.checkpoint("setup")
         count_objects = indexer.objects_count()
+        if _diagnostics:
+            _diagnostics.checkpoint("object_counts")
         time_range, time_status, time_error = self._resolve_time_range(
             from_ts, to_ts, query=query
         )
@@ -1744,7 +1909,7 @@ class KVSearchView(BaseView):
             }
 
         criteria_groups, status, msg_error = self.parse_query(
-            query, allow_since_directive=True
+            query, allow_since_directive=True, allow_debug_directive=True
         )
         results_ip = {}
         timestamp_array = {}
@@ -1760,6 +1925,9 @@ class KVSearchView(BaseView):
 
         next_cursor = cursor_ts
         stopped_in_window = False
+        if _diagnostics:
+            _diagnostics.checkpoint("parse_and_dates")
+            _diagnostics.counts.update(seen_ips=len(seen_ips), limit=limit)
         if status and cursor_ts >= time_range["from_ts"]:
             current_to = cursor_ts
             current_from = max(
@@ -1771,11 +1939,26 @@ class KVSearchView(BaseView):
                 int((current_to - current_from) / self.SEARCH_WINDOW_SECONDS) + 1,
             )
             window_uids = indexer.get_uids_by_last_seen_range(current_from, current_to)
+            if _diagnostics:
+                _diagnostics.checkpoint("time_scope")
+                _diagnostics.window.update(from_ts=current_from, to_ts=current_to)
+                _diagnostics.counts["window_uids"] = len(window_uids)
             page_uids = self._get_matching_uids(
-                indexer, criteria_groups, scoped_uids=window_uids
+                indexer,
+                criteria_groups,
+                scoped_uids=window_uids,
+                diagnostics=_diagnostics,
             )
+            if _diagnostics:
+                _diagnostics.checkpoint("criteria")
+                _diagnostics.counts["matched_uids"] = len(page_uids)
             day_ip_map = indexer.get_ip_from_uids(page_uids)
+            if _diagnostics:
+                _diagnostics.checkpoint("uid_to_ip")
+                _diagnostics.counts["candidate_ips"] = len(day_ip_map)
             day_timestamps = self._build_timestamp_array(indexer, day_ip_map)
+            if _diagnostics:
+                _diagnostics.checkpoint("ip_history_timestamps")
             sorted_ips = sorted(
                 day_ip_map,
                 key=lambda ip: (
@@ -1800,9 +1983,14 @@ class KVSearchView(BaseView):
                 next_cursor = current_from - 1
                 exhausted = next_cursor < time_range["from_ts"]
 
+            if _diagnostics:
+                _diagnostics.checkpoint("sort_and_select")
+                _diagnostics.counts["probe_ips"] = len(results_ip)
             requested_hostname_array = self._build_requested_hostname_array(
                 indexer, results_ip
             )
+            if _diagnostics:
+                _diagnostics.checkpoint("requested_hostnames")
 
         processingtimems = (time.time() - start_time) * 1000
         has_more = bool(status and not exhausted)
@@ -1814,6 +2002,8 @@ class KVSearchView(BaseView):
             }
         returned_results = len(results_ip) if status else 0
         shown_count = len(seen_ips) + returned_results
+        if _diagnostics:
+            _diagnostics.counts["returned_ips"] = returned_results
 
         return {
             "status": status,
@@ -1878,6 +2068,7 @@ class KVSearchView(BaseView):
             from_ts = search_session.get("from_ts")
             to_ts = search_session.get("to_ts")
             seen_ips = search_session.get("seen_ips", [])
+            restore_reader_generation(app.config, search_session.get("generation"))
         else:
             from_ts = request.args.get("from_ts")
             to_ts = request.args.get("to_ts")
@@ -1915,6 +2106,7 @@ class KVSearchView(BaseView):
 
     @expose("/tag_suggest")
     @has_access
+    @prioritized_search
     def tag_suggest(self):
         """
         AJAX helper for tag: query autocompletion.
@@ -1925,6 +2117,7 @@ class KVSearchView(BaseView):
 
     @expose("/header_suggest")
     @has_access
+    @prioritized_search
     def header_suggest(self):
         """
         AJAX helper for http_headval: header-name autocompletion.
@@ -1934,6 +2127,198 @@ class KVSearchView(BaseView):
                 "suggestions": self._build_header_suggestions(
                     request.args.get("term", "")
                 )
+            }
+        )
+
+    @expose("/tags", methods=["POST"])
+    @has_access
+    @prioritized_search
+    def tags(self):
+        """
+        Return normalized tags for all scan UIDs behind a bounded batch of IPs.
+
+        Tags are stored in Kvrocks and can be fetched independently from the
+        search result documents, allowing the search page to enrich rows
+        asynchronously without querying Meilisearch. UID history is limited
+        to the requested search time range.
+        """
+        payload = request.get_json(silent=True) or {}
+        raw_ips = payload.get("ips")
+        if not isinstance(raw_ips, list):
+            return jsonify({"error": "ips must be a list"}), 400
+
+        ips = []
+        seen_ips = set()
+        for raw_ip in raw_ips:
+            ip = str(raw_ip or "").strip()
+            if not ip or ip in seen_ips or not is_valid_ip(ip):
+                continue
+            seen_ips.add(ip)
+            ips.append(ip)
+            if len(ips) >= self.TAG_LOOKUP_BATCH_LIMIT:
+                break
+
+        if not ips:
+            return jsonify({"tags_by_ip": {}})
+
+        time_range, time_status, time_error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts")
+        )
+        if not time_status:
+            return jsonify({"error": time_error or "Invalid time range"}), 400
+
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        ip_pipeline = indexer.r.pipeline(transaction=False)
+        for ip in ips:
+            ip_pipeline.smembers(f"ip:{ip}")
+        ip_uids = {
+            ip: sorted(set(uids or [])) for ip, uids in zip(ips, ip_pipeline.execute())
+        }
+        all_uids = sorted({uid for uids in ip_uids.values() for uid in uids})
+        if not all_uids:
+            return jsonify({"tags_by_ip": {ip: [] for ip in ips}})
+
+        doc_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in all_uids:
+            doc_pipeline.hgetall(f"doc:{uid}")
+        documents = dict(zip(all_uids, doc_pipeline.execute()))
+        eligible_uids = set()
+        for uid, document in documents.items():
+            first_seen, last_seen = indexer.normalize_seen_range(
+                document.get("first_seen"), document.get("last_seen")
+            )
+            if (
+                first_seen is not None
+                and last_seen is not None
+                and last_seen >= time_range["from_ts"]
+                and first_seen <= time_range["to_ts"]
+            ):
+                eligible_uids.add(uid)
+
+        tag_pipeline = indexer.r.pipeline(transaction=False)
+        eligible_list = sorted(eligible_uids)
+        for uid in eligible_list:
+            tag_pipeline.smembers(f"tags:{uid}")
+        tags_by_uid = dict(zip(eligible_list, tag_pipeline.execute()))
+        tags_by_ip = {}
+        timestamps_by_ip = {}
+        for ip in ips:
+            tags = []
+            first_seen_values = []
+            last_seen_values = []
+            for uid in ip_uids[ip]:
+                tags.extend(tags_by_uid.get(uid) or [])
+                if uid not in eligible_uids:
+                    continue
+                document = documents.get(uid) or {}
+                first_seen, last_seen = indexer.normalize_seen_range(
+                    document.get("first_seen"), document.get("last_seen")
+                )
+                if first_seen is not None:
+                    first_seen_values.append(first_seen)
+                if last_seen is not None:
+                    last_seen_values.append(last_seen)
+            tags_by_ip[ip] = sorted(normalize_tags(tags), key=str.lower)
+            timestamps_by_ip[ip] = {
+                "min_seen": min(first_seen_values) if first_seen_values else None,
+                "max_seen": max(last_seen_values) if last_seen_values else None,
+            }
+        return jsonify({"tags_by_ip": tags_by_ip, "timestamps_by_ip": timestamps_by_ip})
+
+    @expose("/expand_ips", methods=["POST"])
+    @has_access
+    @prioritized_search
+    def expand_ips(self):
+        """Resolve every matching UID for the already displayed IPs."""
+        payload = request.get_json(silent=True) or {}
+        raw_ips = payload.get("ips")
+        query = str(payload.get("query") or "").strip()
+        if not isinstance(raw_ips, list) or not query:
+            return jsonify({"error": "ips and query are required"}), 400
+
+        ips = []
+        seen_ips = set()
+        for raw_ip in raw_ips:
+            ip = str(raw_ip or "").strip()
+            if ip and ip not in seen_ips and is_valid_ip(ip):
+                seen_ips.add(ip)
+                ips.append(ip)
+            if len(ips) >= self.TAG_LOOKUP_BATCH_LIMIT:
+                break
+        if not ips:
+            return jsonify({"results": {}, "timestamps": {}, "tags_by_ip": {}})
+
+        time_range, time_status, time_error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts"), query=query
+        )
+        criteria_groups, query_status, query_error = self.parse_query(
+            query, allow_since_directive=True, allow_debug_directive=True
+        )
+        if not time_status or not query_status:
+            return jsonify({"error": time_error or query_error or "Invalid query"}), 400
+
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        ip_uids = {ip: set(indexer.r.smembers(f"ip:{ip}")) for ip in ips}
+        candidate_uids = sorted({uid for values in ip_uids.values() for uid in values})
+        doc_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in candidate_uids:
+            doc_pipeline.hgetall(f"doc:{uid}")
+        documents = dict(zip(candidate_uids, doc_pipeline.execute()))
+        eligible = set()
+        timestamps_by_uid = {}
+        for uid, document in documents.items():
+            first_seen, last_seen = indexer.normalize_seen_range(
+                document.get("first_seen"), document.get("last_seen")
+            )
+            timestamps_by_uid[uid] = {"first_seen": first_seen, "last_seen": last_seen}
+            if (
+                first_seen is not None
+                and last_seen is not None
+                and last_seen >= time_range["from_ts"]
+                and first_seen <= time_range["to_ts"]
+            ):
+                eligible.add(uid)
+
+        matching = self._get_matching_uids(
+            indexer, criteria_groups, scoped_uids=eligible
+        )
+        results = {}
+        timestamps = {}
+        uid_timestamps = {}
+        tags_by_ip = {}
+        tag_uids = sorted(matching)
+        tag_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in tag_uids:
+            tag_pipeline.smembers(f"tags:{uid}")
+        tags_by_uid = dict(zip(tag_uids, tag_pipeline.execute()))
+        for ip in ips:
+            matched_uids = sorted(ip_uids[ip].intersection(matching))
+            results[ip] = matched_uids
+            uid_timestamps[ip] = {uid: timestamps_by_uid[uid] for uid in matched_uids}
+            timestamps[ip] = {
+                "min_seen": min(
+                    (timestamps_by_uid[uid]["first_seen"] for uid in matched_uids),
+                    default=None,
+                ),
+                "max_seen": max(
+                    (timestamps_by_uid[uid]["last_seen"] for uid in matched_uids),
+                    default=None,
+                ),
+            }
+            tags = []
+            for uid in matched_uids:
+                tags.extend(tags_by_uid.get(uid) or [])
+            tags_by_ip[ip] = sorted(normalize_tags(tags), key=str.lower)
+        return jsonify(
+            {
+                "results": results,
+                "timestamps": timestamps,
+                "uid_timestamps": uid_timestamps,
+                "tags_by_ip": tags_by_ip,
             }
         )
 
@@ -2061,6 +2446,115 @@ class KVSearchView(BaseView):
         worker.start()
         return jsonify({"job_id": job_id})
 
+    @expose("/export_resolved_start", methods=["POST"])
+    @has_access
+    def export_resolved_start(self):
+        """Create an owner-bound CSV export without queueing unbounded DNS work."""
+        try:
+            validate_csrf(request.headers.get("X-CSRFToken"))
+        except ValidationError:
+            return jsonify(error="Invalid CSRF token"), 400
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or not isinstance(payload.get("q"), str):
+            return jsonify(error="Missing query"), 400
+        query = payload["q"].strip()
+        _, valid, error = self.parse_query(query, True, True)
+        if not valid:
+            return jsonify(error=error or "Invalid query"), 400
+        time_range, valid, error = self._resolve_time_range(
+            payload.get("from_ts"), payload.get("to_ts"), query=query
+        )
+        if not valid:
+            return jsonify(error=error or "Invalid time range"), 400
+        owner = getattr(current_user, "id", None)
+        if owner is None:
+            return jsonify(error="Forbidden"), 403
+        if not RESOLVED_EXPORT_SLOTS.acquire(blocking=False):
+            return jsonify(error="Resolved exports busy; retry later"), 503
+        job_id = str(uuid.uuid4())
+        with EXPORT_JOB_STATES_LOCK:
+            if any(
+                state.get("export_type") == "resolved_csv"
+                and state.get("owner_user_id") == owner
+                and state.get("status") in {"queued", "running"}
+                for state in EXPORT_JOB_STATES.values()
+            ):
+                RESOLVED_EXPORT_SLOTS.release()
+                return (
+                    jsonify(
+                        error="A resolved export is already running for your account"
+                    ),
+                    409,
+                )
+            EXPORT_JOB_STATES[job_id] = {
+                "job_id": job_id,
+                "export_type": "resolved_csv",
+                "owner_user_id": owner,
+                "status": "queued",
+                "query": query,
+                **time_range,
+                "created_ts": time.time(),
+                "processed_uids": 0,
+                "total_uids": 0,
+                "progress_percent": 0.0,
+                "file_path": None,
+                "error": "",
+                "warnings": [],
+                "warning_count": 0,
+                "finished_at": None,
+            }
+        try:
+            threading.Thread(
+                target=self._run_resolved_export_job, args=(job_id,), daemon=True
+            ).start()
+        except RuntimeError:
+            RESOLVED_EXPORT_SLOTS.release()
+            self._set_job_state(
+                job_id, status="error", error="Unable to start resolved export"
+            )
+            return jsonify(error="Unable to start resolved export"), 503
+        return jsonify(job_id=job_id)
+
+    @expose("/export_resolved_status")
+    @has_access
+    def export_resolved_status(self):
+        """Only the creating user may inspect CSV progress or warnings."""
+        state = self._get_owned_job(request.args.get("job_id", ""))
+        if state is None:
+            return jsonify(error="Unknown export job"), 404
+        if state is False:
+            return jsonify(error="Forbidden"), 403
+        if state.get("export_type") != "resolved_csv":
+            return jsonify(error="Wrong export type"), 409
+        response = jsonify(self._serialize_job_state(state))
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @expose("/export_resolved_download")
+    @has_access
+    def export_resolved_download(self):
+        """Download the completed CSV, enforcing ownership and export type."""
+        state = self._get_owned_job(request.args.get("job_id", ""))
+        if state is None:
+            return make_response("Unknown export job", 404)
+        if state is False:
+            return make_response("Forbidden", 403)
+        if state.get("export_type") != "resolved_csv":
+            return make_response("Wrong export type", 409)
+        if state["status"] != "done" or not state.get("file_path"):
+            return make_response("Export not ready", 409)
+        if not os.path.isfile(state["file_path"]):
+            return make_response("Export file missing", 410)
+        response = send_file(
+            state["file_path"],
+            as_attachment=True,
+            download_name="resolved_ips.csv",
+            mimetype="text/csv",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     @expose("/export_full_status")
     @has_access
     def export_full_status(self):
@@ -2151,9 +2645,18 @@ class KVSearchView(BaseView):
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
         count_objects = indexer.objects_count()
+        tag_catalogue_error = False
+        try:
+            tag_catalogue = self._collect_tag_catalogue()
+        except (RedisError, ValueError):
+            tag_catalogue = []
+            tag_catalogue_error = True
         return self.render_template(
             "search_kvrocks.html",
             total_scan_count=count_objects.get("uid_count", 0),
+            tag_catalogue=tag_catalogue,
+            tag_catalogue_error=tag_catalogue_error,
+            search_keywords=self._search_suggestion_keywords(),
         )
 
 
@@ -2164,6 +2667,56 @@ class IPDetailView(BaseView):
 
     route_base = "/ip"
     default_view = "detail"
+
+    @expose("/", methods=["GET", "POST"])
+    @has_access
+    def index(self):
+        """Offer an authenticated WHOIS lookup for a user-entered IP/CIDR."""
+        if request.method == "POST":
+            try:
+                validate_csrf(request.form.get("csrf_token"))
+            except ValidationError:
+                return jsonify(error="Invalid CSRF token"), 400
+            value = request.form.get("ip", "").strip()
+            if len(value) > 64:
+                return jsonify(error="Enter a valid IP address or CIDR"), 400
+            try:
+                network = ipaddress.ip_network(value, strict=False)
+            except ValueError:
+                return jsonify(error="Enter a valid IP address or CIDR"), 400
+            try:
+                cached = network_whois(network.with_prefixlen)
+                result = cached["value"]
+            except WhoisLookupError as error:
+                logger.warning("WHOIS lookup failed for %s: %s", network, error)
+                return jsonify(error="WHOIS lookup failed; try again later"), 502
+            return jsonify(
+                query=network.with_prefixlen,
+                result=result,
+                cache=cache_metadata(cached),
+            )
+        return self.render_template("ip_whois_lookup.html", title="IP WHOIS")
+
+    @expose("/whois", methods=["GET"])
+    @has_access
+    def whois_lookup(self):
+        """Return WHOIS data for the IP supplied by the IP detail page."""
+        value = request.args.get("ip", "").strip()
+        if len(value) > 64:
+            return jsonify(error="Enter a valid IP address or CIDR"), 400
+        try:
+            network = ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            return jsonify(error="Enter a valid IP address or CIDR"), 400
+        try:
+            cached = network_whois(network.with_prefixlen)
+            result = cached["value"]
+        except WhoisLookupError as error:
+            logger.warning("WHOIS lookup failed for %s: %s", network, error)
+            return jsonify(error="WHOIS lookup failed; try again later"), 502
+        return jsonify(
+            query=network.with_prefixlen, result=result, cache=cache_metadata(cached)
+        )
 
     @staticmethod
     def _safe_timestamp_to_iso(timestamp):
@@ -2250,24 +2803,6 @@ class IPDetailView(BaseView):
                 cleaned.append(entry)
         return cleaned
 
-    @staticmethod
-    def _parse_pdns_ndjson(payload):
-        """
-        Parse CIRCL Passive DNS NDJSON payload into a list of records.
-        """
-        records = []
-        for line in (payload or "").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(record, dict):
-                records.append(record)
-        return records
-
     @expose("/pdns/<string:ip>")
     @has_access
     def passive_dns(self, ip):
@@ -2290,19 +2825,55 @@ class IPDetailView(BaseView):
             return jsonify({"error": "Passive DNS password is not configured"}), 503
 
         try:
-            response = requests.get(
-                f"https://www.circl.lu/pdns/query/{ip}",
-                auth=(passive_user, passive_pwd),
-                headers={"dribble-disable-active-query": "1"},
-                timeout=15,
-            )
-            response.raise_for_status()
-        except requests.RequestException as error:
-            logger.warning("CIRCL passive DNS failed for %s: %s", ip, error)
+            cached = cached_passive_dns(ip, passive_user, passive_pwd)
+        except LookupError:
             return jsonify({"error": "Passive DNS lookup failed"}), 502
 
-        records = self._parse_pdns_ndjson(response.text)
-        return jsonify(records)
+        records = cached["value"]
+        payload = add_resolve_tokens(
+            records, str(ipaddress.ip_address(ip)), app.secret_key
+        )
+        result = jsonify(payload)
+        result.headers["Cache-Control"] = "no-store"
+        result.headers["X-Lookup-Cache"] = "hit" if cached["cached"] else "miss"
+        result.headers["X-Lookup-Fetched-At"] = str(cached["fetched_at"])
+        result.headers["X-Lookup-Expires-At"] = str(cached["expires_at"])
+        return result
+
+    @expose("/pdns/resolve/<string:ip>", methods=["POST"])
+    @has_access
+    def resolve_passive_dns(self, ip):
+        """Verify one signed PDNS hostname without modifying observation history."""
+        try:
+            address = str(ipaddress.IPv4Address(ip))
+        except ipaddress.AddressValueError:
+            return jsonify(error="Live A verification requires an IPv4 address"), 400
+        try:
+            validate_csrf(request.headers.get("X-CSRFToken"))
+        except ValidationError:
+            return jsonify(error="Invalid CSRF token; reload this page"), 400
+        # Bound streamed bodies too, even when Content-Length is absent.
+        raw_payload = request.stream.read(4097)
+        if max(len(raw_payload), request.content_length or 0) > 4096:
+            return jsonify(error="Resolution request too large"), 413
+        try:
+            payload = json.loads(raw_payload) if request.is_json else None
+        except (ValueError, UnicodeError):
+            payload = None
+        if not isinstance(payload, dict):
+            return jsonify(error="Expected a JSON resolution request"), 400
+        try:
+            hostname = verify_resolve_token(
+                payload.get("token"), address, app.secret_key
+            )
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+        result = resolve_a(hostname, address)
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        if result["status"] == "busy":
+            response.status_code = 429
+        return response
 
     @expose("/geolookup/<string:ip>")
     @has_access
@@ -2314,28 +2885,41 @@ class IPDetailView(BaseView):
             return jsonify({"error": "Invalid IP"}), 400
 
         try:
-            response = requests.get(
-                f"https://ip.circl.lu/geolookup/{ip}",
-                timeout=10,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except requests.RequestException as error:
-            logger.warning("CIRCL geolookup failed for %s: %s", ip, error)
+            cached = ip_information(ip)
+        except (requests.RequestException, ValueError, LookupBusy):
             return jsonify({"error": "Lookup failed"}), 502
-        except ValueError as error:
-            logger.warning(
-                "CIRCL geolookup returned invalid JSON for %s: %s", ip, error
-            )
-            return jsonify({"error": "Invalid lookup response"}), 502
+        result = jsonify(self._strip_geolookup_meta(cached["value"]))
+        result.headers["Cache-Control"] = "no-store"
+        result.headers["X-Lookup-Cache"] = "hit" if cached["cached"] else "miss"
+        result.headers["X-Lookup-Fetched-At"] = str(cached["fetched_at"])
+        result.headers["X-Lookup-Expires-At"] = str(cached["expires_at"])
+        return result
 
-        return jsonify(self._strip_geolookup_meta(payload))
+    @staticmethod
+    def observation_scope(indexer, ip, selected_hostname=""):
+        """Share IP-only/requested-hostname selection with the JSON read API."""
+        timestamps = indexer.get_timestamp_for_ip(ip)
+        uids = [uid for uid in timestamps if uid not in ("min_seen", "max_seen")]
+        hostnames = indexer.get_requested_hostnames_for_uids(uids)
+        choices = {name for names in hostnames.values() for name in names}
+        selected = [
+            uid
+            for uid in uids
+            if (
+                selected_hostname in hostnames.get(uid, [])
+                if selected_hostname
+                else not hostnames.get(uid)
+            )
+        ]
+        selected.sort(key=lambda uid: (-(timestamps[uid].get("last_seen") or -1), uid))
+        return timestamps, choices, selected
 
     @expose("/<string:ip>")
     @has_access
+    @prioritized_search
     def detail(self, ip):
         """
-        Render a fully expanded detail page for one IP.
+        Render only the selected requested-hostname group for one IP.
         """
         if not is_valid_ip(ip):
             return make_response("Invalid IP", 400)
@@ -2343,22 +2927,18 @@ class IPDetailView(BaseView):
         indexer = KVrocksIndexer(
             db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
         )
-        ip_timestamps = indexer.get_timestamp_for_ip(ip)
-        uids = [uid for uid in ip_timestamps if uid not in ("min_seen", "max_seen")]
-        sorted_uids = sorted(
-            uids,
-            key=lambda uid: (
-                -(ip_timestamps.get(uid, {}).get("last_seen") or -1),
-                uid,
-            ),
+        selected_hostname = (request.args.get("hostname") or "").strip().lower()
+        ip_timestamps, requested_hostnames, sorted_uids = self.observation_scope(
+            indexer, ip, selected_hostname
         )
+        if selected_hostname and selected_hostname not in requested_hostnames:
+            return make_response("Unknown requested hostname for this IP", 404)
 
         index = client.index("plum")
         port_groups = {}
         unmapped_documents = []
         warnings = []
-        requested_hostnames = set()
-        has_ip_only_filter = False
+        ip_tags = set()
         for uid in sorted_uids:
             uid_timestamps = ip_timestamps.get(uid, {})
             uid_tags = set()
@@ -2367,6 +2947,7 @@ class IPDetailView(BaseView):
                 for tag_value in tag_values:
                     uid_tags.add(tag_value)
             uid_tags = sorted(uid_tags, key=str.lower)
+            ip_tags.update(uid_tags)
             first_seen = self._safe_timestamp_to_display(
                 uid_timestamps.get("first_seen")
             )
@@ -2397,8 +2978,7 @@ class IPDetailView(BaseView):
                     continue
                 hostname = str(hostname_entry.get("name") or "").strip()
                 if hostname:
-                    requested_hostnames.add(hostname)
-                    user_hostnames.append(hostname)
+                    user_hostnames.append(hostname.lower())
             ports = body.get("ports") or []
             if not ports:
                 unmapped_documents.append(
@@ -2439,6 +3019,8 @@ class IPDetailView(BaseView):
                         "first_seen": first_seen,
                         "last_seen": last_seen,
                         "tab_label": last_seen or first_seen or uid,
+                        "first_seen_epoch": uid_timestamps.get("first_seen"),
+                        "last_seen_epoch": uid_timestamps.get("last_seen"),
                         "timestamp_sort": uid_timestamps.get("last_seen")
                         or uid_timestamps.get("first_seen")
                         or 0,
@@ -2449,10 +3031,9 @@ class IPDetailView(BaseView):
                         "user_hostnames": sorted(set(user_hostnames), key=str.lower),
                         "tags": uid_tags,
                         "port": port,
+                        "web_scheme": port_web_scheme(port, uid_tags),
                     }
                 )
-                if not user_hostnames:
-                    has_ip_only_filter = True
         port_cards = []
         for group in port_groups.values():
             group["service_names"] = sorted(group["service_names"])
@@ -2463,19 +3044,37 @@ class IPDetailView(BaseView):
             port_cards.append(group)
         port_cards.sort(key=self._port_group_sort_key)
 
-        return self.render_template(
+        first_dates = [
+            ip_timestamps[uid].get("first_seen")
+            for uid in sorted_uids
+            if ip_timestamps[uid].get("first_seen") is not None
+        ]
+        last_dates = [
+            ip_timestamps[uid].get("last_seen")
+            for uid in sorted_uids
+            if ip_timestamps[uid].get("last_seen") is not None
+        ]
+        fragment = request.args.get("fragment") == "1"
+        html = self.render_template(
             "ip_detail.html",
+            fragment=fragment,
+            selected_hostname=selected_hostname,
             ip=ip,
             total_documents=len(sorted_uids),
             total_ports=len(port_cards),
-            first_seen=(self._safe_timestamp_to_display(ip_timestamps.get("min_seen"))),
-            last_seen=(self._safe_timestamp_to_display(ip_timestamps.get("max_seen"))),
+            first_seen=self._safe_timestamp_to_display(min(first_dates, default=None)),
+            last_seen=self._safe_timestamp_to_display(max(last_dates, default=None)),
             port_cards=port_cards,
             unmapped_documents=unmapped_documents,
-            has_ip_only_filter=has_ip_only_filter,
             requested_hostnames=sorted(requested_hostnames, key=str.lower),
+            ip_tags=sorted(ip_tags, key=str.lower),
             warnings=warnings,
         )
+        if fragment:
+            response = jsonify(hostname=selected_hostname, html=html)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return html
 
 
 class BulkImportForm(FlaskForm):
@@ -2496,9 +3095,19 @@ class TargetsView(ModelView):
     add_template = "add_targetsview.html"
     edit_template = "edit_targetsview.html"
     list_template = "list_targetsview.html"
-    list_columns = ["value", "description", "last_scan", "active", "working"]
+    list_columns = ["id", "value", "description", "last_scan", "active", "working"]
     search_columns = ["value", "description", "active", "working", "scanprofiles"]
     label_columns = {
+        "id": "ID",
+        "created_at": "Inserted at (UTC)",
+        "target_type": "Target type",
+        "network_asn_display": "ASN",
+        "network_as_name": "AS name",
+        "network_country_alpha3": "Country alpha-3",
+        "network_country_numeric": "Country numeric code",
+        "network_latitude": "Latitude (country average)",
+        "network_longitude": "Longitude (country average)",
+        "network_updated_at": "Network last refreshed (UTC)",
         "value": "CIDR/Host",
         "scanprofiles": "Scan profiles",
         "duration_html": "Scan Cycle",
@@ -2534,6 +3143,8 @@ class TargetsView(ModelView):
     edit_columns = ["value", "description", "active", "working", "scanprofiles"]
     show_columns = [
         "value",
+        "created_at",
+        "target_type",
         "description",
         "active",
         "working",
@@ -2569,6 +3180,36 @@ class TargetsView(ModelView):
     @staticmethod
     def _json_results(items):
         return jsonify([{"id": item.id, "text": str(item)} for item in items])
+
+    @expose("/show/<pk>")
+    @has_access
+    def show(self, pk):
+        """Render immediately; the browser fetches external information separately."""
+        return super().show(pk)
+
+    @expose("/network_info/<int:pk>", methods=["GET"])
+    @has_access
+    @permission_name("show")
+    def network_info(self, pk):
+        """Use show permissions and row filters for an asynchronous source lookup."""
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is None:
+            abort(404)
+        value = item.value
+        db.session.rollback()
+        if target_type(value) == "FQDN":
+            return jsonify(
+                disabled=True,
+                message="IP and AS information is unavailable for FQDN targets.",
+            )
+        try:
+            cached = ip_information(value)
+            info = parse_network_information(cached["value"])
+        except (requests.RequestException, ValueError, LookupBusy):
+            return jsonify(error="IP and AS lookup failed; try again later."), 502
+        response = jsonify(info=info, cache=cache_metadata(cached))
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @expose("/scanprofiles_remote", methods=["GET"])
     @has_access
@@ -2609,21 +3250,76 @@ class TargetsView(ModelView):
         single=False,
     )
     def mulrreslovewhois(self, items):
-        """
-        Implement Raise priority of job to 4.
-        """
-        if isinstance(items, list):
-            # Raise N record
-            for item in items:
-                info = get_asn_description_for_ip(item.value)
-                item.description = info
-        else:
-            # Raise Un tag
-            info = get_asn_description_for_ip(item.value)
-            item.description = info
-        db.session.commit()
+        """Force selected targets through the shared structured lookup."""
+        if not self.appbuilder.sm.has_access(
+            "mulresolvehwois", self.class_permission_name
+        ):
+            abort(403)
+        self._validate_network_refresh_request()
+        selected = items if isinstance(items, list) else [items]
+        target_ids = [item.id for item in selected]
+        db.session.rollback()
+        self._refresh_network_ids(target_ids)
         self.update_redirect()
         return redirect(self.get_redirect())
+
+    @staticmethod
+    def _validate_network_refresh_request():
+        """Require a form POST token for every mutation path."""
+        if request.method != "POST":
+            abort(405)
+        try:
+            validate_csrf(request.form.get("csrf_token"))
+        except ValidationError:
+            abort(400, description="Invalid CSRF token")
+
+    @staticmethod
+    def _refresh_network_ids(target_ids):
+        """Report per-target outcomes without exposing backend error details."""
+        for target_id in target_ids:
+            try:
+                outcome = refresh_target_network(target_id, force=True)
+            except Exception:  # pylint: disable=broad-exception-caught
+                logger.exception("Network refresh failed for target %s", target_id)
+                outcome = "failed"
+            flash(
+                f"Target {target_id}: network refresh {outcome}",
+                "success" if outcome == "updated" else "warning",
+            )
+
+    @expose("/refresh_network/<int:pk>", methods=["POST"])
+    @has_access
+    def refresh_network(self, pk):
+        """Force an immediate refresh from target details, with FAB permission."""
+        self._validate_network_refresh_request()
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is None:
+            abort(404)
+        db.session.rollback()
+        self._refresh_network_ids([pk])
+        return redirect(url_for("TargetsView.show", pk=pk))
+
+    @expose("/whois/<int:pk>", methods=["GET"])
+    @has_access
+    def whois(self, pk):
+        """Return WHOIS text for a stored IP/CIDR or FQDN target."""
+        item = self.datamodel.get(pk, self._base_filters)
+        if item is None:
+            abort(404)
+        try:
+            if item.target_type == "FQDN":
+                query, result = lookup_domain_whois(item.value)
+            else:
+                cached = network_whois(item.value)
+                return jsonify(
+                    query=item.value,
+                    result=cached["value"],
+                    cache=cache_metadata(cached),
+                )
+        except WhoisLookupError as error:
+            logger.warning("WHOIS lookup failed for target %s: %s", pk, error)
+            return jsonify(error="WHOIS lookup failed; try again later"), 502
+        return jsonify(query=query, result=result)
 
     @action(
         "muldelete", "Delete Job", "Delete all Really?", "fa-trash-can", single=False
@@ -2713,7 +3409,7 @@ class TargetsView(ModelView):
             ip_clean = ip.strip("\n ,;'\"")  # remove surrounding "Spc ,; and all quotes
             if ip_clean == "":
                 pass
-            if is_valid_fqdn(ip_clean):
+            if is_valid_fqdn(ip_clean, app.config.get("TLDADD", ())):
                 # If we got an FQDN too.
                 new_target = Targets()
                 new_target.description = "Bulk Import"
@@ -2776,7 +3472,8 @@ class BotsView(ModelView):
     """
 
     datamodel = SQLAInterface(Bots)
-    list_columns = ["uid", "agent_version", "ip", "country", "last_seen"]
+    list_columns = ["uid", "agent_version", "ip", "country", "active", "last_seen"]
+    edit_columns = ["active"]
 
 
 class JobsView(ModelView):
@@ -3097,6 +3794,12 @@ class CollectedHeadersView(ModelView):
         return self
 
 
+class TagRulesListWidget(ListWidget):
+    """Tag-rule list with reindex in the per-row CRUD action group."""
+
+    template = "tagrules_list_widget.html"
+
+
 class TagRulesView(ModelView):
     """
     CRUD interface for search-backed tagging rules.
@@ -3104,6 +3807,8 @@ class TagRulesView(ModelView):
 
     datamodel = SQLAInterface(TagRules)
     list_template = "list_tagrulesview.html"
+    show_template = "show_tagrulesview.html"
+    list_widget = TagRulesListWidget
     list_columns = [
         "active_html",
         "tags_html",
@@ -3112,10 +3817,10 @@ class TagRulesView(ModelView):
     ]
     show_columns = [
         "active",
+        "uuid",
         "name",
         "description",
         "query",
-        "tags",
         "tags_html",
         "created_at_html",
         "updated_at_html",
@@ -3126,6 +3831,7 @@ class TagRulesView(ModelView):
     base_order = ("updated_at", "desc")
     label_columns = {
         "id": "ID",
+        "uuid": "UUID",
         "name": "Rule Name",
         "name_html": "Rule Name",
         "active": "Active",
@@ -3141,6 +3847,8 @@ class TagRulesView(ModelView):
     }
 
     def _normalize_tag_rule_item(self, item):
+        if not item.uuid:
+            item.uuid = str(uuid.uuid4())
         item.name = str(item.name or "").strip()
         if not item.name:
             raise ValueError("Rule name is required")
@@ -3166,6 +3874,59 @@ class TagRulesView(ModelView):
     def pre_update(self, item):
         return self._normalize_tag_rule_item(item)
 
+    def post_add(self, item):
+        _ = item
+        reconciliation = ensure_rule_required_headers(db.session)
+        self._flash_header_reconciliation(reconciliation)
+
+    def post_update(self, item):
+        _ = item
+        reconciliation = ensure_rule_required_headers(db.session)
+        self._flash_header_reconciliation(reconciliation)
+
+    def post_delete(self, item):
+        _ = item
+        self._flash_header_reconciliation(ensure_rule_required_headers(db.session))
+
+    @staticmethod
+    def _flash_header_reconciliation(summary):
+        """Explain dynamic header collection changes and conservative cleanup."""
+        enabled = summary.get("enabled_presence", []) + summary.get(
+            "enabled_values", []
+        )
+        if enabled:
+            flash(
+                "Enabled header collection for active tag rules: "
+                + ", ".join(sorted(set(enabled)))
+                + ". Existing captures will be updated automatically.",
+                "warning",
+            )
+        if summary.get("ambiguous"):
+            flash(
+                "Human validation required for non-exact header references: "
+                + ", ".join(summary["ambiguous"]),
+                "warning",
+            )
+        if summary.get("cleanup_candidates"):
+            flash(
+                "Unused header collection candidates (not removed automatically): "
+                + ", ".join(summary["cleanup_candidates"]),
+                "warning",
+            )
+
+    @expose("/reindex_current")
+    @has_access
+    def reindex_current(self):
+        """Read scheduler-owned state without starting or recovering work."""
+        indexer = KVrocksIndexer(
+            app.config["KVROCKS_HOST"],
+            app.config["KVROCKS_PORT"],
+            socket_timeout=5,
+        )
+        return jsonify(
+            dict(reconciliation_status(indexer.raw), pacing=pacing_status(indexer.raw))
+        )
+
     @action(
         "muldelete",
         "Delete Tag Rules",
@@ -3178,6 +3939,7 @@ class TagRulesView(ModelView):
         Delete selected tag rules from the list checkbox action.
         """
         self.datamodel.delete_all(items)
+        self._flash_header_reconciliation(ensure_rule_required_headers(db.session))
         self.update_redirect()
         return redirect(self.get_redirect())
 
@@ -3186,9 +3948,12 @@ class TagRulesView(ModelView):
         version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         rules = db.session.query(TagRules).order_by(TagRules.name).all()
         for rule in rules:
-            filename = rule.name.replace(" ", "_").lower() + ".yaml"
+            # Names are user-facing metadata and may duplicate; UUID is identity.
+            filename = f"{rule.uuid}.yaml"
             doc = {
+                "name": rule.name,
                 "description": rule.description,
+                "uuid": rule.uuid,
                 "query": rule.query,
                 "tags": rule.tags_list(),
                 "version": version,
@@ -3201,6 +3966,7 @@ class TagRulesView(ModelView):
         """Export all tag rules as individual YAML files in the /tags directory."""
         tags_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "tags",
             "tags",
         )
         os.makedirs(tags_dir, exist_ok=True)
@@ -3229,6 +3995,14 @@ class TagRulesView(ModelView):
             as_attachment=True,
             download_name=f"tagrules_{version}.zip",
         )
+
+
+def validate_report_query_field(_form, field):
+    """Attach offline query errors to the existing report form field."""
+    try:
+        field.data = validate_report_query(field.data, KVSearchView())
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
 
 
 class ReportsView(ModelView):
@@ -3276,9 +4050,24 @@ class ReportsView(ModelView):
     edit_columns = add_columns
     add_form_extra_fields = {
         "active": BooleanField("Report active", default=False),
+        "query": TextAreaField(
+            "Search query", validators=[validate_report_query_field]
+        ),
+        "schedule_type": SelectField(
+            "Schedule type",
+            choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
+            default="monthly",
+        ),
     }
     edit_form_extra_fields = {
         "active": BooleanField("Report active"),
+        "query": TextAreaField(
+            "Search query", validators=[validate_report_query_field]
+        ),
+        "schedule_type": SelectField(
+            "Schedule type",
+            choices=[("monthly", "Monthly"), ("weekly", "Weekly")],
+        ),
     }
     search_columns = ["name", "description", "query", "emails", "active"]
     base_order = ("updated_at", "desc")
@@ -3291,7 +4080,7 @@ class ReportsView(ModelView):
         "emails": "Reporting emails",
         "emails_html": "Reporting emails",
         "schedule_type": "Schedule type",
-        "schedule_day": "Day of month",
+        "schedule_day": "Day (monthly: 1-28; weekly: 1=Monday, 7=Sunday)",
         "schedule_hour": "Hour UTC",
         "schedule_html": "Schedule",
         "last_run_at": "Last report",
@@ -3302,7 +4091,9 @@ class ReportsView(ModelView):
     }
 
     def _normalize_report_item(self, item):
+        query = validate_report_query(item.query, KVSearchView())
         normalize_report_fields(item)
+        item.query = query
         item.active = bool(item.active)
         item.next_run_at = compute_next_report_run(item)
         return item
@@ -3378,6 +4169,7 @@ class ReportsView(ModelView):
                 db.session.remove()
 
     @staticmethod
+    @pinned_read
     def _build_report(report, run_at=None, progress_callback=None):
         def update_progress(step, **kwargs):
             if progress_callback:
@@ -3570,10 +4362,41 @@ class ReportsView(ModelView):
         return self.render_template(
             "report_preview.html",
             report=report,
-            markdown=state.get("markdown", ""),
+            report_html=Markup(render_report_markdown_html(state.get("markdown", ""))),
             from_dt=state.get("from_dt"),
             to_dt=state.get("to_dt"),
+            pdf_url=url_for("ReportsView.preview_pdf", job_id=job_id),
         )
+
+    @expose("/preview_pdf/<string:job_id>")
+    @has_access
+    def preview_pdf(self, job_id):
+        """Download a completed report preview as a PDF."""
+        state = get_report_preview_state(job_id)
+        if state is None:
+            return make_response("Preview job not found", 404)
+        if not self._preview_state_allowed(state):
+            return make_response("Forbidden", 403)
+        if state.get("status") != "done":
+            return make_response("Report preview is not complete", 409)
+
+        report = (
+            db.session.query(Reports)
+            .filter(Reports.id == state.get("report_id"))
+            .one_or_none()
+        )
+        if report is None:
+            return make_response("Report not found", 404)
+
+        filename = re.sub(r"[^A-Za-z0-9._-]+", "_", str(report.name)).strip("._")
+        response = make_response(
+            generate_report_pdf(report.name, state.get("markdown", ""))
+        )
+        response.headers["Content-Type"] = "application/pdf"
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="{filename or "report"}.pdf"'
+        )
+        return response
 
     @expose("/preview/<int:pk>")
     @has_access
@@ -3594,7 +4417,7 @@ class ReportsView(ModelView):
         return self.render_template(
             "report_preview.html",
             report=report,
-            markdown=markdown,
+            report_html=Markup(render_report_markdown_html(markdown)),
             from_dt=from_dt,
             to_dt=to_dt,
         )
@@ -3641,6 +4464,7 @@ class ScanprofilesView(ModelView):
         "priority",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
         "current_cycle_summary_html",
     ]
@@ -3656,6 +4480,7 @@ class ScanprofilesView(ModelView):
         "priority",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
     ]
     edit_columns = [
@@ -3664,6 +4489,7 @@ class ScanprofilesView(ModelView):
         "priority",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
     ]
     show_columns = [
@@ -3673,6 +4499,7 @@ class ScanprofilesView(ModelView):
         "priority_retag_pending",
         "ports",
         "nses",
+        "nmap_additional_params",
         "apply_to_all",
     ]
     add_form_extra_fields = {
@@ -3711,6 +4538,7 @@ class ScanprofilesView(ModelView):
     }
     label_columns = {
         "nses": "Nse Scripts",
+        "nmap_additional_params": "nmap additional params",
         "apply_to_all": "Apply to all scans",
         "scan_cycle_minutes": "Scan Frequency (min)",
         "priority_retag_pending": "Priority retag pending",
@@ -4033,7 +4861,7 @@ class StatsView(BaseView):
             target_value = str(row.value or "").strip()
             if not target_value:
                 continue
-            if is_valid_fqdn(target_value):
+            if is_valid_fqdn(target_value, app.config.get("TLDADD", ())):
                 fqdn_count += 1
                 total_hosts_to_scan += 1
                 continue
@@ -4051,6 +4879,9 @@ class StatsView(BaseView):
             "fqdn_count": fqdn_count,
             "cidr_host_count": cidr_host_count,
             "total_hosts_to_scan": total_hosts_to_scan,
+            "scanned_port_count": (
+                db.session.query(Ports.id).join(Ports.scanprofiles).distinct().count()
+            ),
             "kv_scanned_host_count": 0,
             "kv_scan_result_count": 0,
         }
@@ -4109,3 +4940,4 @@ appbuilder.add_view(
 )
 db.create_all()
 ensure_default_collected_headers(db.session)
+ensure_rule_required_headers(db.session)

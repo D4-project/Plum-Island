@@ -1,7 +1,0 @@
-description: Windows OpenSSH
-query: banner.bg:ssh-2.0-openssh_for_windows_
-tags:
-- vendor:windows
-- proto:ssh
-- product:openssh
-version: 20260520T133458Z

@@ -1,7 +1,0 @@
-description: MOBOTIX Camera
-query: http_favicon_mmhash:661332347 OR http_headval:www-authenticate.lk:"mobotix camera user"
-tags:
-- product:mobotix
-- type:camera
-- vendor:mobotix
-version: 20260520T133458Z

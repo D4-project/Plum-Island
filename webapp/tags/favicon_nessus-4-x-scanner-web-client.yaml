@@ -1,6 +1,0 @@
-description: Nessus 4.x Scanner Web Client
-query: http_favicon_md5:E298E00B2FF6340343DDF2FC6212010B
-tags:
-- product:nessus-4-x-scanner-web-client
-- vendor:nessus
-version: 20260520T133458Z

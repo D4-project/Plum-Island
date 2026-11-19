@@ -1,6 +1,0 @@
-description: nagios (3.0.2)
-query: http_favicon_md5:1C4201C7DA53D6C7E48251D3A9680449
-tags:
-- product:nagios-3-0-2
-- vendor:nagios
-version: 20260520T133458Z

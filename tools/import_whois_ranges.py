@@ -46,8 +46,8 @@ SOURCES = [
     },
     {
         "name": "arin",
-        "url": "ftp://ftp.arin.net/pub/rr/arin.db",
-        "enabled": False,
+        "url": "https://ftp.arin.net/pub/rr/arin.db.gz",
+        "enabled": True,
     },
     {
         "name": "lacnic-delegated",
@@ -57,7 +57,7 @@ SOURCES = [
     {
         "name": "ripe-inetnum",
         "url": "ftp://ftp.ripe.net/ripe/dbase/split/ripe.db.inetnum.gz",
-        "enabled": True,
+        "enabled": False,
     },
     {
         "name": "ripe-inet6num",
@@ -335,6 +335,9 @@ def import_ranges_to_plum(ranges):
         logger.debug("Plum import result %s: %s", cidr, result)
 
     logger.info("Plum import submitted CIDR: %d", submitted)
+    logger.info(
+        "New CIDRs timestamped by server; network enrichment queued without changing descriptions."
+    )
     logger.info("Plum import skipped CIDR: %d", skipped)
 
 

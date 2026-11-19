@@ -4,6 +4,7 @@ This script do a full export of Plum IP database of the meilli instance
 Each report is save using the UID
 """
 
+import argparse
 import os
 import json
 import time
@@ -13,20 +14,6 @@ import yaml
 # Configuration
 PAGE_SIZE = 5000
 OUTPUT_DIR = "meili_dump"
-
-
-with open("config.yaml", "r") as f:
-    config = yaml.safe_load(f) or {}
-IN_MEILI_URL = config.get("IN_MEILI_URL")
-IN_MEILI_API_KEY = config.get("IN_MEILI_API_KEY")
-INDEX_NAME = config.get("INDEX_NAME")
-
-if not IN_MEILI_URL:
-    raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
-
-# Init client
-client = meilisearch.Client(IN_MEILI_URL, IN_MEILI_API_KEY)
-index = client.index(INDEX_NAME)
 
 
 def save_document(doc):
@@ -42,10 +29,27 @@ def save_document(doc):
         json.dump(dict(doc), file2save, ensure_ascii=False, indent=2)
 
 
-def main():
+def main(argv=None):
     """
     Iterate the db and collect a bunch of document
     """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--do-export", action="store_true", help="Export the configured Meilisearch index"
+    )
+    args = parser.parse_args(argv)
+    if not args.do_export:
+        parser.print_help()
+        return 0
+
+    with open("config.yaml", "r", encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file) or {}
+    meili_url = config.get("IN_MEILI_URL")
+    if not meili_url:
+        raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
+    client = meilisearch.Client(meili_url, config.get("IN_MEILI_API_KEY"))
+    index = client.index(config.get("INDEX_NAME"))
+
     offset = 0
     total_fetched = 0
 
@@ -66,7 +70,8 @@ def main():
         time.sleep(0.2)
 
     print(f"\nTotal documents exported : {total_fetched}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

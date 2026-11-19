@@ -1,0 +1,50 @@
+<div class="search-query-examples" id="scan-query-help" hidden>
+    <div class="search-examples-heading">
+        Query examples
+        <button type="button" class="search-helper-toggle" data-search-helper-toggle
+                title="Switch keywords and tags" aria-label="Switch keywords and tags"
+                aria-controls="search-keyword-table search-tag-table">
+            <i class="fa fa-exchange" aria-hidden="true"></i>
+        </button>
+        {% include 'search_examples_toggle.html' %}
+    </div>
+    <div class="search-examples-content">
+    <div class="query-modifier-examples">
+        <div>
+            <h3>Combine filters</h3>
+            <p>Match scans with port 443 and an HTTP server containing <code>nginx</code>.</p>
+            <button type="button" class="query-example-button" data-query-example="port:443 AND http_server.lk:nginx"><code>port:443 AND http_server.lk:nginx</code></button>
+        </div>
+        <div>
+            <h3>Match either filter</h3>
+            <p>Match scans with port 443 or port 22.</p>
+            <button type="button" class="query-example-button" data-query-example="port:443 OR port:22"><code>port:443 OR port:22</code></button>
+        </div>
+        <div>
+            <h3>Group alternatives</h3>
+            <p>Match nginx on port 443, or match port 22. Parentheses keep each group together.</p>
+            <button type="button" class="query-example-button" data-query-example="(port:443 AND http_server.lk:nginx) OR (port:22)"><code>(port:443 AND http_server.lk:nginx) OR (port:22)</code></button>
+        </div>
+        <div>
+            <h3>Exclude matches</h3>
+            <p>Match port 443, excluding scans whose HTTP server contains <code>nginx</code>.</p>
+            <button type="button" class="query-example-button" data-query-example="port:443 AND NOT http_server.lk:nginx"><code>port:443 AND NOT http_server.lk:nginx</code></button>
+        </div>
+        <div>
+            <h3>Starts with</h3>
+            <p><code>.bg</code> / <code>.begin</code>: starts with <code>nginx</code>. Matches <code>nginx/1.26</code>, but not <code>custom-nginx</code>.</p>
+            <button type="button" class="query-example-button" data-query-example="http_server.bg:nginx"><code>http_server.bg:nginx</code></button>
+        </div>
+        <div>
+            <h3>Contains</h3>
+            <p><code>.lk</code> / <code>.like</code>: contains <code>nginx</code> anywhere. Matches both <code>nginx/1.26</code> and <code>custom-nginx</code>.</p>
+            <button type="button" class="query-example-button" data-query-example="http_server.lk:nginx"><code>http_server.lk:nginx</code></button>
+        </div>
+        <div>
+            <h3>Search an HTTP header value</h3>
+            <p>Match collected <code>x-powered-by</code> header values containing <code>php</code>, such as <code>php/8.2</code>. The modifier applies to the value.</p>
+            <button type="button" class="query-example-button" data-query-example="http_headval:x-powered-by.lk:php"><code>http_headval:x-powered-by.lk:php</code></button>
+        </div>
+    </div>
+    </div>
+</div>

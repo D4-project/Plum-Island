@@ -1,0 +1,636 @@
+{% extends "appbuilder/base.html" %}
+{% import 'appbuilder/general/lib.html' as lib %}
+
+{% block content %}
+<script src="{{ url_for('static', filename='js/lookup_cache.js') }}"></script>
+{{ lib.panel_begin(title, "show") }}
+
+<ul class="nav nav-tabs">
+    <li class="active"><a href="#Home" data-toggle="tab">{{ _("Detail") }}</a></li>
+    {% if related_views is defined %}
+        {% for view in related_views %}
+            <li>
+                <a href="#{{view.__class__.__name__}}" data-toggle="tab">{{view.title}}</a>
+            </li>
+        {% endfor %}
+    {% endif %}
+    <li><a id="target-results-tab" href="#TargetResults" data-toggle="tab">Results</a></li>
+    {% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
+        <li><a id="target-whois-tab" href="#TargetWhois" data-toggle="tab">Whois</a></li>
+    {% endif %}
+</ul>
+<div class="tab-content">
+    {% if related_views is defined %}
+    {% for view in related_views %}
+        <div id="{{view.__class__.__name__}}" class="tab-pane">
+            {{ widgets.get('related_views')[loop.index - 1](pk = pk)|safe }}
+        </div>
+    {% endfor %}
+    {% endif %}
+{% block show_form %}
+    <div id="Home" class="tab-pane active">
+        {{ widgets.get('show')()|safe }}
+<div class="panel panel-default" data-target-network-url="{{ url_for('TargetsView.network_info', pk=pk) }}">
+  <div class="panel-heading">IP and AS information</div>
+  <div class="panel-body">
+    <p id="target-network-status" role="status"><i class="fa fa-spinner fa-spin" aria-hidden="true"></i> Loading IP and AS information…</p>
+    <p id="target-network-cache" class="text-muted small"></p>
+    <dl id="target-network-result"></dl>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='js/target_network_info.js') }}"></script>
+
+
+{% if appbuilder.sm.has_access('can_refresh_network', 'TargetsView') %}
+<form class="plum-target-refresh-form" action="{{ url_for('TargetsView.refresh_network', pk=pk) }}" method="post" hidden>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit" class="btn btn-default btn-sm" title="Refresh network info" aria-label="Refresh network info">
+    <i class="fa fa-refresh" aria-hidden="true"></i>
+  </button>
+</form>
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+  const refreshForm = document.querySelector('.plum-target-refresh-form');
+  const backLabel = {{ _("Back")|tojson }};
+  if (!refreshForm) return;
+  const backButton = Array.from(document.querySelectorAll('a.btn, button.btn'))
+    .find(button => button.textContent.trim() === backLabel);
+  if (backButton) {
+    backButton.insertAdjacentElement('afterend', refreshForm);
+    refreshForm.hidden = false;
+  }
+})();
+</script>
+{% endif %}
+
+<div class="plum-target-show-panels">
+
+<div class="panel panel-info">
+  <div class="panel-heading">
+    <h4 class="panel-title">Profile Scan Stats</h4>
+  </div>
+  <div class="panel-body">
+    {% set profile_stats = get_target_profile_stats(pk) %}
+    {% if profile_stats %}
+    <div class="table-responsive">
+      <table class="table table-condensed table-hover">
+        <thead>
+          <tr>
+            <th>Profile</th>
+            <th>Frequency (min)</th>
+            <th>Apply All</th>
+            <th>Working</th>
+            <th>Last Scan</th>
+            <th>Previous Scan</th>
+            <th>Cycle</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in profile_stats %}
+          <tr>
+            <td><a href="{{ url_for('ScanprofilesView.show', pk=row.profile_id) }}">{{ row.profile_name }}</a></td>
+            <td>{{ row.scan_cycle_minutes }}</td>
+            <td>{{ row.apply_to_all }}</td>
+            <td>{{ row.working }}</td>
+            <td>{{ row.last_scan or '-' }}</td>
+            <td>{{ row.last_previous_scan or '-' }}</td>
+            <td>{{ row.duration }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info" role="alert">No scan profile applies to this target.</div>
+    {% endif %}
+</div>
+</div>
+
+    </div>
+    </div>
+
+    <div id="TargetResults" class="tab-pane">
+    <div class="plum-target-show-panels">
+<div class="panel panel-primary">
+  <div class="panel-heading">
+    <h4 class="panel-title ">Results of last scans</h4>
+  </div>
+  <div class="panel-body" id="addrAccordion">
+<div id="info" class="mt-2"></div>
+<div id="target-search-spinner" class="target-search-status mt-1" role="status" aria-live="polite" hidden>
+  <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+  <span>Searching...</span>
+</div>
+<div id="msg_error" class="panel-group mt-2"></div>
+<div id="hits" class="panel-group mt-2"></div>
+<div id="load-more-container" class="mt-2"></div>
+
+<script src="{{ url_for('static', filename='themes/plum/ip_tag_enrichment.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+<script>
+const targetSearchQuery = {{ get_target_value(pk) | tojson }};
+const targetRequestedHostname = {{ get_target_requested_hostname(pk) | tojson }};
+const targetSearchTimeRange = {{ get_target_search_time_range(pk) | tojson }};
+const TARGET_SEARCH_PAGE_SIZE = 100;
+const MAX_TARGET_SEARCH_WINDOW_DAYS = 4096;
+const TARGET_SEARCH_WINDOW_SECONDS = 86400;
+let targetSearchState = null;
+let targetTagEnricher = null;
+
+async function readJsonResponse(res) {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+        return await res.json();
+    }
+
+    const rawText = await res.text();
+    const snippet = rawText.trim().slice(0, 300) || `HTTP ${res.status}`;
+    throw new Error(snippet);
+}
+
+function renderTargetIpTags(ip, tags) {
+    const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
+    window.renderIpTagBadges(target, tags);
+}
+
+targetTagEnricher = window.createIpTagEnricher({
+    readJsonResponse,
+    renderTags: renderTargetIpTags
+});
+
+function copyIpToClipboard(ip, triggerEl) {
+    const markCopied = () => {
+        if (!triggerEl) {
+            return;
+        }
+        const originalTitle = triggerEl.getAttribute('title') || 'Copy IP';
+        triggerEl.classList.add('copied');
+        triggerEl.setAttribute('title', 'Copied');
+        setTimeout(() => {
+            triggerEl.classList.remove('copied');
+            triggerEl.setAttribute('title', originalTitle);
+        }, 1200);
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(ip).then(markCopied).catch(() => {});
+        return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = ip;
+    textarea.className = 'plum-clipboard-fallback';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+        document.execCommand('copy');
+        markCopied();
+    } finally {
+        document.body.removeChild(textarea);
+    }
+}
+
+let targetSearchStarted = false;
+$('#target-results-tab').on('shown.bs.tab', async () => {
+    if (targetSearchStarted) return;
+    targetSearchStarted = true;
+    await search();
+});
+
+function formatProcessingTime(milliseconds) {
+    return `${Number(milliseconds || 0).toFixed(3)}ms`;
+}
+
+function getTargetSearchTotalDays() {
+    const fromTs = Number(targetSearchTimeRange.from_ts);
+    const toTs = Number(targetSearchTimeRange.to_ts);
+    if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs < fromTs) {
+        return null;
+    }
+    return Math.max(1, Math.ceil((toTs - fromTs + 1) / TARGET_SEARCH_WINDOW_SECONDS));
+}
+
+function setTargetSearchLoading(isLoading, message = 'Searching...') {
+    const spinner = document.getElementById('target-search-spinner');
+    if (!spinner) {
+        return;
+    }
+    const messageEl = spinner.querySelector('span');
+    if (messageEl) {
+        messageEl.textContent = message;
+    }
+    spinner.hidden = !isLoading;
+}
+
+function setTargetLoadMoreLoading() {
+    const container = document.getElementById('load-more-container');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = `
+        <span class="target-search-status text-muted" role="status" aria-live="polite">
+            <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+            <span>Loading more...</span>
+        </span>
+    `;
+}
+
+function renderTargetLoadMoreButton() {
+    const container = document.getElementById('load-more-container');
+    if (!container) {
+        return;
+    }
+    container.innerHTML = '';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-default';
+    button.innerHTML = '<i class="fa fa-plus" aria-hidden="true"></i> Load more';
+    button.addEventListener('click', () => loadNextTargetResults(true));
+    container.appendChild(button);
+}
+
+function renderTargetSearchSummary(data, hasMore) {
+    const infoDiv = document.getElementById('info');
+    if (!infoDiv || !targetSearchState) {
+        return;
+    }
+
+    const time = formatProcessingTime(targetSearchState.processingTimeMs);
+    const totalDays = getTargetSearchTotalDays();
+    let daySuffix = '';
+    if (totalDays !== null) {
+        const effectiveDays = hasMore
+            ? Math.min(targetSearchState.scannedDays || 0, totalDays)
+            : totalDays;
+        const daySummary = effectiveDays >= totalDays
+            ? `${totalDays} days`
+            : `${effectiveDays}/${totalDays} days`;
+        daySuffix = ` for ${daySummary}`;
+    }
+
+    const uidCount = data.uid_count !== undefined && data.uid_count !== null
+        ? data.uid_count
+        : (targetSearchState.uidCount || 0);
+    const ipCount = data.ip_count !== undefined && data.ip_count !== null
+        ? data.ip_count
+        : (targetSearchState.ipCount || 0);
+    const prefix = hasMore && targetSearchState.renderedCount > 0
+        ? 'Showing first'
+        : 'Showing';
+    infoDiv.textContent = `${prefix} ${targetSearchState.renderedCount} results in ${time}${daySuffix} out of ${uidCount} scans on ${ipCount} hosts.`;
+}
+
+function showTargetSearchWarning(message) {
+    const errorDiv = document.getElementById('msg_error');
+    if (!errorDiv) {
+        return;
+    }
+    errorDiv.textContent = '';
+    const warning = document.createElement('div');
+    warning.className = 'alert alert-warning';
+    warning.setAttribute('role', 'alert');
+    warning.textContent = message || '';
+    errorDiv.appendChild(warning);
+}
+
+async function search() {
+    const hitsDiv = document.getElementById('hits');
+    const infoDiv = document.getElementById('info');
+    const errorDiv = document.getElementById('msg_error');
+    const loadMoreDiv = document.getElementById('load-more-container');
+
+    targetSearchState = {
+        searchId: null,
+        nextCursor: null,
+        windowDays: 1,
+        hasMore: true,
+        renderedCount: 0,
+        processingTimeMs: 0,
+        scannedDays: 0,
+        uidCount: 0,
+        ipCount: 0
+    };
+    targetTagEnricher.reset();
+
+    infoDiv.textContent = '';
+    errorDiv.textContent = '';
+    hitsDiv.innerHTML = '';
+    loadMoreDiv.innerHTML = '';
+    await loadNextTargetResults(false);
+}
+
+async function loadNextTargetResults(append) {
+    if (!targetSearchState || !targetSearchState.hasMore) {
+        return;
+    }
+
+    const hitsDiv = document.getElementById('hits');
+    const loadMoreDiv = document.getElementById('load-more-container');
+    const errorDiv = document.getElementById('msg_error');
+    let addedThisRun = 0;
+    let hasMore = targetSearchState.hasMore;
+    let lastData = null;
+
+    errorDiv.textContent = '';
+    loadMoreDiv.innerHTML = '';
+    setTargetSearchLoading(!append, 'Searching...');
+    if (append) {
+        setTargetLoadMoreLoading();
+    }
+
+    try {
+        while (addedThisRun < TARGET_SEARCH_PAGE_SIZE && hasMore) {
+            const remaining = TARGET_SEARCH_PAGE_SIZE - addedThisRun;
+            const cursorBefore = targetSearchState.nextCursor;
+            const params = new URLSearchParams({
+                q: targetSearchQuery,
+                limit: String(remaining),
+                window_days: String(targetSearchState.windowDays)
+            });
+            if (targetSearchTimeRange.from_ts && targetSearchTimeRange.to_ts) {
+                params.set('from_ts', String(targetSearchTimeRange.from_ts));
+                params.set('to_ts', String(targetSearchTimeRange.to_ts));
+            }
+            if (targetSearchState.searchId) {
+                params.set('search_id', targetSearchState.searchId);
+            }
+            if (targetSearchState.nextCursor !== null && targetSearchState.nextCursor !== undefined) {
+                params.set('cursor_ts', String(targetSearchState.nextCursor));
+            }
+
+            const res = await fetch(`/kvsearchview/query?${params.toString()}`);
+            const data = await readJsonResponse(res);
+            lastData = data;
+            const pagination = data.pagination || {};
+
+            targetSearchState.processingTimeMs += Number(data.processingTimeMs || 0);
+            targetSearchState.scannedDays += Number(pagination.scanned_days || 0);
+            targetSearchState.uidCount = data.uid_count;
+            targetSearchState.ipCount = data.ip_count;
+            targetSearchState.searchId = data.search_id || targetSearchState.searchId;
+
+            if (data.status === false) {
+                showTargetSearchWarning(data.msg_error || 'Search failed');
+                hasMore = false;
+                break;
+            }
+
+            const returnedIps = renderTargetResults(data.results || {}, targetSearchState.renderedCount, hitsDiv);
+            if (returnedIps.length > 0) {
+                targetSearchState.renderedCount += returnedIps.length;
+                addedThisRun += returnedIps.length;
+            }
+
+            hasMore = Boolean(pagination.has_more);
+            targetSearchState.nextCursor = pagination.next_cursor;
+
+            if (returnedIps.length === 0) {
+                targetSearchState.windowDays = Math.min(
+                    targetSearchState.windowDays * 2,
+                    MAX_TARGET_SEARCH_WINDOW_DAYS
+                );
+            } else if (pagination.stopped_in_window) {
+                targetSearchState.windowDays = Number(
+                    pagination.window_days || targetSearchState.windowDays || 1
+                );
+            } else {
+                targetSearchState.windowDays = 1;
+            }
+
+            renderTargetSearchSummary(data, hasMore);
+
+            if (!hasMore) {
+                break;
+            }
+            if (
+                targetSearchState.nextCursor === null
+                || targetSearchState.nextCursor === undefined
+                || String(targetSearchState.nextCursor) === String(cursorBefore)
+            ) {
+                break;
+            }
+
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+    } catch (error) {
+        console.error('Target search failed', error);
+        showTargetSearchWarning(`Search failed: ${error?.message || 'Unexpected error'}`);
+        if (!append) {
+            hitsDiv.innerHTML = '';
+        }
+        hasMore = false;
+    } finally {
+        targetSearchState.hasMore = hasMore;
+        setTargetSearchLoading(false);
+        loadMoreDiv.innerHTML = '';
+        if (lastData && lastData.status && hasMore) {
+            renderTargetLoadMoreButton();
+        }
+    }
+}
+
+function renderTargetResults(results, baseIndex, hitsDiv) {
+    const returnedIps = [];
+    Object.entries(results).forEach(([ip, uids], ipIndex) => {
+        const resultIndex = baseIndex + ipIndex;
+        returnedIps.push(ip);
+        const ipPanel = document.createElement('div');
+        ipPanel.className = 'panel panel-default';
+
+        const heading = document.createElement('div');
+        heading.className = 'panel-heading';
+        const titleRow = document.createElement('div');
+        titleRow.className = 'target-result-title-row';
+
+        const title = document.createElement('h4');
+        title.className = 'panel-title';
+        const ipLink = document.createElement('a');
+        ipLink.className = 'ip-address-link';
+        ipLink.href = `/ip/${encodeURIComponent(ip)}`;
+        ipLink.title = `Open details for ${ip}`;
+        ipLink.setAttribute('aria-label', `Open details for ${ip}`);
+        ipLink.textContent = ip;
+        title.appendChild(ipLink);
+        titleRow.appendChild(title);
+
+        const detailLink = document.createElement('a');
+        detailLink.className = 'target-ip-action';
+        detailLink.setAttribute('data-toggle', 'collapse');
+        detailLink.setAttribute('data-parent', '#hits');
+        detailLink.href = `#collapse-ip-${resultIndex}`;
+        detailLink.title = `Expand scan results for ${ip}`;
+        detailLink.setAttribute('aria-label', `Expand scan results for ${ip}`);
+        const detailIcon = document.createElement('i');
+        detailIcon.className = 'fa fa-info-circle';
+        detailIcon.setAttribute('aria-hidden', 'true');
+        detailLink.appendChild(detailIcon);
+        titleRow.appendChild(detailLink);
+
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.className = 'target-ip-action';
+        copyButton.dataset.ip = ip;
+        copyButton.title = `Copy ${ip}`;
+        copyButton.setAttribute('aria-label', `Copy ${ip}`);
+        copyButton.addEventListener('click', () => copyIpToClipboard(copyButton.dataset.ip, copyButton));
+        const copyIcon = document.createElement('i');
+        copyIcon.className = 'fa-regular fa-copy';
+        copyIcon.setAttribute('aria-hidden', 'true');
+        copyButton.appendChild(copyIcon);
+        titleRow.appendChild(copyButton);
+
+        const tagContainer = document.createElement('span');
+        tagContainer.className = 'search-ip-tags';
+        tagContainer.dataset.searchIpTags = ip;
+        tagContainer.hidden = true;
+        titleRow.appendChild(tagContainer);
+
+        heading.appendChild(titleRow);
+        ipPanel.appendChild(heading);
+
+        const collapse = document.createElement('div');
+        collapse.id = `collapse-ip-${resultIndex}`;
+        collapse.className = 'panel-collapse collapse';
+        const uidsDiv = document.createElement('div');
+        uidsDiv.className = 'panel-body';
+        uidsDiv.id = `uids-${resultIndex}`;
+        collapse.appendChild(uidsDiv);
+        ipPanel.appendChild(collapse);
+
+        if (targetRequestedHostname) {
+            const url = new URL(ipLink.getAttribute('href'), window.location.origin);
+            url.searchParams.set('hostname', targetRequestedHostname);
+            ipLink.setAttribute('href', `${url.pathname}${url.search}`);
+        }
+        hitsDiv.appendChild(ipPanel);
+
+        uids.forEach((uid, uidIndex) => {
+            const uidPanel = document.createElement('div');
+            uidPanel.className = 'panel panel-info';
+            const uidHeading = document.createElement('div');
+            uidHeading.className = 'panel-heading';
+            const uidTitle = document.createElement('h5');
+            uidTitle.className = 'panel-title';
+            const uidLink = document.createElement('a');
+            uidLink.href = '#';
+            uidLink.dataset.uid = uid;
+            uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
+            uidLink.textContent = uid;
+            uidLink.addEventListener('click', (event) => {
+                event.preventDefault();
+                loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+            });
+            uidTitle.appendChild(uidLink);
+            uidHeading.appendChild(uidTitle);
+            uidPanel.appendChild(uidHeading);
+
+            const uidBody = document.createElement('div');
+            uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
+            uidBody.className = 'panel-body';
+            uidBody.style.display = 'none';
+            uidPanel.appendChild(uidBody);
+            uidsDiv.appendChild(uidPanel);
+        });
+    });
+    targetTagEnricher.queue(results, targetSearchTimeRange);
+    return returnedIps;
+}
+
+async function loadUid(uid, targetId) {
+    const target = document.getElementById(targetId);
+    if (target.style.display === 'none' || target.innerHTML === '') {
+        const res = await fetch(`/meilisearchview/getuid?uid=${encodeURIComponent(uid)}`);
+        const data = await readJsonResponse(res);
+        let json = JSON.stringify(data, null, 2);
+        // garde l'indentation devant les lignes ajoutées
+        json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>
+            line.replace(/\\n/g, '\\n\n' + indent + '  ')
+        );
+        const pre = document.createElement('pre');
+        pre.textContent = json;
+        target.innerHTML = '';
+        target.appendChild(pre);
+        target.style.display = 'block';
+    } else {
+        target.style.display = 'none';
+    }
+}
+  </script>
+</div>
+
+</div>
+
+    </div>
+    </div>
+
+    {% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
+    <div id="TargetWhois" class="tab-pane">
+      <div class="panel panel-info">
+        <div class="panel-heading"><h4 class="panel-title">WHOIS</h4></div>
+        <div class="panel-body" data-whois-url="{{ url_for('TargetsView.whois', pk=pk) }}">
+          <p>Current registry record for <strong>{{ get_target_value(pk) }}</strong>.</p>
+          <p id="target-whois-cache" class="text-muted small" role="status"></p>
+    <pre id="target-whois-result" role="status" aria-live="polite">Select this tab to query the registry.</pre>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+{% endblock show_form %}
+</div>
+{{ lib.panel_end() }}
+
+{% endblock content %}
+{% block add_tail_js %}
+{# Do not load ab_keep_tab.js here: its global lastTab overrides Detail. #}
+<script id="target-default-tab" nonce="{{ baselib.get_nonce() }}">
+(() => {
+  function showDetail() {
+    const detailTab = document.querySelector('a[href="#Home"]');
+    if (!detailTab) return;
+    $(detailTab).tab('show');
+    if (window.location.hash) {
+      window.history.replaceState(window.history.state, document.title,
+        window.location.pathname + window.location.search);
+    }
+  }
+  $(showDetail);
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) showDetail();
+  });
+})();
+</script>
+{% if appbuilder.sm.has_access('can_whois', 'TargetsView') %}
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+  const tab = document.getElementById('target-whois-tab');
+  const panel = document.getElementById('TargetWhois');
+  const result = document.getElementById('target-whois-result');
+  if (!tab || !panel || !result) return;
+  let loading = false;
+  let loaded = false;
+  tab.addEventListener('click', async () => {
+    if (loading || loaded) return;
+    loading = true;
+    result.textContent = 'Querying WHOIS registry...';
+        if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('target-whois-cache', null);
+    try {
+      const response = await fetch(panel.querySelector('[data-whois-url]').dataset.whoisUrl, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'WHOIS lookup failed.');
+      result.textContent = data.result || 'No WHOIS record returned.';
+            if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('target-whois-cache', data.cache);
+      loaded = true;
+    } catch (error) {
+      result.textContent = error.message || 'WHOIS lookup failed. Try again.';
+    } finally {
+      loading = false;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

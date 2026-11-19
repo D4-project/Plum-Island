@@ -5,38 +5,83 @@ Helpers for YAML-backed search tag rules.
 import ipaddress
 import logging
 import re
+from uuid import UUID
 
 import yaml
+from plum_antibodies import validate_tags
 
 try:
     from .mutils import lowercase_dict
+    from .search_query import Expression, iter_criteria, map_criteria
 except ImportError:
     from mutils import lowercase_dict
+    from search_query import Expression, iter_criteria, map_criteria
 
 logger = logging.getLogger("flask_appbuilder")
 
 TAG_SPLIT_RE = re.compile(r"[\n,]+")
 
 
+def normalize_rule_uuid(raw_uuid):
+    """Return one canonical UUID rule identity or reject missing/malformed input."""
+    if not isinstance(raw_uuid, str):
+        raise ValueError("Tag rule YAML requires a canonical 'uuid'")
+    value = raw_uuid.strip()
+    try:
+        parsed = UUID(value)
+    except ValueError as error:
+        raise ValueError("Tag rule YAML requires a canonical 'uuid'") from error
+    if str(parsed) != value:
+        raise ValueError("Tag rule YAML requires a canonical 'uuid'")
+    return value
+
+
+def normalize_rule_name(raw_name):
+    """Return a display name from YAML; names are intentionally non-unique."""
+    if not isinstance(raw_name, str):
+        raise ValueError("Tag rule YAML requires a non-empty 'name'")
+    value = raw_name.strip()
+    if not value or len(value) > 256:
+        raise ValueError(
+            "Tag rule YAML requires a non-empty 'name' up to 256 characters"
+        )
+    return value
+
+
+def analyze_header_dependencies(criteria_groups):
+    """Analyze compiled criteria for exact and ambiguous HTTP header needs."""
+    exact = {}
+    ambiguous = []
+    for criteria in iter_criteria(criteria_groups):
+        for field, values in (criteria or {}).items():
+            base, _, modifier = str(field).lower().removeprefix("!").partition(".")
+            if base not in ("http_header", "http_headval"):
+                continue
+            values = values if isinstance(values, list) else [values]
+            if base == "http_header" and modifier:
+                ambiguous.extend(str(value).strip().lower() for value in values)
+                continue
+            for value in values:
+                candidate = str(value or "").strip().lower()
+                if base == "http_headval":
+                    candidate = candidate.split(":", 1)[0].strip()
+                if candidate and re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9a-z]+", candidate):
+                    exact[candidate] = (
+                        exact.get(candidate, False) or base == "http_headval"
+                    )
+    return {"exact": exact, "ambiguous": sorted(set(ambiguous))}
+
+
 def normalize_tags(tags):
     """
-    Normalize tag values to unique lowercase strings.
+    Validate and normalize tag values through Plum-Antibodies.
 
     The canonical stored value is namespace:value, for example product:gitlab.
-    Legacy tag:namespace:value inputs are accepted at import/edit boundaries and
-    collapsed to the canonical form.
+    Invalid or duplicate values raise ``TagValidationError`` before a rule can
+    be stored. Legacy tag:namespace:value inputs are collapsed to the canonical
+    form by the shared validator.
     """
-    normalized = []
-    seen = set()
-    for tag in tags or []:
-        value = str(tag).strip().lower()
-        while value.startswith("tag:") and value.count(":") >= 2:
-            value = value.split(":", 1)[1].strip()
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        normalized.append(value)
-    return normalized
+    return validate_tags(tags or [], allow_empty=True)
 
 
 def parse_tags_text(tags_value):
@@ -77,6 +122,8 @@ def parse_tag_rule_yaml(yaml_body):
         raise ValueError("Tag rule YAML must be a mapping")
 
     description = str(payload.get("description") or "").strip()
+    rule_uuid = normalize_rule_uuid(payload.get("uuid"))
+    name = normalize_rule_name(payload.get("name"))
     query = str(payload.get("query") or "").strip()
     raw_tags = payload.get("tags") or []
 
@@ -94,6 +141,8 @@ def parse_tag_rule_yaml(yaml_body):
         raise ValueError("Tag rule YAML requires at least one tag")
 
     return {
+        "uuid": rule_uuid,
+        "name": name,
         "description": description,
         "query": query,
         "tags": tags,
@@ -133,7 +182,7 @@ def validate_search_query(query):
     criteria_groups, status, msg_error = KVSearchView().parse_query(query)
     if not status:
         raise ValueError(msg_error or "Invalid search query")
-    return [lowercase_dict(group) for group in criteria_groups]
+    return map_criteria(criteria_groups, lowercase_dict)
 
 
 def compile_tag_rule_definition(name, description, query, tags):
@@ -236,14 +285,27 @@ def document_matches_criteria_groups(document, criteria_groups):
     """
     Return True when one OR group fully matches the parsed document.
     """
+    if isinstance(criteria_groups, Expression):
+        if criteria_groups.kind == "criteria":
+            return document_matches_criteria_groups(
+                document, [criteria_groups.criteria()]
+            )
+        matches = (
+            document_matches_criteria_groups(document, child)
+            for child in criteria_groups.children
+        )
+        return all(matches) if criteria_groups.kind == "all" else any(matches)
     for criteria in criteria_groups or []:
         group_matches = True
         for field, values in criteria.items():
+            negate = field.startswith("!")
+            field = field.removeprefix("!")
             base_field, suffix = (field.split(".", 1) + [""])[:2]
             if not isinstance(values, list):
                 values = [values]
             for value in values:
-                if not _document_field_matches(document, base_field, suffix, value):
+                matches = _document_field_matches(document, base_field, suffix, value)
+                if matches == negate:
                     group_matches = False
                     break
             if not group_matches:

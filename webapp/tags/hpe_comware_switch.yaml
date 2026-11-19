@@ -1,7 +1,0 @@
-description: HPE Comware Switch
-query: banner.lk:"hewlett packard enterprise development lp" OR banner.bg:ssh-2.0-comware
-tags:
-- vendor:hpe
-- product:comware
-- type:switch
-version: 20260520T133458Z

@@ -1,8 +1,0 @@
-description: Zyxel SSH server
-query: banner.lk:"zyxel ssh server"
-tags:
-- vendor:zyxel
-- type:router
-- proto:ssh
-- product:zyxel-ssh-server
-version: 20260520T133458Z

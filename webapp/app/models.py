@@ -10,7 +10,10 @@ This is the module containing all the data models
 
 import html
 import re
+import shlex
+import uuid
 from flask_appbuilder import Model
+from flask_appbuilder.models.decorators import renders
 from markupsafe import Markup as Esc
 from sqlalchemy import (
     BigInteger,
@@ -19,16 +22,22 @@ from sqlalchemy import (
     String,
     Boolean,
     DateTime,
+    Float,
+    Index,
     ForeignKey,
     Table,
     Text,
     UniqueConstraint,
 )
 from flask_appbuilder.models.mixins import FileColumn
-from sqlalchemy import func
+from sqlalchemy import event, func
 from sqlalchemy.orm import relationship, object_session, validates
-from .utils.mutils import compute_scan_unit_count
+from .utils.mutils import classify_target_is_ip_cidr, compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
+from .utils.ip2asn import target_type
+
+NMAP_ADDITIONAL_PARAMS_MAX_LENGTH = 4096
+NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS = frozenset(";&|$" + chr(96) + "<>")
 
 HTTP_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
 
@@ -43,6 +52,42 @@ def is_valid_http_header_name(value):
         and len(header_name) <= 128
         and bool(HTTP_HEADER_NAME_RE.fullmatch(header_name))
     )
+
+
+def validate_nmap_additional_params(value):
+    """
+    Validate optional Nmap parameters as shell-free argv input.
+
+    The agent must receive arguments, never a shell command. Shell control
+    characters are rejected here as an early server-side safety check.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("Nmap additional params must be a string")
+
+    params = value.strip()
+    if not params:
+        return None
+    if len(params) > NMAP_ADDITIONAL_PARAMS_MAX_LENGTH:
+        raise ValueError("Nmap additional params are too long")
+    if any(char in params for char in NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS):
+        raise ValueError("Nmap additional params contain forbidden shell syntax")
+    if "\n" in params or "\r" in params:
+        raise ValueError("Nmap additional params must be one line")
+
+    try:
+        tokens = shlex.split(params, posix=True)
+    except ValueError as error:
+        raise ValueError("Nmap additional params must be valid argv syntax") from error
+    if not tokens:
+        return None
+    if any(
+        any(char in token for char in NMAP_ADDITIONAL_PARAMS_FORBIDDEN_CHARS)
+        for token in tokens
+    ):
+        raise ValueError("Nmap additional params contain forbidden shell syntax")
+    return params
 
 
 def _html_escape(value, quote=True):
@@ -135,6 +180,9 @@ class Jobs(Model):
     active = Column(Boolean, default=False)  # Job is running
     finished = Column(Boolean, default=False)  # True if Job was successfull
     exported = Column(Boolean, default=False)  # True if result was exported
+    meili_task_uid = Column(Integer, nullable=True)
+    meili_documents_submitted = Column(Integer, default=0, nullable=False)
+    meili_documents_total = Column(Integer, nullable=True)
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
     job_creation = Column(DateTime, default=utcnow_naive)  # Timestamp of job creation
@@ -147,6 +195,7 @@ class Jobs(Model):
     scan_unit_count = Column(BigInteger, default=1, nullable=False)
     scan_ports = Column(Text, nullable=True)
     scan_nses = Column(Text, nullable=True)
+    nmap_additional_params = Column(Text, nullable=True)
     scanprofile = relationship("ScanProfiles", back_populates="jobs")
     scanprofile_cycle = relationship("ScanProfileCycles", back_populates="jobs")
     targets = relationship(
@@ -442,8 +491,15 @@ DEFAULT_COLLECTED_HEADERS = (
     "x-gitlab-meta",
     "x-jitsi-release",
     "x-joomla-version",
-    "x-kubernetes-pf-flowschema-ui",
-    "x-kubernetes-pf-prioritylevel-uid",
+    "x-kong-proxy-latency",
+    "x-kong-upstream-latency",
+    "x-kong-response-latency",
+    "x-kong-admin-latency",
+    "x-kong-upstream-status",
+    "x-kong-request-id",
+    "x-kong-total-latency",
+    "x-kong-third-party-latency",
+    "x-kong-client-latency",
     "x-litespeed-cache",
     "x-litespeed-purge",
     "x-litespeed-tag",
@@ -567,6 +623,139 @@ def ensure_default_collected_headers(session):
         session.commit()
 
 
+TAG_RULE_HEADER_RE = re.compile(
+    r"\b(http_header|http_headval)(?:\.[a-z]+)?\s*:\s*" r"([!#$%&'*+\-.^_`|~0-9a-z]+)",
+    re.IGNORECASE,
+)
+TAG_RULE_TAG_COLOR_CLASSES = {
+    "vuln": "tagrules-tag-vuln",
+    "vendor": "tagrules-tag-vendor",
+    "product": "tagrules-tag-product",
+    "type": "tagrules-tag-type",
+    "proto": "tagrules-tag-proto",
+    "lang": "tagrules-tag-lang",
+    "cpe": "tagrules-tag-cpe",
+    "hard": "tagrules-tag-cpe",
+}
+
+
+def headers_required_by_tag_rules(rules):
+    """Return collected header names and value flags required by tag rules."""
+    from .utils.tagrules import analyze_header_dependencies
+
+    required = {}
+    for rule in rules or []:
+        if isinstance(rule, dict):
+            criteria_groups = rule.get("criteria_groups")
+            query = str(rule.get("query", "") or "")
+        else:
+            criteria_groups = getattr(rule, "criteria_groups", None)
+            query = str(getattr(rule, "query", "") or "")
+        if criteria_groups is None:
+            for field, header_name in TAG_RULE_HEADER_RE.findall(query):
+                header_name = re.sub(
+                    r"\.(?:lk|like|bg|begin)$", "", header_name.strip().lower()
+                )
+                if is_valid_http_header_name(header_name):
+                    required[header_name] = (
+                        required.get(header_name, False)
+                        or field.lower() == "http_headval"
+                    )
+            continue
+        for header_name, collect_value in analyze_header_dependencies(criteria_groups)[
+            "exact"
+        ].items():
+            required[header_name] = required.get(header_name, False) or collect_value
+    return required
+
+
+def ensure_rule_required_headers(session, compiled_rules=None, commit=True):
+    """Ensure headers referenced by active tag rules are indexed."""
+    active_rules = session.query(TagRules).filter(TagRules.active == True).all()
+    if compiled_rules is None:
+        from .utils.tagrules import compile_tag_rule_records
+
+        compiled_rules = compile_tag_rule_records(active_rules)
+    required = headers_required_by_tag_rules(compiled_rules)
+    summary = {
+        "enabled_presence": [],
+        "enabled_values": [],
+        "cleanup_candidates": [],
+        "ambiguous": [],
+    }
+    from .utils.tagrules import analyze_header_dependencies
+
+    for rule in compiled_rules:
+        summary["ambiguous"].extend(
+            analyze_header_dependencies(rule.get("criteria_groups", [])).get(
+                "ambiguous", []
+            )
+        )
+    summary["ambiguous"] = sorted(set(summary["ambiguous"]))
+    if not required:
+        return summary
+
+    existing = {
+        row.header_name: row
+        for row in session.query(CollectedHeaders)
+        .filter(CollectedHeaders.header_name.in_(required))
+        .all()
+    }
+    changed = False
+
+    # Older reconciliation logic could persist the value predicate as part of
+    # the header name (for example ``www-authenticate.bg``).  Fold those rows
+    # into the canonical header row when the base name is now required.
+    for row in session.query(CollectedHeaders).all():
+        malformed = re.match(
+            r"^(.+)\.(?:lk|like|bg|begin)$", str(row.header_name or "")
+        )
+        if not malformed:
+            continue
+        canonical_name = malformed.group(1)
+        if canonical_name not in required:
+            continue
+        canonical = existing.get(canonical_name)
+        if canonical is None:
+            canonical = CollectedHeaders(
+                header_name=canonical_name,
+                collect_value=bool(row.collect_value),
+            )
+            session.add(canonical)
+            existing[canonical_name] = canonical
+        elif row.collect_value and not canonical.collect_value:
+            canonical.collect_value = True
+        session.delete(row)
+        changed = True
+
+    for header_name, collect_value in required.items():
+        row = existing.get(header_name)
+        if row is None:
+            session.add(
+                CollectedHeaders(
+                    header_name=header_name,
+                    collect_value=collect_value,
+                )
+            )
+            changed = True
+            summary["enabled_presence"].append(header_name)
+            if collect_value:
+                summary["enabled_values"].append(header_name)
+        elif collect_value and not row.collect_value:
+            row.collect_value = True
+            changed = True
+            summary["enabled_values"].append(header_name)
+    defaults = set(DEFAULT_COLLECTED_HEADERS)
+    summary["cleanup_candidates"] = sorted(
+        row.header_name
+        for row in session.query(CollectedHeaders).all()
+        if row.header_name not in required and row.header_name not in defaults
+    )
+    if changed and commit:
+        session.commit()
+    return summary
+
+
 class TagRules(Model):
     """
     Search-backed tagging rules applied on parsed search documents.
@@ -574,7 +763,10 @@ class TagRules(Model):
 
     __tablename__ = "tagrules"
     id = Column(Integer, primary_key=True)
-    name = Column(String(256), unique=True, nullable=False)
+    uuid = Column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid.uuid4())
+    )
+    name = Column(String(256), nullable=False)
     active = Column(Boolean, default=True, nullable=False)
     description = Column(String(512), nullable=False)
     query = Column(Text, nullable=False)
@@ -609,13 +801,16 @@ class TagRules(Model):
         if not tags:
             return Esc("")
 
-        visible_limit = 2
+        visible_limit = 5
         title = _html_escape(", ".join(tags), quote=True)
         rendered = ""
         rendered += f'<span class="tagrules-tags" title="{title}">'
         for tag in tags[:visible_limit]:
+            color_class = TAG_RULE_TAG_COLOR_CLASSES.get(
+                tag.partition(":")[0].lower(), ""
+            )
             rendered += (
-                '<span class="label label-default tagrules-tag">'
+                f'<span class="tagrules-tag {color_class}">'
                 f"{_html_escape(tag)}"
                 "</span> "
             )
@@ -628,6 +823,7 @@ class TagRules(Model):
         rendered += "</span>"
         return Esc(rendered)
 
+    @renders("name")
     def name_html(self):
         """
         Render the rule name with the description available on hover.
@@ -660,7 +856,9 @@ class TagRules(Model):
     def created_at_html(self):
         return self._datetime_html(self.created_at)
 
+    @renders("updated_at")
     def updated_at_html(self):
+        """Display the update timestamp while retaining database sorting."""
         return self._datetime_html(self.updated_at)
 
 
@@ -725,6 +923,23 @@ class Reports(Model):
             return Esc(
                 f'<span class="label label-info">monthly day '
                 f"{schedule_day:02d} at {schedule_hour:02d}:00</span>"
+            )
+        if self.schedule_type == "weekly":
+            schedule_day = max(1, min(int(self.schedule_day or 1), 7))
+            weekdays = (
+                "Monday",
+                "Tuesday",
+                "Wednesday",
+                "Thursday",
+                "Friday",
+                "Saturday",
+                "Sunday",
+            )
+            weekday = weekdays[schedule_day - 1]
+            schedule_hour = int(self.schedule_hour or 0)
+            return Esc(
+                f'<span class="label label-info">weekly {weekday} '
+                f"at {schedule_hour:02d}:00</span>"
             )
         return Esc(
             f'<span class="label label-default">'
@@ -813,6 +1028,7 @@ class ScanProfileCycles(Model):
     completed_target_count = Column(Integer, default=0, nullable=False)
     scan_unit_count = Column(BigInteger, default=0, nullable=False)
     completed_scan_unit_count = Column(BigInteger, default=0, nullable=False)
+    max_target_id = Column(Integer, default=None)
 
     scanprofile = relationship(
         "ScanProfiles",
@@ -864,14 +1080,85 @@ class ScanProfileCycles(Model):
         return min(100.0, max(0.0, (completed / total) * 100))
 
     @staticmethod
-    def _progress_title(completed, total, target_completed, target_total):
+    def _format_blockers(target_completed, target_total, queued_jobs, active_jobs):
+        """
+        Render observable reasons why a running cycle cannot finish yet.
+        """
+        incomplete_targets = max(
+            0,
+            int(target_total or 0) - int(target_completed or 0),
+        )
+        blockers = []
+        if incomplete_targets:
+            blockers.append(f"{incomplete_targets:,} incomplete target")
+        if queued_jobs:
+            blockers.append(f"{int(queued_jobs):,} queued job")
+        if active_jobs:
+            blockers.append(f"{int(active_jobs):,} active job")
+        return ", ".join(blockers)
+
+    def _job_blocker_counts(self):
+        """
+        Return queued and active unfinished jobs attached to this cycle.
+        """
+        session = object_session(self)
+        if session is None or self.id is None:
+            return 0, 0
+
+        counts = {False: 0, True: 0}
+        rows = (
+            session.query(Jobs.active, func.count(Jobs.id))
+            .filter(
+                Jobs.scanprofile_cycle_id == self.id,
+                Jobs.finished.is_(False),
+            )
+            .group_by(Jobs.active)
+            .all()
+        )
+        for active, count in rows:
+            counts[bool(active)] = int(count or 0)
+        return counts[False], counts[True]
+
+    @staticmethod
+    def _progress_title(
+        completed,
+        total,
+        target_completed,
+        target_total,
+        job_counts=None,
+    ):
         """
         Render compact cycle tooltip text.
         """
-        return (
+        queued_jobs, active_jobs = job_counts or (0, 0)
+        title = (
             f"{int(completed or 0):,}/{int(total or 0):,} IP scan for "
             f"{int(target_completed or 0):,}/{int(target_total or 0):,} target"
         )
+        blockers = ScanProfileCycles._format_blockers(
+            target_completed,
+            target_total,
+            queued_jobs,
+            active_jobs,
+        )
+        if blockers:
+            title += f"; blockers: {blockers}"
+        return title
+
+    def blocker_summary(self):
+        """
+        Return current completion blockers for list/show views.
+        """
+        if self.status != "running":
+            return ""
+        queued_jobs, active_jobs = self._job_blocker_counts()
+        blockers = self._format_blockers(
+            self.completed_target_count,
+            self.target_count,
+            queued_jobs,
+            active_jobs,
+        )
+        return blockers or "reconciliation pending"
 
     def duration_html(self):
         """
@@ -906,11 +1193,21 @@ class ScanProfileCycles(Model):
         completed = int(self.completed_scan_unit_count or 0)
         target_total = int(self.target_count or 0)
         target_completed = int(self.completed_target_count or 0)
+        queued_jobs, active_jobs = self._job_blocker_counts()
         percent = self._format_percent(completed, total)
-        title = self._progress_title(completed, total, target_completed, target_total)
+        title = self._progress_title(
+            completed,
+            total,
+            target_completed,
+            target_total,
+            (queued_jobs, active_jobs),
+        )
+        finalizing = (
+            " — finalizing" if self.status == "running" and percent >= 100 else ""
+        )
         return Esc(
             '<span class="label label-default" '
-            f'title="{_html_escape(title)}">{percent:.1f}%</span>'
+            f'title="{_html_escape(title)}">{percent:.1f}%{finalizing}</span>'
         )
 
     def summary_badge_html(self, label):
@@ -923,11 +1220,19 @@ class ScanProfileCycles(Model):
         completed = int(self.completed_scan_unit_count or 0)
         target_total = int(self.target_count or 0)
         target_completed = int(self.completed_target_count or 0)
+        queued_jobs, active_jobs = self._job_blocker_counts()
         percent = self._format_percent(completed, total)
-        title = self._progress_title(completed, total, target_completed, target_total)
+        title = self._progress_title(
+            completed,
+            total,
+            target_completed,
+            target_total,
+            (queued_jobs, active_jobs),
+        )
+        finalizing = " — finalizing" if status == "running" and percent >= 100 else ""
         return (
             f'<span class="label {label_class}" title="{_html_escape(title)}">'
-            f"{_html_escape(label)} {percent:.1f}%</span>"
+            f"{_html_escape(label)} {percent:.1f}%{finalizing}</span>"
         )
 
     def previous_cycle_html(self):
@@ -1005,6 +1310,7 @@ class ScanProfiles(Model):
     priority = Column(Integer, default=0)
     priority_retag_pending = Column(Boolean, default=False, nullable=False)
     scan_cycle_minutes = Column(Integer, default=720)
+    nmap_additional_params = Column(Text, nullable=True)
     current_cycle_id = Column(Integer, default=None)
     last_cycle_finished_at = Column(DateTime, default=None)
     jobs = relationship("Jobs", back_populates="scanprofile")
@@ -1017,6 +1323,11 @@ class ScanProfiles(Model):
     scan_states = relationship(
         "TargetScanStates", back_populates="scanprofile", cascade="all, delete-orphan"
     )
+
+    @validates("nmap_additional_params")
+    def validate_nmap_additional_params_field(self, _key, value):
+        """Keep stored profile parameters safe for shell-free agents."""
+        return validate_nmap_additional_params(value)
 
     @validates("priority")
     def validate_priority(self, key, value):
@@ -1126,6 +1437,23 @@ class ScanProfiles(Model):
         return Esc(running_cycle.summary_badge_html("Current"))
 
 
+class AutonomousSystems(Model):
+    """Shared CIRCL AS metadata; coordinates are country averages."""
+
+    __tablename__ = "autonomous_systems"
+    asn = Column(BigInteger, primary_key=True, autoincrement=False)
+    name = Column(String(512), nullable=False)
+    country_alpha2 = Column(String(2))
+    country_alpha3 = Column(String(3))
+    country_numeric = Column(String(3))
+    latitude = Column(Float)
+    longitude = Column(Float)
+    updated_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+    def __repr__(self):
+        return f"AS{self.asn} {self.name}"
+
+
 class Targets(Model):
     """
     Class for networks and hosts targets definitions
@@ -1134,9 +1462,26 @@ class Targets(Model):
     """
 
     __tablename__ = "targets"
+    __table_args__ = (
+        Index(
+            "idx_targets_network_pending",
+            "network_refresh_pending",
+            "network_retry_at",
+            "id",
+        ),
+    )
     id = Column(Integer, primary_key=True)
     value = Column(String(45), unique=True, nullable=False)  # The CIDR or HOST
+    is_ip_cidr = Column(Boolean, nullable=False)
     description = Column(String(256))  # A facultative descrition
+    created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+    network_asn = Column(BigInteger, ForeignKey("autonomous_systems.asn"), index=True)
+    autonomous_system = relationship("AutonomousSystems")
+    network_updated_at = Column(DateTime)
+    network_refresh_pending = Column(Boolean, default=False, nullable=False)
+    network_retry_at = Column(DateTime)
+    network_claim = Column(String(36))
+    network_claim_until = Column(DateTime)
     active = Column(Boolean, default=True)  # To suspend the target
     working = Column(Boolean, default=False)  # Set when jobs todo are presents
     last_scan = Column(DateTime, default=None)  # Last Scan of the Range.
@@ -1148,9 +1493,100 @@ class Targets(Model):
         "TargetScanStates", back_populates="target", cascade="all, delete-orphan"
     )
 
-    as_bgp = Column(Integer, default=0)  # BGP AS Number
-    as_description = Column(String(256))  # AS Description.
-    as_country = Column(String(2), default="ZZ")  # AS Country
+    @property
+    def target_type(self):
+        """Expose address family/CIDR type without resolving hostnames."""
+        return target_type(self.value)
+
+    @property
+    def as_bgp(self):
+        """Legacy read compatibility; the relationship is the source of truth."""
+        return self.network_asn or 0
+
+    @property
+    def as_description(self):
+        """Legacy AS description accessor."""
+        return self.autonomous_system.name if self.autonomous_system else None
+
+    @property
+    def as_country(self):
+        """Legacy alpha-2 country accessor."""
+        return self.autonomous_system.country_alpha2 if self.autonomous_system else "ZZ"
+
+    def _network_info_value(self, attribute):
+        """Return one safe plain-text value for the target detail table."""
+        if self.target_type == "FQDN":
+            return "Unavailable for FQDN targets"
+        info = self.autonomous_system
+        if info is None:
+            return (
+                "Not available (refresh pending)"
+                if self.network_refresh_pending
+                else "Not available"
+            )
+        value = getattr(info, attribute)
+        return str(value) if value is not None else "Unavailable"
+
+    @property
+    def network_asn_display(self):
+        """Render the shared ASN as one ordinary detail row."""
+        value = self._network_info_value("asn")
+        if value == "0":
+            return "CIDR not announced"
+        return f"AS{value}" if value.isdecimal() else value
+
+    @property
+    def network_as_name(self):
+        """Expose shared AS name as a plain-text detail row."""
+        return self._network_info_value("name")
+
+    @property
+    def network_country_alpha3(self):
+        """Expose country alpha-3 code as a plain-text detail row."""
+        return self._network_info_value("country_alpha3")
+
+    @property
+    def network_country_numeric(self):
+        """Expose zero-padded numeric country code as text."""
+        return self._network_info_value("country_numeric")
+
+    @property
+    def network_latitude(self):
+        """Expose country-average latitude as a plain-text detail row."""
+        return self._network_info_value("latitude")
+
+    @property
+    def network_longitude(self):
+        """Expose country-average longitude as a plain-text detail row."""
+        return self._network_info_value("longitude")
+
+    def network_information_html(self):
+        """Show escaped structured AS data, separately from the description."""
+        if self.target_type == "FQDN":
+            return Esc("Unavailable for FQDN targets")
+        info = self.autonomous_system
+        if info is None:
+            return Esc(
+                "Not available"
+                + (" — refresh pending" if self.network_refresh_pending else "")
+            )
+        rows = [
+            ("ASN", info.asn),
+            ("AS name", info.name),
+            ("Country alpha-3", info.country_alpha3),
+            ("Country numeric code", info.country_numeric),
+            ("Latitude (country average)", info.latitude),
+            ("Longitude (country average)", info.longitude),
+        ]
+        return Esc(
+            "<dl>"
+            + "".join(
+                f"<dt>{label}</dt><dd>{_html_escape(str(value)) if value is not None else 'Unavailable'}</dd>"
+                for label, value in rows
+            )
+            + "</dl>"
+        )
+
     priority = Column(Integer, default=1)  # Priority, by default LOW
     scan_unit_count = Column(BigInteger, default=1, nullable=False)
 
@@ -1159,7 +1595,16 @@ class Targets(Model):
         """
         Maintain the precalculated scan-unit count when target value changes.
         """
+        self.is_ip_cidr = classify_target_is_ip_cidr(value)
         self.scan_unit_count = compute_scan_unit_count(value)
+        if value != self.value:
+            self.autonomous_system = None
+            self.network_asn = None
+            self.network_updated_at = None
+            self.network_claim = None
+            self.network_claim_until = None
+            self.network_retry_at = None
+            self.network_refresh_pending = target_type(value) != "FQDN"
         return value
 
     @validates("priority")
@@ -1199,3 +1644,10 @@ class Targets(Model):
                 return f"{seconds}s"
         else:
             return "∞"
+
+
+@event.listens_for(Targets, "before_insert")
+@event.listens_for(Targets, "before_update")
+def _persist_target_classification(_mapper, _connection, target):
+    """Derived metadata cannot be overridden by constructor assignment order."""
+    target.is_ip_cidr = classify_target_is_ip_cidr(target.value)

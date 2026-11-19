@@ -1,7 +1,0 @@
-description: OpenSSH
-query: banner.bg:ssh-2.0-openssh
-tags:
-- proto:ssh
-- product:openssh
-- vendor:openssh
-version: 20260520T133458Z

@@ -1,6 +1,0 @@
-description: GPON Home Gateway
-query: http_title.lk:"GPON Home Gateway"
-tags:
-- vendor:gpon-gateway
-- product:gpon-home-gateway
-version: 20260520T133458Z

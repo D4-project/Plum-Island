@@ -1,9 +1,0 @@
-description: Apache Tomcat (6.0.18), Alfresco Enterprise Content Management System
-query: http_favicon_md5:D80E364C0D3138C7ECD75BF9896F2CAD
-tags:
-- product:tomcat
-- product:alfresco
-- type:cms
-- lang:java
-- vendor:apache
-version: 20260520T133458Z

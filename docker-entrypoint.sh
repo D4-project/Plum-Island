@@ -45,6 +45,9 @@ if [ ! -f "$DB_PATH" ]; then
 
     echo "[plum] Loading initial TCP ports, HTTP header tagging, tag rules, NSE scripts and default scan profile..."
     python ../tools/initial_setup.py
+else
+    echo "[plum] Synchronizing configured security roles..."
+    python ../tools/initial_setup.py --roles-only
 fi
 
 exec python run.py

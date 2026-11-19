@@ -22,6 +22,10 @@
     <div class="stats-value">{{ "{:,}".format(stats.total_hosts_to_scan) }}</div>
   </div>
   <div class="stats-card">
+    <div class="stats-label">Unique ports to scan</div>
+    <div class="stats-value">{{ "{:,}".format(stats.scanned_port_count) }}</div>
+  </div>
+  <div class="stats-card">
     <div class="stats-label">Scanned hosts in Kvrocks</div>
     <div class="stats-value">{{ "{:,}".format(stats.kv_scanned_host_count) }}</div>
   </div>

@@ -11,11 +11,15 @@ This module contains all code related to API's.
 # pylint: disable=too-many-lines
 
 import base64
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 import hashlib
+import ipaddress
 import os
 import json
 import logging
+import re
 import time
+import meilisearch
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi
 from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, protect
@@ -40,8 +44,14 @@ from .models import (
 )
 from . import appbuilder, db
 from .utils.mutils import is_valid_uuid, is_valid_ip, get_country, flat_marsh_error
+from .utils.kvrocks import KVrocksIndexer
+from .utils.index_generations import GenerationClient, CONTROL
+from .utils.index_activity import prioritized_search
+from .utils.result_parser import port_protocol_values
+from .utils.tagrules import normalize_tags
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
 from .utils.scan_cycles import reconcile_scanprofile_cycle
+from .utils.network_enrichment import request_network_refresh
 from .views import TargetsView
 
 
@@ -131,6 +141,62 @@ class BotInfoSchema(Schema):
         raise ValidationError("Invalid AGENT_KEY")
 
 
+class BotJobReleaseSchema(Schema):
+    """
+    Schema for interrupted job release requests.
+    """
+
+    UID = fields.String(required=True, metadata={"description": "Uniq Bot ID"})
+    AGENT_KEY = fields.String(
+        required=True,
+        metadata={"description": "Bot Agent access Key"},
+    )
+    JOB_UID = fields.String(
+        required=True,
+        metadata={"description": "Uid of the scan job to release"},
+    )
+    ERROR = fields.String(
+        required=False,
+        allow_none=True,
+        metadata={"description": "Optional interruption reason"},
+    )
+
+    @validates("UID")
+    def validate_uid(self, value, **_kwargs):
+        """
+        UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid UID")
+
+    @validates("JOB_UID")
+    def validate_job_uid(self, value, **_kwargs):
+        """
+        JOB_UID Validation
+        """
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid JOB_UID")
+
+    @validates("AGENT_KEY")
+    def validate_agent_key(self, value, **_kwargs):
+        """
+        Validate Authorization to interact with Island
+        """
+        if len(value) != 16 + 64:
+            raise ValidationError("Invalid Agent Key")
+
+        keyidx = value[0:16]
+        try:
+            agentkey = (
+                db.session.query(ApiKeys).filter(ApiKeys.keyidx == keyidx).one().key
+            )
+            if check_password_hash(agentkey, value):
+                return True
+        except NoResultFound as error:
+            raise ValidationError("Invalid AGENT_KEY") from error
+        raise ValidationError("Invalid AGENT_KEY")
+
+
 class BulkTargetsSchema(Schema):
     """
     Schema for Targets bulk import via API
@@ -179,6 +245,11 @@ def _get_bot_by_uid(bot_uid):
         .limit(1)
         .scalar()
     )
+
+
+def _build_job_nmap_additional_params_payload(job):
+    """Return optional profile parameters while tolerating legacy jobs."""
+    return getattr(job, "nmap_additional_params", None)
 
 
 def _build_job_nse_payload(scan_nses, agent_nse_hashes):
@@ -245,6 +316,42 @@ def _claim_job_for_bot(job_id, bot_id, now):
     )
 
 
+def _release_interrupted_job(job, bot, now):
+    """
+    Release an interrupted job assigned to a bot.
+
+    Mutates only jobs assigned to the requesting bot. Finished jobs and already
+    released queued jobs are treated as idempotent success.
+    """
+    if job.finished:
+        if job.bot_id == bot.id:
+            bot.running = False
+            bot.last_seen = now
+        return True, "already finished"
+
+    if job.bot_id is None:
+        if job.active:
+            return False, "forbidden"
+        return True, "already released"
+
+    if job.bot_id != bot.id:
+        return False, "forbidden"
+
+    if not job.active:
+        job.bot_id = None
+        job.job_start = None
+        bot.running = False
+        bot.last_seen = now
+        return True, "already released"
+
+    job.active = False
+    job.bot_id = None
+    job.job_start = None
+    bot.running = False
+    bot.last_seen = now
+    return True, "released"
+
+
 def _get_available_job_priorities():
     """
     Return the priority queues that currently have at least one waiting job.
@@ -309,6 +416,35 @@ class PublicTargetsApi(ModelRestApi):
     """
 
     datamodel = SQLAInterface(Targets)
+    # Server-managed timestamps, AS associations and lease fields are read-only.
+    add_columns = ["value", "description", "active", "priority", "scanprofiles"]
+    edit_columns = ["value", "description", "active", "priority", "scanprofiles"]
+    list_columns = [
+        "id",
+        "value",
+        "description",
+        "active",
+        "priority",
+        "working",
+        "last_scan",
+        "last_previous_scan",
+        "scan_unit_count",
+        "scanprofiles",
+        "created_at",
+        "is_ip_cidr",
+        "network_updated_at",
+    ]
+    show_columns = list_columns
+
+    @staticmethod
+    def _insertion_metadata(item):
+        """Report server-owned metadata without accepting it in input schemas."""
+        return {
+            "created_at": item.created_at.isoformat() + "Z",
+            "target_type": item.target_type,
+            "is_ip_cidr": item.is_ip_cidr,
+            "network_refresh_pending": bool(item.network_refresh_pending),
+        }
 
     def _coverage_error(self, item):
         return TargetsView._target_coverage_error(item)
@@ -335,7 +471,10 @@ class PublicTargetsApi(ModelRestApi):
             return self.response(
                 201,
                 **{
-                    API_RESULT_RES_KEY: self.add_model_schema.dump(item, many=False),
+                    API_RESULT_RES_KEY: {
+                        **self.add_model_schema.dump(item, many=False),
+                        **self._insertion_metadata(item),
+                    },
                     "id": self.datamodel.get_pk_value(item),
                 },
             )
@@ -607,6 +746,9 @@ class Api(BaseApi):
                 "nmap_ports": (
                     job_todo.scan_ports.split(",") if job_todo.scan_ports else []
                 ),
+                "nmap_additional_params": _build_job_nmap_additional_params_payload(
+                    job_todo
+                ),
             }
         else:
             ret_msg = {"message": "ready", "job": ""}
@@ -614,6 +756,78 @@ class Api(BaseApi):
         db.session.commit()
 
         return self.response(200, message=ret_msg)
+
+    @expose("/releasejob", methods=["POST"])
+    @safe
+    def releasejobs(self):
+        """
+        Bot to Island connection to release an interrupted job.
+        """
+        try:
+            data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                data = json.loads(data)
+
+            botinfoschema = BotJobReleaseSchema()
+            botinfo = botinfoschema.load(data)
+
+        except ValidationError as err:
+            return self.response_400(
+                message=f"Invalid input: {flat_marsh_error(err.messages)}"
+            )
+
+        logger.debug(
+            "Agent UID %s releasing interrupted job %s",
+            botinfo.get("UID"),
+            botinfo.get("JOB_UID"),
+        )
+
+        releasing_bot = _get_bot_by_uid(botinfo.get("UID"))
+        if releasing_bot is None:
+            logger.warning(
+                "Unknown or inactive bot %s tried to release job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(403, message="forbidden")
+
+        job_bot = (
+            db.session.query(Jobs)
+            .filter(Jobs.uid == botinfo.get("JOB_UID"))
+            .limit(1)
+            .scalar()
+        )
+        if job_bot is None:
+            logger.warning(
+                "Bot %s tried to release unknown job %s",
+                botinfo.get("UID"),
+                botinfo.get("JOB_UID"),
+            )
+            return self.response(404, message="job not found")
+
+        released, state = _release_interrupted_job(
+            job_bot,
+            releasing_bot,
+            utcnow_naive(),
+        )
+        if not released:
+            logger.warning(
+                "Bot %s tried to release job %s assigned to bot_id %s",
+                botinfo.get("UID"),
+                job_bot.uid,
+                job_bot.bot_id,
+            )
+            return self.response(403, message="forbidden")
+
+        logger.info(
+            "Bot %s releasejob %s: %s%s",
+            botinfo.get("UID"),
+            job_bot.uid,
+            state,
+            f" ({botinfo.get('ERROR')})" if botinfo.get("ERROR") else "",
+        )
+        db.session.commit()
+        return self.response(200, message="ready")
 
     @expose("/sndjob", methods=["POST"])
     @safe
@@ -687,7 +901,7 @@ class Api(BaseApi):
 
         if job_bot.bot_id != submitting_bot.id:
             logger.warning(
-                "Bot %s tried to submit job %s assigned to bot_id %s",
+                "Bot %s submitted stale or late result for job %s assigned to bot_id %s",
                 botinfo.get("UID"),
                 job_bot.uid,
                 job_bot.bot_id,
@@ -771,6 +985,7 @@ class Api(BaseApi):
                 job_bot.uid,
             )
             for target in job_bot.targets:
+                request_network_refresh(target)
                 logger.debug("target_id candidate to clean: %s", target.id)
                 logger.debug("target_id candidate last scan %s", target.last_scan)
                 previous_scan = ensure_utc_naive(target.last_scan)
@@ -818,7 +1033,13 @@ class Api(BaseApi):
             time.perf_counter() - sync_started,
         )
         if job_bot.scanprofile_id is not None:
-            reconcile_scanprofile_cycle(job_bot.scanprofile_id)
+            # Historical-cycle pruning may unlink many retained jobs. It is
+            # unrelated to accepting this result and must not extend this
+            # latency-sensitive SQLite writer transaction.
+            reconcile_scanprofile_cycle(
+                job_bot.scanprofile_id,
+                prune_history=False,
+            )
         commit_started = time.perf_counter()
         db.session.commit()
         logger.debug(
@@ -826,6 +1047,16 @@ class Api(BaseApi):
             job_bot.uid,
             time.perf_counter() - commit_started,
             time.perf_counter() - request_started,
+        )
+        scan_results_received = (
+            len(result_data)
+            if isinstance(result_data, list)
+            else int(isinstance(result_data, dict))
+        )
+        logger.info(
+            "Scanner result received: job=%s json_files=1 scan_results=%s",
+            job_bot.uid,
+            scan_results_received,
         )
         return self.response(200, message="ready")
 
@@ -2081,9 +2312,349 @@ class PortsApi(BaseApi):
         return self.response(200, message=f"Port '{label}' deleted")
 
 
+class InfoIpApi(BaseApi):
+    """Read indexed open ports and co-observed tags for one IP."""
+
+    route_base = "/api/v1/infoip"
+    openapi_spec_tag = "IP Scan Summary API"
+    DEFAULT_DAYS = 30
+    PROTOCOL_BATCH_SIZE = 200
+
+    @staticmethod
+    def _two_years_before(value):
+        """Return the same UTC instant two calendar years earlier."""
+        try:
+            return value.replace(year=value.year - 2)
+        except ValueError:  # February 29 in a leap year.
+            return value.replace(year=value.year - 2, day=28)
+
+    @staticmethod
+    def _parse_boundary(value, end_of_day=False):
+        """Accept an ISO date or timezone-aware ISO datetime."""
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            boundary = datetime_time.max if end_of_day else datetime_time.min
+            return datetime.combine(
+                date.fromisoformat(value), boundary, tzinfo=timezone.utc
+            )
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("Datetime must include a timezone")
+        return parsed.astimezone(timezone.utc)
+
+    @classmethod
+    def _explicit_window(cls, start, stop, now):
+        """Parse paired ISO boundaries, including a whole date-only stop day."""
+        if not start or not stop:
+            raise ValueError("Both start and stop are required")
+        try:
+            from_date = cls._parse_boundary(start)
+            to_date = cls._parse_boundary(stop, end_of_day=True)
+        except ValueError as error:
+            raise ValueError("Use ISO dates or timezone-aware ISO datetimes") from error
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", stop) and to_date.date() == now.date():
+            to_date = now
+        return from_date, to_date
+
+    @classmethod
+    def _days_window(cls, days, now):
+        """Parse a rolling number of days."""
+        if days is None:
+            period_days = cls.DEFAULT_DAYS
+        elif not re.fullmatch(r"[1-9]\d*", days) or len(days) > 3:
+            raise ValueError("days must be a positive integer up to two years")
+        else:
+            period_days = int(days)
+        if period_days > 731:
+            raise ValueError("The maximum lookback is two years")
+        return now - timedelta(days=period_days), now
+
+    @classmethod
+    def _resolve_window(cls, args, now=None):
+        """Resolve days or start/stop within the latest two calendar years."""
+        now = now or datetime.now(timezone.utc)
+        days = args.get("days")
+        start = args.get("start")
+        stop = args.get("stop")
+        if any(len(args.getlist(key)) > 1 for key in ("days", "start", "stop")):
+            raise ValueError("Specify each time parameter only once")
+        if days is not None and (start is not None or stop is not None):
+            raise ValueError("Use either days or start and stop")
+        if start is not None or stop is not None:
+            from_date, to_date = cls._explicit_window(start, stop, now)
+        else:
+            from_date, to_date = cls._days_window(days, now)
+        if from_date > to_date:
+            raise ValueError("start must be before stop")
+        if to_date > now:
+            raise ValueError("stop cannot be in the future")
+        if from_date < cls._two_years_before(now):
+            raise ValueError("The maximum lookback is two years")
+        return from_date, to_date
+
+    @staticmethod
+    def _protocols_from_meili(indexer, uids):
+        """Resolve only missing per-report protocols and cache valid pairs."""
+        if not uids:
+            return {}
+        client = meilisearch.Client(
+            db.app.config.get("MEILI_DATABASE_URI"),
+            db.app.config.get("MEILI_KEY"),
+            timeout=5,
+        )
+        index = client.index("plum")
+        resolved = {}
+        for offset in range(0, len(uids), InfoIpApi.PROTOCOL_BATCH_SIZE):
+            batch = uids[offset : offset + InfoIpApi.PROTOCOL_BATCH_SIZE]
+            try:
+                page = index.get_documents(
+                    {"ids": batch, "fields": ["id", "body.ports"], "limit": len(batch)}
+                )
+            except meilisearch.errors.MeilisearchError as error:
+                logger.warning("InfoIP protocol lookup failed: %s", error)
+                break
+            docs = []
+            for result in page.results:
+                raw_doc = dict(result)
+                pairs = port_protocol_values(raw_doc)
+                if pairs:
+                    uid = str(raw_doc["id"])
+                    resolved[uid] = set(pairs)
+                    docs.append({"uid": uid, "port_protocol": pairs})
+            if docs:
+                # Automatic reconciliation owns writes once enabled. The API
+                # can still return source-derived protocols without altering
+                # a pinned (possibly retired) generation.
+                managed = isinstance(indexer.r, GenerationClient) and bool(
+                    indexer.r.raw.get(CONTROL + "desired")
+                )
+                if not managed:
+                    indexer.replace_field_values_batch("port_protocol", docs)
+        return resolved
+
+    @staticmethod
+    def _protocol_ports(ports, pairs):
+        """Match indexed protocol pairs with port numbers; retain legacy gaps."""
+        numbered_ports = {
+            int(port)
+            for port in ports
+            if str(port).isdigit() and 0 <= int(port) <= 65535
+        }
+        protocol_ports = set()
+        for pair in pairs:
+            protocol, separator, port = str(pair).partition("/")
+            if (
+                separator
+                and protocol in ("tcp", "udp")
+                and port.isdigit()
+                and int(port) in numbered_ports
+            ):
+                protocol_ports.add((int(port), protocol))
+        protocol_ports.update(
+            (port, None)
+            for port in numbered_ports - {port for port, _ in protocol_ports}
+        )
+        return protocol_ports
+
+    @staticmethod
+    def _ports_with_tags(indexer, selected, timestamps):
+        """Collect per-port tags and seen bounds from selected HSH reports."""
+        if not selected:
+            return []
+        pipeline = indexer.r.pipeline(transaction=False)
+        for uid in selected:
+            pipeline.smembers(f"ports:{uid}")
+            pipeline.smembers(f"port_protocols:{uid}")
+            pipeline.smembers(f"tags:{uid}")
+        values = pipeline.execute()
+        missing = [
+            uid
+            for uid, ports, pairs in zip(selected, values[::3], values[1::3])
+            if ports and not pairs
+        ]
+        resolved = InfoIpApi._protocols_from_meili(indexer, missing)
+        port_data = {}
+        for uid, ports, pairs, tags in zip(
+            selected, values[::3], values[1::3], values[2::3]
+        ):
+            for port, protocol in InfoIpApi._protocol_ports(
+                ports, pairs or resolved.get(uid, set())
+            ):
+                entry = port_data.setdefault(
+                    (port, protocol),
+                    {
+                        "tags": set(),
+                        "first_seen": timestamps[uid]["first_seen"],
+                        "last_seen": timestamps[uid]["last_seen"],
+                    },
+                )
+                entry["tags"].update(tags)
+                entry["first_seen"] = min(
+                    entry["first_seen"], timestamps[uid]["first_seen"]
+                )
+                entry["last_seen"] = max(
+                    entry["last_seen"], timestamps[uid]["last_seen"]
+                )
+        return [
+            {
+                "port": port,
+                "protocol": protocol,
+                "tags": sorted(normalize_tags(data["tags"]), key=str.lower),
+                "first_seen": datetime.fromtimestamp(data["first_seen"], timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "last_seen": datetime.fromtimestamp(data["last_seen"], timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+            }
+            for (port, protocol), data in sorted(
+                port_data.items(), key=lambda item: (item[0][0], item[0][1] or "")
+            )
+        ]
+
+    @expose("/<path:ip>", methods=["GET"])
+    @protect()
+    @safe
+    @prioritized_search
+    def get(self, ip):
+        """
+        ---
+        get:
+          summary: Get open ports and tags observed for an IP.
+          description: |
+            Aggregate indexed scan reports whose last_seen is inside the selected
+            UTC window. Each protocol/port pair lists tags from reports where that
+            port was observed; tags are computed for whole reports, so this does
+            not establish that a tag describes that port's service.
+            Per-port last_seen is the latest positive observation in the window;
+            first_seen is the earliest Kvrocks first_seen among selected HSH reports
+            containing that port, and may predate the requested window.
+            Legacy reports lacking protocol indexes are resolved from Meilisearch
+            for this IP and cached in Kvrocks. If unavailable, protocol is null.
+            No continuous openness between scans is implied.
+            Default window is the last 30 days. Lookback cannot exceed two years.
+          parameters:
+            - in: path
+              name: ip
+              required: true
+              schema:
+                type: string
+              description: One public IPv4 or IPv6 address; CIDR ranges are rejected.
+            - in: query
+              name: days
+              schema:
+                type: integer
+                minimum: 1
+                maximum: 731
+                default: 30
+              description: Rolling days before now; mutually exclusive with start/stop.
+            - in: query
+              name: start
+              schema:
+                type: string
+              description: UTC ISO date or timezone-aware datetime; requires stop.
+            - in: query
+              name: stop
+              schema:
+                type: string
+              description: UTC ISO date or timezone-aware datetime; requires start.
+          responses:
+            "200":
+              description: Distinct open ports with tags co-observed in their reports.
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      result:
+                        type: object
+                        properties:
+                          ip:
+                            type: string
+                          start:
+                            type: string
+                            format: date-time
+                          stop:
+                            type: string
+                            format: date-time
+                          ports:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                port:
+                                  type: integer
+                                protocol:
+                                  type: string
+                                  nullable: true
+                                  enum: [tcp, udp]
+                                tags:
+                                  type: array
+                                  items:
+                                    type: string
+                                first_seen:
+                                  type: string
+                                  format: date-time
+                                last_seen:
+                                  type: string
+                                  format: date-time
+                          report_count:
+                            type: integer
+            "400":
+              description: Invalid IP or time parameters.
+            "404":
+              description: IP has no indexed reports.
+            "401":
+              description: Authentication required.
+            "403":
+              description: Permission denied.
+        """
+        if not is_valid_ip(ip):
+            return self.response_400(
+                message="Invalid public IP address; CIDR ranges are not accepted"
+            )
+        try:
+            from_date, to_date = self._resolve_window(request.args)
+        except ValueError as error:
+            return self.response_400(message=str(error))
+
+        normalized_ip = str(ipaddress.ip_address(ip))
+        indexer = KVrocksIndexer(
+            db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+        )
+        timestamps = indexer.get_timestamp_for_ip(normalized_ip)
+        uids = [uid for uid in timestamps if uid not in ("min_seen", "max_seen")]
+        if not uids:
+            return self.response_404()
+
+        start_ts = int(from_date.timestamp())
+        stop_ts = int(to_date.timestamp())
+        selected = sorted(
+            uid
+            for uid in uids
+            if timestamps[uid].get("last_seen") is not None
+            and start_ts <= timestamps[uid]["last_seen"] <= stop_ts
+        )
+        return self.response(
+            200,
+            result={
+                "ip": normalized_ip,
+                "start": from_date.isoformat().replace("+00:00", "Z"),
+                "stop": to_date.isoformat().replace("+00:00", "Z"),
+                "ports": self._ports_with_tags(indexer, selected, timestamps),
+                "report_count": len(selected),
+            },
+        )
+
+
 appbuilder.add_api(PublicTargetsApi)
 appbuilder.add_api(TargetsApi)
 appbuilder.add_api(Api)
 appbuilder.add_api(ScanProfilesApi)
 appbuilder.add_api(NsesApi)
 appbuilder.add_api(PortsApi)
+appbuilder.add_api(InfoIpApi)
+
+# Views are initialized before APIs; keep the optional read interface separate.
+from .discovery_api import DiscoveryApi  # pylint: disable=wrong-import-position
+
+appbuilder.add_api(DiscoveryApi)

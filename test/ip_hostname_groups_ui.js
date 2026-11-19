@@ -1,0 +1,89 @@
+'use strict';
+const assert = require('node:assert/strict');
+const {createCache} = require('../webapp/app/static/js/ip_hostname_groups.js');
+
+(async function () {
+    const requests = [];
+    const resolvers = new Map();
+    const displayed = [];
+    const states = [];
+    const controller = createCache('', 'IP', key => {
+        requests.push(key);
+        return new Promise((resolve, reject) => resolvers.set(key, {resolve, reject}));
+    }, value => displayed.push(value), state => states.push(state));
+    const first = controller.select('a');
+    const second = controller.select('b');
+    await Promise.resolve();
+    resolvers.get('b').resolve('B');
+    await second;
+    assert.deepEqual(displayed, ['B']);
+    resolvers.get('a').resolve('A');
+    await first;
+    assert.deepEqual(displayed, ['B'], 'late A must not replace B');
+    await controller.select('a');
+    await controller.select('');
+    await controller.select('b');
+    assert.deepEqual(displayed, ['B', 'A', 'IP', 'B']);
+    assert.deepEqual(requests, ['a', 'b'], 'back/return must use memory cache');
+
+    const third = controller.select('c');
+    const repeated = controller.select('c');
+    await Promise.resolve();
+    assert.deepEqual(requests, ['a', 'b', 'c'], 'share in-flight request');
+    await controller.select('a');
+    resolvers.get('c').reject(new Error('offline'));
+    await Promise.all([third, repeated]);
+    assert.equal(states.at(-1), 'ready', 'obsolete error must not affect selection');
+    const retry = controller.select('c');
+    await Promise.resolve();
+    resolvers.get('c').resolve('C');
+    await retry;
+    assert.equal(displayed.at(-1), 'C');
+    assert.deepEqual(requests, ['a', 'b', 'c', 'c'], 'failed requests remain retryable');
+    const failure = controller.select('d');
+    await Promise.resolve();
+    resolvers.get('d').reject(new Error('offline'));
+    await failure;
+    assert.equal(states.at(-1), 'error');
+    // Exercise the actual template's lazy, independent enrichment requests.
+    const source = require('node:fs').readFileSync(
+        require('./ui_template_paths').templatePath('ip_detail.html'), 'utf8');
+    const start = source.indexOf('    function loadInformation() {');
+    const end = source.indexOf("\n    const copyButton = document.getElementById('ip-copy-button');", start);
+    const element = () => ({style: {display: 'none'}, textContent: '', appendChild() {}});
+    const loadingEl = element(), pdnsLoadingEl = element(), errorEl = element(), pdnsErrorEl = element();
+    const enrichment = new Map();
+    const mapLoads = [];
+    const context = {
+        ip: '2001:db8::1', informationStarted: false,
+        document: {createElement: element},
+        window: {PlumShowLocation: geoData => mapLoads.push(geoData)},
+        loadingEl, pdnsLoadingEl, errorEl, pdnsErrorEl,
+        resultsEl: {...element(), dataset: {geolookup: '/plum/ip/geolookup/2001%3Adb8%3A%3A1'}},
+        pdnsResultsEl: element(),
+        renderEntry: value => value,
+        fetch: url => new Promise((resolve, reject) => enrichment.set(url, {resolve, reject}))
+    };
+    const vm = require('node:vm');
+    vm.createContext(context);
+    vm.runInContext(source.slice(start, end), context);
+    assert.equal(enrichment.size, 0, 'no requests before opening Informations');
+    context.loadInformation();
+    assert.equal(enrichment.size, 2, 'start geo and PDNS without waiting for either');
+    assert.equal(require('./ui_template_paths').isHidden(loadingEl), false);
+    assert.equal(require('./ui_template_paths').isHidden(pdnsLoadingEl), false);
+    context.loadInformation();
+    assert.equal(enrichment.size, 2);
+    assert.equal(mapLoads.length, 1, 'Location shares the first IP lookup');
+    enrichment.get('/plum/ip/geolookup/2001%3Adb8%3A%3A1').resolve({ok: true, json: async () => []});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(await mapLoads[0], []);
+    assert.equal(require('./ui_template_paths').isHidden(loadingEl), true, 'geo completes independently');
+    assert.equal(require('./ui_template_paths').isHidden(pdnsLoadingEl), false, 'PDNS spinner remains while pending');
+    enrichment.get('/ip/pdns/2001%3Adb8%3A%3A1').reject(new Error('PDNS unavailable'));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(require('./ui_template_paths').isHidden(pdnsLoadingEl), true);
+    assert.equal(pdnsErrorEl.textContent, 'PDNS unavailable');
+    assert.equal(require('./ui_template_paths').isHidden(errorEl), true, 'PDNS failure does not fail geo');
+    console.log('Hostname group cache checks passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

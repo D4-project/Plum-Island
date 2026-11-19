@@ -1,8 +1,0 @@
-description: Lancom SSH
-query: banner.bg:ssh-2.0-lancom
-tags:
-- vendor:lancom
-- type:router
-- proto:ssh
-- product:lancom-ssh
-version: 20260520T133458Z

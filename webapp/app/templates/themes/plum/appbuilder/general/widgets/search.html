@@ -1,0 +1,70 @@
+{% import 'appbuilder/baselib.html' as baselib %}
+
+<details class="plum-filter-panel"{% if active_filters %} open{% endif %}>
+<summary>
+  <i class="fa fa-search" aria-hidden="true"></i>
+  <span>{{ _('Search & filter') }}</span>
+  {% if active_filters %}<span class="plum-filter-count">{{ active_filters|length }} {{ _('applied') }}</span>{% endif %}
+  <i class="fa fa-chevron-down plum-filter-chevron" aria-hidden="true"></i>
+</summary>
+<form id="filter_form" class="form-search plum-list-filters" method="get" role="search" aria-label="{{ _('Search records') }}">
+  <div class="plum-filter-toolbar">
+    <p>{{ _('Search across all records, including other pages.') }}</p>
+    <div class="btn-group">
+      <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+        <i class="fa fa-plus" aria-hidden="true"></i> {{ _('Add filter') }} <span class="caret"></span>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-right">
+        {% for col in include_cols %}
+          <li><a href="#" name="{{ col }}" class="filter">{{ label_columns[col] }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+
+  <table class="table filters" aria-label="{{ _('Search criteria') }}"><tbody></tbody></table>
+  <p class="plum-filter-empty">{{ _('Choose Add filter to select a field to search.') }}</p>
+
+  <div class="plum-filter-actions">
+    <span>{{ _('Press Enter to search.') }}</span>
+    <a class="btn btn-default" href="{{ route_base.rstrip('/') }}/list/">{{ _('Reset') }}</a>
+    <button type="submit" class="btn btn-primary"><i class="fa fa-search" aria-hidden="true"></i> {{ _('Search') }}</button>
+  </div>
+</form>
+</details>
+
+<script nonce="{{ baselib.get_nonce() }}">
+(function ($) {
+  const labels = {{ label_columns | tojson }};
+  const fields = {{ form_fields | tojson }};
+  const operations = {{ search_filters | tojson }};
+  const active = {{ active_filters | tojson }};
+  const removeLabel = {{ _('Remove filter') | tojson }};
+  const operatorLabel = {{ _('Match condition') | tojson }};
+  const valueHint = {{ _('Enter a value…') | tojson }};
+  const $form = $('#filter_form');
+
+  new AdminFilters('#filter_form', labels, fields, operations, active);
+  $form.on('click', 'a.filter', function (event) {
+    event.preventDefault();
+  });
+
+  $(function () {
+    function labelRows() {
+      $form.find('.filters tr').each(function () {
+        const $row = $(this);
+        const label = $row.find('.remove-filter').text().replace('×', '').trim();
+        $row.find('.remove-filter').attr({'aria-label': `${removeLabel}: ${label}`, title: `${removeLabel}: ${label}`});
+        $row.find('.filter-op').attr('aria-label', `${label}: ${operatorLabel}`);
+        $row.find('.filter-op').next('.select2').find('.select2-selection')
+          .attr('aria-label', `${label}: ${operatorLabel}`);
+        $row.find('.filter_val').attr('aria-label', label);
+        $row.find('input.filter_val[type="text"], input.filter_val[type="search"]')
+          .attr('placeholder', valueHint);
+      });
+    }
+    labelRows();
+    new MutationObserver(labelRows).observe($form.find('.filters')[0], {childList: true, subtree: true});
+  });
+})(jQuery);
+</script>

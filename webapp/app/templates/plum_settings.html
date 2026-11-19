@@ -1,0 +1,101 @@
+{% extends "appbuilder/base.html" %}
+
+{% block head_css %}
+  {{ super() }}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/plum_settings.css') }}">
+{% endblock %}
+
+{% block content %}
+<main class="plum-settings" id="plum-settings">
+  <header class="settings-heading">
+    <h1>Plum Settings</h1>
+    <p>Configure Plum services and background tasks. Authentication and theme settings are managed separately.</p>
+  </header>
+  {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
+  {% if not unavailable %}
+  <form method="post" action="{{ url_for('PlumSettingsView.index') }}" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="revision" value="{{ revision }}">
+    <div class="settings-toolbar">
+      <div>
+        {% if pending %}
+        <strong>{{ pending|length }} setting{{ 's' if pending|length != 1 else '' }} pending restart</strong>
+        {% else %}
+        <strong>No pending changes</strong>
+        {% endif %}
+        <p>Restart Plum-Agent to apply changes.</p>
+      </div>
+      <button type="submit" class="btn btn-primary"><i class="fa fa-save" aria-hidden="true"></i> Save settings</button>
+    </div>
+    <div class="settings-grid">
+      {% for card in cards %}
+      <section class="settings-card" aria-labelledby="settings-card-{{ loop.index }}">
+        <header>
+          <h2 id="settings-card-{{ loop.index }}">{{ card.section.title }}</h2>
+          <p>{{ card.section.help }}</p>
+        </header>
+        <div class="settings-fields">
+        {% for item in card.fields %}
+          {% set field = item.definition %}
+          <div class="settings-field{% if item.pending %} settings-pending{% endif %}">
+            {% if item.inherited and not field.secret and not field.inactive %}
+            <input type="hidden" name="prefilled_{{ field.key }}" value="true" data-prefilled-default="setting-{{ field.key }}">
+            {% endif %}
+            <label for="setting-{{ field.key }}">{{ field.label }}{% if field.unit %} <span class="settings-unit">({{ field.unit }})</span>{% endif %}</label>
+            {% if field.inactive %}
+              <input id="setting-{{ field.key }}" class="form-control" value="{{ item.value }}" disabled aria-describedby="help-{{ field.key }}">
+            {% elif field.secret %}
+              <div class="settings-secret" data-secret-field>
+                <select id="setting-{{ field.key }}" name="secret_action_{{ field.key }}" class="form-control" aria-describedby="help-{{ field.key }}" data-secret-action>
+                  <option value="keep">Keep unchanged — {{ 'configured' if item.configured else 'not set' }}</option>
+                  <option value="replace">Replace credential</option>
+                  {% if field.optional %}<option value="clear">Clear credential</option>{% endif %}
+                  {% if item.override %}<option value="base">Use config.py value</option>{% endif %}
+                </select>
+                <label class="sr-only" for="secret-{{ field.key }}">New {{ field.label }}</label>
+                <input id="secret-{{ field.key }}" type="password" name="secret_value_{{ field.key }}" class="form-control" value="" autocomplete="new-password" placeholder="New credential" data-secret-value>
+              </div>
+            {% elif field.value_type == 'bool' %}
+              <select id="setting-{{ field.key }}" name="{{ field.key }}" class="form-control" aria-describedby="help-{{ field.key }}">
+                <option value="true"{% if item.value == 'True' %} selected{% endif %}>True — enabled</option>
+                <option value="false"{% if item.value == 'False' %} selected{% endif %}>False — disabled</option>
+              </select>
+            {% elif field.kind == 'level' %}
+              <select id="setting-{{ field.key }}" name="{{ field.key }}" class="form-control" aria-describedby="help-{{ field.key }}">
+                {% for level in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] %}<option{% if item.value == level %} selected{% endif %}>{{ level }}</option>{% endfor %}
+              </select>
+            {% elif field.kind == 'suffixes' %}
+              <textarea id="setting-{{ field.key }}" name="{{ field.key }}" class="form-control" rows="3" aria-describedby="help-{{ field.key }}">{{ item.value }}</textarea>
+            {% else %}
+              <input id="setting-{{ field.key }}" name="{{ field.key }}" class="form-control" value="{{ item.value }}" aria-describedby="help-{{ field.key }}"
+                {% if field.value_type in ['int', 'float', 'port'] %}type="number" step="{{ 'any' if field.value_type == 'float' else '1' }}"{% if field.minimum is not none %} min="{{ field.minimum }}"{% endif %}{% if field.kind == 'port' %} min="1" max="65535"{% endif %}{% if field.key == 'SCHEDULER_QUEUE_STATE_BATCH_SIZE' %} max="256"{% endif %}
+                {% elif field.kind == 'email' %}type="email"{% elif field.kind == 'url' %}type="url"{% else %}type="text"{% endif %}{% if not field.optional and not item.inherited %} required{% endif %}>
+            {% endif %}
+            <div id="help-{{ field.key }}" class="settings-help">
+              <p>{{ field.help }}</p>
+              <p class="settings-default"><strong>Default:</strong> {{ item.default }}{% if field.unit %} {{ field.unit }}{% endif %}</p>
+              <p class="settings-application">{% if field.inactive %}<strong>Inactive legacy setting</strong>{% else %}<strong>Restart required:</strong> Plum-Agent{% endif %}</p>
+              <p class="settings-key"><code>{{ field.key }}</code></p>
+            </div>
+            {% if item.pending %}
+            <p class="settings-pending-note"><strong>Pending restart.</strong>{% if not field.secret %} Currently applied: <span>{{ item.applied or 'Not set' }}</span>{% else %} The active credential is unchanged.{% endif %}</p>
+            {% endif %}
+            {% if item.override and not field.secret and not field.inactive %}
+            <label class="settings-reset"><input type="checkbox" name="reset_{{ field.key }}" value="true"> Use config.py value after restart</label>
+            {% endif %}
+          </div>
+        {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+    <div class="settings-footer"><button type="submit" class="btn btn-primary">Save settings</button></div>
+  </form>
+  {% endif %}
+</main>
+{% endblock %}
+
+{% block tail_js %}
+  {{ super() }}
+  <script src="{{ url_for('static', filename='js/plum_settings.js') }}"></script>
+{% endblock %}

@@ -69,7 +69,9 @@ When you need to understand actual product behavior, prioritize:
 
 ## Entry Points
 
-- `webapp/run.py`: local dev launcher, runs Flask on `0.0.0.0:5001` with `debug=True`.
+- `setup.sh`: first-run installer. Creates `.venv`, installs `requirements.txt`, creates the Flask-AppBuilder admin user, then runs `tools/initial_setup.py`.
+- `tools/initial_setup.py`: initial DB/data bootstrap. Seeds roles, TCP ports, HTTP header collection, bundled YAML tag rules, NSE scripts from `D4-project/Plum-Rules-NSE`, and the default all-target banner scan profile.
+- `webapp/run.py`: tracked demo launcher, runs Flask on `0.0.0.0:5000` with `debug=True`, matching Compose. A local port override (for example 5001) is not the shipped default. See the production limitations in `documentation/installation.md`.
 - `webapp/app/__init__.py`: creates Flask, SQLAlchemy, AppBuilder, loads views/APIs, and starts the scheduler only in the Werkzeug main process.
 - `webapp/app/views.py`: GUI views, search pages, bulk target import, and job result file display.
 - `webapp/app/apis.py`: bot-facing API plus target bulk import API.
@@ -98,6 +100,22 @@ PYLINTHOME=/tmp/pylint .venv/bin/pylint <changed-python-files>
 
 If a test cannot run because it needs external services or local data, state that explicitly with the reason. Do not silently skip relevant tests.
 
+### GUI themes and local assets
+
+- Keep `plum.css` as the default for new installations. Preserve explicit theme
+  and base-template choices in existing configurations.
+- GUI changes must identify affected template variants and verify Plum plus
+  affected original-template themes such as Readable/Flatly. Test rendering and
+  script loading, not only the presence of template or CSS files.
+- Prefer shared JavaScript and template partials for behavior used by multiple
+  themes; avoid separate implementations of the same controls.
+- For Plum, verify light/dark mode, navigation, keyboard controls and any changed
+  search helpers. Keep CSS, JavaScript and webfonts served locally; no CDN or
+  Google Fonts dependency at runtime. Retain licenses and provenance for assets.
+- Run `.venv/bin/python -m unittest test.test_ui_theme test.test_plum_offline_assets`
+  and relevant browser-side checks in addition to the full suite above. Report
+  which themes were checked and any remaining browser/runtime limitation.
+
 ## System Model
 
 ### Main entities
@@ -108,9 +126,11 @@ If a test cannot run because it needs external services or local data, state tha
 - `ApiKeys`: bot authentication secrets.
 - `ScanProfiles`, `Ports`, `Nses`: scan definition data model. Jobs are dispatched with profile-specific ports and NSE scripts.
 
+Fresh setup creates an all-target `Default banner scan` profile for TCP ports `22`, `80`, and `443` with `http-headers.nse`, `http-title.nse`, `ssl-cert.nse`, `ssh-hostkey.nse`, `tls-alpn.nse`, `banner.nse`, `modbus.nse` and `http-mm-sha-favicon.nse` (not `http-favicon.nse`). NSE imports prefer Plum-Rules-NSE, with bundled `nse/` files filling missing default names. It also seeds all TCP ports, using conventional `/etc/services` names when available without overwriting existing names, the default HTTP header tagging collection, YAML tag rules, and controller-managed NSE scripts.
+
 ### Effective runtime flow
 
-1. Scheduler selects active, non-working targets whose `last_scan` is empty or older than `SCAN_DELAY`.
+1. Scheduler selects eligible `target_scan_states` per active applicable profile, using `ScanProfiles.scan_cycle_minutes`, not global `SCAN_DELAY` or `Targets.last_scan`. Never-scanned and expired states are selected separately. Current-cycle `max_target_id` bounds membership; states completed since `cycle.started_at` are not rescheduled within that cycle. Target-level timestamps/working flags are aggregates, not the per-profile scheduling source.
 2. CIDRs are split into scan jobs of up to 256 IPs. In practice, the system builds jobs no larger than `/24` worth of IPv4 addresses. FQDNs are batched with the same 256-item ceiling.
 3. A bot calls `/bot_api/beacon` to register/update liveness.
 4. A bot calls `/bot_api/getjob` and receives a queued job plus the profile-specific `nmap_ports` and `nmap_nse` payload. NSE bodies are only transferred when the agent cache hash differs.
@@ -118,6 +138,12 @@ If a test cannot run because it needs external services or local data, state tha
 6. The result is stored under `JSON_FOLDER/<first-uid-char>/<job_uid>.json`.
 7. Scheduler exports finished, non-exported jobs to Meilisearch and Kvrocks.
 8. Old exported jobs are purged by `JOB_SCAVENGE`.
+
+Before queuing a CIDR scan, the scheduler checks CIRCL routing information using
+the 24-hour target cache. ASN `0` completes the job/state without a scanner or
+result export; cycle progress advances normally. Missing/stale routing data that
+cannot be refreshed defers scheduling, rather than counting as completion.
+See [scheduling and routing](documentation/scanning.md) for the complete contract.
 
 ### Job priority contract
 
@@ -174,9 +200,9 @@ Domain extraction in `result_parser.py` is guarded. Plum does not index every st
 
 The current contract is:
 
-- `ONLINETLD = False`: validate suffixes offline with `py-faup-rs` built-in knowledge. This is the fast offline mode.
-- `ONLINETLD = True`: validate suffixes against the explicit `TLDS` list loaded at startup. In the web app, that list is refreshed from IANA when enabled.
-- `TLDADD`: extra suffixes that are always accepted in addition to the main validation mode, for example `local`.
+- `pyfaup-rs` validates known public suffixes offline, including multi-label suffixes such as `co.uk`.
+- `TLDADD` optionally accepts extra private suffixes not known to pyfaup, for example `local`.
+- `ONLINETLD` and `TLDS` are obsolete. No IANA list is downloaded at startup.
 
 So `TLDADD` is an allow-list override, not the primary detection mechanism.
 
@@ -190,7 +216,7 @@ If a suffix is accepted, Plum may populate all of these parsed fields:
 If these fields are missing in Kvrocks while isolated parsing works, check this order first:
 
 1. the parser config actually passed to `parse_json()`
-2. whether `ONLINETLD` and `TLDS` or offline suffix detection match the intended mode
+2. whether pyfaup recognizes the suffix
 3. whether `TLDADD` contains the local/private suffixes you expect
 4. whether the data was indexed before the parser/config fix and therefore needs reindexing
 
@@ -199,7 +225,7 @@ If these fields are missing in Kvrocks while isolated parsing works, check this 
 Plum exposes two distinct search pages and they do not serve the same purpose:
 
 - `Token Search` uses Meilisearch. This is the broad, free-form, word-based search page. It is useful when the user wants to search scan documents more loosely and inspect matching raw bodies quickly.
-- `Search Scans` uses Kvrocks. This is the structured search page, closer to a Shodan-like experience. It accepts fielded filters such as `ip`, `net`, `port`, `http_server`, `http_title`, `x509_subject`, `banner`, and similar parsed attributes.
+- `Search Scans` uses Kvrocks. This is the structured search page, closer to a Shodan-like experience. It accepts fielded filters such as `ip`, `net`, `port`, `http_server`, `http_header`, `http_headval`, `http_title`, `x509_subject`, `banner`, and similar parsed attributes.
 
 The structured search page is the more operational one:
 
@@ -211,7 +237,11 @@ The structured search page is the more operational one:
 - it normalizes the selected date range to `00:00:00` on the start date and `23:59:59` on the end date
 - it renders only the first 100 IPs at a time for responsiveness and resumes with `Load more`
 - it uses an adaptive backward scan by `last_seen`: start at 1 day, grow to 2/4/8/... days when empty, then fall back to 1 day once hits are found
-- it can export the matching IP list and the full matching JSON set
+- it can export the matching IP list, full matching JSON set, and resolved CSV
+  (`ip`, `last seen`, `ptr`, `pdns`); all use full overlap scope, not visible rows
+- resolved CSV PTR names come only from matching stored scan documents, never
+  live reverse-DNS lookups; PDNS enrichment uses the configured CIRCL API and
+  locally filters observation intervals against the same resolved search dates
 
 So the split is:
 
@@ -220,6 +250,30 @@ So the split is:
 
 The structured search capability is part of the product, not an auxiliary admin feature. The README presents these fields as the way to explore collected exposure data.
 
+### Automatic index reconciliation
+
+The scheduler owns the lifecycle of `tools/reconcile_index.py`. GUI status reads
+must never launch recovery/index threads. Rule imports and GUI changes converge
+through committed SQL snapshots; worker inputs remain frozen until publication.
+Managed Kvrocks clients resolve logical keys through pinned generations. Route
+source ingestion through `ingest_indexer_sources` and the common journal/write
+barrier; never mutate a retired reader generation or clear the live index.
+Keep search sessions, signed API cursors, exports/reports and catalogue caches
+bound to their generation. See `documentation/automatic-indexing.md` for coverage,
+contribution provenance, bootstrap, recovery and offline cleanup contracts.
+
+### Search tag catalogue
+
+The five search helper columns show tags present in indexed scans, globally
+independent of query/dates. Both document ingestion and tag-only replacement
+maintain the Kvrocks `tag_catalogue` candidate set. Read names and positive
+`SCARD tag:{value}` counts only; never scan keys, load UID memberships or query
+SQL rules per page. Cache for 60 seconds per worker/backend with a refresh lock.
+Keep zero-count candidates to avoid races with ingestion; full tag flush/rebuild
+clears the set, while rebuilds preserving tags retain it. Seed existing indexes
+with `tools/backfill_tag_catalogue.py`, not an automatic request-time scan.
+Discovery API tag discovery retains its separate active-rule catalogue contract.
+
 ### IP detail view
 
 The structured search page links each IP to `/ip/<ip>`. That page is not a raw document dump; it is a cumulative history view for one IP across all matching stored scans.
@@ -227,11 +281,15 @@ The structured search page links each IP to `/ip/<ip>`. That page is not a raw d
 Its current contract is:
 
 - the `Scans Results` tab aggregates observations by port
-- each port card contains timestamp tabs ordered oldest on the left and newest on the right
-- the most recent timestamp tab is selected by default
+- each port header contains an SVG timeline: points at last_seen, ranges from first_seen to last_seen, sharing the visible observation time domain across ports for the selected hostname (or IP-only); changing the filter recomputes these bounds
+- the most recent matching observation is selected by default; timeline points select reports with mouse or keyboard, with all points and periods kept on one line even when close together; unknown dates remain accessible separately
 - a `Requested Hostname` dropdown is rendered before the port cards
 - the dropdown always includes `IP only` first, then all `fqdn_requested` values for that IP in alphabetical order
-- selecting a hostname filters the visible observations client-side without reloading the page
+- hostname choices come from Kvrocks `fqdn_requesteds:<uid>` metadata; only the selected group's full documents are fetched from Meilisearch, including on direct `?hostname=` links (no hostname means IP-only)
+- changing hostname fetches an HTML fragment through the same protected `detail` route, updates the URL and caches loaded groups in page memory; late responses never replace the current selection, and back/forward restores cached groups
+- scan counts, port counts, tags and first/last-seen metadata describe the selected group; the virtual-host count describes the complete hostname catalogue
+- a port's web link requires `proto:http` on the active observation's UID; SSL/TLS evidence on that port selects HTTPS, otherwise HTTP
+- web links retain the scanned port and selected hostname/IP, and update when the active timeline observation or hostname changes
 - the `Informations` tab is separate and is used for external enrichment such as CIRCL geolookup and passive DNS
 
 If you change how `body.hostnames` is parsed or indexed, verify both structured search and `/ip/<ip>` together. The IP detail page now depends on the same `type == "user"` hostname semantics as `fqdn_requested`.
@@ -266,6 +324,18 @@ This is the core orchestration path. Small mistakes here can stall scans, duplic
 
 ### If you change search
 
+Before coding, read [Search engine internals](documentation/sysinternal/search_engine.md),
+[Kvrocks objects](documentation/kvrocks_objects.md), and [Search syntax](documentation/search.md).
+The internals guide records current execution paths, invariants, known differences,
+and required regression checks. Use it to assess impact before modifying search.
+Update it in the same change when behavior or architecture changes; keep existing
+semantics during performance-only work, and identify intentional semantic fixes explicitly.
+
+Use standalone `debug` in interactive queries for request-local stage timings and
+Kvrocks counters; see the internals guide's diagnostics contract before changing
+instrumentation. Preserve identical results/commands with diagnostics on or off.
+Do not interpret unit tests or diagnostic command counts as performance validation.
+
 - `webapp/app/views.py`
 - `webapp/app/utils/kvrocks.py`
 - `webapp/app/utils/result_parser.py`
@@ -273,7 +343,7 @@ This is the core orchestration path. Small mistakes here can stall scans, duplic
 - `webapp/app/templates/search_kvrocks.html`
 - `readme.md`
 
-The search syntax exposed in the UI and README must stay aligned with the fields actually produced by `parse_json()` and indexed by `KVrocksIndexer.add_documents_batch()`.
+The search syntax exposed in the UI and README must stay aligned with the fields produced by `parse_json()` followed by `prepare_kvrocks_document()` and indexed by `KVrocksIndexer.add_documents_batch()`.
 
 For the structured search page specifically, keep these moving parts aligned:
 
@@ -282,6 +352,57 @@ For the structured search page specifically, keep these moving parts aligned:
 - `KVSearchView.execute_search_page()` for the fast paged UI semantics
 - `search_kvrocks.html` for the help table, default date handling, and adaptive loading behavior
 - `result_parser.py` plus `KVrocksIndexer.add_documents_batch()` for the actual indexed field names
+
+### Plum-Virion and Discovery API
+
+Plum-Virion is the separate MCP repository (`../Plum-Virion` in a sibling local
+checkout). Its `AGENT.md` follows Plum's Black, compilation, Pylint, tests,
+docstring and documentation requirements. Plum-Island owns query validation,
+execution, stored data and permissions; Virion adapts the authenticated API.
+The authoritative contract is [discovery.md](documentation/discovery.md).
+
+- `webapp/app/discovery_api.py` uses `@protect()` on every operation. Preserve
+  method-level FAB permissions and JWT user binding.
+- `search` reuses `execute_search_page`; signed cursors bind query, dates and
+  seen IPs to the principal. Empty windows may continue.
+- `show_ip` shares `IPDetailView.observation_scope` with the web view. Preserve
+  IP-only/hostname groups, observation history and Kvrocks UID tag provenance.
+- Catalogues describe active SQL rule tags and configured collected headers,
+  not observed matches or historical coverage.
+- Coordinate API changes with Virion and update both repositories' docs/tests.
+  Virion never accesses databases directly or copies the parser.
+- Discovery operations never start scans, modify indexes or resolve external DNS.
+
+### If you change setup/bootstrap
+
+- `setup.sh`
+- `tools/initial_setup.py`
+- `requirements.txt`
+- `documentation/installation.md`
+- `documentation/tools.md`
+- `readme.md`
+- `release_note.md`
+
+Keep the first-run installer aligned with the documented initial objects: TCP ports, HTTP header collection, tag rules, NSE imports, and default scan profiles.
+
+### SQL migration filenames (mandatory)
+
+Every migration in `webapp/sql_upd/` must be named exactly
+`NN_migrate_from_<full-40-character-lowercase-git-SHA>.py`.
+
+- Inspect existing migration numbers first; use the next unused sequential number,
+  zero-padded to at least two digits. Never reuse or renumber an existing migration.
+- The SHA identifies the source revision before the schema change, not the future
+  migration commit. Resolve it with `git rev-parse <source-revision>`; for a new
+  change based on the current checkout, use `git rev-parse HEAD` before committing.
+- No abbreviated SHA, descriptive suffix, or description-only filename. Put the
+  migration purpose in its module docstring and the applicable versioned guide
+  linked from `documentation/migration.md`. Keep that index's source/destination
+  versions explicit; local `/Plan/` notes are not release documentation.
+- When correcting a filename, update every reference in tests, documentation and
+  scripts. A rename does not authorize running the migration.
+- Before finishing, run `test/test_sql_migration_names.py` and the affected
+  migration tests against disposable databases only.
 
 ## Parsing And Search Contract
 
@@ -304,6 +425,8 @@ It extracts these searchable fields:
 - `tag`
 - `port`
 - `http_title`
+- `http_header`
+- `http_headval`
 - `http_cookiename`
 - `http_etag`
 - `http_server`
@@ -319,6 +442,19 @@ It extracts these searchable fields:
 - `x509_san`
 - `banner`
 
+Index writers use `parse_json(raw_doc, config, tag_rules=...)` then
+`prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=...)`. Skip documents
+when the public parser returns `None`. Preparation copies the parsed dictionary;
+it does not modify raw scan JSON or the public parser's CN-only contract.
+The indexed copy adds `x509_issuer_cn`, `x509_subject_cn` and `port_protocol`
+(`tcp/443`, `udp/53`, etc.; InfoIP metadata, not a structured-search keyword).
+When available, structured certificate attributes replace `x509_issuer` and
+`x509_subject` with serialized DNs; without a constructed DN the parsed value
+is retained. With supplied rules, preparation recomputes tags against this copy.
+Both scheduler export and the Kvrocks importer use this stage. Tag-only reindex
+reads existing indexed fields and cannot replace a full certificate rebuild.
+See [certificate migration](migration_full_cert.md) and the search internals guide.
+
 Raw scan documents, including the Meilisearch source documents, never carry `tag` or `tags` fields. Tags are computed from DB-backed tag rules while parsing for the Kvrocks index. Canonical stored tag values use `<namespace>:<value>` such as `product:openssh` or `proto:ssh`; Kvrocks query/index keys use `tag:<namespace>:<value>` and `tags:<uid>`. Do not add Meilisearch fallbacks for tags or merge "pre-existing document tags" into computed tags.
 
 `fqdn_requested` is not a synonym of `fqdn`. It is derived only from `body.hostnames[*]` entries whose `type == "user"`. This field is used both by structured search and by the hostname selector on `/ip/<ip>`.
@@ -326,22 +462,29 @@ Raw scan documents, including the Meilisearch source documents, never carry `tag
 ### Reporting contract
 
 Reports are configured from the `Reports` model and use the structured Kvrocks query syntax.
-The query is always evaluated inside the report interval. Monthly reports use `last_run_at` as the start when available; otherwise they start one calendar month before the run time.
+The query is always evaluated inside the report interval. Monthly reports cover one calendar month ending at run time; weekly reports cover seven days ending at run time. `last_run_at` records delivery only and never changes report scope.
 
-Report output is Markdown only for now. Keep the current shape aligned between code and README:
+Report Markdown is canonical. Preview renders its full safe HTML subset.
+Email renders only the title/summary metadata, Open ports and disclaimer as safe
+HTML and Markdown plain text, with a note pointing to the complete attached PDF.
+Generate the full PDF before SMTP delivery; never send a partial report on PDF failure.
+Keep the current full-report shape aligned between code and README:
 
-- summary and period
+- top-level report title, summary metadata, and period
 - open port summary
-- monthly `New opened port` comparison before the host list
-- host list sorted by numeric IP order
+- `New opened port` grouped under bold port labels with numerically sorted affected IP sub-bullets, comparing preceding equivalent period before the host list
+- full report dump sorted by numeric IP order
 - per-host tags from Kvrocks `tags:<uid>` only; scan documents and Meilisearch documents do not contain tags
 - per-host open ports and scan result count
 - per-host associated FQDNs from PTR records found in report-period documents first, only when the source document `last_seen` is within `REPORT_PTR_LAST_SEEN_MONTHS` months before the report end, then `fqdn_requesteds:<uid>`, completed by Passive DNS `A` records up to 25 total entries
 - report-period PTR entries are rendered with `(ptr)`
 - requested FQDNs win over Passive DNS duplicates; Passive DNS-only entries are rendered with `(pdns)`
+- the global `FQDN discovered in Passive DNS` section includes only records observed within the previous 90 days
 - the as-is disclaimer
 
 The `Preview` action must not send email and must remain available for inactive reports.
+Rendered previews include a heading index with stable anchors and a print action; print
+output must hide UI controls. HTML rendering must escape every report-controlled value.
 Preview generation is asynchronous because Passive DNS enrichment can be slow:
 
 1. `/reportsview/preview_loading/<id>` renders the progress modal.
@@ -358,8 +501,16 @@ The structured query syntax currently works like this:
 - quoted values are allowed because parsing is `shlex`-based, for example `http_title.lk:"index of"`
 - implicit `AND` inside one group
 - explicit `OR` between groups
+- standalone `NOT` before a field term, with at least one positive term per OR group
 - repeated occurrences of the same key inside one group accumulate into a list
 - supported suffix modifiers are `.lk` / `.like`, `.bg` / `.begin`, and `.not` / `.nt`
+
+Standalone NOT uses an internal `!field` key in compiled groups. The view evaluates
+positive criteria, subtracts each negative predicate within that UID scope, then
+unions OR groups. Exclusion is per scan UID, not across an IP's entire history.
+Keep exports, matching history, tag-rule evaluation and header dependency analysis
+aligned when changing this representation. Legacy `.not`/`.nt` suffix behavior is
+separate and must not be silently changed alongside the standalone operator.
 
 Time filtering also has two distinct semantics and they must not be conflated:
 
@@ -377,6 +528,20 @@ If you add a new parsed field, update all of:
 
 If you skip one of these, the feature will look half-implemented.
 
+### If you change YAML detection rules
+
+The YAML detection rules live in the `Plum-Antibodies` submodule. Follow its
+[`AGENT.md`](https://github.com/D4-project/Plum-Antibodies/blob/main/AGENT.md)
+and update the submodule pointer here after publishing rule changes.
+
+- release_note.md
+
+When you modify an existing YAML rule, increase its UTC `version` in
+`YYYYMMDDTHHMMSSZ` format; imports replace the stored rule only when this value
+is newer.
+
+Do not add automated tests for detection-only YAML rule changes. Keep these changes limited to the rule file and release note unless the parser, indexer, or tag engine behavior itself changes.
+
 Also keep the split of responsibilities clear:
 
 - Meilisearch receives the exported JSON-like host documents.
@@ -384,21 +549,27 @@ Also keep the split of responsibilities clear:
 
 The README-level search contract currently includes:
 
-- exact fields such as `ip`, `net`, `port`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`, `x509_md5`, `x509_sha1`, `x509_sha256`
-- prefix or substring search on fields such as `fqdn`, `fqdn_requested`, `host`, `domain`, `tld`, `tag`, `http_title`, `http_cookiename`, `http_etag`, `http_server`, `http_favicon_path`, `banner`, `x509_issuer`, `x509_subject`, `x509_san`
+- exact fields such as `ip`, `net`, `port`, `tag`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`, `x509_md5`, `x509_sha1`, `x509_sha256`
+- prefix or substring search on fields such as `fqdn`, `fqdn_requested`, `domain_requested`, `host`, `domain`, `tld`, `http_title`, `http_cookiename`, `http_etag`, `http_server`, `http_favicon_path`, `banner`, `x509_issuer`, `x509_issuer_cn`, `x509_subject`, `x509_subject_cn`, `x509_san`
 - abbreviated modifiers `lk` for `like` and `bg` for `begin`
 - implicit `AND` inside one query group
 - explicit `OR` between query groups
+- one level of parentheses, sibling groups allowed; AND binds before OR
+- shared compiler in `utils/search_query.py`, used by search, reports and tag rules
+- read-only `utils/search_plan.py` uses per-value SCARD hints, not new stored counters;
+  preserve flat IP/net unions, header fallback semantics and debug command parity
 
-Keep `AGENT.md`, `README`, parser output, and `KVSearchView.parse_query()` aligned. If one changes without the others, the analyst-facing search model becomes misleading.
+Keep `AGENT.md`, `readme.md`, parser output, and `KVSearchView.parse_query()` aligned. If one changes without the others, the analyst-facing search model becomes misleading.
 
 ## Operational Assumptions
 
 - Flask-AppBuilder is the admin/UI framework.
 - SQLite is the default local relational DB in dev, used for app state and objects rather than scanned result storage.
 - Meilisearch and Kvrocks are expected to be running externally.
+- `setup.sh` must use the local virtualenv Python explicitly for pip, Flask CLI, and bootstrap commands. Do not depend on shell activation to find `flask`.
+- `tools/initial_setup.py` owns first-run seed data: security roles, TCP ports, HTTP header collection, YAML tag rules, NSE imports from `https://github.com/D4-project/Plum-Rules-NSE`, and the `Default banner scan` profile.
 - Scheduler startup has side effects at import time in `webapp/app/scheduler.py`.
-- When `ONLINETLD = True`, app startup performs a live TLD download via `fetch_tlds()`.
+- Domain parsing uses pyfaup's local suffix data; startup does not download TLDs.
 - `webapp/app/jsons/` may contain copied sample scan results useful for development and parser work; do not assume this directory reflects live production data.
 - `tools/` contains helper scripts for import, export, indexing, and ad hoc maintenance; it is not the main runtime path of the web application.
 

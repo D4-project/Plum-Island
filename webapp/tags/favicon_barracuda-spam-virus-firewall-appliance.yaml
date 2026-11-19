@@ -1,6 +1,0 @@
-description: Barracuda Spam/Virus firewall appliance
-query: http_favicon_md5:DE2B6EDBF7930F5DD0FFE0528B2BBCF4
-tags:
-- product:barracuda-spam-virus-firewall-appliance
-- vendor:barracuda
-version: 20260520T133458Z

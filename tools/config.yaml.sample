@@ -19,15 +19,9 @@ OUT_KVROCKS_HOST: localhost
 last_fqdns_learn:
   - ".lu$"
 
-ONLINETLD: false
+# pyfaup validates public suffixes offline. Optional private suffixes:
 TLDADD:
   - "local"
-# Optional when ONLINETLD is false:
-# TLDS:
-#   - "com"
-#   - "net"
-#   - "org"
-#   - "lu"
 # Plum API Interactions
 PLUMISLAND: "https://localhost:5001"
 PLUMAPIUSER: "myuser"

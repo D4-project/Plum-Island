@@ -1,0 +1,91 @@
+{
+  "retrieved": "2026-11-19",
+  "version": "0.14.0",
+  "source": "https://github.com/ecrou-exact/vitrine",
+  "files": [
+    {
+      "path": "esm/chunks/chunk-2JLL3QCI.js",
+      "sha256": "6285e40bed7e3edc2d0ed84fd89cd83293fa2ee8d437eeae2ee1a864bca3cd72",
+      "bytes": 9536,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-2JLL3QCI.js"
+    },
+    {
+      "path": "esm/chunks/chunk-ARXNZC4M.js",
+      "sha256": "02c45c7bbbf7284bd6b13444e919ed240029b2449768eae47043c9f85e488cf4",
+      "bytes": 8658,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-ARXNZC4M.js"
+    },
+    {
+      "path": "esm/chunks/chunk-BDNJJGYF.js",
+      "sha256": "7d3a0e8e856434104fecdb186425e71172effa1f50b5524eb8545aae1b636a65",
+      "bytes": 34477,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-BDNJJGYF.js"
+    },
+    {
+      "path": "esm/chunks/chunk-FI76XTH5.js",
+      "sha256": "7225049fc4abddbc42051cc151d492446e32f1b5d5c34aea9e80131fdeb203c9",
+      "bytes": 53771,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-FI76XTH5.js"
+    },
+    {
+      "path": "esm/chunks/chunk-FOOPRKFN.js",
+      "sha256": "470df450fdd408305be3f42e2dab68899d2025edb425a542f74d24caad679398",
+      "bytes": 334,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-FOOPRKFN.js"
+    },
+    {
+      "path": "esm/chunks/chunk-G3RLLBA6.js",
+      "sha256": "cc8ddff7dbdcf22515af958156e411dea8b2e1be5b527f4bdda2e40e79f09314",
+      "bytes": 8918,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-G3RLLBA6.js"
+    },
+    {
+      "path": "esm/chunks/chunk-HWLWGRZO.js",
+      "sha256": "de5b03b8a828e096465ab08fce4f56f8127e648f965c09ecff6d61e7737f4cfa",
+      "bytes": 12709,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-HWLWGRZO.js"
+    },
+    {
+      "path": "esm/chunks/chunk-MNS6CTXC.js",
+      "sha256": "a786d33f00b8a6518b44cccaf60394466ee973a89bd4daf8d9f040856364c517",
+      "bytes": 91629,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-MNS6CTXC.js"
+    },
+    {
+      "path": "esm/chunks/chunk-QHH6BVCU.js",
+      "sha256": "4158b30766c61232d28f640800e620766841b31416f51dc3c14cbf410b8f21bb",
+      "bytes": 5208,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-QHH6BVCU.js"
+    },
+    {
+      "path": "esm/chunks/chunk-QXIEPLJY.js",
+      "sha256": "9b623c3db2debc6e6cfac620aac9c9cf9997ceeb49cd2127a0d8e090a413fff8",
+      "bytes": 4379,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-QXIEPLJY.js"
+    },
+    {
+      "path": "esm/chunks/chunk-WEQYOP2V.js",
+      "sha256": "07ab9ae5bc991e4c64a024713e1ae604c99d4e2971ad219e21512616fe574ca3",
+      "bytes": 9046,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-WEQYOP2V.js"
+    },
+    {
+      "path": "esm/chunks/chunk-YCSGENO5.js",
+      "sha256": "4e3ccdb39b047c7f521453143a0ea9fc281b40cc765f2bbfc4d49465fb85bb84",
+      "bytes": 5638,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/chunks/chunk-YCSGENO5.js"
+    },
+    {
+      "path": "esm/vt-json.js",
+      "sha256": "1ef6ea3b774f2d4c9455a37c9c13052e5d3ff75a39648cde29157a125b40be5d",
+      "bytes": 1009,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/vt-json.js"
+    },
+    {
+      "path": "esm/vt-terminal.js",
+      "sha256": "c372b956588b76ef1eedc32567796012aa46d8f5638161425abb12b171b112db",
+      "bytes": 985,
+      "url": "https://ecrou-exact.github.io/vitrine/dist/esm/vt-terminal.js"
+    }
+  ]
+}

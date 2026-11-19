@@ -21,26 +21,47 @@ from flask_appbuilder.security.manager import (
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
+# Administrators can override Plum-specific settings in Security > Plum Settings.
+# Saving requires a coordinated restart of the components identified on the page.
+# Overrides do not rewrite this file. Private storage defaults to
+# webapp/.plum-settings; PLUM_SETTINGS_DIR selects a deployment-owned directory.
+# Docker uses /plum/data/settings on the persistent data volume.
+# See documentation/plum-settings.md for precedence, secrets and recovery.
+# Flask/FAB options (authentication, themes, SQLAlchemy, etc.) remain here only.
+
 # Your App secret key
 SECRET_KEY = "YouNeedToChangeMeInProduction"
 MEILI_KEY = "YouNeedToChangeMeInProduction"
 
 # The Meili database connections settings
 MEILI_DATABASE_URI = "http://localhost:7700"
+MEILI_HTTP_TIMEOUT_SECONDS = 10
 
 # Your App secret key
 KVROCKS_HOST = "localhost"
 KVROCKS_PORT = 6666
+KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
 PASSIVE_USER = ""
 PASSIVE_PWD = ""
 
-# Monthly Markdown report delivery.
+# Shared external lookup cache lifetimes (hours). Restart Plum-Agent after editing.
+WHOIS_CACHE_HOURS = 24
+PDNS_CACHE_HOURS = 12
+IP_INFO_CACHE_HOURS = 24
+
+# IP detail "Location" map card (Informations tab). False hides the map.
+MAP_ENABLED = True
+
+# Weekly/monthly reports: short email summary plus complete PDF attachment.
+# See documentation/reports.md. Restart the application after configuration changes.
 # Leave REPORT_SMTP_HOST empty to disable report email sending.
 REPORT_SMTP_HOST = ""
 REPORT_SMTP_PORT = 25
 REPORT_SMTP_USER = ""
 REPORT_SMTP_PASSWORD = ""
+# Sender fallback: REPORT_SMTP_USER, then plum-reports@localhost.
 REPORT_SMTP_FROM = ""
+# STARTTLS and implicit TLS respectively; configure the matching port explicitly.
 REPORT_SMTP_USE_TLS = False
 REPORT_SMTP_USE_SSL = False
 
@@ -53,25 +74,8 @@ SQLALCHEMY_DATABASE_URI = "sqlite:///" + os.path.join(basedir, "app.db")
 # SQLALCHEMY_DATABASE_URI = 'mysql://myapp@localhost/myapp'
 # SQLALCHEMY_DATABASE_URI = 'postgresql://root:password@localhost/myapp'
 
-# Domain Detection Guard:
-# When a host a fqdn or a domain is detected.
-# This domain is only take in considerations for indexation if 
-# the TLD is a known one.
-#
-# You have two methode to detect the domain
-#
-# False
-# Detection is done with the library py-faup-rs
-# This method is fast and offline.
-#
-# True
-# This method use the TLD list from
-# This list is refreshed at each start of Plum Island
-
-# What method do you need ?
-ONLINETLD=False
-
-# You may specify additional domains to add to the index.
+# Domain extraction uses pyfaup offline, including multi-label public suffixes.
+# Optional private suffixes not known to pyfaup (for example .local):
 TLDADD=["local"]
 
 
@@ -178,10 +182,46 @@ SCAN_DELAY = 12
 # How many time between job scheduling in minutes
 SCHEDULER_DELAY = 10
 
+# Scheduler-supervised background indexing. Initial tuning values, not latency
+# guarantees: measure on your workload before raising concurrency/batch sizes.
+TAG_RECONCILIATION_ENABLED = True
+TAG_RECONCILIATION_POLL_SECONDS = 30
+TAG_RECONCILIATION_BATCH_SIZE = 25
+TAG_RECONCILIATION_PAUSE_SECONDS = 0.1
+# Runtime pacing does not invalidate a frozen job or restart its saved cursor.
+TAG_RECONCILIATION_PLANNING_BATCH_SIZE = 1000
+TAG_RECONCILIATION_MIN_PLANNING_BATCH_SIZE = 25
+TAG_RECONCILIATION_LATENCY_BUDGET = 0.10
+TAG_RECONCILIATION_QUIET_SECONDS = 2
+TAG_RECONCILIATION_IDLE_SECONDS = 15
+# Soft per-read planning duration target; commands already running cannot preempt.
+TAG_RECONCILIATION_UNIT_SECONDS = 0.05
+
+# Independent CIRCL enrichment worker: initial operational limits, tune to latency.
+NETWORK_LOOKUP_TIMEOUT_SECONDS = 10
+NETWORK_REFRESH_BATCH_SIZE = 32
+
+# Root logging level, including console output: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+# Missing or invalid values fall back to WARNING; applies even without file logging.
+LOG_LEVEL = "WARNING"
+# Optional persistent application logging. Files use <prefix>-YYMMDD.log.
+LOG_ENABLED = False
+LOG_DIR = "./log"
+LOG_FILE_PREFIX = "island"
+# Date-named logs always rotate daily at local midnight. This legacy setting
+# remains for compatibility with existing configuration files.
+LOG_ROTATION_DAYS = 1
+LOG_RETENTION_DAYS = 90
+
+# Active unfinished jobs are returned to the queue after two hours without a
+# result. Late agent submissions are rejected by ownership checks.
+# This timeout is fixed by the scheduler watchdog.
+
 # Per-profile waiting queue target. The scheduler tops queues up to this level.
 SCHEDULER_QUEUE_TARGET_JOBS_PER_PROFILE = 256
 
-# Maximum number of target/profile runtime rows evaluated per profile and tick.
+# Maximum target/profile states staged in one queue transaction. The scheduler
+# commits each batch before loading the next one so scan results can interleave.
 SCHEDULER_QUEUE_STATE_BATCH_SIZE = 256
 
 # Maximum number of missing target/profile runtime rows created per tick.
@@ -189,6 +229,10 @@ SCHEDULER_STATE_SYNC_BATCH_SIZE = 2048
 
 # Safety cap for new queued jobs created during one scheduler tick.
 SCHEDULER_QUEUE_MAX_NEW_JOBS_PER_TICK = 1024
+
+# Soft queue-generation runtime budget. The scheduler stops between committed
+# 256-state batches. One target remains atomic, so a /16 may run slightly longer.
+SCHEDULER_QUEUE_TIME_BUDGET_SECONDS = 45
 
 # Maximum queued jobs retagged per scan profile and scheduler tick after a
 # scan profile priority change.
@@ -205,6 +249,9 @@ JOB_SCAVENGE = 60
 
 
 # Theme configuration
+# Default for new installations: Plum templates, CSS and locally served fonts.
+APP_THEME = "plum.css"
+# Other supported themes use the original templates. Uncomment one to switch.
 # these are located on static/appbuilder/css/themes
 # you can create your own and easily use them placing them on the same dir structure to override
 # APP_THEME = "bootstrap-theme.css"  # default bootstrap
@@ -214,7 +261,9 @@ JOB_SCAVENGE = 60
 # APP_THEME = "cyborg.css"
 # APP_THEME = "flatly.css"
 # APP_THEME = "journal.css"
-APP_THEME = "readable.css"
+# Plum selects templates/themes/plum plus static/appbuilder/css/themes/plum.css.
+# Bundled themes (for example readable.css) use the original templates.
+# APP_THEME = "readable.css"
 # APP_THEME = "simplex.css"
 # APP_THEME = "slate.css"
 # APP_THEME = "spacelab.css"

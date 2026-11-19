@@ -1,0 +1,33 @@
+.plum-welcome-image {
+  position: relative;
+  width: 320px;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.plum-welcome-button {
+  position: absolute;
+  /* Trace the cow in the 320 x 328 logo; percentages follow image resizing. */
+  left: 70%;
+  top: 46.9512%;
+  width: 13.4375%;
+  height: 7.9268%;
+  clip-path: polygon(0% 73%, 9% 54%, 21% 54%, 23% 35%, 37% 31%,
+    40% 4%, 47% 0%, 56% 19%, 65% 0%, 72% 0%, 77% 23%, 91% 12%,
+    98% 19%, 98% 42%, 91% 62%, 91% 85%, 81% 96%, 65% 92%,
+    51% 85%, 37% 96%, 23% 92%, 19% 81%, 5% 85%);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.plum-welcome-button:focus-visible {
+  background: rgb(8 125 118 / 35%);
+}
+
+.plum-welcome-logo {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}

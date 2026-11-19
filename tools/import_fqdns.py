@@ -173,4 +173,7 @@ if __name__ == "__main__":
         bulk_payload = "\n".join(chunk)
         result = bulk_import_targets(base_url, token, bulk_payload)
         logger.info("Chunk %d (%d entries)", chunk_index, len(chunk))
+        logger.info(
+            "New targets timestamped by server; CIDR network enrichment queued, FQDN enrichment unavailable."
+        )
         logger.debug("Chunk %d result: %s", chunk_index, json.dumps(result, indent=4))

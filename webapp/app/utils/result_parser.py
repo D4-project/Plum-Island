@@ -18,13 +18,13 @@ For now far from performance issues anyway.
 
 """
 
+import ipaddress
 import re
-from pyfaup import Url  # pylint: disable=no-name-in-module
 
 try:
-    from pyfaup import FaupCompat  # pylint: disable=no-name-in-module
+    from .domains import parse_hostname
 except ImportError:
-    FaupCompat = None
+    from domains import parse_hostname
 
 try:
     from .tagrules import apply_tag_rules_to_document
@@ -33,28 +33,61 @@ except ImportError:
 
 
 def normalize_db_conf(db_conf_local):
-    """
-    Accept either the full config dict or a legacy plain TLD list.
-    """
-    if isinstance(db_conf_local, dict):
-        conf = dict(db_conf_local)
-        conf.setdefault("ONLINETLD", False)
-        conf.setdefault("TLDS", [])
-        conf.setdefault("TLDADD", [])
-        conf["HTTP_HEADER_COLLECTION"] = normalize_http_header_collection(
-            conf.get("HTTP_HEADER_COLLECTION", {})
-        )
-        return conf
+    """Normalize parser settings without mutating caller config."""
+    if not isinstance(db_conf_local, dict):
+        raise TypeError("parse_json expects a config dict")
+    conf = dict(db_conf_local)
+    conf.setdefault("TLDADD", [])
+    conf["HTTP_HEADER_COLLECTION"] = normalize_http_header_collection(
+        conf.get("HTTP_HEADER_COLLECTION", {})
+    )
+    return conf
 
-    if isinstance(db_conf_local, list):
-        return {
-            "ONLINETLD": False,
-            "TLDS": db_conf_local,
-            "TLDADD": [],
-            "HTTP_HEADER_COLLECTION": {},
-        }
 
-    raise TypeError("parse_json expects a config dict or a TLD list")
+def is_external_ip(value):
+    """
+    Return True only for routable unicast IPs suitable for indexing.
+    """
+    try:
+        ip_addr = ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return False
+    return ip_addr.is_global and not ip_addr.is_multicast
+
+
+def has_tls_certificate(document):
+    """Return whether an Nmap document contains a populated SSL certificate."""
+    certificate_fields = (
+        "issuer",
+        "subject",
+        "extensions",
+        "md5",
+        "sha1",
+        "sha256",
+        "pem",
+    )
+    for port in (document or {}).get("body", {}).get("ports", []):
+        for script in port.get("scripts", []):
+            if script.get("id") == "ssl-cert" and any(
+                script.get(field) for field in certificate_fields
+            ):
+                return True
+    return False
+
+
+def has_indexed_tls_certificate(document):
+    """Return whether an indexed document contains certificate fields."""
+    certificate_fields = (
+        "x509_issuer",
+        "x509_issuer_cn",
+        "x509_md5",
+        "x509_sha1",
+        "x509_sha256",
+        "x509_subject",
+        "x509_subject_cn",
+        "x509_san",
+    )
+    return any((document or {}).get(field) for field in certificate_fields)
 
 
 # B -> Body.XXXX Subsearch
@@ -71,6 +104,7 @@ default_parsing = [
     "get_http_title:p.http-title.output",
     "get_ssl_info:p.ssl-cert",
     "get_hosts:p.ssl-cert.issuer.commonName",
+    "get_hosts:p.ssl-cert.subject.commonName",
     "get_hosts:p.ssl-cert.extensions.X509v3_Subject_Alternative_Name",
     "get_hosts:p.banner.output",
     "get_banner:p.banner.output",
@@ -102,6 +136,8 @@ fqdn_regex = re.compile(
     r"""(?:^|[\s(\/<>|@'"=\:])([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-_]{2,})+)(?=$|[\?\s#&\/<>'",)])""",
     re.MULTILINE,
 )
+
+cert_dns_name_regex = re.compile(r"(?:^|[,\s])DNS\s*:\s*([^,\s]+)", re.IGNORECASE)
 
 favicon_field_regex = re.compile(
     r"^\s*(?:\|_?\s*)?"
@@ -229,6 +265,135 @@ def get_ssl_info(data: dict, target: str, _general: bool = False):
     }
 
 
+_CERTIFICATE_NAME_ORDER = (
+    ("commonName", "CN"),
+    ("organizationalUnitName", "OU"),
+    ("organizationName", "O"),
+    ("localityName", "L"),
+    ("stateOrProvinceName", "ST"),
+    ("countryName", "C"),
+)
+_CERTIFICATE_NAME_ESCAPES = re.compile(r"([\\,+=\"<>;])")
+
+
+def _certificate_values(value):
+    """Return deterministic string values for one certificate attribute."""
+    if value is None:
+        return []
+    values = value if isinstance(value, (list, tuple)) else [value]
+    return [str(item) for item in values if item is not None and str(item) != ""]
+
+
+def _escape_certificate_value(value):
+    """Escape separators and leading/trailing spaces in one DN value."""
+    escaped = _CERTIFICATE_NAME_ESCAPES.sub(r"\\\1", str(value))
+    escaped = escaped.replace("\n", r"\0A").replace("\r", r"\0D")
+    if escaped.startswith("#"):
+        escaped = "\\" + escaped
+    if escaped.startswith(" "):
+        escaped = "\\ " + escaped[1:]
+    if escaped.endswith(" "):
+        escaped = escaped[:-1] + r"\ "
+    return escaped
+
+
+def serialize_certificate_name(name):
+    """Serialize an Nmap issuer/subject mapping to a stable searchable DN."""
+    if not isinstance(name, dict):
+        return None
+
+    pairs = []
+    consumed = set()
+    for source_key, output_key in _CERTIFICATE_NAME_ORDER:
+        values = _certificate_values(name.get(source_key))
+        if values:
+            pairs.extend(
+                f"{output_key}={_escape_certificate_value(value)}" for value in values
+            )
+        consumed.add(source_key)
+
+    for source_key in sorted(str(key) for key in name if str(key) not in consumed):
+        values = _certificate_values(name.get(source_key))
+        pairs.extend(
+            f"{source_key}={_escape_certificate_value(value)}" for value in values
+        )
+    return ", ".join(pairs) or None
+
+
+def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
+    """Add certificate indexes to a copy destined for Kvrocks.
+
+    ``parse_json`` remains the public parser and is deliberately not modified by
+    this enrichment step. The raw scan document is used only while preparing the
+    secondary Kvrocks document.
+    """
+    indexed_doc = dict(parsed_doc or {})
+    issuer_dns = []
+    subject_dns = []
+    issuer_cns = []
+    subject_cns = []
+
+    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+        for script in port.get("scripts", []):
+            if script.get("id") != "ssl-cert":
+                continue
+            issuer = script.get("issuer")
+            subject = script.get("subject")
+            issuer_cns.extend(_certificate_values((issuer or {}).get("commonName")))
+            subject_cns.extend(_certificate_values((subject or {}).get("commonName")))
+            issuer_dn = serialize_certificate_name(issuer)
+            subject_dn = serialize_certificate_name(subject)
+            if issuer_dn:
+                issuer_dns.append(issuer_dn)
+            if subject_dn:
+                subject_dns.append(subject_dn)
+
+    issuer_cns = list(dict.fromkeys(issuer_cns))
+    subject_cns = list(dict.fromkeys(subject_cns))
+    issuer_dns = list(dict.fromkeys(issuer_dns))
+    subject_dns = list(dict.fromkeys(subject_dns))
+
+    if not issuer_cns:
+        issuer_cns = list(indexed_doc.get("x509_issuer", []) or [])
+    if not subject_cns:
+        subject_cns = list(indexed_doc.get("x509_subject", []) or [])
+    if issuer_cns:
+        indexed_doc["x509_issuer_cn"] = issuer_cns
+    if subject_cns:
+        indexed_doc["x509_subject_cn"] = subject_cns
+    if issuer_dns:
+        indexed_doc["x509_issuer"] = issuer_dns
+    if subject_dns:
+        indexed_doc["x509_subject"] = subject_dns
+
+    if tag_rules is not None:
+        indexed_doc.pop("tag", None)
+        computed_tags = apply_tag_rules_to_document(indexed_doc, tag_rules=tag_rules)
+        if has_tls_certificate(raw_doc) and "proto:tls" not in computed_tags:
+            computed_tags.append("proto:tls")
+        if computed_tags:
+            indexed_doc["tag"] = computed_tags
+
+    indexed_doc["port_protocol"] = port_protocol_values(raw_doc)
+    return indexed_doc
+
+
+def port_protocol_values(raw_doc):
+    """Return valid protocol/port pairs from a raw scan document."""
+    values = set()
+    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+        protocol = port.get("protocol")
+        portid = port.get("portid")
+        if (
+            isinstance(protocol, str)
+            and protocol.lower() in ("tcp", "udp")
+            and str(portid).isdigit()
+            and 0 <= int(portid) <= 65535
+        ):
+            values.add(f"{protocol.lower()}/{int(portid)}")
+    return sorted(values)
+
+
 def get_body(data, target):
     """
     Get a Key from the Json with the parsing syntax.
@@ -295,121 +460,38 @@ def get_http_etag(data: dict, target: str):
     return {"http_etag": http_etag}
 
 
-def _suffix_is_allowed(suffix, suffix_str, db_conf):
+def _normalize_certificate_hostname(value):
     """
-    Check suffix validity across pyfaup-rs API variants.
+    Normalize TLS certificate DNS names before hostname parsing.
     """
-    if db_conf["ONLINETLD"]:
-        if suffix_str in db_conf["TLDS"]:
-            return True
-    else:
-        is_known = getattr(suffix, "is_known", None)
-        if callable(is_known) and is_known():
-            return True
-        if is_known is None:
-            return True
-
-    return suffix_str in db_conf["TLDADD"]
+    hostname = str(value or "").strip().lower().rstrip(".,;").rstrip(".")
+    if hostname.startswith("dns:"):
+        hostname = hostname[4:].strip()
+    if hostname.startswith("*."):
+        hostname = hostname[2:]
+    return hostname
 
 
-def _split_hostname_from_suffix(hostname, suffix_str):
+def _hostname_candidates(body):
     """
-    Compute domain/subdomain when pyfaup-rs does not expose those attributes.
+    Extract plain hostnames and TLS SAN/CN wildcard names from text values.
     """
-    if not suffix_str:
-        return "", ""
+    text = str(body)
+    candidates = []
 
-    suffix_tail = f".{suffix_str}"
-    if hostname.endswith(suffix_tail):
-        root = hostname[: -len(suffix_tail)]
-    else:
-        root = hostname.rsplit(".", 1)[0]
+    for hostname in fqdn_regex.findall(text):
+        candidates.append(hostname)
 
-    if not root:
-        return "", ""
+    normalized_body = _normalize_certificate_hostname(text)
+    if normalized_body != text.lower() and fqdn_regex.fullmatch(normalized_body):
+        candidates.append(normalized_body)
 
-    if "." not in root:
-        return f"{root}.{suffix_str}", ""
+    for hostname in cert_dns_name_regex.findall(text):
+        normalized = _normalize_certificate_hostname(hostname)
+        if normalized and fqdn_regex.fullmatch(normalized):
+            candidates.append(normalized)
 
-    subdomain, domain_label = root.rsplit(".", 1)
-    domain = f"{domain_label}.{suffix_str}"
-    return domain, subdomain
-
-
-def _parse_hostname_parts(hostname, db_conf):
-    """
-    Parse one hostname using pyfaup-rs, with compatibility for builds that do not
-    expose domain/subdomain attributes on Url.
-    """
-    hostname = str(hostname or "").strip().lower().rstrip(".")
-    if not hostname:
-        return None
-
-    try:
-        url = Url(f"http://{hostname}")
-    except (ValueError, TypeError):
-        return None
-
-    suffix = getattr(url, "suffix", None)
-    if not suffix:
-        return _parse_hostname_parts_compat(hostname, db_conf)
-
-    return _build_hostname_parts(
-        hostname,
-        suffix,
-        getattr(url, "domain", None),
-        getattr(url, "subdomain", None),
-        db_conf,
-    )
-
-
-def _parse_hostname_parts_compat(hostname, db_conf):
-    """
-    Parse with pyfaup-rs FaupCompat when Url exposes only raw URL fields.
-    """
-    if FaupCompat is None:
-        return None
-
-    try:
-        parser = FaupCompat()
-        parser.decode(f"http://{hostname}")
-        parsed = parser.get()
-    except (ValueError, TypeError, AttributeError):
-        return None
-
-    suffix = parsed.get("tld")
-    if not suffix:
-        return None
-
-    return _build_hostname_parts(
-        hostname,
-        suffix,
-        parsed.get("domain"),
-        parsed.get("subdomain"),
-        db_conf,
-    )
-
-
-def _build_hostname_parts(hostname, suffix, domain, subdomain, db_conf):
-    """
-    Build normalized hostname parts from pyfaup Url or FaupCompat output.
-    """
-    suffix_str = str(suffix).lower()
-    if not _suffix_is_allowed(suffix, suffix_str, db_conf):
-        return None
-
-    fallback_domain, fallback_subdomain = _split_hostname_from_suffix(
-        hostname, suffix_str
-    )
-    domain = domain or fallback_domain
-    subdomain = subdomain or fallback_subdomain
-
-    return {
-        "fqdn": hostname,
-        "host": str(subdomain).lower() if subdomain else "",
-        "domain": str(domain).lower() if domain else "",
-        "tld": suffix_str,
-    }
+    return list(dict.fromkeys(candidates))
 
 
 def get_hosts(data: dict, target: str, db_conf: dict):
@@ -421,10 +503,10 @@ def get_hosts(data: dict, target: str, db_conf: dict):
     hosts, fqdn_hosts, domains, tlds = [], [], [], []
     if body:
         # Extract FQDN using regex if not empty data
-        fqdn_hosts_candidates = fqdn_regex.findall(str(body))
+        fqdn_hosts_candidates = _hostname_candidates(body)
         if fqdn_hosts_candidates:
             for host in fqdn_hosts_candidates:
-                parsed_host = _parse_hostname_parts(host, db_conf)
+                parsed_host = parse_hostname(host, db_conf.get("TLDADD", ()))
                 if not parsed_host:
                     continue
                 fqdn_hosts.append(parsed_host["fqdn"])
@@ -435,13 +517,6 @@ def get_hosts(data: dict, target: str, db_conf: dict):
                     domains.append(parsed_host["domain"])
 
     return {"fqdn": fqdn_hosts, "host": hosts, "domain": domains, "tld": tlds}
-
-
-def _parse_valid_hostname(hostname, db_conf: dict):
-    """
-    Parse one hostname using the configured domain validation rules.
-    """
-    return _parse_hostname_parts(hostname, db_conf)
 
 
 def get_fqdn_requested(data: dict, target: str, db_conf: dict):
@@ -461,7 +536,7 @@ def get_fqdn_requested(data: dict, target: str, db_conf: dict):
         if hostname and hostname not in fqdn_requested:
             fqdn_requested.append(hostname)
 
-        parsed_hostname = _parse_valid_hostname(hostname, db_conf)
+        parsed_hostname = parse_hostname(hostname, db_conf.get("TLDADD", ()))
         if not parsed_hostname:
             continue
         domain = parsed_hostname.get("domain")
@@ -605,10 +680,12 @@ def fuse_dicts(d1, d2):
     return fused
 
 
-def parse_json(doc, db_conf_local, tag_rules=None):
+def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-locals
     """
     Parse one Nmap-like document into the Kvrocks search fields.
     """
+    if not is_external_ip(doc.get("ip")):
+        return None
 
     db_conf = normalize_db_conf(db_conf_local)
 
@@ -667,6 +744,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):
     }
 
     computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
+    if has_tls_certificate(doc) and "proto:tls" not in computed_tags:
+        computed_tags.append("proto:tls")
     if computed_tags:
         final_result["tag"] = computed_tags
 

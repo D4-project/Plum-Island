@@ -1,0 +1,34 @@
+.plum-settings { max-width: 1280px; margin: 0 auto 36px; }
+.settings-heading { margin-bottom: 22px; }
+.settings-heading h1 { font-size: 27px; margin-bottom: 9px; }
+.settings-heading p, .settings-card header p, .settings-help { color: var(--plum-muted, #536171); }
+.settings-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 18px; margin-bottom: 22px; border: 1px solid var(--plum-border, #dce4e9); border-radius: 8px; background: var(--plum-card, #fff); }
+.settings-toolbar p { margin: 5px 0 0; font-size: 13px; }
+.settings-toolbar .btn { flex-shrink: 0; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; align-items: start; }
+.settings-card { min-width: 0; border: 1px solid var(--plum-border, #dce4e9); border-radius: 9px; background: var(--plum-card, #fff); overflow: hidden; }
+.settings-card header { padding: 20px 22px; border-bottom: 1px solid var(--plum-border, #dce4e9); }
+.settings-card h2 { font-size: 18px; font-weight: 600; margin: 0 0 9px; line-height: 1.4; }
+.settings-card header p { margin: 0; line-height: 1.5; font-size: 13px; }
+.settings-fields { padding: 0 22px; }
+.settings-field { padding: 20px 0; min-width: 0; }
+.settings-field + .settings-field { border-top: 1px solid var(--plum-border, #dce4e9); }
+.settings-field > label { display: block; font-size: 14px; margin-bottom: 8px; }
+.settings-unit { font-weight: normal; }
+.settings-field .form-control { width: 100%; max-width: 100%; min-width: 0; }
+.settings-help { margin-top: 9px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-help p { margin: 0 0 5px; }
+.settings-default, .settings-application { color: var(--plum-ink, #243345); }
+.settings-key code { padding: 0; background: transparent; color: var(--plum-muted, #536171); font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+.settings-secret { display: grid; gap: 8px; }
+.settings-secret [hidden] { display: none; }
+.settings-pending-note { padding: 10px; margin: 10px 0 0; border-left: 3px solid #c18b16; background: var(--plum-surface, #f6f8fa); font-size: 12px; overflow-wrap: anywhere; }
+.settings-reset { font-weight: normal; font-size: 12px; margin-top: 10px; cursor: pointer; }
+.settings-reset input { margin-right: 5px; }
+.settings-footer { display: flex; justify-content: flex-end; padding-top: 22px; }
+@media (max-width: 767px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .settings-toolbar { flex-direction: column; align-items: stretch; }
+  .settings-fields { padding: 0 16px; }
+  .settings-card header { padding: 16px; }
+}

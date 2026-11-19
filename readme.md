@@ -1,11 +1,11 @@
 <div align="center">
-  <img alt="d4-Plum-Island" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_logo.png" style="width:25%;" />
+  <img alt="d4-Plum-Island" src="documentation/media/plum_logo.png" style="width:25%;" />
 
 <h1>Proactive Land Uncovering & Monitoring</h1>
-  <img alt="d4-Plum-Island overview" src="https://raw.githubusercontent.com/D4-project/Plum-Island/master/documentation/media/plum_overview.png" />
+  <img alt="d4-Plum-Island overview" src="documentation/media/plum_overview.png" />
 </div>
 
-<p align="center"><em>Beta version</em></p>
+<p align="center"><strong>Plum Island - 20 Years Hack.lu Release - v0.2610.0</strong><br /><em>Released on 2026-10-14</em></p>
 
 ## Description
 
@@ -14,13 +14,17 @@ It assigns scan jobs to distributed agents, collects their results, stores scan 
 
 The project is designed for repeated monitoring rather than one-shot scans: targets can be linked to scan profiles, jobs are queued by priority, results are kept over time, and reports can summarize what changed during a period.
 
+![IP detail view with requested hostname selection, port timelines and scan results](documentation/media/ip_detail.png)
+
 ## Main features
 
 - Distributed scan orchestration with agents and server-side job queues.
 - Target and scan profile management.
 - Per-profile scan tracking for each target.
 - Indexed search over IPs, networks, ports, DNS names, HTTP metadata, favicons, TLS certificates, banners, and computed tags.
-- Structured query syntax with exact, prefix, substring, `AND`, `OR`, and date-range filtering.
+- Structured query syntax with exact, prefix, substring, `AND`, `OR`, single-level parentheses, and date-range filtering.
+- Active unfinished scan jobs are requeued by the scheduler after two hours;
+  late agent results are rejected when ownership has changed.
 - Tag rules that automatically add tags to matching scan documents.
 - Favicon-based tagging using MD5, SHA-256, and mmhash indicators.
 - Scheduled Markdown reports from the same search syntax used by the UI.
@@ -36,8 +40,15 @@ The search index supports fields such as:
 - `http_header`, `http_headval`
 - `http_favicon_path`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`
 - `banner`
-- `x509_issuer`, `x509_subject`, `x509_san`, `x509_md5`, `x509_sha1`, `x509_sha256`
+- `x509_issuer`, `x509_issuer_cn`, `x509_subject`, `x509_subject_cn`, `x509_san`, `x509_md5`, `x509_sha1`, `x509_sha256`
+
+`fqdn`, `host`, and `domain` include normalized hostnames found in TLS certificate DNS SAN and subject CN data. Rebuild or reimport the Kvrocks index to apply parser improvements to existing scans.
 - `tag`
+
+Certificate searches distinguish common names (`x509_issuer_cn`,
+`x509_subject_cn`) from available serialized DN attributes (`x509_issuer`,
+`x509_subject`). Existing installations must coordinate saved-query conversion
+and index rebuilding; see the [certificate upgrade guide](migration_full_cert.md).
 
 Example:
 
@@ -45,16 +56,35 @@ Example:
 domain.begin:"circl.lu" port:443 http_server.lk:nginx
 ```
 
+Exclude matching scans with `NOT`, for example
+`tag:type:router AND NOT tag:vendor:mikrotik`. Operators are case-insensitive;
+each OR path requires a positive bound, and exclusion applies per scan UID.
+
+Share filters across alternatives with one level of parentheses:
+
+```text
+(domain_requested:circl.lu OR net:185.194.93.0/24 OR net:185.194.94.0/24) AND tag:lang:php
+```
+
+Nested groups and `NOT (group)` are not supported.
+
+![Filtered scan search results with tags and supported search keywords](documentation/media/search_filters.png)
+
 See [Search documentation](documentation/search.md) for the full field list, modifiers, examples, and date-range behavior.
 
 ## Tagging
 
 Tag rules are stored as YAML definitions and can also be managed from the web UI.
-Each rule contains a description, a search query, a list of tags, and a version timestamp.
+Each rule contains a mandatory canonical `uuid` and `name`, a description, a
+search query, a list of tags, and a version timestamp. UUID is the unique rule
+identity; display names may repeat and come from YAML, not the filename. Use a
+new UUID for a new rule and retain it when updating that rule.
 
 Example:
 
 ```yaml
+uuid: 5673172d-c76e-4d25-b1fd-4ab3851c6167
+name: hashicorp-vault-example
 description: HashiCorp Vault
 query: http_favicon_mmhash:747250914 AND http_title.bg:Vault
 tags:
@@ -63,24 +93,32 @@ tags:
 version: 20260428T170756Z
 ```
 
-See [Tagging documentation](documentation/tagging.md) for YAML format, import/export tooling, version handling, and reindexing.
+See the [Plum-Antibodies tag documentation](https://github.com/D4-project/Plum-Antibodies/blob/main/documentation/tagging.md)
+for YAML format and version handling. Import and reindex commands remain in
+the [Plum Island tools documentation](documentation/tools.md).
 
 ## Reports
 
 Reports use the same structured search syntax as the interactive search page.
-They generate Markdown summaries for a reporting interval and can be previewed, run manually, or sent on a schedule.
+They generate reports for a reporting interval and can be previewed, downloaded as PDF, run manually, or sent on a schedule. Email contains a short summary with the complete PDF attached.
 
-See [Reports documentation](documentation/reports.md) for report configuration, interval handling, Markdown content, and SMTP delivery.
+See [Reports documentation](documentation/reports.md) for setup, query semantics, UTC schedules, report content, SMTP sender and TLS configuration, PDF attachments, and troubleshooting.
 
 ## Documentation
 
+- [v0.2610.0 release notes](release_note.md)
 - [Installation](documentation/installation.md)
-- [Migration](documentation/migration.md)
+- [Network requirements and data flows](documentation/network.md)
+- [Migration guides — published releases and current main](documentation/migration.md)
+- [Certificate CN/DN upgrade](migration_full_cert.md)
 - [Search](documentation/search.md)
-- [Tagging](documentation/tagging.md)
+- [Discovery API and Plum-Virion MCP](documentation/discovery.md)
+- [Tagging rules](https://github.com/D4-project/Plum-Antibodies/tree/main/tags)
+- [Tag tooling](documentation/tools.md#tag-tools)
 - [Reports](documentation/reports.md)
 - [Scan profiles, scheduling, and priority](documentation/scanning.md)
 - [Tools](documentation/tools.md)
+- [Search index recovery](documentation/recovery-tools.md)
 - [Kvrocks objects](documentation/kvrocks_objects.md)
 
 ## Technical requirements
@@ -107,7 +145,7 @@ Python package dependencies are listed in [requirements.txt](requirements.txt):
 ## Quick setup
 
 ```bash
-git clone https://github.com/D4-project/Plum-Island
+git clone --recurse-submodules https://github.com/D4-project/Plum-Island
 cd Plum-Island
 ./setup.sh
 ```
@@ -116,8 +154,11 @@ The setup script creates a local Python virtual environment, installs `requireme
 
 - default TCP ports
 - HTTP header tagging collection
-- YAML tag rules from `webapp/tags/`
+- YAML tag rules from `webapp/tags/tags/`
 - NSE scripts from `https://github.com/D4-project/Plum-Rules-NSE`
-- all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with `banner.nse`
+- all-target `Default banner scan` profile for TCP ports 22, 80, and 443 with the [default NSE scripts](documentation/tools.md#initial_setuppy)
+
+To refresh an existing clone, run `./updisland.sh` from the Plum-Island root.
+It updates Plum-Island and the Plum-Antibodies tag-rules submodule.
 
 See [Installation documentation](documentation/installation.md) for Meilisearch, Kvrocks, Passive DNS, Docker, and runtime configuration details.

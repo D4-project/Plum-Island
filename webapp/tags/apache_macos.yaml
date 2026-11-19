@@ -1,7 +1,0 @@
-description: Apache on Mac OS X
-query: http_favicon_md5:73778A17B0D22FFBB7D6C445A7947B92
-tags:
-- product:apache
-- type:osx
-- vendor:apache
-version: 20260520T133458Z

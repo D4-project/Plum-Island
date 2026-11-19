@@ -1,6 +1,0 @@
-description: Synology DiskStation Manager
-query: http_favicon_md5:C60EA375C39D1AB273C4D1BEE717287A
-tags:
-- product:synology-diskstation-manager
-- vendor:synology
-version: 20260520T133458Z

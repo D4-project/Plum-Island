@@ -1,0 +1,81 @@
+/* Give Location half the available card width on desktop. */
+#ip-info-results > .ip-map-entry {
+    order: 3;
+    grid-column: 1 / -1;
+}
+@media (min-width: 1200px) {
+    #ip-info-results:has(> .ip-map-entry) {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+    }
+    #ip-info-results > .ip-map-entry { grid-column: 3; }
+}
+.ip-map-entry .ip-info-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.ip-map-entry .ip-info-box { padding: 0; }
+.ip-map-canvas {
+    height: 18rem;
+    min-height: 100%;
+    background: #f2efe9;
+}
+.ip-map-entry:fullscreen { background: var(--plum-card, Canvas); }
+.ip-map-entry:fullscreen .ip-info-box {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.ip-map-entry:fullscreen .ip-map-canvas {
+    flex: 1;
+    min-height: 0;
+}
+.ip-map-note {
+    padding: 0.5rem 0.9rem;
+    font-size: 13px;
+}
+.ip-map-entry .leaflet-popup-content { font-size: 13px; line-height: 1.45; }
+.plum-flag {
+    display: inline-block;
+    width: 20px;
+    height: 15px;
+    margin-right: 8px;
+    border-radius: 2px;
+    object-fit: cover;
+    vertical-align: -2px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.plum-flag[hidden] { display: none; }
+
+.ip-whois-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+}
+#ip-whois-copy[hidden] { display: none; }
+.ip-clipboard-fallback { position: fixed; left: -9999px; }
+.ip-whois-terminal { display: block; }
+
+/* Dark mode (Plum color mode). */
+@media screen {
+    :root[data-plum-color-mode="dark"] .ip-map-canvas { background: #0f1720; }
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-tile-pane {
+        filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9);
+    }
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-popup-content-wrapper,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-popup-tip,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-bar a,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-control-attribution {
+        background: var(--plum-card, #192532);
+        color: var(--plum-ink, #dce6ef);
+        border-color: var(--plum-border, #354657);
+    }
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-control-attribution a,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-popup-close-button {
+        color: var(--plum-accent, #69d5c4);
+    }
+    :root[data-plum-color-mode="dark"] .ip-map-note { color: var(--plum-muted, #a4b5c5); }
+    :root[data-plum-color-mode="dark"] .plum-flag { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2); }
+}

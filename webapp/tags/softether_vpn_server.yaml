@@ -1,7 +1,0 @@
-description: SoftEther VPN Server
-query: http_title.bg:"SoftEther VPN Server"
-tags:
-- product:vpn
-- product:softether_vpn
-- vendor:softether
-version: 20260520T133458Z

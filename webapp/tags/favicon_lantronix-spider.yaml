@@ -1,6 +1,0 @@
-description: Lantronix (Spider)
-query: http_favicon_mmhash:882208493
-tags:
-- product:lantronix-spider
-- vendor:lantronix
-version: 20260520T133458Z

@@ -1,7 +1,0 @@
-description: Squid
-query: http_Server.lk:squid or http_favicon_md5:A967C8BFDE9EA0869637294B679B7251
-tags:
-- product:squid
-- product:proxy
-- vendor:squid
-version: 20260520T133458Z

@@ -1,7 +1,0 @@
-description: Roundcube
-query: http_cookiename.bg:roundcube
-tags:
-- product:webmail
-- product:roundcube
-- vendor:roundcube
-version: 20260520T133458Z

@@ -7,6 +7,10 @@ this help and exits.
 """
 
 import argparse
+from contextlib import contextmanager
+import fcntl
+import json
+import os
 import logging
 import sys
 import warnings
@@ -17,11 +21,70 @@ import yaml
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 WEBAPP_DIR = BASE_DIR / "webapp"
-DEFAULT_TAGS_DIR = WEBAPP_DIR / "tags"
+# Plum-Antibodies is mounted at webapp/tags as a Git submodule. Its own
+# bundled rules live below the repository's tags/ directory.
+DEFAULT_TAGS_DIR = WEBAPP_DIR / "tags" / "tags"
 TOOLS_CONFIG = BASE_DIR / "tools" / "config.yaml"
 MISSING_VERSION_TIME = datetime(1970, 1, 1)
 TAG_FLUSH_BATCH_SIZE = 1000
 MAX_BATCH_SIZE = 1000
+REINDEX_LOCK_FILE = Path(
+    __import__("os").environ.get(
+        "PLUM_REINDEX_LOCK_FILE", "/tmp/plum-island-tag-reindex.lock"
+    )
+)
+REINDEX_STATUS_FILE = Path(
+    os.environ.get(
+        "PLUM_REINDEX_STATUS_FILE", "/tmp/plum-island-tag-reindex.status.json"
+    )
+)
+
+
+def read_reindex_status():
+    try:
+        return json.loads(REINDEX_STATUS_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+
+
+def _write_reindex_status(**updates):
+    current = read_reindex_status() or {}
+    current.update(updates)
+    if current.get("status") == "running":
+        current["heartbeat_at"] = datetime.now(timezone.utc).isoformat()
+    temporary = REINDEX_STATUS_FILE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(current), encoding="utf-8")
+    temporary.replace(REINDEX_STATUS_FILE)
+
+
+class ReindexBusyError(RuntimeError):
+    """Another CLI or web reindex is already running."""
+
+
+@contextmanager
+def reindex_execution_lock(lock_path=None):
+    """Serialize reindex operations across CLI and web processes."""
+    path = Path(lock_path or REINDEX_LOCK_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ReindexBusyError("A tag reindex is already running") from error
+        yield handle
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
+def reindex_lock_is_held(lock_path=None):
+    """Return whether another process currently owns the reindex lock."""
+    try:
+        with reindex_execution_lock(lock_path):
+            return False
+    except ReindexBusyError:
+        return True
 
 
 def build_parser():
@@ -122,7 +185,7 @@ def build_parser():
 
     reindex_parser = subparsers.add_parser(
         "reindex",
-        help="Recompute Kvrocks tags from Meilisearch documents.",
+        help="Queue reconciliation in the scheduler-managed background process.",
     )
     reindex_parser.add_argument(
         "rule_id",
@@ -144,7 +207,7 @@ def build_parser():
     reindex_parser.add_argument(
         "--flush",
         action="store_true",
-        help="Delete all existing Kvrocks tag indexes before recomputing them.",
+        help="Queue a full background rebuild; preserve the active index until publication.",
     )
 
     list_parser = subparsers.add_parser(
@@ -270,7 +333,7 @@ def legacy_reindex_args(argv=None):
     parser.add_argument(
         "--flush",
         action="store_true",
-        help="Delete all existing Kvrocks tag indexes before recomputing them.",
+        help="Queue a full background rebuild; preserve the active index until publication.",
     )
     parser.add_argument(
         "--list_tags",
@@ -421,7 +484,7 @@ def iter_yaml_files(tags_dir):
             yield path
 
 
-def get_yaml_files(args, rule_name=None):
+def get_yaml_files(args, rule_uuid=None):
     """
     Return the YAML files selected by CLI arguments.
     """
@@ -435,11 +498,12 @@ def get_yaml_files(args, rule_name=None):
     if not tags_dir.is_dir():
         raise FileNotFoundError(f"Tags directory not found: {tags_dir}")
 
-    if rule_name:
-        tags_file = tags_dir / f"{rule_name}.yaml"
-        if not tags_file.is_file():
-            raise FileNotFoundError(f"Tag YAML file not found: {tags_file}")
-        return [tags_file]
+    if rule_uuid:
+        for tags_file in iter_yaml_files(tags_dir):
+            payload, _source_version, _has_version = load_yaml_rule(tags_file)
+            if payload.get("uuid") == rule_uuid:
+                return [tags_file]
+        raise FileNotFoundError(f"Tag YAML file not found for UUID: {rule_uuid}")
 
     if not getattr(args, "all", False):
         return []
@@ -466,7 +530,10 @@ def import_rules(args):
     logging.disable(logging.CRITICAL)
 
     from app import app, db  # pylint: disable=import-outside-toplevel
-    from app.models import TagRules  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        TagRules,
+        ensure_rule_required_headers,
+    )
 
     # pylint: disable-next=import-outside-toplevel
     from app.utils.kvrocks import KVrocksIndexer
@@ -518,7 +585,7 @@ def import_rules(args):
                 db.session.rollback()
             return summary
 
-        rule_name = None
+        rule_uuid = None
         rule_id = getattr(args, "rule_id", None)
         if rule_id is not None:
             selected_rule = (
@@ -526,14 +593,14 @@ def import_rules(args):
             )
             if selected_rule is None:
                 raise SystemExit(f"Tag rule id {rule_id} not found")
-            rule_name = selected_rule.name
+            rule_uuid = selected_rule.uuid
 
-        yaml_files = get_yaml_files(args, rule_name=rule_name)
+        yaml_files = get_yaml_files(args, rule_uuid=rule_uuid)
         for yaml_file in yaml_files:
-            name = yaml_file.stem
             try:
                 payload, source_version, has_version = load_yaml_rule(yaml_file)
                 normalized = parse_tag_rule_yaml(yaml_file.read_text(encoding="utf-8"))
+                name = normalized["name"]
                 compile_tag_rule_definition(
                     name,
                     normalized["description"],
@@ -545,7 +612,11 @@ def import_rules(args):
                 print(f"SKIP {yaml_file.name}: {error}", file=sys.stderr)
                 continue
 
-            existing = db.session.query(TagRules).filter_by(name=name).one_or_none()
+            source_uuid = normalized["uuid"]
+            existing_by_uuid = (
+                db.session.query(TagRules).filter_by(uuid=source_uuid).one_or_none()
+            )
+            existing = existing_by_uuid
             tags_text = format_tags_text(normalized["tags"])
             version_label = payload.get("version") if has_version else "missing"
 
@@ -553,6 +624,7 @@ def import_rules(args):
                 summary["inserted"] += 1
                 if not args.dry_run:
                     new_rule = TagRules(
+                        uuid=source_uuid,
                         name=name,
                         active=True,
                         description=normalized["description"],
@@ -570,7 +642,9 @@ def import_rules(args):
                 continue
 
             same_content = (
-                existing.description == normalized["description"]
+                existing.uuid == source_uuid
+                and existing.name == name
+                and existing.description == normalized["description"]
                 and existing.query == normalized["query"]
                 and existing.tags == tags_text
             )
@@ -598,6 +672,8 @@ def import_rules(args):
                     f"db_updated_at={existing.updated_at}"
                 )
             if not args.dry_run:
+                existing.uuid = source_uuid
+                existing.name = name
                 existing.description = normalized["description"]
                 existing.query = normalized["query"]
                 existing.tags = tags_text
@@ -606,7 +682,14 @@ def import_rules(args):
         if args.dry_run:
             db.session.rollback()
         else:
+            reconciliation = ensure_rule_required_headers(db.session, commit=False)
             db.session.commit()
+            if reconciliation.get("ambiguous"):
+                print(
+                    "WARNING: human validation required for non-exact headers: "
+                    + ", ".join(reconciliation["ambiguous"]),
+                    file=sys.stderr,
+                )
 
     return summary
 
@@ -643,11 +726,12 @@ def load_reindex_runtime():
     from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel
         KVrocksIndexer,
     )
-    from app.utils.mutils import fetch_tlds  # pylint: disable=import-outside-toplevel
     from app.utils.result_parser import (  # pylint: disable=import-outside-toplevel
+        has_indexed_tls_certificate,
         parse_json,
     )
     from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
+        apply_tag_rules_to_document,
         compile_tag_rule_records,
     )
 
@@ -658,8 +742,9 @@ def load_reindex_runtime():
         "TagRules": TagRules,
         "ensure_default_collected_headers": ensure_default_collected_headers,
         "KVrocksIndexer": KVrocksIndexer,
-        "fetch_tlds": fetch_tlds,
+        "has_indexed_tls_certificate": has_indexed_tls_certificate,
         "parse_json": parse_json,
+        "apply_tag_rules_to_document": apply_tag_rules_to_document,
         "compile_tag_rule_records": compile_tag_rule_records,
     }
 
@@ -679,30 +764,8 @@ def configure_parser_from_tools_config(app_config, config):
     """
     Overlay parser settings from tools/config.yaml when present.
     """
-    if "ONLINETLD" in config:
-        app_config["ONLINETLD"] = bool(config.get("ONLINETLD"))
     if "TLDADD" in config:
         app_config["TLDADD"] = list(config.get("TLDADD") or [])
-    if "TLDS" in config:
-        app_config["TLDS"] = list(config.get("TLDS") or [])
-
-
-def ensure_parser_tlds(app_config, fetch_tlds):
-    """
-    Mirror the runtime parser TLD setup for reparsing.
-    """
-    if "TLDS" not in app_config:
-        app_config["TLDS"] = []
-
-    if app_config.get("ONLINETLD") and not app_config.get("TLDS"):
-        app_config["TLDS"] = fetch_tlds()
-
-    extra_tlds = list(app_config.get("TLDADD", []))
-    existing_tlds = set(app_config.get("TLDS", []))
-    for tld in extra_tlds:
-        if tld not in existing_tlds:
-            app_config["TLDS"].append(tld)
-            existing_tlds.add(tld)
 
 
 def configure_parser_http_headers(
@@ -719,25 +782,96 @@ def configure_parser_http_headers(
     }
 
 
-def iter_meili_documents(index, page_size):
-    """
-    Yield Meilisearch documents page by page in read-only mode.
-    """
-    offset = 0
+REINDEX_FIELDS = (
+    "net",
+    "fqdn",
+    "fqdn_requested",
+    "host",
+    "domain",
+    "domain_requested",
+    "tld",
+    "port",
+    "http_title",
+    "http_favicon_path",
+    "http_favicon_mmhash",
+    "http_favicon_md5",
+    "http_favicon_sha256",
+    "http_cookiename",
+    "http_etag",
+    "http_header",
+    "http_headval",
+    "http_server",
+    "x509_issuer",
+    "x509_issuer_cn",
+    "x509_md5",
+    "x509_sha1",
+    "x509_sha256",
+    "x509_subject",
+    "x509_subject_cn",
+    "x509_san",
+    "banner",
+)
+
+
+def chunked(iterable, chunk_size):
+    """Yield lists containing at most ``chunk_size`` items."""
+    batch = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) >= chunk_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def iter_kvrocks_document_batches(indexer, batch_size, start_cursor=0):
+    """Yield ``(documents, next_cursor)`` batches reconstructed from Kvrocks."""
+    cursor = int(start_cursor or 0)
     while True:
-        print(
-            f"Fetching Meili documents offset={offset} limit={page_size}",
-            flush=True,
+        next_cursor, uid_batch = indexer.r.sscan(
+            "all_uids", cursor=cursor, count=batch_size
         )
-        documents = index.get_documents({"limit": page_size, "offset": offset})
-        results = list(getattr(documents, "results", []) or [])
-        if not results:
+        uid_batch = [str(uid) for uid in uid_batch]
+        documents = []
+        if uid_batch:
+            pipe = indexer.r.pipeline(transaction=False)
+            for uid in uid_batch:
+                pipe.hgetall(f"doc:{uid}")
+                for field in REINDEX_FIELDS:
+                    pipe.smembers(f"{field}s:{uid}")
+            results = pipe.execute()
+            fields_per_uid = len(REINDEX_FIELDS) + 1
+            for offset, uid in enumerate(uid_batch):
+                values = results[
+                    offset * fields_per_uid : (offset + 1) * fields_per_uid
+                ]
+                metadata = values[0] or {}
+                document = {
+                    "id": uid,
+                    "uid": uid,
+                    "ip": metadata.get("ip", ""),
+                }
+                for field, field_values in zip(REINDEX_FIELDS, values[1:]):
+                    if field_values:
+                        document[field] = sorted(str(value) for value in field_values)
+                documents.append(document)
+
+        yield documents, int(next_cursor)
+        if int(next_cursor) == 0:
             break
+        cursor = int(next_cursor)
 
-        for result in results:
-            yield dict(result)
 
-        offset += len(results)
+def iter_kvrocks_documents(indexer, batch_size):
+    """Yield tag-rule documents reconstructed from Kvrocks indexes.
+
+    Tag rules consume the normalized fields stored in Kvrocks. Reading these
+    fields directly avoids the expensive full-document scan against
+    Meilisearch, which can timeout or overload the search backend.
+    """
+    for documents, _next_cursor in iter_kvrocks_document_batches(indexer, batch_size):
+        yield from documents
 
 
 def delete_keys_by_pattern(redis_client, pattern, batch_size):
@@ -770,7 +904,7 @@ def flush_existing_tag_indexes(indexer, batch_size):
     """
     Remove all Kvrocks tag indexes before a full tag rebuild.
     """
-    total_deleted = 0
+    total_deleted = indexer.r.delete(indexer.TAG_CATALOGUE_KEY)
     for pattern in ("tag:*", "tags:*"):
         print(f"Flushing existing Kvrocks keys matching {pattern}", flush=True)
         deleted = delete_keys_by_pattern(indexer.r, pattern, batch_size)
@@ -838,12 +972,10 @@ def load_kvrocks_endpoint(tools_config):
     return kvrocks_host, kvrocks_port
 
 
-def reindex_tags(args):
+def _reindex_tags_unlocked(args, progress_callback=None):
     """
-    Recompute Kvrocks tags from Meilisearch documents.
+    Recompute Kvrocks tags from the normalized Kvrocks document indexes.
     """
-    import meilisearch  # pylint: disable=import-outside-toplevel
-
     validate_batch_size(args.batch_size)
     suppress_connection_debug_logs()
     tools_config = load_tools_config()
@@ -856,13 +988,12 @@ def reindex_tags(args):
     TagRules = runtime["TagRules"]
     ensure_default_collected_headers = runtime["ensure_default_collected_headers"]
     KVrocksIndexer = runtime["KVrocksIndexer"]
-    fetch_tlds = runtime["fetch_tlds"]
-    parse_json = runtime["parse_json"]
     compile_tag_rule_records = runtime["compile_tag_rule_records"]
+    apply_tag_rules_to_document = runtime["apply_tag_rules_to_document"]
+    has_indexed_tls_certificate = runtime["has_indexed_tls_certificate"]
 
     with app.app_context():
         configure_parser_from_tools_config(app.config, tools_config)
-        ensure_parser_tlds(app.config, fetch_tlds)
         configure_parser_http_headers(
             app.config,
             db,
@@ -888,16 +1019,8 @@ def reindex_tags(args):
             if target_rule is None:
                 raise SystemExit(f"Tag rule id {args.rule_id} not found")
 
-        meili_url = get_tool_config_value(tools_config, "IN_MEILI_URL")
-        meili_api_key = get_tool_config_value(tools_config, "IN_MEILI_API_KEY")
-        index_name = tools_config.get("INDEX_NAME", "plum")
-
-        if not meili_url:
-            raise SystemExit("Missing IN_MEILI_URL in tools/config.yaml")
-
-        meili_client = meilisearch.Client(meili_url, meili_api_key)
-        meili_index = meili_client.index(index_name)
         indexer = KVrocksIndexer(kvrocks_host, kvrocks_port)
+        total_docs = int(indexer.r.scard("all_uids") or 0)
 
         if args.allrules:
             print("Mode: all active tag rules", flush=True)
@@ -912,7 +1035,7 @@ def reindex_tags(args):
             f"{len(active_rules)} DB rows",
             flush=True,
         )
-        print(f"Reading source documents from {meili_url} / index={index_name}")
+        print(f"Reading source documents from Kvrocks all_uids ({total_docs})")
         print(f"Writing tags to Kvrocks {kvrocks_host}:{kvrocks_port}")
         print(f"Batch size: {args.batch_size} documents max")
 
@@ -920,45 +1043,110 @@ def reindex_tags(args):
             flush_existing_tag_indexes(indexer, args.batch_size)
 
         pending_docs = []
-        processed_docs = 0
-        updated_docs = 0
-        error_docs = 0
+        processed_docs = int(getattr(args, "processed", 0) or 0)
+        updated_docs = int(getattr(args, "updated", 0) or 0)
+        error_docs = int(getattr(args, "errors", 0) or 0)
+        scan_cursor = int(getattr(args, "resume_cursor", 0) or 0)
 
-        for meili_doc in iter_meili_documents(meili_index, args.batch_size):
-            processed_docs += 1
+        for documents, next_cursor in iter_kvrocks_document_batches(
+            indexer, args.batch_size, start_cursor=scan_cursor
+        ):
+            pending_docs = []
+            for kvrocks_doc in documents:
+                processed_docs += 1
 
-            try:
-                parsed_doc = parse_json(meili_doc, app.config, tag_rules=compiled_rules)
-                pending_docs.append(
-                    {
-                        "uid": parsed_doc["uid"],
-                        "tag": parsed_doc.get("tag", []),
-                    }
+                try:
+                    parsed_doc = dict(kvrocks_doc)
+                    parsed_doc["tag"] = apply_tag_rules_to_document(
+                        parsed_doc, tag_rules=compiled_rules
+                    )
+                    if (
+                        has_indexed_tls_certificate(parsed_doc)
+                        and "proto:tls" not in parsed_doc["tag"]
+                    ):
+                        parsed_doc["tag"].append("proto:tls")
+                    pending_docs.append(
+                        {
+                            "uid": kvrocks_doc["uid"],
+                            "tag": parsed_doc["tag"],
+                        }
+                    )
+                except Exception as error:
+                    error_docs += 1
+                    print(
+                        "[WARN] Unable to reparse Kvrocks document "
+                        f"{kvrocks_doc.get('id', '<unknown>')}: {error}",
+                        flush=True,
+                    )
+
+            updated_docs += flush_tag_batch(indexer, pending_docs)
+            scan_cursor = next_cursor
+            # ``all_uids`` can grow while scans are being received. Refresh
+            # the denominator so progress remains meaningful during a long
+            # reindex, and never report a processed count above the total.
+            live_total_docs = int(indexer.r.scard("all_uids") or 0)
+            total_docs = max(total_docs, live_total_docs, processed_docs)
+            print(
+                "Progress: "
+                f"processed={processed_docs}; total={total_docs}; "
+                f"updated={updated_docs}; errors={error_docs}; "
+                f"cursor={scan_cursor}",
+                flush=True,
+            )
+            if progress_callback:
+                progress_callback(
+                    f"Progress: processed={processed_docs}; total={total_docs or 0}; "
+                    f"updated={updated_docs}; errors={error_docs}; cursor={scan_cursor}"
                 )
-            except Exception as error:
-                error_docs += 1
-                print(
-                    "[WARN] Unable to reparse Meili document "
-                    f"{meili_doc.get('id', '<unknown>')}: {error}",
-                    flush=True,
-                )
-                continue
 
-            if len(pending_docs) >= args.batch_size:
-                updated_docs += flush_tag_batch(indexer, pending_docs)
-                print(
-                    "Progress: "
-                    f"processed={processed_docs}; updated={updated_docs}; "
-                    f"errors={error_docs}",
-                    flush=True,
-                )
-
-        updated_docs += flush_tag_batch(indexer, pending_docs)
         print(
             "Done. "
             f"processed={processed_docs}; updated={updated_docs}; errors={error_docs}",
             flush=True,
         )
+        if progress_callback:
+            progress_callback(
+                f"Done. processed={processed_docs}; total={total_docs or processed_docs}; "
+                f"updated={updated_docs}; errors={error_docs}; cursor=0"
+            )
+
+
+def request_reconciliation(full=False, endpoint=None):
+    """Queue work for the scheduler; never start a competing CLI indexer."""
+    # Import runtime dependencies only after CLI argument/help handling.
+    # pylint: disable=import-outside-toplevel
+    sys.path.insert(0, str(WEBAPP_DIR))
+    from app import app  # pylint: disable=import-outside-toplevel
+    from app.utils.kvrocks import (
+        KVrocksIndexer,
+    )  # pylint: disable=import-outside-toplevel
+    from app.utils.index_reconciliation import (
+        queue_snapshot,
+        reconciliation_status,
+    )  # pylint: disable=import-outside-toplevel
+    from app.utils.tag_runtime import (
+        desired_snapshot,
+    )  # pylint: disable=import-outside-toplevel
+
+    configured = (app.config["KVROCKS_HOST"], int(app.config["KVROCKS_PORT"]))
+    if endpoint is not None and tuple(endpoint) != configured:
+        raise SystemExit(
+            "Tool output backend differs from the controller; use the matching controller configuration"
+        )
+    with app.app_context():
+        raw = KVrocksIndexer(*configured).raw
+        queue_snapshot(raw, desired_snapshot(), full=full)
+        return reconciliation_status(raw)
+
+
+def reindex_tags(args, progress_callback=None):
+    """Compatibility entry point: queue automatic work, or a forced full build."""
+    status = request_reconciliation(full=bool(getattr(args, "flush", False)))
+    message = "Index reconciliation queued for the scheduler; progress is visible on Tag Rules"
+    print(message)
+    if progress_callback:
+        progress_callback(message)
+    return status
 
 
 def list_tags(args):
@@ -1029,7 +1217,13 @@ def delete_rules(args):
     logging.disable(logging.CRITICAL)
 
     from app import app, db  # pylint: disable=import-outside-toplevel
-    from app.models import TagRules  # pylint: disable=import-outside-toplevel
+    from app.models import (  # pylint: disable=import-outside-toplevel
+        TagRules,
+        ensure_rule_required_headers,
+    )
+    from app.utils.tagrules import (  # pylint: disable=import-outside-toplevel
+        parse_tag_rule_yaml,
+    )
 
     summary = {
         "deleted": 0,
@@ -1047,6 +1241,13 @@ def delete_rules(args):
             if not args.dry_run:
                 db.session.query(TagRules).delete(synchronize_session=False)
                 db.session.commit()
+                reconciliation = ensure_rule_required_headers(db.session)
+                if reconciliation.get("cleanup_candidates"):
+                    print(
+                        "WARNING: review unused rule header collection candidates: "
+                        + ", ".join(reconciliation["cleanup_candidates"]),
+                        file=sys.stderr,
+                    )
             else:
                 db.session.rollback()
             return summary
@@ -1059,9 +1260,12 @@ def delete_rules(args):
                 .one_or_none()
             )
         else:
-            rule_name = Path(args.tags_file).stem
-            summary["selector"] = f"name={rule_name}"
-            rule = db.session.query(TagRules).filter_by(name=rule_name).one_or_none()
+            yaml_file = Path(args.tags_file).resolve()
+            source_uuid = parse_tag_rule_yaml(yaml_file.read_text(encoding="utf-8"))[
+                "uuid"
+            ]
+            summary["selector"] = f"uuid={source_uuid}"
+            rule = db.session.query(TagRules).filter_by(uuid=source_uuid).one_or_none()
 
         if rule is None:
             summary["missing"] = 1
@@ -1077,6 +1281,19 @@ def delete_rules(args):
         if not args.dry_run:
             db.session.delete(rule)
             db.session.commit()
+            reconciliation = ensure_rule_required_headers(db.session)
+            if reconciliation.get("cleanup_candidates"):
+                print(
+                    "WARNING: review unused rule header collection candidates: "
+                    + ", ".join(reconciliation["cleanup_candidates"]),
+                    file=sys.stderr,
+                )
+            if reconciliation.get("ambiguous"):
+                print(
+                    "WARNING: human validation required for non-exact headers: "
+                    + ", ".join(reconciliation["ambiguous"]),
+                    file=sys.stderr,
+                )
         else:
             db.session.rollback()
     return summary
@@ -1111,7 +1328,10 @@ def run_legacy_reindex(argv=None):
     args = legacy_reindex_args(argv)
     if args.list_tags:
         return list_tags(args)
-    return reindex_tags(args)
+    try:
+        return reindex_tags(args)
+    except ReindexBusyError as error:
+        raise SystemExit(str(error)) from error
 
 
 def main(argv=None):
@@ -1151,7 +1371,10 @@ def main(argv=None):
         args.flush_tag = args.tag
         return run_import(args)
     if args.command == "reindex":
-        return reindex_tags(args)
+        try:
+            return reindex_tags(args)
+        except ReindexBusyError as error:
+            raise SystemExit(str(error)) from error
     if args.command == "list-tags":
         return list_tags(args)
 

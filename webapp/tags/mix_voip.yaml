@@ -1,7 +1,0 @@
-description: MixVoip
-query: 'http_title:"MIXpbx :: Configuration and managagement"'
-tags:
-- product:mixvoip
-- product:telephony
-- vendor:mixvoip
-version: 20260520T133458Z

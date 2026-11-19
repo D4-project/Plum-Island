@@ -1,6 +1,0 @@
-description: CrushFTP
-query: http_favicon_mmhash:-1022206565 OR http_server.lk:"crushftp"
-tags:
-- product:crushftp
-- vendor:crushftp
-version: 20260520T133458Z
