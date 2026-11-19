@@ -25,10 +25,20 @@ complete the appropriate [versioned migration](migration.md).
   roles before FAB synchronization, fixing repeated startup cleanup warnings
   with Flask-AppBuilder 4.8.1 (#260).
 
-There are **no new SQL schema migrations** after the scripts already included
-in v0.2610.0 for these changes. Do not replay SQL migrations 14–24, the
-IP-to-port conversion, smarthash migration or certificate rebuild as part of
-this upgrade. Existing scan documents, UIDs and observation history are retained.
+### Unique scan profile names
+
+Existing SQLite installations need migration 25 before enabling profile writes
+with this version. Stop Plum and back up the database. From the repository root,
+check the database you plan to upgrade, then run the migration:
+
+```sh
+python webapp/sql_upd/25_migrate_from_3cad0c465919df626c23c7b10bade36612b3ab59.py --db /path/to/app.db --dry-run
+python webapp/sql_upd/25_migrate_from_3cad0c465919df626c23c7b10bade36612b3ab59.py --db /path/to/app.db
+```
+
+If names collide, the script stops and lists the profile IDs grouped by duplicate
+name. Choose distinct names for those profiles and retry. Their IDs, associations
+and history are preserved. New databases get the index at creation.
 
 ## 1. Deploy code and synchronize roles
 

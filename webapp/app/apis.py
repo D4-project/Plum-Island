@@ -28,6 +28,7 @@ from flask import request
 
 from sqlalchemy import func, distinct
 from sqlalchemy.exc import IntegrityError, NoResultFound
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
 from marshmallow import Schema, fields, validates, ValidationError
 from .models import (
@@ -1082,13 +1083,19 @@ class ScanProfilesApi(BaseApi):
     }
 
     @staticmethod
-    def _serialize(profile):
+    def _summary(profile):
         return {
             "id": profile.id,
             "name": profile.name,
             "scan_cycle_minutes": profile.scan_cycle_minutes,
             "priority": profile.priority,
             "apply_to_all": profile.apply_to_all,
+        }
+
+    @classmethod
+    def _serialize(cls, profile):
+        return {
+            **cls._summary(profile),
             "port_ids": sorted(port.id for port in profile.ports),
             "nse_ids": sorted(nse.id for nse in profile.nses),
         }
@@ -1266,7 +1273,10 @@ class ScanProfilesApi(BaseApi):
         """
         ---
         get:
-          summary: List all scan profiles.
+          summary: List scan profile summaries sorted by name and ID.
+          parameters:
+            - {in: query, name: page, schema: {type: integer, minimum: 1, default: 1}}
+            - {in: query, name: page_size, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
           responses:
             "200":
               description: Array of scan profile objects sorted by name.
@@ -1290,20 +1300,25 @@ class ScanProfilesApi(BaseApi):
                               type: integer
                             apply_to_all:
                               type: boolean
-                            port_ids:
-                              type: array
-                              items:
-                                type: integer
-                            nse_ids:
-                              type: array
-                              items:
-                                type: integer
+                      total:
+                        type: integer
         """
+        try:
+            page = int(request.args.get("page", 1))
+            size = int(request.args.get("page_size", 50))
+        except ValueError:
+            return self.response_400(message="Pagination requires integer values")
+        if not 1 <= page <= 2147483647 or not 1 <= size <= 100:
+            return self.response_400(message="Invalid page or page_size")
+        query = db.session.query(ScanProfiles)
         profiles = (
-            db.session.query(ScanProfiles).order_by(ScanProfiles.name.asc()).all()
+            query.order_by(ScanProfiles.name, ScanProfiles.id)
+            .offset((page - 1) * size)
+            .limit(size)
+            .all()
         )
         return self.response(
-            200, result=[self._serialize(profile) for profile in profiles]
+            200, total=query.count(), result=[self._summary(item) for item in profiles]
         )
 
     @expose("/", methods=["POST"])
@@ -1351,12 +1366,16 @@ class ScanProfilesApi(BaseApi):
           responses:
             "201":
               description: Scan profile created successfully.
+            "413":
+              description: Request exceeds the configured body size limit.
             "400":
               description: Missing/invalid fields or duplicate name.
         """
-        data = request.get_json(silent=True)
         try:
+            data = request.get_json(silent=True)
             payload = self._validated_create_payload(data)
+        except RequestEntityTooLarge:
+            return self.response(413, message="Request exceeds configured size limit")
         except ValueError as error:
             return self.response_400(message=str(error))
 
@@ -1474,6 +1493,8 @@ class ScanProfilesApi(BaseApi):
           responses:
             "200":
               description: Updated scan profile object.
+            "413":
+              description: Request exceeds the configured body size limit.
             "400":
               description: Invalid fields or name collision.
             "404":
@@ -1485,9 +1506,11 @@ class ScanProfilesApi(BaseApi):
         if item is None:
             return self.response_404()
 
-        data = request.get_json(silent=True)
         try:
+            data = request.get_json(silent=True)
             payload = self._validated_update_payload(data, pk)
+        except RequestEntityTooLarge:
+            return self.response(413, message="Request exceeds configured size limit")
         except ValueError as error:
             return self.response_400(message=str(error))
 
