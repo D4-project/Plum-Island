@@ -1,0 +1,64 @@
+/* IP detail "Location" map card (Informations tab).
+ * Three columns only when the map card is present (MAP_ENABLED); otherwise
+ * the original two-column layout from plum-components.css applies. */
+@media (min-width: 1200px) {
+    .plum-ip-page #ip-info-results:has(> .ip-map-entry) {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+.ip-map-entry { order: 3; }
+.ip-map-entry .ip-info-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.ip-map-entry .ip-info-box { padding: 0; }
+.ip-map-canvas {
+    height: 18rem;
+    min-height: 100%;
+    background: #f2efe9;
+}
+.ip-map-canvas:fullscreen { height: 100vh; }
+.ip-map-note {
+    padding: 0.5rem 0.9rem;
+    font-size: 13px;
+}
+.ip-map-entry .leaflet-popup-content { font-size: 13px; line-height: 1.45; }
+.plum-flag {
+    display: inline-block;
+    width: 20px;
+    height: 15px;
+    margin-right: 8px;
+    border-radius: 2px;
+    object-fit: cover;
+    vertical-align: -2px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
+}
+.plum-flag[hidden] { display: none; }
+
+/* WHOIS terminal: copy button always visible in the header, top right. */
+.ip-whois-terminal { display: block; }
+.ip-whois-terminal::part(copy-button) { opacity: 1; visibility: visible; margin-left: auto; }
+
+/* Dark mode (Plum color mode). */
+@media screen {
+    :root[data-plum-color-mode="dark"] .ip-map-canvas { background: #0f1720; }
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-tile-pane {
+        filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.9);
+    }
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-popup-content-wrapper,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-popup-tip,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-bar a,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-control-attribution {
+        background: var(--plum-card, #192532);
+        color: var(--plum-ink, #dce6ef);
+        border-color: var(--plum-border, #354657);
+    }
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-control-attribution a,
+    :root[data-plum-color-mode="dark"] .ip-map-canvas .leaflet-popup-close-button {
+        color: var(--plum-accent, #69d5c4);
+    }
+    :root[data-plum-color-mode="dark"] .ip-map-note { color: var(--plum-muted, #a4b5c5); }
+    :root[data-plum-color-mode="dark"] .plum-flag { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2); }
+}

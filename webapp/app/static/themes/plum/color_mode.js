@@ -17,12 +17,15 @@
 
     let preferred = savedMode();
 
+    // Vitrine components that follow the Plum color mode.
+    const viewers = 'vt-json, vt-terminal';
+
     function syncViewers(container) {
-        if (container.matches && container.matches('vt-json')) {
+        if (container.matches && container.matches(viewers)) {
             container.setAttribute('theme', mode);
         }
         if (container.querySelectorAll) {
-            container.querySelectorAll('vt-json').forEach(viewer => viewer.setAttribute('theme', mode));
+            container.querySelectorAll(viewers).forEach(viewer => viewer.setAttribute('theme', mode));
         }
     }
 

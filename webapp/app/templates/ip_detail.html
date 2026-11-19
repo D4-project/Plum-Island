@@ -773,6 +773,31 @@
     const loading = document.getElementById('ip-whois-loading');
     const error = document.getElementById('ip-whois-error');
     const result = document.getElementById('ip-whois-result');
+    // One WHOIS request per page, shared by this tab and the map card (ip_map.js).
+    let whoisRequest = null;
+    function loadWhois() {
+        if (!whoisRequest) {
+            whoisRequest = (async () => {
+                const response = await fetch(endpoint, {
+                    credentials: 'same-origin',
+                    headers: { Accept: 'application/json' }
+                });
+                const isJson = (response.headers.get('content-type') || '').toLowerCase().includes('json');
+                if (!response.ok) {
+                    const fallback = response.status === 401 || response.status === 403
+                        ? 'WHOIS access denied or session expired.'
+                        : `WHOIS lookup failed (${response.status}).`;
+                    const data = isJson ? await response.json() : null;
+                    throw new Error(data?.error || fallback);
+                }
+                if (!isJson) throw new Error('WHOIS returned an unexpected response. Sign in and retry.');
+                return response.json();
+            })();
+            whoisRequest.catch(() => { whoisRequest = null; });
+        }
+        return whoisRequest;
+    }
+    if (typeof window !== 'undefined') window.PlumWhoisData = loadWhois;
     if (!tab || !loading || !error || !result) return;
     let started = false;
     $(tab).on('shown.bs.tab', async () => {
@@ -782,24 +807,26 @@
         loading.style.display = '';
         error.style.display = 'none';
         try {
-            const response = await fetch(endpoint, {
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json' }
-            });
-            const isJson = (response.headers.get('content-type') || '').toLowerCase().includes('json');
-            if (!response.ok) {
-                const fallback = response.status === 401 || response.status === 403
-                    ? 'WHOIS access denied or session expired.'
-                    : `WHOIS lookup failed (${response.status}).`;
-                const data = isJson ? await response.json() : null;
-                throw new Error(data?.error || fallback);
-            }
-            if (!isJson) throw new Error('WHOIS returned an unexpected response. Sign in and retry.');
-            const data = await response.json();
+            const data = await loadWhois();
             loading.style.display = 'none';
             result.style.display = 'block';
             result.textContent = data.result || 'No WHOIS record returned.';
             if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-whois-cache', data.cache);
+            // Terminal-style rendering with Vitrine; the <pre> stays as fallback.
+            if (data.result && typeof window !== 'undefined' && window.customElements) {
+                customElements.whenDefined('vt-terminal').then(() => {
+                    const terminal = document.createElement('vt-terminal');
+                    terminal.setAttribute('variant', 'full');
+                    terminal.setAttribute('label', 'WHOIS');
+                    terminal.setAttribute('copy', '');
+                    terminal.setAttribute('wrap', '');
+                    terminal.setAttribute('theme',
+                        document.documentElement.getAttribute('data-plum-color-mode') || 'light');
+                    terminal.className = 'ip-whois-terminal';
+                    terminal.content = `$ whois ${data.query || ''}\n${data.result}`;
+                    result.replaceWith(terminal);
+                });
+            }
         } catch (lookupError) {
             loading.style.display = 'none';
             error.textContent = lookupError.message || 'WHOIS lookup failed.';
@@ -813,6 +840,19 @@
 <script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_pdns_resolve.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_hostname_groups.js') }}"></script>
+{% if config is not defined or config.MAP_ENABLED is not defined or config.MAP_ENABLED %}
+<div id="ip-map-config" hidden
+        data-ip="{{ ip }}"
+        data-geolookup="{{ url_for('IPDetailView.geolookup', ip=ip) }}"
+        data-whois="{{ url_for('IPDetailView.whois_lookup', ip=ip) }}"
+        data-tile-url="{{ config.MAP_TILE_URL if config is defined and config.MAP_TILE_URL else 'https://geo.circl.lu/hot/{z}/{x}/{y}.png' }}"
+        data-attribution="{{ config.MAP_TILE_ATTRIBUTION if config is defined and config.MAP_TILE_ATTRIBUTION else '&copy; OpenStreetMap contributors, tiles hosted by CIRCL' }}"></div>
+{% endif %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ip_map.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_map.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='vendor/vitrine/esm/vt-terminal.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
 <script>
 (function () {
     const ip = {{ ip | tojson }};
@@ -873,6 +913,9 @@
             : 'Ip Informations';
 
         appendInfoRow(grid, 'Country', countryInfo['Country']);
+        if (countryInfo['Country'] && window.PlumFlag && grid.lastElementChild) {
+            grid.lastElementChild.prepend(window.PlumFlag(country.iso_code || countryInfo['Alpha-2 code']));
+        }
         appendInfoRow(grid, 'ISO Code', country.iso_code || countryInfo['Alpha-2 code']);
         appendInfoRow(grid, 'Alpha-3', countryInfo['Alpha-3 code']);
         appendInfoRow(grid, 'Numeric Code', countryInfo['Numeric code']);
