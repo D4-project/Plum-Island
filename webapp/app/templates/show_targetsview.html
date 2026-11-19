@@ -34,7 +34,7 @@
   <div class="panel-heading">IP and AS information</div>
   <div class="panel-body">
     <p id="target-network-status" role="status"><i class="fa fa-spinner fa-spin" aria-hidden="true"></i> Loading IP and AS information…</p>
-    <p id="target-network-cache" class="text-muted"></p>
+    <p id="target-network-cache" class="text-muted small"></p>
     <dl id="target-network-result"></dl>
   </div>
 </div>
@@ -571,7 +571,7 @@ async function loadUid(uid, targetId) {
         <div class="panel-heading"><h4 class="panel-title">WHOIS</h4></div>
         <div class="panel-body" data-whois-url="{{ url_for('TargetsView.whois', pk=pk) }}">
           <p>Current registry record for <strong>{{ get_target_value(pk) }}</strong>.</p>
-          <p id="target-whois-cache" class="text-muted" role="status"></p>
+          <p id="target-whois-cache" class="text-muted small" role="status"></p>
     <pre id="target-whois-result" role="status" aria-live="polite">Select this tab to query the registry.</pre>
         </div>
       </div>

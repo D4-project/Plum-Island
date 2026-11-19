@@ -27,12 +27,16 @@ async function verify(body, ok = true, contentType = 'application/json') {
   return {context, elements};
 }
 (async () => {
+  const fetchedAt = new Date(2026, 10, 19, 10, 25, 2).getTime() / 1000;
   const {context, elements} = await verify({
     info: {asn: 64500, name: '<img src=x onerror=alert(1)>', country_alpha3: 'LUX',
       country_numeric: '442', latitude: null, longitude: null},
-    cache: {cached: true, fetched_at: 1700000000, expires_at: 1700086400}
+    cache: {cached: true, fetched_at: fetchedAt, expires_at: fetchedAt + 86400}
   });
-  assert.match(elements['target-network-cache'].textContent, /^Cached.*Fetched.*Expires/);
+  const expected = 'Fetched 19/11/2026 at 10:25:02';
+  assert.equal(elements['target-network-cache'].textContent, expected);
+  context.PlumLookupCache.show('target-network-cache', {cached: false, fetched_at: fetchedAt});
+  assert.equal(elements['target-network-cache'].textContent, expected);
   assert.equal(elements['target-network-result'].children[3].textContent, '<img src=x onerror=alert(1)>');
   assert.equal(elements['target-network-status'].textContent, '');
   vm.runInContext("PlumLookupCache.show('target-network-cache', null);", context);

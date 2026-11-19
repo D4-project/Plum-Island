@@ -737,7 +737,7 @@
     <div class="ip-info-panel">
         <div id="ip-info-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading IP information…</div>
         <div id="ip-info-error" class="alert alert-warning" role="alert" style="display: none;"></div>
-        <p id="ip-info-cache" class="text-muted" role="status"></p>
+        <p id="ip-info-cache" class="text-muted small" role="status"></p>
         <div id="ip-info-results" data-geolookup="{{ url_for('IPDetailView.geolookup', ip=ip) }}"></div>
     </div>
     <div class="ip-pdns-panel">
@@ -752,7 +752,7 @@
         <div class="ip-pdns-box">
             <div id="ip-pdns-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Loading Passive DNS…</div>
             <div id="ip-pdns-error" class="alert alert-warning" role="alert" style="display: none; margin-bottom: 0;"></div>
-            <p id="ip-pdns-cache" class="text-muted" role="status"></p>
+            <p id="ip-pdns-cache" class="text-muted small" role="status"></p>
             <div id="ip-pdns-results"></div>
         </div>
     </div>
@@ -761,7 +761,7 @@
     <div id="ip-whois-loading" class="ip-section-loading" role="status" aria-live="polite" style="display: none;">Querying WHOIS registry…</div>
     <div id="ip-whois-error" class="alert alert-warning" role="alert" style="display:none;"></div>
     <div class="ip-whois-toolbar">
-        <p id="ip-whois-cache" class="text-muted" role="status"></p>
+        <p id="ip-whois-cache" class="text-muted small" role="status"></p>
         <button type="button" id="ip-whois-copy" class="btn btn-default btn-xs" hidden><span data-copy-feedback>Copy WHOIS response</span></button>
     </div>
     <pre id="ip-whois-result" role="status" aria-live="polite" style="display:none;"></pre>

@@ -35,7 +35,7 @@ matching existing target-enrichment semantics; it does not enumerate the range.
 4. A miss acquires a distributed lease, rechecks the cache and fetches the source.
    Concurrent callers wait for the same response instead of launching duplicates.
 5. Successful data and its expiry are written atomically. The page displays the
-   result, whether it was cached, and its fetch and expiry times.
+   result and its original fetch time in the browser’s local time zone.
 
 Reports and exports call the same source service directly, without HTTP calls
 back into Plum. There is no cache prewarming, scheduled refresh or sweeping job.
