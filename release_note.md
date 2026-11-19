@@ -1,5 +1,10 @@
 # Unreleased
 
+- Add administrator-only Plum Settings under Security, with explanatory cards,
+  explicit defaults and per-field restart information. Persist validated private
+  overrides, protect secrets and pin indexing children to their scheduler's
+  applied configuration; retain config.py and existing deployments (#283).
+
 - Restore ascending and descending sorting by Rule Name and Updated on the Tag
   Rules page in Plum and the original themes, retaining filters and pagination.
 

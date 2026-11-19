@@ -9,6 +9,7 @@ from flask import Flask, g
 from flask_appbuilder import AppBuilder, SQLA
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+from plum_settings import apply_settings
 from .security import CustomSecurityManager  # Custom Security menu
 from .logging_config import configure_logging
 from .ui_theme import configure_ui_templates
@@ -18,6 +19,7 @@ from .utils.index_generations import READER_SCOPE
 # Flask + SQLAlchemy
 app = Flask(__name__)
 app.config.from_object("config")
+apply_settings(app.config)
 configure_ui_templates(app)
 configure_icon_assets(app)
 
@@ -86,6 +88,15 @@ appbuilder = AppBuilder(app, db.session, security_manager_class=CustomSecurityMa
 # pylint: disable=C0413
 from . import views
 from . import apis
+from .settings_view import PlumSettingsView
+
+appbuilder.add_view(
+    PlumSettingsView,
+    "Plum Settings",
+    category="Security",
+    icon="fa-sliders",
+    menu_cond=appbuilder.sm.is_plum_settings_admin,
+)
 
 # Scheduler: should only start in main process once
 if os.environ.get("WERKZEUG_RUN_MAIN") == "true":

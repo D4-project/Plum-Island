@@ -65,10 +65,15 @@ def main():
         parser.error("--apply requires --offline: stop all readers/controllers first")
     import config  # pylint: disable=import-outside-toplevel,import-error
     import redis  # pylint: disable=import-outside-toplevel
+    from plum_settings import (  # pylint: disable=import-outside-toplevel
+        tool_configuration,
+    )
+
+    applied = tool_configuration(config)
 
     raw = redis.Redis(
-        host=config.KVROCKS_HOST,
-        port=config.KVROCKS_PORT,
+        host=applied["KVROCKS_HOST"],
+        port=applied["KVROCKS_PORT"],
         decode_responses=True,
         socket_timeout=30,
     )

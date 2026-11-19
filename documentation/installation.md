@@ -65,6 +65,11 @@ Are the parameters correct ? (y/n) :
 ```
 
 If Passive DNS is enabled, the setup script writes `PASSIVE_USER` and `PASSIVE_PWD` in `webapp/config.py`.
+
+Administrators can subsequently use **Security → Plum Settings** for Plum-specific
+options. See [Plum Settings](plum-settings.md) for explicit defaults, required
+restarts, configuration precedence and offline recovery. Framework settings remain
+in `config.py`.
 Leave it disabled if you do not have CIRCL Passive DNS credentials; the IP detail page and reports will skip this enrichment.
 
 Review `webapp/config.py` and adapt it to your environment.
@@ -239,8 +244,10 @@ New configs default to `APP_THEME = "plum.css"` through
 ### Persistent custom configuration, including report SMTP
 
 `REPORT_SMTP_*` variables are not mapped from the environment by the current
-Compose file/entrypoint. Use a complete config file mounted read-only for settings
-such as SMTP. Keep it outside the repository/build context. For an existing
+Compose file/entrypoint. Configure SMTP through **Security → Plum Settings**, then
+restart the affected processes; GUI overrides persist in `/plum/data/settings`.
+Alternatively, use a complete config file mounted read-only. Saved GUI overrides
+take precedence over its Plum settings. Keep the file outside the repository/build context. For an existing
 installation, preserve its secret key and backend settings rather than replacing
 them with template defaults.
 

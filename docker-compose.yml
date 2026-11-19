@@ -4,6 +4,7 @@ services:
     ports:
       - "5000:5000"
     environment:
+      PLUM_SETTINGS_DIR: "/plum/data/settings"
       MEILI_KEY: "${MEILI_KEY}"
       MEILI_DATABASE_URI: "http://plum-meilisearch:7700"
       KVROCKS_HOST: "plum-kvrocks"

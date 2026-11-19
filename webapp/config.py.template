@@ -21,6 +21,14 @@ from flask_appbuilder.security.manager import (
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
+# Administrators can override Plum-specific settings in Security > Plum Settings.
+# Saving requires a coordinated restart of the components identified on the page.
+# Overrides do not rewrite this file. Private storage defaults to
+# webapp/.plum-settings; PLUM_SETTINGS_DIR selects a deployment-owned directory.
+# Docker uses /plum/data/settings on the persistent data volume.
+# See documentation/plum-settings.md for precedence, secrets and recovery.
+# Flask/FAB options (authentication, themes, SQLAlchemy, etc.) remain here only.
+
 # Your App secret key
 SECRET_KEY = "YouNeedToChangeMeInProduction"
 MEILI_KEY = "YouNeedToChangeMeInProduction"

@@ -26,6 +26,7 @@ COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /plum/webapp
+ENV PLUM_SETTINGS_DIR=/plum/data/settings
 EXPOSE 5000
 
 ENTRYPOINT ["docker-entrypoint.sh"]

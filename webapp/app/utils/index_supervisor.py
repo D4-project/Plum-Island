@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 
+from plum_settings import child_settings_environment, publish_controller_settings
+
 from app.utils.index_generations import CONTROL, file_lock, read_json
 from app.utils.index_reconciliation import (
     processing_revision,
@@ -19,6 +21,7 @@ class IndexSupervisor:
     """Own only processes we launched; never signal a PID read from storage."""
 
     def __init__(self, raw, config):
+        publish_controller_settings(config)
         self.raw = raw
         self.config = config
         self.process = None
@@ -69,6 +72,7 @@ class IndexSupervisor:
         root = Path(__file__).resolve().parents[3]
         environment = dict(os.environ)
         environment.pop("WERKZEUG_RUN_MAIN", None)
+        environment.update(child_settings_environment(self.config))
         environment["PLUM_INDEX_PARENT_PID"] = str(os.getpid())
         self.process = subprocess.Popen(  # pylint: disable=consider-using-with
             [sys.executable, str(root / "tools" / "reconcile_index.py")],

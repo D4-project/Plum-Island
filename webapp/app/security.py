@@ -4,12 +4,37 @@ This module implemenets additional item in the security menu.
 
 from flask_appbuilder.security.sqla.manager import SecurityManager
 from sqlalchemy.exc import SQLAlchemyError
+from flask_login import current_user
 
 
 class CustomSecurityManager(SecurityManager):
     """
     Class to implement shortcut in security folder
     """
+
+    def is_plum_settings_admin(self):
+        """Only active members of the configured administrator role may configure Plum."""
+        return bool(
+            current_user.is_authenticated
+            and current_user.is_active
+            and any(role.name == self.auth_role_admin for role in current_user.roles)
+        )
+
+    def has_access(self, permission_name, view_name):
+        """A mistaken FAB grant cannot expose application configuration."""
+        if (
+            view_name in {"PlumSettingsView", "Plum Settings"}
+            and not self.is_plum_settings_admin()
+        ):
+            return False
+        return super().has_access(permission_name, view_name)
+
+    def get_user_menu_access(self, menu_names=None):
+        """Hide settings consistently in both framework menus and Plum navigation."""
+        menus = super().get_user_menu_access(menu_names)
+        if not self.is_plum_settings_admin():
+            menus = menus - {"Plum Settings"}
+        return menus
 
     def add_permissions_view(self, base_permissions, view_menu):
         """Remove obsolete permission-view pairs atomically before FAB sync.

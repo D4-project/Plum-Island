@@ -21,6 +21,11 @@ def main():
     """Load controller configuration, then execute one frozen reconciliation."""
     os.environ.pop("WERKZEUG_RUN_MAIN", None)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "webapp"))
+    from plum_settings import (  # pylint: disable=import-outside-toplevel
+        pin_controller_for_worker,
+    )
+
+    pin_controller_for_worker()
     import meilisearch  # pylint: disable=import-outside-toplevel
     from app import app  # pylint: disable=import-outside-toplevel
     from app.utils.kvrocks import (  # pylint: disable=import-outside-toplevel

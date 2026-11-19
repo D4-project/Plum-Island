@@ -20,3 +20,4 @@ webapp/app.db-wal
 /webapp/app/static/uploads
 
 /webapp/app/index_state/
+/webapp/.plum-settings/
