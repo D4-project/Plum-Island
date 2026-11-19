@@ -1,5 +1,5 @@
 /* IP detail Informations tab: "Location" map card.
- * Tiles: CIRCL-hosted OpenStreetMap (MAP_TILE_URL).
+ * Tiles: CIRCL-hosted OpenStreetMap.
  * Position: WHOIS "geoloc:" when present, else CIRCL geolookup country average.
  * The marker popup shows WHOIS network/organisation/address. */
 (function () {
@@ -29,7 +29,6 @@
     if (!config || !tab || !results || !window.jQuery) return;
     const WORLD = [[-85, -180], [85, 180]];
     let map = null;
-    let started = false;
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -168,7 +167,7 @@
             maxBoundsViscosity: 1.0,
             worldCopyJump: false,
         }).setView([location.lat, location.lon], precise ? 12 : 4);
-        window.L.tileLayer(config.dataset.tileUrl, {
+        window.L.tileLayer('https://geo.circl.lu/hot/{z}/{x}/{y}.png', {
             maxZoom: 18,
             noWrap: true,
             bounds: WORLD,
@@ -176,25 +175,23 @@
             // keep more tiles around and avoid requesting intermediate levels.
             keepBuffer: 4,
             updateWhenZooming: false,
-            attribution: config.dataset.attribution || '',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, tiles hosted by CIRCL',
         }).addTo(map);
         window.L.marker([location.lat, location.lon]).addTo(map)
             .bindPopup(popupContent(rows, location.country, location.iso));
     }
 
     window.jQuery(tab).on('shown.bs.tab', function () {
-        if (map) {
-            map.invalidateSize();
-            return;
-        }
-        if (started) return;
-        started = true;
+        if (map) map.invalidateSize();
+    });
+
+    window.PlumShowLocation = function (geoData) {
         // Reuse the Whois tab request when available (single WHOIS query per page).
         const whoisData = window.PlumWhoisData ? window.PlumWhoisData() : getJson(config.dataset.whois);
         const whois = whoisData
             .then((data) => parseWhois(data.result))
             .catch(() => ({}));
-        Promise.all([getJson(config.dataset.geolookup).catch(() => null), whois])
+        Promise.all([geoData.catch(() => null), whois])
             .then(([geo, fields]) => {
                 const rows = whoisRows(fields);
                 const country = geo ? countryLocation(geo) : null;
@@ -204,5 +201,5 @@
                     : country;
                 if (location) renderMap(location, Boolean(exact), rows);
             });
-    });
+    };
 })();

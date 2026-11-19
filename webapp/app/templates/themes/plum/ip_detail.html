@@ -310,7 +310,7 @@
         <div id="ip-info-loading" class="ip-section-loading" role="status" aria-live="polite" hidden>Loading IP information…</div>
         <div id="ip-info-error" class="alert alert-warning" role="alert" hidden></div>
         <p id="ip-info-cache" class="text-muted" role="status"></p>
-        <div id="ip-info-results"></div>
+        <div id="ip-info-results" data-geolookup="{{ url_for('IPDetailView.geolookup', ip=ip) }}"></div>
     </div>
     <div class="ip-pdns-panel">
         <div class="ip-pdns-title"><span>Passive DNS</span>
@@ -415,10 +415,7 @@
 {% if config is not defined or config.MAP_ENABLED is not defined or config.MAP_ENABLED %}
 <div id="ip-map-config" hidden
         data-ip="{{ ip }}"
-        data-geolookup="{{ url_for('IPDetailView.geolookup', ip=ip) }}"
-        data-whois="{{ url_for('IPDetailView.whois_lookup', ip=ip) }}"
-        data-tile-url="{{ config.MAP_TILE_URL if config is defined and config.MAP_TILE_URL else 'https://geo.circl.lu/hot/{z}/{x}/{y}.png' }}"
-        data-attribution="{{ config.MAP_TILE_ATTRIBUTION if config is defined and config.MAP_TILE_ATTRIBUTION else '&copy; OpenStreetMap contributors, tiles hosted by CIRCL' }}"></div>
+        data-whois="{{ url_for('IPDetailView.whois_lookup', ip=ip) }}"></div>
 {% endif %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/ip_map.css') }}">
@@ -512,19 +509,24 @@
         loadingEl.hidden = false;
         pdnsLoadingEl.hidden = false;
         // Independent requests: Passive DNS must not delay IP information.
-        fetch(`/ip/geolookup/${encodeURIComponent(ip)}`)
+        const geoData = fetch(resultsEl.dataset.geolookup)
         .then((response) => {
             if (!response.ok) {
                 throw new Error(`Lookup failed (${response.status})`);
             }
             if (typeof PlumLookupCache !== 'undefined') PlumLookupCache.show('ip-info-cache', PlumLookupCache.headers(response));
             return response.json();
-        })
+        });
+        if (window.PlumShowLocation) window.PlumShowLocation(geoData);
+        geoData
         .then((payload) => {
             loadingEl.hidden = true;
             const entries = Array.isArray(payload) ? payload : [payload];
             if (!entries.length) {
-                resultsEl.innerHTML = '<div class="text-muted">No information returned.</div>';
+                const empty = document.createElement('div');
+                empty.className = 'text-muted';
+                empty.textContent = 'No information returned.';
+                resultsEl.appendChild(empty);
                 return;
             }
             entries.forEach((entry, index) => {

@@ -186,19 +186,6 @@ SECTIONS = (
                 True,
                 "Display the location map card. When disabled, the other cards use the full width.",
             ),
-            Setting(
-                "MAP_TILE_URL",
-                "Map tile URL",
-                "https://geo.circl.lu/hot/{z}/{x}/{y}.png",
-                "XYZ tile URL template with {z}, {x} and {y}. Default: CIRCL-hosted OpenStreetMap.",
-            ),
-            Setting(
-                "MAP_TILE_ATTRIBUTION",
-                "Map attribution",
-                '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
-                "contributors, tiles hosted by CIRCL",
-                "Attribution shown on the map, required by the tile provider.",
-            ),
         ),
     ),
     Section(

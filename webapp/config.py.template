@@ -51,13 +51,6 @@ IP_INFO_CACHE_HOURS = 24
 
 # IP detail "Location" map card (Informations tab). False hides the map.
 MAP_ENABLED = True
-# IP detail map tiles (standard XYZ / OpenStreetMap "slippy map" URL).
-# Default: CIRCL-hosted OpenStreetMap HOT style tiles.
-MAP_TILE_URL = "https://geo.circl.lu/hot/{z}/{x}/{y}.png"
-MAP_TILE_ATTRIBUTION = (
-    '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
-    "contributors, tiles hosted by CIRCL"
-)
 
 # Weekly/monthly reports: short email summary plus complete PDF attachment.
 # See documentation/reports.md. Restart the application after configuration changes.

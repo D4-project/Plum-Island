@@ -1,12 +1,14 @@
-/* IP detail "Location" map card (Informations tab).
- * Three columns only when the map card is present (MAP_ENABLED); otherwise
- * the original two-column layout from plum-components.css applies. */
-@media (min-width: 1200px) {
-    .plum-ip-page #ip-info-results:has(> .ip-map-entry) {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
+/* Give Location half the available card width on desktop. */
+#ip-info-results > .ip-map-entry {
+    order: 3;
+    grid-column: 1 / -1;
 }
-.ip-map-entry { order: 3; }
+@media (min-width: 1200px) {
+    #ip-info-results:has(> .ip-map-entry) {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr);
+    }
+    #ip-info-results > .ip-map-entry { grid-column: 3; }
+}
 .ip-map-entry .ip-info-title {
     display: flex;
     align-items: center;
