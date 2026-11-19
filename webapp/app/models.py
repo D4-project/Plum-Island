@@ -1293,7 +1293,7 @@ class ScanProfiles(Model):
 
     __tablename__ = "scanprofiles"
     id = Column(Integer, primary_key=True)
-    name = Column(String(256), nullable=False)  # Name of the profile.
+    name = Column(String(256), nullable=False, unique=True, index=True)  # Profile name.
     apply_to_all = Column(Boolean, default=False)  # Name of the profile.
     ports = relationship(
         "Ports",

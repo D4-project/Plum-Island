@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add authenticated scan profile CRUD with paginated summaries (#176).
+
 - Add a switchable location map to IP details in all themes. On large screens
   the map takes half the row beside the IP and AS panels. Its full-screen
   button also exits full screen. The WHOIS tab can copy the full registry
