@@ -36,6 +36,23 @@ The updater prints the backup path and the final migration number. If names
 collide, it lists the profile IDs grouped by duplicate name and rolls back the
 pending batch. Give those profiles distinct names and rerun the updater.
 
+### Unique protocol/port pairs
+
+`./updisland.sh` applies SQLite migration 26 automatically. For each duplicate
+protocol/port pair it keeps the lowest port ID and its description. It prints the
+discarded IDs and any conflicting descriptions, and reconnects every affected
+scan profile to the surviving ID. TCP/80 and UDP/80 remain separate entries.
+Queued jobs keep their saved port lists.
+
+The Ports form and `POST` / `PUT` under `/api/v1/ports/` reject duplicate pairs.
+API clients storing port IDs can refresh them from `GET /api/v1/ports/` or
+the `port_ids` field returned by `GET /api/v1/scanprofiles/<id>`.
+
+If the migration fails, the updater rolls back the transaction. To undo a
+completed merge, stop Plum and all SQLite writers, restore the backup printed by
+the updater with SQLite's `.restore` command, and redeploy the preceding code
+before restarting. Restoring returns the whole database to the backup timestamp.
+
 ## 1. Deploy code and synchronize roles
 
 Use the normal controller service stop/restart procedure during code replacement.

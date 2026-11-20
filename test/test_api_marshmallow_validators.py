@@ -24,6 +24,7 @@ from app.apis import (
     ScanProfilesApi,
     _release_interrupted_job,
 )
+from app.models import Ports
 
 
 class BotInfoSchemaValidationTest(TestCase):
@@ -211,8 +212,8 @@ class PortsApiValidationTest(TestCase):
                     PortsApi._normalize_proto_label(value)
 
     def test_proto_to_port_uses_model_tuple_format(self):
-        """Generated uniqueness value follows the model-documented format."""
-        self.assertEqual(PortsApi._proto_to_port(22, 1), "22:1")
+        """ORM and bulk inserts share the historic numeric key format."""
+        self.assertEqual(Ports.storage_key(22, 1), "22:1")
 
 
 class ScanProfilesApiValidationTest(TestCase):

@@ -44,7 +44,7 @@ import requests
 from redis.exceptions import RedisError
 
 from netaddr import IPNetwork
-from sqlalchemy import or_
+from sqlalchemy import String, cast, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from werkzeug.security import generate_password_hash
 from wtforms import (
@@ -4617,12 +4617,14 @@ class ScanprofilesView(ModelView):
         filters = [
             Ports.name.ilike(f"%{query}%"),
             Ports.proto_to_port.ilike(f"%{query}%"),
+            (Protos.value + ":" + cast(Ports.value, String)).ilike(f"%{query}%"),
         ]
         if query.isdigit():
             filters.append(Ports.value == int(query))
 
         items = (
             db.session.query(Ports)
+            .join(Ports.proto)
             .filter(or_(*filters))
             .order_by(Ports.value.asc())
             .limit(limit)
@@ -4818,6 +4820,17 @@ class ProtosView(ModelView):
         return self
 
 
+def validate_port_pair(form, field):
+    """Attach duplicate errors to the port number on both add and edit forms."""
+    if form.proto.data is not None and field.data is not None:
+        try:
+            Ports.check_available(
+                db.session, form.proto.data, field.data, getattr(form, "_id", None)
+            )
+        except ValueError as error:
+            raise ValidationError(str(error)) from error
+
+
 class PortsView(ModelView):
     """
     This class implements GUI for
@@ -4833,12 +4846,8 @@ class PortsView(ModelView):
     list_columns = ["value", "proto", "name"]
     edit_columns = ["value", "proto", "name", "scanprofiles"]
     add_columns = ["value", "proto", "name", "scanprofiles"]
+    validators_columns = {"value": [validate_port_pair]}
     base_order = ("value", "asc")  # Latest finished on top.
-
-    def pre_add(self, item):
-        # Create the tuple for proto_to_port to avoid port duplicate.
-        item.proto_to_port = f"{item.proto}:{item.value}"
-        return self
 
 
 class StatsView(BaseView):

@@ -1,5 +1,8 @@
 # Unreleased
 
+- Enforce unique protocol/port pairs in the Ports form and REST API. Migration
+  26 merges existing duplicates and preserves each scan profile's ports (#286).
+
 - Apply pending SQLite migrations automatically during `./updisland.sh`, with a
   backup before changes and a final migration number before roles synchronize.
 

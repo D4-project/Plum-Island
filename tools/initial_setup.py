@@ -221,7 +221,7 @@ def seed_tcp_ports(dry_run=False):
                     value=port,
                     name=default_tcp_port_name(port, service_names),
                     proto_id=tcp_proto_id,
-                    proto_to_port=f"{port}:{tcp_proto_id}",
+                    proto_to_port=Ports.storage_key(port, tcp_proto_id),
                 )
             )
             if len(pending) >= PORT_INSERT_BATCH_SIZE:
@@ -329,15 +329,9 @@ def seed_default_scan_profile(dry_run=False):
                     value=port,
                     name=default_tcp_port_name(port, service_names),
                     proto=tcp_proto,
-                    proto_to_port=f"{port}:{tcp_proto.id or 0}",
                 )
             )
             created_ports += 1
-        if missing_ports and not dry_run:
-            db.session.flush()
-            for port in ports:
-                port.proto_to_port = f"{port.value}:{tcp_proto.id}"
-
         nses = (
             db.session.query(Nses)
             .filter(Nses.name.in_(DEFAULT_SCAN_PROFILE_NSES))

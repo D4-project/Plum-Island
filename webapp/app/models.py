@@ -30,7 +30,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from flask_appbuilder.models.mixins import FileColumn
-from sqlalchemy import event, func
+from sqlalchemy import event, func, inspect
 from sqlalchemy.orm import relationship, object_session, validates
 from .utils.mutils import classify_target_is_ip_cidr, compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
@@ -409,17 +409,48 @@ class Ports(Model):
     """
 
     __tablename__ = "ports"
+    __table_args__ = (Index("uq_ports_proto_value", "proto_id", "value", unique=True),)
     id = Column(Integer, primary_key=True)
     value = Column(Integer, nullable=False)  # Port to Scan
     name = Column(String(256), nullable=False)  # Description of the port
     proto_id = Column(Integer, ForeignKey("protos.id"), nullable=False)
     proto = relationship("Protos", backref="ports")
-    proto_to_port = Column(
-        String(32 + 5), nullable=False, unique=True
-    )  # (str(port.value):str(proto.id)), empeche les doubles tuple port/proto
+    proto_to_port = Column(String(32 + 5), nullable=False, unique=True)
+
+    @staticmethod
+    def storage_key(value, proto_id):
+        """Legacy search key shared by ORM writes and bulk setup."""
+        return f"{value}:{proto_id}"
+
+    @staticmethod
+    def duplicate_message(proto_label, value):
+        """User-visible error for both validation and concurrent conflicts."""
+        return f"Port {proto_label}:{value} already exists"
+
+    @classmethod
+    def check_available(cls, session, proto, value, current_id=None):
+        """Check the protocol/port pair before a GUI or REST write."""
+        query = session.query(cls.id).filter_by(proto_id=proto.id, value=value)
+        if current_id is not None:
+            query = query.filter(cls.id != current_id)
+        if query.first() is not None:
+            raise ValueError(cls.duplicate_message(proto.value, value))
 
     def __repr__(self):
         return f"{self.proto}:{self.value}"
+
+
+@event.listens_for(Ports, "before_insert")
+@event.listens_for(Ports, "before_update")
+def set_port_search_key(_mapper, _connection, port):
+    """Refresh the legacy key after SQLAlchemy has synchronized the protocol FK."""
+    state = inspect(port)
+    if (
+        state.pending
+        or state.attrs.proto_id.history.has_changes()
+        or state.attrs.value.history.has_changes()
+    ):
+        port.proto_to_port = Ports.storage_key(port.value, port.proto_id)
 
 
 class Nses(Model):

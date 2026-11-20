@@ -14,14 +14,22 @@ from app import apis
 from app.models import Ports, Protos, ScanProfiles
 
 
-class ProfileRestTest(unittest.TestCase):
+class ProfileApiFixture(unittest.TestCase):
     """Run real JWT and database checks against a disposable SQLite database."""
+
+    def configure_catalogue(self):
+        """Register routes before the first request reaches the fixture app."""
+        self.builder.add_api(apis.ScanProfilesApi)
+
+    def database_uri(self):
+        """Use an isolated in-memory database for sequential requests."""
+        return "sqlite://"
 
     def setUp(self):
         self.app = Flask(__name__)
         self.app.config.update(
             SECRET_KEY="isolated-test-key-for-jwt-0123456789",
-            SQLALCHEMY_DATABASE_URI="sqlite://",
+            SQLALCHEMY_DATABASE_URI=self.database_uri(),
             SQLALCHEMY_TRACK_MODIFICATIONS=False,
             WTF_CSRF_ENABLED=False,
         )
@@ -30,7 +38,7 @@ class ProfileRestTest(unittest.TestCase):
         self.addCleanup(self.db.engine.dispose)
         self.addCleanup(self.db.session.remove)
         self.builder = AppBuilder(self.app, self.db.session)
-        self.builder.add_api(apis.ScanProfilesApi)
+        self.configure_catalogue()
         self.enterContext(patch.object(apis, "db", self.db))
         self.client = self.app.test_client()
         self.url = "/api/v1/scanprofiles/"
@@ -61,6 +69,10 @@ class ProfileRestTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.json)
         return {"Authorization": "Bearer " + response.json["access_token"]}
+
+
+class ProfileRestTest(ProfileApiFixture):
+    """Exercise profile reads and writes through real HTTP requests."""
 
     def ports(self, count):
         """Seed inert catalogue records. No targets or agents exist in this app."""

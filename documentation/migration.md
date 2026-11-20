@@ -10,7 +10,7 @@ after completing the applicable release migration.
 
 | Installed version | Destination | Guide | Main data work |
 | --- | --- | --- | --- |
-| `v0.2610.0` | Current `main` (Unreleased) | [Upgrade from v0.2610.0](migration-v0.2610.0-to-main.md) | SQLite migration 25 for unique scan profile names, observed-tag catalogue backfill and security-role synchronization. |
+| `v0.2610.0` | Current `main` (Unreleased) | [Upgrade from v0.2610.0](migration-v0.2610.0-to-main.md) | SQLite migrations 25–26 for unique scan profile names and protocol/port pairs, observed-tag catalogue backfill and security-role synchronization. |
 | `v0.2604.0` | `v0.2610.0` | [Migration from v0.2604.0](migration-v0.2604.0-to-v0.2610.0.md) | SQL migrations 14–24, legacy IP-to-port conversion, certificate query/index migration. |
 | `v0.2606.0` | `v0.2610.0` | [Migration from v0.2606.0](migration-v0.2606.0-to-v0.2610.0.md) | SQL migrations 17–24, per-port smarthash deduplication with merged history, certificate query/index migration. No IP-to-port split. |
 

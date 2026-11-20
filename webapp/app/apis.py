@@ -2005,30 +2005,12 @@ class PortsApi(BaseApi):
         return proto_label
 
     @staticmethod
-    def _proto_to_port(port_value, proto_id):
-        return f"{port_value}:{proto_id}"
-
-    @staticmethod
     def _get_proto(proto_label):
         return (
             db.session.query(Protos)
             .filter(func.upper(Protos.value) == proto_label)
             .one_or_none()
         )
-
-    @staticmethod
-    def _port_exists(port_value, proto_id, current_id=None):
-        query = db.session.query(Ports).filter(
-            Ports.value == port_value,
-            Ports.proto_id == proto_id,
-        )
-        if current_id is not None:
-            query = query.filter(Ports.id != current_id)
-        return query.first() is not None
-
-    @staticmethod
-    def _duplicate_message(proto_label, port_value):
-        return f"Port {proto_label}:{port_value} already exists"
 
     @staticmethod
     def _require_json_object(data):
@@ -2058,8 +2040,7 @@ class PortsApi(BaseApi):
         if proto is None:
             raise ValueError(f"Unknown protocol '{proto_label}'")
 
-        if self._port_exists(port_value, proto.id):
-            raise ValueError(self._duplicate_message(proto_label, port_value))
+        Ports.check_available(db.session, proto, port_value)
 
         return port_value, name, proto
 
@@ -2083,9 +2064,7 @@ class PortsApi(BaseApi):
             if proto is None:
                 raise ValueError(f"Unknown protocol '{proto_label}'")
 
-        proto_label = str(proto.value)
-        if self._port_exists(port_value, proto.id, current_id=pk):
-            raise ValueError(self._duplicate_message(proto_label, port_value))
+        Ports.check_available(db.session, proto, port_value, current_id=pk)
 
         return port_value, name, proto
 
@@ -2173,20 +2152,19 @@ class PortsApi(BaseApi):
         except ValueError as error:
             return self.response_400(message=str(error))
 
+        proto_label = proto.value
         item = Ports(
             value=port_value,
             name=name,
             proto_id=proto.id,
-            proto_to_port=self._proto_to_port(port_value, proto.id),
         )
         db.session.add(item)
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            proto_label = str(proto.value)
             return self.response_400(
-                message=self._duplicate_message(proto_label, port_value)
+                message=Ports.duplicate_message(proto_label, port_value)
             )
         return self.response(201, result=self._serialize(item))
 
@@ -2291,13 +2269,12 @@ class PortsApi(BaseApi):
         item.name = name
         item.proto_id = proto.id
         item.proto = proto
-        item.proto_to_port = self._proto_to_port(port_value, proto.id)
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
             return self.response_400(
-                message=self._duplicate_message(proto_label, port_value)
+                message=Ports.duplicate_message(proto_label, port_value)
             )
         return self.response(200, result=self._serialize(item))
 
