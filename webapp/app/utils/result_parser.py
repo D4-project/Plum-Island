@@ -3,7 +3,6 @@ This module will parse json results an prepare required data for indexation.
 
 It use a parsing profile description.
 
-hsh:http-header.output
 get_http_cookies:http-header.output
 get_hosts:http-header.output
 get_http_server:http-header.output
@@ -55,8 +54,20 @@ def is_external_ip(value):
     return ip_addr.is_global and not ip_addr.is_multicast
 
 
+def _scan_body(document):
+    return (document or {}).get("body") or {}
+
+
+def _scan_ports(body):
+    return body.get("ports") or []
+
+
 def has_tls_certificate(document):
     """Return whether an Nmap document contains a populated SSL certificate."""
+    return _ports_have_tls_certificate(_scan_ports(_scan_body(document)))
+
+
+def _ports_have_tls_certificate(ports):
     certificate_fields = (
         "issuer",
         "subject",
@@ -66,7 +77,7 @@ def has_tls_certificate(document):
         "sha256",
         "pem",
     )
-    for port in (document or {}).get("body", {}).get("ports", []):
+    for port in ports:
         for script in port.get("scripts", []):
             if script.get("id") == "ssl-cert" and any(
                 script.get(field) for field in certificate_fields
@@ -109,21 +120,6 @@ default_parsing = [
     "get_hosts:p.banner.output",
     "get_banner:p.banner.output",
     "get_favicon:p.http-mm-sha-favicon",
-]
-
-# Authorised data harversting methods.
-ALLOW = [
-    "get_http_cookies",
-    "get_hosts",
-    "get_fqdn_requested",
-    "get_http_header",
-    "get_http_server",
-    "get_http_title",
-    "get_http_etag",
-    "get_banner",
-    "get_ssl_info",
-    "hsh",
-    "get_favicon",
 ]
 
 CONFIG_AWARE_ACTIONS = {
@@ -218,18 +214,6 @@ def iter_http_header_lines(body):
         header_value = str(match.group(2) or "").strip().lower()
         if header_name:
             yield header_name, header_value
-
-
-def insensitive(input_list):
-    """
-    Put all data in lowercase along the "real one".
-    """
-    combined = []
-    for x in input_list:
-        if x:
-            combined.append(x)  # original
-            combined.append(x.lower())  # lowercase
-    return combined
 
 
 def get_ssl_info(data: dict, target: str, _general: bool = False):
@@ -333,7 +317,8 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
     issuer_cns = []
     subject_cns = []
 
-    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+    ports = _scan_ports(_scan_body(raw_doc))
+    for port in ports:
         for script in port.get("scripts", []):
             if script.get("id") != "ssl-cert":
                 continue
@@ -369,19 +354,23 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
     if tag_rules is not None:
         indexed_doc.pop("tag", None)
         computed_tags = apply_tag_rules_to_document(indexed_doc, tag_rules=tag_rules)
-        if has_tls_certificate(raw_doc) and "proto:tls" not in computed_tags:
+        if _ports_have_tls_certificate(ports) and "proto:tls" not in computed_tags:
             computed_tags.append("proto:tls")
         if computed_tags:
             indexed_doc["tag"] = computed_tags
 
-    indexed_doc["port_protocol"] = port_protocol_values(raw_doc)
+    indexed_doc["port_protocol"] = _port_protocol_values(ports)
     return indexed_doc
 
 
 def port_protocol_values(raw_doc):
     """Return valid protocol/port pairs from a raw scan document."""
+    return _port_protocol_values(_scan_ports(_scan_body(raw_doc)))
+
+
+def _port_protocol_values(ports):
     values = set()
-    for port in (raw_doc or {}).get("body", {}).get("ports", []):
+    for port in ports:
         protocol = port.get("protocol")
         portid = port.get("portid")
         if (
@@ -420,7 +409,7 @@ def run_parser_action(action, script, target, db_conf):
     """
     Call one configured parser action with explicit config when required.
     """
-    parser = globals()[action]
+    parser = _PARSER_DISPATCH[action]
     if action in CONFIG_AWARE_ACTIONS:
         return parser(script, target, db_conf)
     return parser(script, target)
@@ -680,6 +669,20 @@ def fuse_dicts(d1, d2):
     return fused
 
 
+_PARSER_DISPATCH = {
+    "get_http_cookies": get_http_cookies,
+    "get_hosts": get_hosts,
+    "get_fqdn_requested": get_fqdn_requested,
+    "get_http_header": get_http_header,
+    "get_http_server": get_http_server,
+    "get_http_title": get_http_title,
+    "get_http_etag": get_http_etag,
+    "get_banner": get_banner,
+    "get_ssl_info": get_ssl_info,
+    "get_favicon": get_favicon,
+}
+
+
 def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-locals
     """
     Parse one Nmap-like document into the Kvrocks search fields.
@@ -688,6 +691,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         return None
 
     db_conf = normalize_db_conf(db_conf_local)
+    body = _scan_body(doc)
+    ports = _scan_ports(body)
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
@@ -695,8 +700,8 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         # result = {}  # Parsing result array
 
         # Check if rule contains a splitter.
-        if not ":" in parsing_rule:
-            raise TypeError
+        if ":" not in parsing_rule:
+            raise TypeError(f"Parsing rule missing ':' separator: {parsing_rule!r}")
         action = parsing_rule.split(":")
         target = action[1]
         script_name = target.split(".")[1]
@@ -706,19 +711,17 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         # print(f"doing action {action} on {target}")
 
         # Check if rules contains a legitimate parsing method
-        if not action in ALLOW:
-            raise TypeError
+        if action not in _PARSER_DISPATCH:
+            raise TypeError(f"Action {action!r} is not supported")
 
         parse_result = {}
         # print(f"Looking {target} for section >{section}<")
         if section == "b":
-            for script in doc.get("body"):
-                if script == script_name:  # If it is in the job list.
-                    script = doc.get("body").get(script)
-                    parse_result = run_parser_action(action, script, target, db_conf)
+            if script_name in body:
+                parse_result = run_parser_action(action, body[script_name], target, db_conf)
 
         elif section == "p":
-            for port in doc.get("body").get("ports"):  # for each ports,
+            for port in ports:  # for each ports,
                 for script in port.get("scripts", []):  # We look at script results
                     if script.get("id") == script_name:  # If it is in the job list.
                         parse_result = fuse_dicts(
@@ -728,23 +731,23 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
 
         final_result = fuse_dicts(final_result, parse_result)
 
-    ports = []
-    for port in doc.get("body").get("ports"):
-        ports.append(port.get("portid"))
+    port_list = []
+    for port in ports:
+        port_list.append(port.get("portid"))
 
     uid = doc.get("id")
     ip = doc.get("ip")
-    last_seen = doc.get("body").get("endtime")
+    last_seen = body.get("endtime")
 
     final_result = final_result | {
         "uid": uid,
         "ip": ip,
         "last_seen": last_seen,
-        "port": ports,
+        "port": port_list,
     }
 
     computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
-    if has_tls_certificate(doc) and "proto:tls" not in computed_tags:
+    if _ports_have_tls_certificate(ports) and "proto:tls" not in computed_tags:
         computed_tags.append("proto:tls")
     if computed_tags:
         final_result["tag"] = computed_tags
