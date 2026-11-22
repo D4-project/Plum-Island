@@ -1,6 +1,11 @@
 {% extends "appbuilder/base.html" %}
 {% import 'appbuilder/general/lib.html' as lib %}
 
+{% block head_js %}
+{{ super() }}
+{% include 'scan_report_assets.html' %}
+{% endblock %}
+
 {% block content %}
 {{ lib.panel_begin(title, "Query Scans") }}
 
@@ -1054,10 +1059,12 @@ function appendUidPanels(ip, uids, timestamps) {
         uidLink.dataset.uid = uidLabel;
         uidLink.dataset.searchUid = uidLabel;
         uidLink.dataset.target = `uid-body-${resultIndex}-${uidIndex}`;
+        uidLink.setAttribute('aria-controls', uidLink.dataset.target);
+        uidLink.setAttribute('aria-expanded', 'false');
         uidLink.textContent = uidLabel;
         uidLink.addEventListener('click', (event) => {
             event.preventDefault();
-            loadUid(uidLink.dataset.uid, uidLink.dataset.target);
+            window.PlumScanReport.toggleIndexed(uidLink);
         });
         uidTitle.appendChild(uidLink);
         if (uidTimestamp) {
@@ -1068,7 +1075,7 @@ function appendUidPanels(ip, uids, timestamps) {
         const uidBody = document.createElement('div');
         uidBody.id = `uid-body-${resultIndex}-${uidIndex}`;
         uidBody.className = 'panel-body';
-        uidBody.style.display = 'none';
+        uidBody.hidden = true;
         uidPanel.appendChild(uidBody);
         uidsDiv.appendChild(uidPanel);
         uidIndex += 1;
@@ -1348,25 +1355,6 @@ async function runSearchPage(cursorTs, append) {
     }
 }
 
-async function loadUid(uid, targetId) {
-    const target = document.getElementById(targetId);
-    if (target.style.display === 'none' || target.innerHTML === '') {
-        const res = await fetch(`/meilisearchview/getuid?uid=${encodeURIComponent(uid)}`);
-        const data = await readJsonResponse(res);
-        let json = JSON.stringify(data, null, 2);
-        // garde l'indentation devant les lignes ajoutées
-        json = json.replace(/^( *)(.*"output": ".*)$/gm, (match, indent, line) =>
-            line.replace(/\\n/g, '\\n\n' + indent + '  ')
-        );
-        target.textContent = '';
-        const pre = document.createElement('pre');
-        pre.textContent = json;
-        target.appendChild(pre);
-        target.style.display = 'block';
-    } else {
-        target.style.display = 'none';
-    }
-}
 
 document.addEventListener('DOMContentLoaded', () => {
     bindDateInput('time-from');
@@ -2013,9 +2001,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>MD5 of the TLS certificate public signature</td>
             </tr>
             <tr>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
-                <td class="kvrocks-empty" aria-hidden="true"></td>
+                <td><span class="search-keyword" data-search-keyword="engine" role="button" tabindex="0">engine</span></td>
+                <td></td>
+                <td>masscan or nmap</td>
                 <td><span class="search-keyword" data-search-keyword="x509_sha1" role="button" tabindex="0">x509_sha1</span></td>
                 <td></td>
                 <td>SHA1 of the TLS certificate public signature</td>

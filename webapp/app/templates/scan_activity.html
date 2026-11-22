@@ -1,0 +1,33 @@
+<h3>Scan activity</h3>
+<p class="text-muted">Completed jobs and open IP/transport/port observations received by Island. Times are UTC; the current interval is still in progress.</p>
+<p class="text-muted">Collection starts with this upgrade. Previous jobs are not included. Targeted ports include nonresponding targets; this is not a packet count.</p>
+<form id="stats-filters" method="get" class="form-inline">
+  <input type="hidden" name="tab" value="graphs">
+  <label for="stats-period">Interval</label>
+  <select id="stats-period" name="period" class="form-control">
+    {% for value, label in [("minute", "Minute · last 60 minutes"), ("hour", "Hour · last 24 hours"), ("day", "Day · last 30 days"), ("month", "Month · last 6 months")] %}
+    <option value="{{ value }}"{% if activity.period == value %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <label for="stats-tool">Scanner</label>
+  <select id="stats-tool" name="tool" class="form-control">
+    {% for value, label in [("all", "All scanners"), ("nmap", "Nmap"), ("masscan", "Masscan")] %}
+    <option value="{{ value }}"{% if activity.tool == value %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</form>
+<div class="stats-grid">
+  <div class="stats-card"><div class="stats-label">Jobs completed · selected window</div><div class="stats-value">{{ "{:,}".format(activity.totals.jobs_completed) }}</div></div>
+  <div class="stats-card"><div class="stats-label">Open port observations · selected window</div><div class="stats-value">{{ "{:,}".format(activity.totals.open_ports) }}</div></div>
+  <div class="stats-card"><div class="stats-label">Ports targeted · reported total</div><div class="stats-value">{% if activity.totals.jobs_completed and activity.totals.jobs_without_target_count == activity.totals.jobs_completed %}Unknown{% else %}{{ "{:,}".format(activity.totals.ports_targeted) }}{% endif %}</div></div>
+</div>
+{% if activity.totals.jobs_without_target_count %}<p class="text-muted">Targeted-port counts unavailable for {{ activity.totals.jobs_without_target_count }} completed job(s). Those jobs are excluded from the reported targeted-port total.</p>{% endif %}
+{% include "scan_activity_graphs.html" %}
+<details class="stats-data"><summary>View data</summary>
+<div class="table-responsive">
+<table class="table table-striped">
+  <thead><tr><th>Interval start (UTC)</th><th>Jobs completed</th><th>Open port observations</th><th>Ports targeted (reported)</th><th>Jobs missing target count</th></tr></thead>
+  <tbody>{% for row in activity.rows %}<tr><td>{{ row.label }}</td><td>{{ row.jobs_completed }}</td><td>{{ row.open_ports }}</td><td>{% if row.jobs_completed and row.jobs_without_target_count == row.jobs_completed %}Unknown{% else %}{{ row.ports_targeted }}{% endif %}</td><td>{{ row.jobs_without_target_count }}</td></tr>{% endfor %}</tbody>
+</table>
+</div>
+</details>

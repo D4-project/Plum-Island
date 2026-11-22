@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import time
+import uuid
 import meilisearch
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_appbuilder import ModelRestApi
@@ -26,11 +27,12 @@ from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, prot
 from flask_appbuilder.filemanager import FileManager
 from flask import request
 
-from sqlalchemy import func, distinct
+from sqlalchemy import func, distinct, false, or_
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
-from marshmallow import Schema, fields, validates, ValidationError
+from marshmallow import Schema, fields, validate, validates, ValidationError
+from .utils.scan_stats import claim_completed_job, increment_completed_counters
 from .models import (
     Targets,
     Bots,
@@ -86,9 +88,21 @@ class BotInfoSchema(Schema):
         required=False,
         metadata={"description": "Result of scan"},
     )
+    PORTS_TARGETED = fields.Integer(
+        required=False,
+        strict=True,
+        validate=validate.Range(min=0, max=10**12),
+        metadata={
+            "description": "Unique IP/transport/port pairs targeted by a completed attempt"
+        },
+    )
     JOB_UID = fields.String(
         required=False,
         metadata={"description": "Uid of the scan"},
+    )
+    ATTEMPT_UID = fields.String(
+        required=False,
+        metadata={"description": "Job-attempt identifier for stale-result protection"},
     )
     NSE_HASHES = fields.Dict(
         required=False,
@@ -96,6 +110,29 @@ class BotInfoSchema(Schema):
         values=fields.String(),
         metadata={"description": "Cached NSE SHA256 hashes keyed by NSE filename"},
     )
+    capabilities = fields.List(
+        fields.String(validate=validate.OneOf(("nmap", "masscan"))),
+        validate=validate.Length(max=2),
+        metadata={"description": "Tools reported by the agent at startup"},
+    )
+    masscan_ip = fields.String(allow_none=True)
+
+    @validates("masscan_ip")
+    def validate_masscan_source(self, value, **_kwargs):
+        """Only a dedicated unicast address can enable banner jobs."""
+        if value is None:
+            return
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as error:
+            raise ValidationError("Invalid Masscan source IP") from error
+        if (
+            address.is_unspecified
+            or address.is_multicast
+            or address.is_loopback
+            or address.is_link_local
+        ):
+            raise ValidationError("Masscan source must be a unicast address")
 
     # Custom validator for the parameters
     @validates("UID")
@@ -113,6 +150,11 @@ class BotInfoSchema(Schema):
         """
         if len(value) != 36 or not is_valid_uuid(value):
             raise ValidationError("Invalid JOB_UID")
+
+    @validates("ATTEMPT_UID")
+    def validate_attempt_uid(self, value, **_kwargs):
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid ATTEMPT_UID")
 
     @validates("EXT_IP")
     def validate_ext_ip(self, value, **_kwargs):
@@ -156,6 +198,10 @@ class BotJobReleaseSchema(Schema):
         required=True,
         metadata={"description": "Uid of the scan job to release"},
     )
+    ATTEMPT_UID = fields.String(
+        required=False,
+        metadata={"description": "Job-attempt identifier"},
+    )
     ERROR = fields.String(
         required=False,
         allow_none=True,
@@ -177,6 +223,11 @@ class BotJobReleaseSchema(Schema):
         """
         if len(value) != 36 or not is_valid_uuid(value):
             raise ValidationError("Invalid JOB_UID")
+
+    @validates("ATTEMPT_UID")
+    def validate_attempt_uid(self, value, **_kwargs):
+        if len(value) != 36 or not is_valid_uuid(value):
+            raise ValidationError("Invalid ATTEMPT_UID")
 
     @validates("AGENT_KEY")
     def validate_agent_key(self, value, **_kwargs):
@@ -292,7 +343,22 @@ def _build_job_nse_payload(scan_nses, agent_nse_hashes):
     return effective_names, nse_payload
 
 
-def _claim_job_for_bot(job_id, bot_id, now):
+def _compatible_job_filter(bot):
+    """Return the SQL predicate for jobs supported by this bot."""
+    predicates = []
+    if bot.has_nmap:
+        predicates.append(or_(Jobs.scan_tool == "nmap", Jobs.scan_tool.is_(None)))
+    if bot.has_masscan:
+        masscan_filter = Jobs.scan_tool == "masscan"
+        if not bot.masscan_ip:
+            masscan_filter = masscan_filter & or_(
+                Jobs.detect_protocol == False, Jobs.detect_protocol.is_(None)
+            )
+        predicates.append(masscan_filter)
+    return or_(*predicates) if predicates else false()
+
+
+def _claim_job_for_bot(job_id, bot, now, attempt_uid=None):
     """
     Atomically claim one queued job.
 
@@ -305,12 +371,14 @@ def _claim_job_for_bot(job_id, bot_id, now):
             Jobs.id == job_id,
             Jobs.active == False,
             Jobs.finished == False,
+            _compatible_job_filter(bot),
         )
         .update(
             {
                 Jobs.active: True,
                 Jobs.job_start: now,
-                Jobs.bot_id: bot_id,
+                Jobs.bot_id: bot.id,
+                Jobs.attempt_uid: attempt_uid,
             },
             synchronize_session=False,
         )
@@ -341,6 +409,7 @@ def _release_interrupted_job(job, bot, now):
     if not job.active:
         job.bot_id = None
         job.job_start = None
+        job.attempt_uid = None
         bot.running = False
         bot.last_seen = now
         return True, "already released"
@@ -348,18 +417,21 @@ def _release_interrupted_job(job, bot, now):
     job.active = False
     job.bot_id = None
     job.job_start = None
+    job.attempt_uid = None
     bot.running = False
     bot.last_seen = now
     return True, "released"
 
 
-def _get_available_job_priorities():
+def _get_available_job_priorities(bot):
     """
     Return the priority queues that currently have at least one waiting job.
     """
     rows = (
         db.session.query(Jobs.priority)
-        .filter(Jobs.active == False, Jobs.finished == False)
+        .filter(
+            Jobs.active == False, Jobs.finished == False, _compatible_job_filter(bot)
+        )
         .distinct()
         .all()
     )
@@ -589,6 +661,12 @@ class Api(BaseApi):
     route_base = "/bot_api"
     openapi_spec_tag = "Bots API"
 
+    @expose("/protocol", methods=["GET"])
+    @safe
+    def protocol(self):
+        """Advertise support for scanner inventories without changing bot state."""
+        return self.response(200, tool_inventory=True)
+
     @expose("/beacon", methods=["POST"])
     @safe
     def status(self):
@@ -623,6 +701,8 @@ class Api(BaseApi):
 
         logger.debug("UID %s Beacon", botinfo.get("UID"))
 
+        tools = botinfo.get("capabilities", ["nmap"])
+        capabilities_reported = "capabilities" in botinfo
         new_bot = Bots(
             # Last Seen is autoupdated at creation
             uid=botinfo.get("UID"),
@@ -631,6 +711,10 @@ class Api(BaseApi):
             device_model=botinfo.get("DEVICE_MODEL"),
             agent_version=botinfo.get("AGENT_VERSION"),
             system_version=botinfo.get("SYSTEM_VERSION"),
+            has_nmap="nmap" in tools,
+            has_masscan="masscan" in tools,
+            masscan_ip=botinfo.get("masscan_ip") if "masscan" in tools else None,
+            supports_job_attempts=capabilities_reported,
         )
 
         db.session.add(new_bot)
@@ -647,6 +731,12 @@ class Api(BaseApi):
                     Bots.device_model: botinfo.get("DEVICE_MODEL"),
                     Bots.agent_version: botinfo.get("AGENT_VERSION"),
                     Bots.system_version: botinfo.get("SYSTEM_VERSION"),
+                    Bots.has_nmap: "nmap" in tools,
+                    Bots.has_masscan: "masscan" in tools,
+                    Bots.masscan_ip: (
+                        botinfo.get("masscan_ip") if "masscan" in tools else None
+                    ),
+                    Bots.supports_job_attempts: capabilities_reported,
                 },
                 synchronize_session="fetch",
             )  # 'fetch' So SQLAlchemy keep correct session state
@@ -692,13 +782,20 @@ class Api(BaseApi):
         # Get one job to do using smooth weighted round-robin over non-empty
         # priority queues. Priority 4 gets the largest share when present, but
         # lower queues inherit capacity when higher queues are empty.
-        prio_list = _select_weighted_priority(_get_available_job_priorities())
+        prio_list = []
+        if job_bot.has_nmap or job_bot.has_masscan:
+            prio_list = _select_weighted_priority(
+                _get_available_job_priorities(job_bot)
+            )
         job_todo = None
         for prio in prio_list:
             candidate = (
                 db.session.query(Jobs)
                 .filter(
-                    Jobs.active == False, Jobs.finished == False, Jobs.priority == prio
+                    Jobs.active == False,
+                    Jobs.finished == False,
+                    Jobs.priority == prio,
+                    _compatible_job_filter(job_bot),
                 )
                 .order_by(Jobs.job_creation.asc())  # oldest first
                 .first()
@@ -707,7 +804,8 @@ class Api(BaseApi):
                 continue
 
             now = utcnow_naive()
-            if _claim_job_for_bot(candidate.id, job_bot.id, now) != 1:
+            attempt_uid = str(uuid.uuid4()) if job_bot.supports_job_attempts else None
+            if _claim_job_for_bot(candidate.id, job_bot, now, attempt_uid) != 1:
                 db.session.rollback()
                 continue
 
@@ -715,6 +813,7 @@ class Api(BaseApi):
             job_todo.active = True
             job_todo.job_start = now
             job_todo.bot_id = job_bot.id
+            job_todo.attempt_uid = attempt_uid
             job_bot.running = True  # Set the Bot to Active too
             job_bot.last_seen = now
             db.session.add(job_bot)
@@ -724,34 +823,46 @@ class Api(BaseApi):
 
         # Now whe have maybe a job to launch.
         if job_todo:
-            try:
-                nmap_nse, nse_scripts = _build_job_nse_payload(
-                    job_todo.scan_nses,
-                    botinfo.get("NSE_HASHES"),
-                )
-            except OSError as error:
-                db.session.rollback()
-                logger.exception(
-                    "Unable to prepare NSE payloads for job %s", job_todo.uid
-                )
-                return self.response_400(
-                    message=f"Unable to prepare NSE payloads: {error}"
-                )
-
+            scan_tool = getattr(job_todo, "scan_tool", None) or "nmap"
             ret_msg = {
                 "message": "ready",
                 "job": job_todo.job,
                 "job_uid": job_todo.uid,
-                "nmap_nse": nmap_nse,
-                "nse_scripts": nse_scripts,
-                "nmap_ports": (
+                "scan_tool": scan_tool,
+                "report_target_count": True,
+                "attempt_uid": job_todo.attempt_uid,
+                "scan_ports": (
                     job_todo.scan_ports.split(",") if job_todo.scan_ports else []
                 ),
-                "nmap_additional_params": _build_job_nmap_additional_params_payload(
-                    job_todo
-                ),
             }
+            if scan_tool == "masscan":
+                ret_msg["detect_protocol"] = bool(job_todo.detect_protocol)
+            else:
+                try:
+                    nmap_nse, nse_scripts = _build_job_nse_payload(
+                        job_todo.scan_nses,
+                        botinfo.get("NSE_HASHES"),
+                    )
+                except OSError as error:
+                    db.session.rollback()
+                    logger.exception(
+                        "Unable to prepare NSE payloads for job %s", job_todo.uid
+                    )
+                    return self.response_400(
+                        message=f"Unable to prepare NSE payloads: {error}"
+                    )
+                ret_msg.update(
+                    {
+                        "nmap_nse": nmap_nse,
+                        "nse_scripts": nse_scripts,
+                        "nmap_ports": ret_msg["scan_ports"],
+                        "nmap_additional_params": _build_job_nmap_additional_params_payload(
+                            job_todo
+                        ),
+                    }
+                )
         else:
+            job_bot.last_seen = utcnow_naive()
             ret_msg = {"message": "ready", "job": ""}
 
         db.session.commit()
@@ -805,6 +916,14 @@ class Api(BaseApi):
                 botinfo.get("JOB_UID"),
             )
             return self.response(404, message="job not found")
+
+        if job_bot.attempt_uid and botinfo.get("ATTEMPT_UID") != job_bot.attempt_uid:
+            logger.warning(
+                "Bot %s tried to release stale attempt for job %s",
+                botinfo.get("UID"),
+                job_bot.uid,
+            )
+            return self.response(409, message="stale job attempt")
 
         released, state = _release_interrupted_job(
             job_bot,
@@ -909,6 +1028,14 @@ class Api(BaseApi):
             )
             return self.response(403, message="forbidden")
 
+        if job_bot.attempt_uid and botinfo.get("ATTEMPT_UID") != job_bot.attempt_uid:
+            logger.warning(
+                "Bot %s submitted stale attempt for job %s",
+                botinfo.get("UID"),
+                job_bot.uid,
+            )
+            return self.response(409, message="stale job attempt")
+
         if not job_bot.active or job_bot.finished:
             logger.warning(
                 "Bot %s submitted job %s in invalid state active=%s finished=%s",
@@ -930,7 +1057,9 @@ class Api(BaseApi):
             return self.response(409, message="job is not active")
 
         elapsed_seconds = (now - job_start).total_seconds()
-        if elapsed_seconds < MIN_JOB_RUNTIME_SECONDS:
+        # Masscan can legitimately finish a small or empty job in under one
+        # second. Keep the historical guard for Nmap jobs only.
+        if job_bot.scan_tool != "masscan" and elapsed_seconds < MIN_JOB_RUNTIME_SECONDS:
             logger.warning(
                 "Bot %s submitted job %s too quickly after %.3fs",
                 botinfo.get("UID"),
@@ -967,6 +1096,15 @@ class Api(BaseApi):
             )
             db.session.rollback()
             return self.response(500, message="result storage failed")
+
+        if not claim_completed_job(db.session, job_bot, now):
+            db.session.rollback()
+            completed = (
+                db.session.query(Jobs.finished).filter(Jobs.id == job_bot.id).scalar()
+            )
+            if completed:
+                return self.response(200, message="ready")
+            return self.response(409, message="job is no longer active")
 
         job_bot.finished = True
         job_bot.active = False
@@ -1041,6 +1179,10 @@ class Api(BaseApi):
                 job_bot.scanprofile_id,
                 prune_history=False,
             )
+        # Lock the shared minute bucket only after target/profile synchronization.
+        increment_completed_counters(
+            db.session, job_bot, result_data, now, botinfo.get("PORTS_TARGETED")
+        )
         commit_started = time.perf_counter()
         db.session.commit()
         logger.debug(
@@ -1075,6 +1217,8 @@ class ScanProfilesApi(BaseApi):
     openapi_spec_tag = "Scan Profiles API"
     _allowed_fields = {
         "name",
+        "scan_tool",
+        "detect_protocol",
         "port_ids",
         "nse_ids",
         "scan_cycle_minutes",
@@ -1087,6 +1231,8 @@ class ScanProfilesApi(BaseApi):
         return {
             "id": profile.id,
             "name": profile.name,
+            "scan_tool": profile.scan_tool,
+            "detect_protocol": profile.detect_protocol,
             "scan_cycle_minutes": profile.scan_cycle_minutes,
             "priority": profile.priority,
             "apply_to_all": profile.apply_to_all,
@@ -1192,6 +1338,12 @@ class ScanProfilesApi(BaseApi):
             query = query.filter(ScanProfiles.id != current_id)
         return query.first() is not None
 
+    @staticmethod
+    def _validate_scan_tool(value):
+        if value not in ("nmap", "masscan"):
+            raise ValueError("'scan_tool' must be 'nmap' or 'masscan'")
+        return value
+
     def _validated_create_payload(self, data):
         self._require_json_object(data)
         self._reject_unknown_fields(data)
@@ -1212,6 +1364,10 @@ class ScanProfilesApi(BaseApi):
 
         return {
             "name": name,
+            "scan_tool": self._validate_scan_tool(data.get("scan_tool", "nmap")),
+            "detect_protocol": self._normalize_boolean(
+                data.get("detect_protocol", False), "detect_protocol"
+            ),
             "scan_cycle_minutes": self._normalize_positive_integer(
                 data.get("scan_cycle_minutes", 720),
                 "scan_cycle_minutes",
@@ -1231,6 +1387,12 @@ class ScanProfilesApi(BaseApi):
         self._require_update_fields(data)
 
         payload = {}
+        if "scan_tool" in data:
+            payload["scan_tool"] = self._validate_scan_tool(data["scan_tool"])
+        if "detect_protocol" in data:
+            payload["detect_protocol"] = self._normalize_boolean(
+                data["detect_protocol"], "detect_protocol"
+            )
         if "name" in data:
             name = self._normalize_profile_name(data["name"], "'name' cannot be empty")
             if self._profile_exists(name, current_id=pk):
@@ -1294,6 +1456,11 @@ class ScanProfilesApi(BaseApi):
                               type: integer
                             name:
                               type: string
+                            scan_tool:
+                              type: string
+                              enum: [nmap, masscan]
+                            detect_protocol:
+                              type: boolean
                             scan_cycle_minutes:
                               type: integer
                             priority:
@@ -1333,7 +1500,8 @@ class ScanProfilesApi(BaseApi):
             Accepts a JSON body with ``name`` and at least one port ID in
             ``port_ids``. Optional fields are ``nse_ids``,
             ``scan_cycle_minutes`` (default 720), ``priority`` (0-4, default 0),
-            and ``apply_to_all`` (boolean, default false).
+            ``apply_to_all`` (default false), ``scan_tool`` (default nmap), and
+            ``detect_protocol`` (default false).
           requestBody:
             required: true
             content:
@@ -1346,6 +1514,11 @@ class ScanProfilesApi(BaseApi):
                   properties:
                     name:
                       type: string
+                    scan_tool:
+                      type: string
+                      enum: [nmap, masscan]
+                    detect_protocol:
+                      type: boolean
                     port_ids:
                       type: array
                       minItems: 1
@@ -1374,6 +1547,9 @@ class ScanProfilesApi(BaseApi):
         try:
             data = request.get_json(silent=True)
             payload = self._validated_create_payload(data)
+            ScanProfiles.validate_banner_support(
+                db.session, payload["scan_tool"], payload["detect_protocol"]
+            )
         except RequestEntityTooLarge:
             return self.response(413, message="Request exceeds configured size limit")
         except ValueError as error:
@@ -1421,6 +1597,11 @@ class ScanProfilesApi(BaseApi):
                             type: integer
                           name:
                             type: string
+                          scan_tool:
+                            type: string
+                            enum: [nmap, masscan]
+                          detect_protocol:
+                            type: boolean
                           scan_cycle_minutes:
                             type: integer
                           priority:
@@ -1455,8 +1636,8 @@ class ScanProfilesApi(BaseApi):
           summary: Update a scan profile by ID.
           description: |
             Accepts a JSON body with any subset of ``name``, ``port_ids``,
-            ``nse_ids``, ``scan_cycle_minutes``, ``priority``, and
-            ``apply_to_all``. At least one supported field must be present.
+            ``nse_ids``, ``scan_cycle_minutes``, ``priority``, ``apply_to_all``,
+            ``scan_tool``, and ``detect_protocol``.
           parameters:
             - in: path
               name: pk
@@ -1473,6 +1654,11 @@ class ScanProfilesApi(BaseApi):
                   properties:
                     name:
                       type: string
+                    scan_tool:
+                      type: string
+                      enum: [nmap, masscan]
+                    detect_protocol:
+                      type: boolean
                     port_ids:
                       type: array
                       minItems: 1
@@ -1509,6 +1695,11 @@ class ScanProfilesApi(BaseApi):
         try:
             data = request.get_json(silent=True)
             payload = self._validated_update_payload(data, pk)
+            ScanProfiles.validate_banner_support(
+                db.session,
+                payload.get("scan_tool", item.scan_tool),
+                payload.get("detect_protocol", item.detect_protocol),
+            )
         except RequestEntityTooLarge:
             return self.response(413, message="Request exceeds configured size limit")
         except ValueError as error:

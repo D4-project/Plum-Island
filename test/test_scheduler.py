@@ -11,6 +11,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest import TestCase, mock
@@ -142,6 +143,7 @@ class StalledJobWatchdogTest(TestCase):
         session.commit()
 
         def refresh(target_id):
+            """Provide the refresh test fixture."""
             self.assertFalse(session.in_transaction())
             if target_id == 1:
                 session.get(models.Targets, target_id).autonomous_system = (
@@ -221,6 +223,7 @@ class StalledJobWatchdogTest(TestCase):
             session.commit()
 
             def routed(target_id):
+                """Provide the routed test fixture."""
                 target = session.get(models.Targets, target_id)
                 target.autonomous_system = models.AutonomousSystems(
                     asn=64500 + target_id, name="Now routed"
@@ -442,6 +445,29 @@ class StalledJobWatchdogTest(TestCase):
             self.scheduler.task_master_of_puppets()
 
         self.assertEqual(call_order, ["watchdog", "create_jobs", "profile_sync"])
+
+    def test_profile_sync_changes_only_queued_job_tool_snapshot(self):
+        """Profile transitions update queued jobs without mutating active attempts."""
+        models, session, profile, _, _ = self._routing_fixture()
+        profile.scan_tool = "masscan"
+        profile.detect_protocol = True
+        profile.priority_retag_pending = True
+        queued = models.Jobs(uid=str(uuid.uuid4()), job="192.0.2.1", scan_tool="nmap")
+        active = models.Jobs(
+            uid=str(uuid.uuid4()),
+            job="192.0.2.2",
+            scan_tool="nmap",
+            active=True,
+        )
+        profile.jobs.extend([queued, active])
+        session.commit()
+        with mock.patch.object(self.scheduler.db, "session", session):
+            summary = self.scheduler.task_sync_queued_profile_jobs()
+        session.refresh(queued)
+        session.refresh(active)
+        self.assertEqual(summary["jobs_synchronized"], 1)
+        self.assertEqual((queued.scan_tool, queued.detect_protocol), ("masscan", True))
+        self.assertEqual((active.scan_tool, active.detect_protocol), ("nmap", False))
 
     def test_due_state_query_applies_cycle_target_boundary(self):
         """Targets above current cycle high-water mark remain for next cycle."""
@@ -698,6 +724,7 @@ class StalledJobWatchdogTest(TestCase):
             """Minimal job object used to inspect scheduler staging."""
 
             def __init__(self):
+                """Provide the init test fixture."""
                 self.targets = []
 
         profile = SimpleNamespace(
@@ -782,6 +809,7 @@ class StalledJobWatchdogTest(TestCase):
         events = []
 
         def execute(statement, _params):
+            """Provide the execute test fixture."""
             operation = str(statement).strip().split(None, 1)[0].upper()
             events.append(operation)
             return select_result if operation == "SELECT" else insert_result
@@ -1056,6 +1084,7 @@ class StalledJobWatchdogTest(TestCase):
         persisted_task_uids = []
 
         def persist(states):
+            """Provide the persist test fixture."""
             persisted_task_uids.append(states[0]["task_uid"])
 
         with mock.patch.object(
@@ -1189,6 +1218,7 @@ class StalledJobWatchdogTest(TestCase):
         ):
 
             def preparing(_context, loaded):
+                """Provide the preparing test fixture."""
                 monitor.return_value.begin.assert_called_once_with("ingestion", None)
                 monitor.return_value.begin.return_value.finish.assert_not_called()
                 self.assertEqual(loaded, states)
@@ -1315,6 +1345,7 @@ class MeiliExportStateMigrationTest(TestCase):
 
     @classmethod
     def setUpClass(cls):
+        """Load shared fixtures without starting external workers."""
         migration_path = (
             Path(__file__).resolve().parents[1]
             / "webapp"
@@ -1329,6 +1360,7 @@ class MeiliExportStateMigrationTest(TestCase):
         spec.loader.exec_module(cls.migration)
 
     def setUp(self):
+        """Create isolated state for the regression checks."""
         self.connection = sqlite3.connect(":memory:")
         self.cursor = self.connection.cursor()
         self.cursor.executescript("""
@@ -1341,6 +1373,7 @@ class MeiliExportStateMigrationTest(TestCase):
             """)
 
     def tearDown(self):
+        """Provide the tearDown test fixture."""
         self.connection.close()
 
     def test_migration_adds_idempotent_pending_task_state(self):

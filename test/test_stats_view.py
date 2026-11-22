@@ -4,7 +4,7 @@ import ast
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,38 +22,56 @@ class StatsViewTest(unittest.TestCase):
         )
         view.bases = []
         view.body = [
-            node for node in view.body if isinstance(node, ast.FunctionDef) and node.name == "index"
+            node
+            for node in view.body
+            if isinstance(node, ast.FunctionDef) and node.name == "index"
         ]
         view.body[0].decorator_list = []
 
         class TargetValue:
+            """Regression checks for target value."""
+
             value = "value"
 
         class PortId:
+            """Regression checks for port id."""
+
             id = "id"
             scanprofiles = "scanprofiles"
 
         class Query:
+            """Regression checks for query."""
+
             def __init__(self, rows=None):
+                """Provide the init test fixture."""
                 self.rows = rows or []
 
             def all(self):
+                """Provide the all test fixture."""
                 return self.rows
 
             def join(self, _relationship):
+                """Provide the join test fixture."""
                 return self
 
             def distinct(self):
+                """Provide the distinct test fixture."""
                 return self
 
             def count(self):
+                """Provide the count test fixture."""
                 return 7
 
         class Session:
+            """Regression checks for session."""
+
             def query(self, field):
+                """Provide the query test fixture."""
                 return Query([] if field == TargetValue.value else None)
 
-        indexer = SimpleNamespace(objects_count=lambda: {"ip_count": 11, "uid_count": 19})
+        indexer = SimpleNamespace(
+            objects_count=lambda: {"ip_count": 11, "uid_count": 19}
+        )
         namespace = {
             "Targets": TargetValue,
             "Ports": PortId,
@@ -66,6 +84,9 @@ class StatsViewTest(unittest.TestCase):
             "is_valid_cidr": lambda _value: False,
             "IPNetwork": None,
             "KVrocksIndexer": None,
+            "utcnow_naive": lambda: None,
+            "request": SimpleNamespace(args={}),
+            "activity_series": Mock(return_value={}),
         }
         module = ast.fix_missing_locations(ast.Module(body=[view], type_ignores=[]))
         exec(compile(module, "<isolated StatsView>", "exec"), namespace)
@@ -76,6 +97,20 @@ class StatsViewTest(unittest.TestCase):
         self.assertEqual(context["stats"]["scanned_port_count"], 7)
         self.assertEqual(context["stats"]["kv_scanned_host_count"], 11)
         self.assertEqual(context["stats"]["kv_scan_result_count"], 19)
+        self.assertEqual(context["stats_tab"], "overview")
+        namespace["activity_series"].assert_not_called()
+
+        # Graphs read only the activity buckets, never the old inventory totals.
+        namespace["request"].args = {"tab": "graphs", "period": "bad", "tool": "bad"}
+        namespace["db"].session.query = Mock(
+            side_effect=AssertionError("inventory query")
+        )
+        graphs = instance.index()
+        self.assertEqual(graphs["stats_tab"], "graphs")
+        self.assertNotIn("stats", graphs)
+        namespace["activity_series"].assert_called_once_with(
+            namespace["db"].session, None, "hour", "all"
+        )
 
 
 if __name__ == "__main__":

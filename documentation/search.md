@@ -114,7 +114,7 @@ The query input suggests supported field names while typing: `po` offers
 For a complete field such as `http_server`, the menu also offers
 `http_server.bg:` (starts with) and `http_server.lk:` (contains). After a dot,
 type `b` or `l` to narrow the modifier choices; `.begin` and `.like` aliases are
-also suggested. Exact-only tags and the separate `since`/`http_headval` forms
+also suggested. Exact-only tags/tools and the separate `since`/`http_headval` forms
 do not receive field-modifier suggestions.
 Suggestions use the parser's field catalogue, loaded with the page; no index
 lookup is needed for field names. Click a suggestion or use Up/Down followed by
@@ -243,6 +243,37 @@ No modifier means exact match. `like` without any scope reducer may slow down th
 
 ## Searchable fields
 
+Scanner provenance is searchable with `engine:nmap` and `engine:masscan`, for
+example `engine:masscan port:443`. The helper lists **engine — masscan or nmap**
+directly below `tag` and `since` in both themes.
+
+nmap2json 2611.4 adds `"engine": "masscan"` only to Masscan host reports. Nmap
+reports stay unchanged. Kvrocks stores only Masscan memberships. `engine:nmap`
+means all candidate UIDs except those marked Masscan, including all existing
+reports without metadata. No history migration, backfill or scan-content rehash
+is required. Existing reports are not rewritten or inferred from their banners.
+An old Masscan report with no engine marker is therefore considered Nmap.
+
+### Why Nmap is not marked
+
+Nmap is the historical default. Marking it explicitly would add a redundant
+Kvrocks membership for nearly every document and require backfilling installations
+with two million existing reports. Instead, the existing candidate UID set already
+defines the population: Nmap is that set minus the explicitly marked Masscan UIDs.
+This avoids a bulk migration, extra Nmap index storage and Nmap-marker writes on
+ingestion. Existing Nmap JSON and deduplication hashes remain unchanged.
+
+`engine` is scanner metadata, not an Antibodies tag: use `engine:nmap`, not
+`tag:engine:nmap`. Only nmap2json's explicit Masscan marker distinguishes new
+Masscan reports; historical unmarked reports deliberately retain the Nmap default.
+
+When another positive filter narrows the query, engine filtering stays inside
+those candidates. A standalone `engine:nmap` is a broad search and can still
+return most of a large index. Source metadata follows the retained observation
+when deduplication replaces a document; it is excluded from content hashes.
+
+### Field reference
+
 | Field | Modifiers | Description |
 | ----- | --------- | ----------- |
 | `ip` | | Host IP address |
@@ -254,6 +285,7 @@ No modifier means exact match. `like` without any scope reducer may slow down th
 | `domain` | `like`, `begin` | DNS domain found during enrichment, including normalized TLS certificate DNS SAN and subject CN names |
 | `tld` | `like`, `begin` | Top-level domain |
 | `tag` | | Computed document tag |
+| `engine` | exact only | `engine:masscan` selects marked Masscan reports; `engine:nmap` selects all others, including legacy reports. |
 | `port` | | Open port |
 | `http_title` | `like`, `begin` | HTML title |
 | `http_cookiename` | `like`, `begin` | HTTP cookie name |

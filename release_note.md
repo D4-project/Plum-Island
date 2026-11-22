@@ -1,5 +1,56 @@
 # Unreleased
 
+- Retry transient Kvrocks/Meili indexing failures automatically, with exponential
+  backoff capped at five minutes and explicit retry status. Resume durable frozen
+  work even when saving its error status failed. Keep snapshot retries outside
+  ingestion barriers and scheduler sleeps; preserve acknowledged publications.
+- Recognize Pure-FTPd's short `220-Welcome to Pure-FTPd.` greeting as well as the
+  standard welcome banner, for both Nmap and Masscan. Generic FTP tagging also
+  accepts an observed FTP service without inferring it from port 21.
+
+- Add `engine:nmap` / `engine:masscan` search and helper entries. Only new Masscan
+  reports carry an engine marker; unmarked reports default to Nmap at query time,
+  without a history migration. Require nmap2json 2611.4; content hashes stay stable.
+- Add a last-six-months graph window with calendar-month aggregation.
+
+- Add Overview and Graphs tabs to Status → Stats, keeping existing totals separate
+  from activity charts in all themes, with minute/hour/day and scanner filters.
+- Add scan activity to Status → Stats: completed jobs, open port observations
+  and reported targeted ports, grouped by minute/hour/day and scanner. Store
+  atomic minute counters in SQL, independently of search indexes and job cleanup.
+  Migration 32 adds the table for SQLite; a MySQL/InnoDB schema script is provided.
+  Older agents retain support, with unavailable target counts shown as unknown.
+
+- Preserve complete received banners. Before hashing and tagging, expose Masscan
+  output as `banner` and observed HTTP response headers as `http-headers` without
+  replacing existing NSE fields. Both themes show the full `banner` once, using
+  the same script block as Nmap instead of a separate Masscan detection block.
+  Require nmap2json 2611.3 for consistent escapes and volatile-date hash masking;
+  existing stored hashes are not migrated automatically.
+
+- Resume generation copy-on-write one key at a time. Record successful COPY
+  ownership atomically in Kvrocks so timeouts cannot restart expensive copies
+  indefinitely and prevent completed scans from reaching the IP view.
+
+- Prioritize pending capture ingestion over background reconciliation writes.
+  Parse and tag incoming captures outside the publication barrier, retrying
+  against the new snapshot if the active generation changes before writing.
+  Use RESP2 for Kvrocks connections and publish desired rule snapshots without
+  holding the capture write barrier during connection setup or retries.
+
+- Require a dedicated agent source IP for Masscan banner jobs. Bot Status displays
+  Masscan Banner capability. Waiting jobs warn when no compatible agent has
+  contacted Island within 15 minutes. Migration 31 stores the announced address.
+
+- Add Masscan as a scan-profile engine alongside Nmap. Agents announce detected
+  tools, the dispatcher keeps priority ordering while selecting compatible jobs,
+  and Bot Status shows both capabilities. Optional Masscan banner detection feeds
+  the common result, history and tagging pipeline. Existing agents and profiles
+  remain Nmap-only until explicitly changed. Per-attempt identifiers reject stale
+  results after a requeue. SQLite migrations 27–30 preserve
+  existing bots, profile settings and queued job snapshots. Fast Masscan jobs,
+  including empty scans, can submit results immediately.
+
 - Enforce unique protocol/port pairs in the Ports form and REST API. Migration
   26 merges existing duplicates and preserves each scan profile's ports (#286).
 

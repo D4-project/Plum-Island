@@ -9,6 +9,8 @@ before modifying its subsystem, and update it alongside behavior changes.
 
 - [External lookup caching](caching.md): WHOIS, PDNS and IP/AS lifetimes, shared
   consumers, Kvrocks keys, concurrency, failures and target snapshots.
+- [Scan activity counters](scan_stats.md): completed jobs, targeted ports, open
+  port observations, SQL minute buckets and compatibility with older agents.
 - [Search engine](search_engine.md): storage contracts, query execution, time
   filtering, pagination, known inconsistencies, and regression checks.
 

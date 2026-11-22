@@ -45,7 +45,7 @@ from redis.exceptions import RedisError
 
 from netaddr import IPNetwork
 from sqlalchemy import String, cast, or_
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 from wtforms import (
     BooleanField,
@@ -53,7 +53,6 @@ from wtforms import (
     SubmitField,
     Field,
     ValidationError,
-    IntegerField,
     SelectField,
 )
 from wtforms.validators import Optional, NumberRange
@@ -92,6 +91,8 @@ from .utils.index_activity import (
 )
 from .utils.index_reconciliation import reconciliation_status
 from .utils.ip_links import port_web_scheme
+from .utils.scanner_reports import display_scripts
+from .utils.scan_stats import activity_series
 from .utils.search_debug import profile_search_page
 from .utils.search_query import compile_query, tokenize_query
 from .utils.search_plan import CandidatePlanner
@@ -135,7 +136,7 @@ from .utils.scan_cycles import (
     reconcile_scanprofile_cycle,
     release_orphaned_scan_states_for_profile,
 )
-from .utils.timeutils import ensure_utc_naive, utcnow_iso
+from .utils.timeutils import ensure_utc_naive, utcnow_iso, utcnow_naive
 
 
 from . import appbuilder, db
@@ -449,6 +450,24 @@ def get_job_uid(pk):
     return result
 
 
+def masscan_banner_agent_available():
+    """Check recent startup inventories for profile configuration feedback."""
+    return ScanProfiles.banner_agent_available(db.session)
+
+
+def blocked_masscan_banner_profiles():
+    """Warn about existing banner profiles when their scanner capacity disappears."""
+    return (
+        not masscan_banner_agent_available()
+        and db.session.query(ScanProfiles.id)
+        .filter(
+            ScanProfiles.scan_tool == "masscan", ScanProfiles.detect_protocol == True
+        )
+        .first()
+        is not None
+    )
+
+
 def get_target_value(pk):
     """
     For Jinja and ajax queries, build the structured search query for a target.
@@ -629,6 +648,11 @@ def get_target_search_time_range(pk):
 
 # Add a Functions to jinja
 app.jinja_env.globals["get_job_uid"] = get_job_uid
+app.jinja_env.filters["scanner_scripts"] = display_scripts
+app.jinja_env.globals["masscan_banner_agent_available"] = masscan_banner_agent_available
+app.jinja_env.globals["blocked_masscan_banner_profiles"] = (
+    blocked_masscan_banner_profiles
+)
 app.jinja_env.globals["csrf_token"] = generate_csrf
 app.jinja_env.globals["get_target_value"] = get_target_value
 app.jinja_env.globals["get_target_requested_hostname"] = get_target_requested_hostname
@@ -1662,6 +1686,8 @@ class KVSearchView(BaseView):
             # "ttl_count",
             # "hsh"
             "banner",
+            "service",
+            "engine",
         ]
 
     @classmethod
@@ -1675,7 +1701,7 @@ class KVSearchView(BaseView):
         """Validate one AND-only group using the shared field catalogue."""
         valid_keywords = self.search_keywords()
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
-        exact_only_keywords = {"tag"}
+        exact_only_keywords = {"tag", "engine"}
 
         result = {}
         msg_error = None
@@ -3472,7 +3498,16 @@ class BotsView(ModelView):
     """
 
     datamodel = SQLAInterface(Bots)
-    list_columns = ["uid", "agent_version", "ip", "country", "active", "last_seen"]
+    list_columns = [
+        "uid",
+        "agent_version",
+        "reported_tools_html",
+        "ip",
+        "country",
+        "active",
+        "last_seen",
+    ]
+    label_columns = {"reported_tools_html": "Tools"}
     edit_columns = ["active"]
 
 
@@ -3485,7 +3520,10 @@ class JobsView(ModelView):
     show_columns = [
         "uid",
         "scanprofile_label_html",
+        "scan_tool",
+        "detect_protocol",
         "job_html",
+        "banner_status_html",
         "scan_ports_html",
         "scan_nses_html",
         "bot_id",
@@ -3502,9 +3540,11 @@ class JobsView(ModelView):
     list_columns = [
         "job_creation",
         "scanprofile_label_html",
+        "scan_tool",
         "job_start",
         "job_end",
         "job_summary_html",
+        "banner_status_html",
         "targets_count_html",
         "active",
         "finished",
@@ -3528,6 +3568,9 @@ class JobsView(ModelView):
         "targets_html": "Targets",
         "targets_count_html": "Targets",
         "duration_html": "Duration",
+        "scan_tool": "Scan tool",
+        "detect_protocol": "Detect protocol",
+        "banner_status_html": "Banner detection",
     }
 
     @action(
@@ -3583,23 +3626,24 @@ class JobsView(ModelView):
         return self
 
     @expose("/file_get/<uid>")
-    @has_access  # Tout authenticated people.
+    @has_access
     def file_get(self, uid):
-        """
-        This methode will display a Json Result
-        It will clean dead host
-        """
-        base = db.app.config.get("JSON_FOLDER")
-        try:
-            is_valid_uuid(uid)
-            with open(f"{base}/{uid[0]}/{uid}.json", "rb") as file_handle:
-                oobject = json.loads(file_handle.read())
-        except (FileNotFoundError, ValueError):
-            oobject = "{}"
+        """Serve the saved report for a visible job, even before indexing."""
+        if not is_valid_uuid(uid):
+            abort(404)
+        pk = db.session.query(Jobs.id).filter(Jobs.uid == uid).scalar()
+        if pk is None or not self.datamodel.get(pk, self._base_filters):
+            abort(404)
 
-        response = make_response(oobject)
-        response.headers["Content-Type"] = "text/json"
-        response.headers["Content-Disposition"] = "inline; filename={uid}.json"
+        filename = f"{uid}.json"
+        path = os.path.join(db.app.config["JSON_FOLDER"], uid[0], filename)
+        try:
+            response = send_file(
+                path, mimetype="application/json", download_name=filename
+            )
+        except FileNotFoundError:
+            abort(404)
+        response.headers["Cache-Control"] = "private, no-store"
         return response
 
 
@@ -4460,6 +4504,7 @@ class ScanprofilesView(ModelView):
     show_template = "show_scanprofilesview.html"
     list_columns = [
         "name",
+        "scan_tool",
         "scan_cycle_minutes",
         "priority",
         "ports",
@@ -4479,21 +4524,17 @@ class ScanprofilesView(ModelView):
         "scan_cycle_minutes",
         "priority",
         "ports",
+        "apply_to_all",
+        "scan_tool",
         "nses",
         "nmap_additional_params",
-        "apply_to_all",
+        "detect_protocol",
     ]
-    edit_columns = [
-        "name",
-        "scan_cycle_minutes",
-        "priority",
-        "ports",
-        "nses",
-        "nmap_additional_params",
-        "apply_to_all",
-    ]
+    edit_columns = add_columns.copy()
     show_columns = [
         "name",
+        "scan_tool",
+        "detect_protocol",
         "scan_cycle_minutes",
         "priority",
         "priority_retag_pending",
@@ -4503,6 +4544,13 @@ class ScanprofilesView(ModelView):
         "apply_to_all",
     ]
     add_form_extra_fields = {
+        "scan_tool": SelectField(
+            "Scan tool",
+            choices=[("nmap", "Nmap"), ("masscan", "Masscan")],
+            default="nmap",
+            description="Scanner used for jobs created from this profile.",
+        ),
+        "detect_protocol": BooleanField("Detect protocol", default=False),
         "priority": build_priority_field(),
         "ports": RemoteRelatedMultipleField(
             "Ports",
@@ -4520,6 +4568,8 @@ class ScanprofilesView(ModelView):
         ),
     }
     edit_form_extra_fields = {
+        "scan_tool": add_form_extra_fields["scan_tool"],
+        "detect_protocol": add_form_extra_fields["detect_protocol"],
         "priority": build_priority_field(),
         "ports": RemoteRelatedMultipleField(
             "Ports",
@@ -4537,6 +4587,8 @@ class ScanprofilesView(ModelView):
         ),
     }
     label_columns = {
+        "scan_tool": "Scan tool",
+        "detect_protocol": "Detect protocol",
         "nses": "Nse Scripts",
         "nmap_additional_params": "nmap additional params",
         "apply_to_all": "Apply to all scans",
@@ -4546,8 +4598,20 @@ class ScanprofilesView(ModelView):
         "cycle_summary_html": "Scan Cycles",
     }
 
+    def process_form(self, form, is_created):
+        # The browser omits disabled controls. Leave their stored values intact.
+        if form.scan_tool.data == "masscan":
+            del form["nses"]
+            del form["nmap_additional_params"]
+        else:
+            del form["detect_protocol"]
+        return super().process_form(form, is_created)
+
     def pre_add(self, item):
         normalize_priority(item)
+        ScanProfiles.validate_banner_support(
+            db.session, item.scan_tool, item.detect_protocol
+        )
         if len(item.ports) == 0:
             raise ValueError("At least one port is mandatory")
         if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
@@ -4556,6 +4620,9 @@ class ScanprofilesView(ModelView):
 
     def pre_update(self, item):
         normalize_priority(item)
+        ScanProfiles.validate_banner_support(
+            db.session, item.scan_tool, item.detect_protocol
+        )
         # Flask-AppBuilder updates the model instance before pre_update is
         # called, so old/new priority comparison is not reliable here. Marking
         # pending on every profile edit is cheap: the scheduler only updates
@@ -4860,6 +4927,18 @@ class StatsView(BaseView):
     @expose("/")
     @has_access
     def index(self):
+        stats_tab = "graphs" if request.args.get("tab") == "graphs" else "overview"
+        period = request.args.get("period", "hour")
+        tool = request.args.get("tool", "all")
+        period = period if period in ("minute", "hour", "day", "month") else "hour"
+        tool = tool if tool in ("all", "nmap", "masscan") else "all"
+        if stats_tab == "graphs":
+            return self.render_template(
+                "stats.html",
+                title="Stats",
+                stats_tab=stats_tab,
+                activity=activity_series(db.session, utcnow_naive(), period, tool),
+            )
         targets = db.session.query(Targets.value).all()
         cidr_count = 0
         fqdn_count = 0
@@ -4901,7 +4980,13 @@ class StatsView(BaseView):
         kv_counts = indexer.objects_count()
         stats["kv_scanned_host_count"] = kv_counts.get("ip_count", 0)
         stats["kv_scan_result_count"] = kv_counts.get("uid_count", 0)
-        return self.render_template("stats.html", stats=stats, title="Stats")
+        return self.render_template(
+            "stats.html",
+            stats=stats,
+            title="Stats",
+            stats_tab=stats_tab,
+            activity={"period": period, "tool": tool},
+        )
 
 
 appbuilder.add_view(

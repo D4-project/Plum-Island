@@ -45,6 +45,7 @@ def code_revision():
             name: (root / name).read_text(encoding="utf-8")
             for name in (
                 "result_parser.py",
+                "scanner_reports.py",
                 "domains.py",
                 "tagrules.py",
                 "search_query.py",

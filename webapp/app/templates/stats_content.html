@@ -1,0 +1,11 @@
+<nav aria-label="Statistics views">
+  <ul class="nav nav-tabs stats-tabs">
+    <li{% if stats_tab != "graphs" %} class="active"{% endif %}><a href="?tab=overview&amp;period={{ activity.period }}&amp;tool={{ activity.tool }}"{% if stats_tab != "graphs" %} aria-current="page"{% endif %}>Overview</a></li>
+    <li{% if stats_tab == "graphs" %} class="active"{% endif %}><a href="?tab=graphs&amp;period={{ activity.period }}&amp;tool={{ activity.tool }}"{% if stats_tab == "graphs" %} aria-current="page"{% endif %}>Graphs</a></li>
+  </ul>
+</nav>
+{% if stats_tab == "graphs" %}
+  {% include "scan_activity.html" %}
+{% else %}
+  {% include "stats_overview.html" %}
+{% endif %}

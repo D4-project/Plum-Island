@@ -447,6 +447,12 @@ It extracts these searchable fields:
 - `x509_san`
 - `banner`
 
+The `service` field records observed service evidence only. Scanner provenance
+uses exact `engine:nmap` / `engine:masscan` predicates. nmap2json marks only Masscan
+host reports. Kvrocks stores only Masscan memberships; unmarked candidates default
+to Nmap at read time. Never add a bulk Nmap backfill or include engine metadata in
+deduplication hashes. See [Search](documentation/search.md).
+
 Index writers use `parse_json(raw_doc, config, tag_rules=...)` then
 `prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=...)`. Skip documents
 when the public parser returns `None`. Preparation copies the parsed dictionary;

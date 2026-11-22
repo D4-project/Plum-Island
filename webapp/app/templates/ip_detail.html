@@ -644,8 +644,9 @@
                     </div>
                 </div>
                 {% endif %}
-                {% if observation.port.scripts %}
-                    {% for script in observation.port.scripts %}
+                {% set scripts = observation.port | scanner_scripts %}
+                {% if scripts %}
+                    {% for script in scripts %}
                     <div class="ip-script-block">
                         <div class="ip-script-title">{{ script.id or "script" }}</div>
                         {% if script.id == "ssl-cert" %}

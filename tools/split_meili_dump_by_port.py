@@ -9,12 +9,16 @@ import argparse
 import copy
 import json
 import re
+import sys
 import time
 import uuid
 from pathlib import Path
 
 import redis
 from nmap2json.smarthash import port_smart_hash
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "webapp/app/utils"))
+from scanner_reports import normalize_masscan_port
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = BASE_DIR / "meili_dump"
@@ -114,7 +118,7 @@ def add_port_hash(port):
     """
     Return a deep-copied port object with nmap2json-compatible hsh256.
     """
-    port_copy = copy.deepcopy(port)
+    port_copy = normalize_masscan_port(port)
     clean_banner_outputs(port_copy)
     normalize_unknown_favicon_outputs(port_copy)
     port_hash = port_smart_hash(port_copy, exclude_keys=["hsh256"])

@@ -6,6 +6,7 @@ import os
 import atexit
 import ipaddress
 import logging
+from redis.exceptions import RedisError
 import shutil
 import uuid
 import json
@@ -26,6 +27,7 @@ from netaddr import AddrFormatError, IPNetwork, cidr_merge
 import meilisearch
 from meilisearch.errors import MeilisearchError
 from nmap2json.smarthash import port_smart_hash
+from .utils.scanner_reports import normalize_masscan_port
 from requests.exceptions import HTTPError
 from sqlalchemy import bindparam, func, text
 from sqlalchemy.orm import joinedload
@@ -181,6 +183,8 @@ def _normalize_unknown_favicon_outputs(port):
     Convert legacy http-favicon unknown-MD5 output to http-mm-sha-favicon shape.
     """
     for script in port.get("scripts") or []:
+        if script.get("id") == "masscan-detection":
+            continue
         output = script.get("output")
         if not isinstance(output, str):
             continue
@@ -198,7 +202,7 @@ def _add_port_hash(port):
     """
     Return a deep-copied port object with computed hsh256.
     """
-    port_copy = copy.deepcopy(port)
+    port_copy = normalize_masscan_port(port)
     _clean_banner_outputs(port_copy)
     _normalize_unknown_favicon_outputs(port_copy)
     port_hash = port_smart_hash(port_copy)
@@ -490,6 +494,7 @@ def task_release_stalled_jobs(now=None):
                 Jobs.active: False,
                 Jobs.bot_id: None,
                 Jobs.job_start: None,
+                Jobs.attempt_uid: None,
             },
             synchronize_session=False,
         )
@@ -1179,6 +1184,8 @@ def _enqueue_profile_job(
     new_job.scan_ports = scan_ports
     new_job.scan_nses = scan_nses
     new_job.nmap_additional_params = profile.nmap_additional_params
+    new_job.scan_tool = getattr(profile, "scan_tool", None) or "nmap"
+    new_job.detect_protocol = bool(getattr(profile, "detect_protocol", False))
     new_job.scan_unit_count = compute_scan_unit_count_list(job_value)
     new_job.priority = profile.priority or 0
     new_job.scanprofile_cycle = scan_cycle
@@ -1971,7 +1978,9 @@ def task_sync_queued_profile_jobs():
                            scanprofile_name = :profile_name,
                            scan_ports = :scan_ports,
                            scan_nses = :scan_nses,
-                           nmap_additional_params = :nmap_additional_params
+                           nmap_additional_params = :nmap_additional_params,
+                           scan_tool = :scan_tool,
+                           detect_protocol = :detect_protocol
                      WHERE id IN (
                             SELECT id
                               FROM jobs
@@ -1984,6 +1993,8 @@ def task_sync_queued_profile_jobs():
                                OR COALESCE(scan_ports, '') != COALESCE(:scan_ports, '')
                                OR COALESCE(scan_nses, '') != COALESCE(:scan_nses, '')
                                OR COALESCE(nmap_additional_params, '') != COALESCE(:nmap_additional_params, '')
+                               OR COALESCE(scan_tool, 'nmap') != :scan_tool
+                               OR COALESCE(detect_protocol, 0) != :detect_protocol
                              )
                              ORDER BY job_creation ASC
                              LIMIT :batch_size
@@ -1997,6 +2008,8 @@ def task_sync_queued_profile_jobs():
                     "scan_ports": _serialize_profile_ports(profile),
                     "scan_nses": _serialize_profile_nses(profile),
                     "nmap_additional_params": profile.nmap_additional_params,
+                    "scan_tool": profile.scan_tool or "nmap",
+                    "detect_protocol": int(bool(profile.detect_protocol)),
                 },
             ).rowcount
             or 0
@@ -2016,6 +2029,8 @@ def task_sync_queued_profile_jobs():
                      OR COALESCE(scan_ports, '') != COALESCE(:scan_ports, '')
                      OR COALESCE(scan_nses, '') != COALESCE(:scan_nses, '')
                      OR COALESCE(nmap_additional_params, '') != COALESCE(:nmap_additional_params, '')
+                     OR COALESCE(scan_tool, 'nmap') != :scan_tool
+                     OR COALESCE(detect_protocol, 0) != :detect_protocol
                    )
                  LIMIT 1
                 """),
@@ -2026,6 +2041,8 @@ def task_sync_queued_profile_jobs():
                 "scan_ports": _serialize_profile_ports(profile),
                 "scan_nses": _serialize_profile_nses(profile),
                 "nmap_additional_params": profile.nmap_additional_params,
+                "scan_tool": profile.scan_tool or "nmap",
+                "detect_protocol": int(bool(profile.detect_protocol)),
             },
         ).fetchone()
         if has_remaining is None:
@@ -2472,7 +2489,7 @@ def task_export_to_dbs():
             summary = _advance_new_meili_export(export_context)
         summary["scanner_json_files_pending"] = json_files_pending
         return summary
-    except (MeilisearchError, MeiliExportTaskError, HTTPError) as error:
+    except (MeilisearchError, MeiliExportTaskError, HTTPError, RedisError) as error:
         db.session.rollback()
         logger.error("Unable to advance export state: %s", error)
         return _export_summary(

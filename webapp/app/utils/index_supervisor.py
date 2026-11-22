@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import logging
 
 from plum_settings import child_settings_environment, publish_controller_settings
 
@@ -15,6 +16,9 @@ from app.utils.index_reconciliation import (
     state_directory,
 )
 from app.utils.index_source_recovery import requeue_orphan_exclusion
+from app.utils.index_retry import retry_delay, transient_error
+
+logger = logging.getLogger(__name__)
 
 
 class IndexSupervisor:
@@ -26,6 +30,8 @@ class IndexSupervisor:
         self.config = config
         self.process = None
         self.stopped = False
+        self.retry_at = 0.0
+        self.retry_attempts = 0
 
     def stop(self):
         """Ask our child to finish its current unit and save a checkpoint."""
@@ -34,6 +40,37 @@ class IndexSupervisor:
             self.process.terminate()
 
     def tick(self, snapshot):
+        """Defer backend outages to later ticks without sleeping in the scheduler."""
+        if self.stopped:
+            return
+        if time.monotonic() < self.retry_at:
+            if self.process is not None and not self.config.get(
+                "TAG_RECONCILIATION_ENABLED", True
+            ):
+                if self.process.poll() is None:
+                    self.process.terminate()
+            return
+        try:
+            self._tick(snapshot)
+        except Exception as error:
+            if not transient_error(error):
+                raise
+            self.retry_attempts += 1
+            delay = retry_delay(self.retry_attempts)
+            self.retry_at = time.monotonic() + delay
+            logger.warning(
+                "Index supervisor backend unavailable (%s); retrying in %.0fs",
+                type(error).__name__,
+                delay,
+                exc_info=self.retry_attempts == 1,
+            )
+        else:
+            if self.retry_attempts:
+                logger.info("Index supervisor backend connection recovered")
+            self.retry_at = 0.0
+            self.retry_attempts = 0
+
+    def _tick(self, snapshot):
         """Reconcile committed desired state, reap a child and start pending work."""
         queue_snapshot(self.raw, snapshot)
         if self.process is not None:

@@ -12,11 +12,14 @@ import html
 import re
 import shlex
 import uuid
+from datetime import timedelta
+from flask import g, has_request_context
 from flask_appbuilder import Model
 from flask_appbuilder.models.decorators import renders
 from markupsafe import Markup as Esc
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     Column,
     Integer,
     String,
@@ -128,6 +131,41 @@ class Bots(Model):
     device_model = Column(String(128), nullable=False)  # Python Version
     agent_version = Column(String(128), nullable=False)
     system_version = Column(String(128), nullable=False)
+    has_nmap = Column(Boolean, nullable=False, default=True, server_default="1")
+    has_masscan = Column(Boolean, nullable=False, default=False, server_default="0")
+    masscan_ip = Column(String(45), nullable=True)
+    supports_job_attempts = Column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+
+    def reported_tools_html(self):
+        """Render the last announced inventory in both Bot Status themes."""
+        badges = []
+        for name, available in (
+            ("Nmap", self.has_nmap),
+            ("Masscan", self.has_masscan),
+            ("Masscan Banner", self.has_masscan and bool(self.masscan_ip)),
+        ):
+            status = "available" if available else "unavailable"
+            icon = "fa-check-circle" if available else "fa-minus-circle"
+            badges.append(
+                Esc(
+                    '<span class="{}" title="{}"><i class="fa {}" aria-hidden="true"></i> {}'
+                    '<span class="sr-only"> {}</span></span>'
+                ).format(
+                    "" if available else "text-muted",
+                    f"{name} {status}"
+                    + (
+                        f" ({self.masscan_ip})"
+                        if name == "Masscan Banner" and available
+                        else ""
+                    ),
+                    icon,
+                    name,
+                    status,
+                )
+            )
+        return Esc(" &nbsp; ").join(badges)
 
 
 # Job to Target pivot table
@@ -165,6 +203,18 @@ assoc_scanprofiles_targets = Table(
 )
 
 
+class ScanStatBucket(Model):
+    """Completed-job activity, independent of search-index generations."""
+
+    __tablename__ = "scan_stat_buckets"
+    bucket_start = Column(DateTime, primary_key=True)
+    scan_tool = Column(String(16), primary_key=True)
+    jobs_completed = Column(BigInteger, nullable=False, default=0)
+    ports_targeted = Column(BigInteger, nullable=False, default=0)
+    open_ports = Column(BigInteger, nullable=False, default=0)
+    jobs_without_target_count = Column(BigInteger, nullable=False, default=0)
+
+
 class Jobs(Model):
     """
     Class for the Job to be run by bots.
@@ -196,6 +246,11 @@ class Jobs(Model):
     scan_ports = Column(Text, nullable=True)
     scan_nses = Column(Text, nullable=True)
     nmap_additional_params = Column(Text, nullable=True)
+    scan_tool = Column(
+        String(16), nullable=False, default="nmap", server_default="nmap"
+    )
+    detect_protocol = Column(Boolean, nullable=False, default=False, server_default="0")
+    attempt_uid = Column(String(36), nullable=True)
     scanprofile = relationship("ScanProfiles", back_populates="jobs")
     scanprofile_cycle = relationship("ScanProfileCycles", back_populates="jobs")
     targets = relationship(
@@ -235,6 +290,44 @@ class Jobs(Model):
         for tag in tags:
             html += f'<span class="label label-default">{_html_escape(tag)}</span> '
         return Esc(html)
+
+    def banner_status_html(self):
+        """Explain why a queued banner job has no recently seen scanner."""
+        if (
+            self.scan_tool != "masscan"
+            or not self.detect_protocol
+            or self.active
+            or self.finished
+        ):
+            return ""
+        available = (
+            getattr(g, "masscan_banner_available", None)
+            if has_request_context()
+            else None
+        )
+        if available is None:
+            session = object_session(self)
+            if session is None:
+                return ""
+            available = (
+                session.query(Bots.id)
+                .filter(
+                    Bots.active == True,
+                    Bots.has_masscan == True,
+                    Bots.masscan_ip.isnot(None),
+                    Bots.masscan_ip != "",
+                    Bots.last_seen >= utcnow_naive() - timedelta(minutes=15),
+                )
+                .first()
+                is not None
+            )
+            if has_request_context():
+                g.masscan_banner_available = available
+        if available:
+            return ""
+        return Esc(
+            '<span class="text-warning"><i class="fa fa-warning" aria-hidden="true"></i> No Masscan agent is available for banner detection.</span>'
+        )
 
     @staticmethod
     def _render_compact_badges(values, limit=4, label_class="label-default"):
@@ -1323,8 +1416,42 @@ class ScanProfiles(Model):
     """
 
     __tablename__ = "scanprofiles"
+
+    @staticmethod
+    def banner_agent_available(session):
+        """Share the same availability rule across forms and API validation."""
+        return (
+            session.query(Bots.id)
+            .filter(
+                Bots.active == True,
+                Bots.has_masscan == True,
+                Bots.masscan_ip.isnot(None),
+                Bots.masscan_ip != "",
+                Bots.last_seen >= utcnow_naive() - timedelta(minutes=15),
+            )
+            .first()
+            is not None
+        )
+
+    @staticmethod
+    def validate_banner_support(session, scan_tool, detect_protocol):
+        """Reject banner profiles until a compatible agent has announced its IP."""
+        if (
+            scan_tool == "masscan"
+            and detect_protocol
+            and not ScanProfiles.banner_agent_available(session)
+        ):
+            raise ValueError(
+                "Cannot save banner detection: no active Masscan agent has announced a dedicated source IP."
+            )
+
+    __table_args__ = (CheckConstraint("scan_tool IN ('nmap', 'masscan')"),)
     id = Column(Integer, primary_key=True)
     name = Column(String(256), nullable=False, unique=True, index=True)  # Profile name.
+    scan_tool = Column(
+        String(16), nullable=False, default="nmap", server_default="nmap"
+    )
+    detect_protocol = Column(Boolean, nullable=False, default=False, server_default="0")
     apply_to_all = Column(Boolean, default=False)  # Name of the profile.
     ports = relationship(
         "Ports",

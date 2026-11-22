@@ -1,6 +1,15 @@
 {% extends "appbuilder/general/model/list.html" %}
 {% import 'appbuilder/baselib.html' as baselib %}
 
+{% block list_list scoped %}
+{% if blocked_masscan_banner_profiles() %}
+<div class="alert alert-warning" role="alert">
+    Masscan banner detection is configured, but no compatible agent is available. Banner jobs will wait until an agent announces a dedicated source IP.
+</div>
+{% endif %}
+{{ super() }}
+{% endblock %}
+
 {% block add_tail_js %}
 {{ super() }}
 <script nonce="{{ baselib.get_nonce() }}">

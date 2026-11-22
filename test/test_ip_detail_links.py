@@ -7,11 +7,12 @@ import subprocess
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from test.test_kvrocks_search import make_indexer
+from types import SimpleNamespace
 
-from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
 from ip_links import port_web_scheme
+from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
+from scanner_reports import display_scripts
 from tagrules import normalize_tags
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,11 @@ class IpDetailLinksTest(unittest.TestCase):
 
     def test_schemes_require_http_tag_and_use_port_tls_evidence(self):
         """Service names alone must not create links on untagged observations."""
+        detection = {"scripts": [{"id": "masscan-detection", "service": "ssl"}]}
+        self.assertEqual(port_web_scheme(detection, ["proto:tls"]), "")
+        self.assertEqual(
+            port_web_scheme(detection, ["proto:http", "proto:tls"]), "https"
+        )
         for port in (
             {"portid": "80", "service": {"name": "http"}},
             {"portid": "443", "service": {"name": "https"}},
@@ -101,6 +107,7 @@ class IpDetailLinksTest(unittest.TestCase):
             indexer.r.sets[f"fqdn_requesteds:{uid}"] = {host}
 
         def load_document(_index, uid):
+            """Provide the load document test fixture."""
             fetched.append(uid)
             return documents[uid], False, None
 
@@ -256,6 +263,7 @@ class IpDetailLinksTest(unittest.TestCase):
             "warnings": ["<script>alert(1)</script>"],
             "unmapped_documents": [],
         }
+        environment.filters["scanner_scripts"] = display_scripts
         template = environment.get_template("ip_detail.html")
         fragment = template.render(fragment=True, **values)
         self.assertIn('id="ip-scan-group"', fragment)
@@ -278,6 +286,41 @@ class IpDetailLinksTest(unittest.TestCase):
         self.assertEqual(full.count('id="ip-scan-summary"'), 1)
         self.assertIn('value="example.org" selected', full)
         self.assertIn('id="ip-whois"', full)
+
+        script = {
+            "id": "masscan-detection",
+            "service": "ssh",
+            "output": "<test-banner>",
+        }
+        observation = {"port": {"scripts": [script]}, "user_hostnames": []}
+        values["port_cards"] = [
+            {"protocol": "tcp", "portid": "2222", "observations": [observation]}
+        ]
+        for name in ("ip_detail.html", "themes/plum/ip_detail.html"):
+            with self.subTest(theme=name):
+                html = environment.get_template(name).render(fragment=True, **values)
+                self.assertIn(">banner</div>", html)
+                self.assertNotIn("Masscan — detection", html)
+                self.assertEqual(html.count("&lt;test-banner&gt;"), 1)
+                self.assertIn("&lt;test-banner&gt;", html)
+                script["output"] = "a" * 200 + "<complete-banner>"
+                expanded = environment.get_template(name).render(
+                    fragment=True, **values
+                )
+                self.assertNotIn("<summary>Full output</summary>", expanded)
+                self.assertIn("a" * 200 + "&lt;complete-banner&gt;", expanded)
+                self.assertNotIn("<complete-banner>", expanded)
+                script["output"] = " ALERT(0x0246) "
+                observation["port"]["scripts"] = [
+                    script,
+                    {"id": "banner", "output": " ALERT(0x0246) "},
+                ]
+                alert = environment.get_template(name).render(fragment=True, **values)
+                self.assertEqual(alert.count("ALERT(0x0246)"), 1)
+                self.assertNotIn("Full output", alert)
+                self.assertNotIn("masscan-detection", alert)
+                observation["port"]["scripts"] = [script]
+                script["output"] = "<test-banner>"
 
     @unittest.skipUnless(shutil.which("node"), "Node.js required for cache checks")
     def test_hostname_cache(self):

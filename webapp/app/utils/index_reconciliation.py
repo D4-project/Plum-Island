@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 from uuid import uuid4
 
@@ -63,6 +64,8 @@ FIELDS = (
     "x509_subject_cn",
     "x509_san",
     "banner",
+    "service",
+    "engine",
 )
 
 
@@ -76,9 +79,30 @@ def state_directory():
     return Path(os.environ.get("PLUM_INDEX_STATE_DIR", str(default)))
 
 
-def write_barrier():
-    """Serialize ingestion batches, shadow batches and final publication."""
-    return file_lock(state_directory() / "writes.lock")
+@contextmanager
+def write_barrier(background=False):
+    """Give waiting foreground writers priority between background units."""
+    directory = state_directory()
+    if not background:
+        with file_lock(directory / "ingestion.lock", shared=True):
+            with file_lock(directory / "writes.lock"):
+                yield
+        return
+    while True:
+        with ExitStack() as locks:
+            try:
+                locks.enter_context(
+                    file_lock(directory / "ingestion.lock", blocking=False)
+                )
+                locks.enter_context(
+                    file_lock(directory / "writes.lock", blocking=False)
+                )
+            except BlockingIOError:
+                pass
+            else:
+                yield
+                return
+        time.sleep(0.01)
 
 
 def index_for(client):
@@ -98,6 +122,8 @@ def load_document(client, uid):
     values = pipe.execute()
     document = dict(values[0], uid=uid, id=uid)
     document.update({field: sorted(items) for field, items in zip(FIELDS, values[1:])})
+    if not document["engine"]:
+        document["engine"] = ["nmap"]
     document["_contributions"] = json.loads(values[-1]) if values[-1] else {}
     return document
 
@@ -172,7 +198,7 @@ def ingest_sources(raw, sources, fallback_snapshot):
     plan = None
     generation = None
     for source in sources:
-        with write_barrier():
+        while True:
             active = raw.get(ACTIVE) or ""
             if plan is None or generation != active:
                 snapshot = read_json(raw, "published", fallback_snapshot)
@@ -180,25 +206,36 @@ def ingest_sources(raw, sources, fallback_snapshot):
                 generation = active
             else:
                 snapshot = plan.snapshot
-            client = GenerationClient(raw, generation, writable=True)
-            job = read_json(raw, "job")
             document = parsed_source(source, snapshot)
-            uid = document["uid"]
-            old = load_document(client, uid)
             tags, contributions = plan.evaluate(document, force=True)
             document["tag"] = tags
-            if job and job["phase"] != "done":
-                raw.srem(CONTROL + "deleted:" + job["id"], uid)
-                raw.rpush(
-                    CONTROL + "journal:" + job["id"],
-                    json.dumps(
-                        {
-                            "source": source,
-                            "before": old,
-                        }
-                    ),
+            with write_barrier():
+                if (raw.get(ACTIVE) or "") != generation:
+                    continue
+                _ingest_document(
+                    raw, source, generation, snapshot, document, contributions
                 )
-            save_document(client, document, contributions, snapshot)
+            break
+
+
+def _ingest_document(raw, source, generation, snapshot, document, contributions):
+    """Journal and write one precomputed capture under the barrier."""
+    client = GenerationClient(raw, generation, writable=True)
+    job = read_json(raw, "job")
+    uid = document["uid"]
+    old = load_document(client, uid)
+    if job and job["phase"] != "done":
+        raw.srem(CONTROL + "deleted:" + job["id"], uid)
+        raw.rpush(
+            CONTROL + "journal:" + job["id"],
+            json.dumps(
+                {
+                    "source": source,
+                    "before": old,
+                }
+            ),
+        )
+    save_document(client, document, contributions, snapshot)
 
 
 def ingest_indexer_sources(indexer, sources):
@@ -263,10 +300,13 @@ def delete_capture(raw, uid):
 
 def queue_snapshot(raw, snapshot, full=False):
     """Polling committed SQL state repairs even a crash between save and enqueue."""
-    with write_barrier():
-        write_json(raw, "desired", snapshot)
-        if full:
-            raw.set(CONTROL + "force_full", "1")
+    # Desired inputs are one atomic value, independent of active generation data.
+    # Connection setup and retries must never hold the capture publication barrier.
+    pipe = raw.pipeline(transaction=True)
+    pipe.set(CONTROL + "desired", json.dumps(snapshot, sort_keys=True))
+    if full:
+        pipe.set(CONTROL + "force_full", "1")
+    pipe.execute()
 
 
 def processing_revision(job):
@@ -411,7 +451,7 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
 
     def start(self):
         """Resume immutable inputs or establish a new generation and journal."""
-        with write_barrier():
+        with write_barrier(background=True):
             job = read_json(self.raw, "job")
             desired = read_json(self.raw, "desired", {})
             # Completed work and superseded blocked work need no resumption.
@@ -472,16 +512,16 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
                 }
                 self.raw.delete(CONTROL + "force_full")
                 self.checkpoint(candidate_sources=None)
-            try:
-                self.plan = RulePlan(self.job["snapshot"], self.job.get("previous"))
-            except ValueError as error:
-                raise SnapshotInvalid(str(error)) from error
-            self.raw.delete(CONTROL + "failure")
-            self.checkpoint(
-                message="",
-                retry_at=None,
-                phase="scanning" if not self.job["scan_complete"] else "catching_up",
-            )
+        try:
+            self.plan = RulePlan(self.job["snapshot"], self.job.get("previous"))
+        except ValueError as error:
+            raise SnapshotInvalid(str(error)) from error
+        self.raw.delete(CONTROL + "failure")
+        self.checkpoint(
+            message="",
+            retry_at=None,
+            phase="scanning" if not self.job["scan_complete"] else "catching_up",
+        )
         return True
 
     def candidate_sources(self):
@@ -573,7 +613,7 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
         tags, contributions = self.plan.evaluate(document, previous, force=reparse)
         document["tag"] = tags
         target = GenerationClient(self.raw, self.job["id"], writable=True)
-        with write_barrier():
+        with write_barrier(background=True):
             save_document(
                 target, document, contributions, self.job["snapshot"], full=reparse
             )
@@ -613,7 +653,7 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
             entry = json.loads(serialized)
             if "delete" in entry:
                 target = GenerationClient(self.raw, self.job["id"], writable=True)
-                with write_barrier():
+                with write_barrier(background=True):
                     remove_document(target, entry["delete"], entry["before"])
                     self.checkpoint(journal_offset=self.job["journal_offset"] + 1)
                 continue
@@ -623,14 +663,14 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
             tags, contributions = self.plan.evaluate(document, force=True)
             document["tag"] = tags
             target = GenerationClient(self.raw, self.job["id"], writable=True)
-            with write_barrier():
+            with write_barrier(background=True):
                 save_document(
                     target, document, contributions, self.job["snapshot"], old=before
                 )
                 self.checkpoint(journal_offset=self.job["journal_offset"] + 1)
         if entries:
             return False
-        with write_barrier():
+        with write_barrier(background=True):
             if self.raw.llen(key) != self.job["journal_offset"]:
                 return False
             if (

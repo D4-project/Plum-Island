@@ -53,6 +53,92 @@ completed merge, stop Plum and all SQLite writers, restore the backup printed by
 the updater with SQLite's `.restore` command, and redeploy the preceding code
 before restarting. Restoring returns the whole database to the backup timestamp.
 
+### Scanner capabilities and Masscan jobs
+
+Migration 31 stores the dedicated Masscan banner source address on each bot.
+Configure it with `python agent.py -s --masscan-ip ADDRESS` and restart the agent.
+Reserve an unused address on the scanner's local subnet without assigning it to
+a kernel interface. The agent validates the address format and rejects addresses
+assigned locally. The operator must ensure network uniqueness and routing.
+Banner jobs require an agent announcing this address. Bot Status shows
+**Masscan Banner** and its source address. Queued banner jobs display a warning
+when no enabled compatible agent has contacted Island within 15 minutes.
+An occupied compatible agent still counts as available. The source address and
+targets must use the same IP family.
+Saving a Masscan profile with banner detection requires a recently seen active
+agent announcing a dedicated source IP. This validation applies to forms and the
+REST API. If that capacity later disappears, Scan Profiles displays a warning and
+existing banner jobs wait for a compatible agent.
+
+Release order: publish the Masscan-capable `nmap2json` package first, then
+update Plum-Island so it accepts both old and new agents and understands
+observed-service tag rules. Publish the new Antibodies rules after Island is
+deployed: `updisland.sh` fetches the Antibodies remote tip, even when the Island
+checkout pins an older submodule revision. Update Plum-Agent and its
+`nmap2json` dependency next. Enable Masscan profiles only when capable agents
+are available. Plum-Island and Plum-Agent require `nmap2json>=2611.4`.
+The [GitHub release v2611.04](https://github.com/D4-project/nmap2json/releases/tag/v2611.04)
+provides the tested 2611.4 wheel, also published on
+[PyPI](https://pypi.org/project/nmap2json/2611.4/). Earlier wheels do not satisfy
+this requirement. Install the current requirements in each consumer's environment:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip check
+```
+
+nmap2json 2611.4 marks only Masscan host reports with `"engine": "masscan"`.
+Search `engine:nmap` includes all unmarked reports automatically. There is no
+engine migration, history rewrite or bulk Nmap index to populate. Restart updated
+agents so their converter emits the new Masscan metadata.
+
+Keep the complete received banner; do not impose an additional storage limit.
+Island exposes Masscan output as the standard `banner` script and extracts
+observed HTTP response headers into `http-headers` before hashing and tagging.
+The IP view displays the banner once, as for Nmap. Masscan's FTP parser removes
+carriage returns, while Nmap preserves them; retain each tool's received output.
+An existing Nmap banner truncated by `banner.nse` cannot be recovered. Protocol
+clock values are masked only in hash input. Existing stored hashes are not
+migrated automatically; adopting the new hashes for historical reports requires
+explicit reconversion and rehashing.
+
+`./updisland.sh` applies SQLite migrations 27–32 automatically. Existing bots,
+profiles and jobs remain Nmap-compatible. New agents announce Nmap and Masscan
+availability; queued jobs store the tool selected by their profile. Pending jobs
+adopt profile changes through the scheduler's bounded synchronization task, while
+active and completed attempts keep their saved settings.
+New agents also echo a per-attempt identifier, preventing a delayed result or
+release from an interrupted attempt from changing a later reassignment of the
+same job. Legacy agents retain their previous Nmap-only contract.
+
+Migration 32 creates `scan_stat_buckets` for the Stats activity page. MySQL
+deployments must apply `tools/sql/32_scan_stats_mysql.sql` before deploying the
+updated code; the SQLite updater does not manage MySQL schemas. Upgrade Island
+before agents. Older agents still contribute completed jobs and open ports;
+targeted-port counts remain unknown until reported by an updated agent.
+See [scan activity counters](sysinternal/scan_stats.md).
+
+Recent agents can also connect to an older Island. They detect protocol support
+at startup and use Nmap only when Island predates Masscan support. Nmap must be
+installed and enabled. Restart those agents after upgrading Island to pick up
+Masscan support.
+
+Update Plum-Agent and its `nmap2json` dependency before selecting Masscan on a
+profile. On Linux, run the agent as its normal service account and grant raw-socket
+access to the actual Masscan executable, then verify it:
+
+```bash
+sudo setcap cap_net_raw=eip /usr/bin/masscan
+getcap /usr/bin/masscan
+```
+
+The agent refuses to start with an enabled Masscan that lacks this capability and
+prints the command for the discovered executable. Use `nmap_disabled: true` or
+`masscan_disabled: true` in the agent configuration to exclude an installed tool.
+Masscan's default rate is 1,000 packets per second; set `masscan_rate` on the agent
+when a different local limit is required. Existing agents that do not announce a
+capability list continue to receive Nmap jobs only.
+
 ## 1. Deploy code and synchronize roles
 
 Use the normal controller service stop/restart procedure during code replacement.

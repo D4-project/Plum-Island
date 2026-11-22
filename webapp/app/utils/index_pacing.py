@@ -8,11 +8,14 @@ from collections import OrderedDict, deque
 import json
 import statistics
 import time
+import logging
+import os
 
 import redis
 
 from app.utils.index_activity import ACTIVITY, PACING, SAMPLE_LIMIT, SAMPLES
-from app.utils.index_generations import CONTROL, GenerationClient
+from app.utils.index_generations import ACTIVE, CONTROL, GenerationClient, write_json
+from app.utils.index_retry import retry_delay, transient_error
 from app.utils.index_reconciliation import (
     ReconciliationWorker,
     SnapshotInvalid,
@@ -20,6 +23,8 @@ from app.utils.index_reconciliation import (
 )
 from app.utils.index_sources import ExcludedSource, SourceDocuments
 from app.utils.index_source_recovery import SOURCE_CONFLICT, orphan_exclusion_metadata
+
+logger = logging.getLogger(__name__)
 
 
 class LoadController:  # pylint: disable=too-many-instance-attributes
@@ -186,6 +191,108 @@ class PacedReconciliationWorker(ReconciliationWorker):
         )
         self.load = LoadController(raw, config)
 
+    def run(self):
+        """Resume durable work after transport outages, with interruptible waits."""
+        attempts = 0
+        while not self.stopping:
+            try:
+                super().run()
+            except BlockingIOError:
+                # Another worker may take ownership while this one backs off.
+                return
+            except Exception as error:
+                if not transient_error(error):
+                    raise
+                attempts += 1
+                delay = retry_delay(attempts)
+                if self._record_backend_retry(delay):
+                    return
+                logger.warning(
+                    "Index worker backend unavailable (%s); retrying in %.0fs from saved checkpoint",
+                    type(error).__name__,
+                    delay,
+                    exc_info=attempts == 1,
+                )
+                if not self._wait_backend_retry(delay):
+                    self._record_backend_pause()
+                    return
+                # Always reload durable inputs, never advance a failed in-memory cursor.
+                self.job = None
+                self.plan = None
+                self._inputs_saved = False
+            else:
+                if attempts:
+                    logger.info(
+                        "Index worker recovered after %s transport retry attempt(s)",
+                        attempts,
+                    )
+                    try:
+                        self.raw.delete(CONTROL + "failure")
+                    except redis.RedisError:
+                        pass
+                return
+
+    def _record_backend_retry(self, delay):
+        """Status is best effort; never overwrite an acknowledged publication."""
+        try:
+            if self.job and self.raw.get(ACTIVE) == self.job["id"]:
+                return True
+            message = "Backend temporarily unavailable; automatically retrying from saved checkpoint. Active index retained."
+            if self.job:
+                self.checkpoint(
+                    phase="retrying", message=message, retry_at=time.time() + delay
+                )
+                self.raw.delete(CONTROL + "failure")
+            else:
+                write_json(
+                    self.raw,
+                    "failure",
+                    {
+                        "phase": "retrying",
+                        "message": message,
+                        "retry_at": time.time() + delay,
+                    },
+                )
+        except redis.RedisError:
+            # If Kvrocks is unreachable, the last durable cursor remains authoritative.
+            pass
+        return False
+
+    def _record_backend_pause(self):
+        """Retain normal stop status when a stop interrupts retry backoff."""
+        try:
+            if self.job:
+                if self.raw.get(ACTIVE) != self.job["id"]:
+                    self.checkpoint(
+                        phase="paused", message="Stopped after checkpoint", retry_at=0
+                    )
+            else:
+                write_json(
+                    self.raw,
+                    "failure",
+                    {
+                        "phase": "paused",
+                        "message": "Stopped before indexing started",
+                        "retry_at": 0,
+                    },
+                )
+        except redis.RedisError:
+            pass
+
+    def _wait_backend_retry(self, delay):
+        """Wait outside publication barriers and react promptly to stop/parent exit."""
+        deadline = time.monotonic() + delay
+        while not self.stopping:
+            parent = os.environ.get("PLUM_INDEX_PARENT_PID")
+            if parent and os.getppid() != int(parent):
+                self.stopping = True
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(0.5, remaining))
+        return False
+
     def start(self):
         """Restore operational counters alongside the original frozen inputs."""
         started = super().start()
@@ -247,7 +354,7 @@ class PacedReconciliationWorker(ReconciliationWorker):
 
     def exclude_source(self, uid, address):
         """Count unindexed exclusions, preserving detached historical dates."""
-        with write_barrier():
+        with write_barrier(background=True):
             metadata = orphan_exclusion_metadata(self.raw, self.job, uid, address)
             if metadata is None:
                 raise SnapshotInvalid(SOURCE_CONFLICT)

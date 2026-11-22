@@ -30,9 +30,17 @@ CONFIG_PATH = Path(__file__).resolve().with_name("config.yaml")
 DEFAULT_WORKERS = max(1, (os.cpu_count() or 1) - 1)
 
 try:
-    from .split_meili_dump_by_port import port_document_uuid, strip_port_hash
+    from .split_meili_dump_by_port import (
+        add_port_hash,
+        port_document_uuid,
+        strip_port_hash,
+    )
 except ImportError:
-    from split_meili_dump_by_port import port_document_uuid, strip_port_hash
+    from split_meili_dump_by_port import (
+        add_port_hash,
+        port_document_uuid,
+        strip_port_hash,
+    )
 
 
 def check_library():
@@ -81,7 +89,11 @@ def timestamp(value):
 
 def load_history(path, doc, client):
     """Read source history, using report scan times for missing Kvrocks bounds."""
-    source = f"IN Kvrocks doc:{doc['id']}" if client is not None else str(path.with_suffix(".time"))
+    source = (
+        f"IN Kvrocks doc:{doc['id']}"
+        if client is not None
+        else str(path.with_suffix(".time"))
+    )
     if client is not None:
         data = client.hgetall(f"doc:{doc['id']}")
     else:
@@ -105,7 +117,11 @@ def load_history(path, doc, client):
         try:
             bounds[field] = timestamp(value)
         except ValueError as error:
-            origin = f" (JSON body.{fallbacks[field]} fallback)" if field in fallbacks else ""
+            origin = (
+                f" (JSON body.{fallbacks[field]} fallback)"
+                if field in fallbacks
+                else ""
+            )
             raise ValueError(
                 f"{source} has invalid {field} for {path}{origin}: {error}"
             ) from error
@@ -140,8 +156,7 @@ def port_documents(doc):
     """Use library hash/established UUIDs without altering raw banner content."""
     ip = validate_document(doc)
     for port in doc["body"]["ports"]:
-        hashed = copy.deepcopy(port)
-        hashed["hsh256"] = smarthash.port_smart_hash(port, exclude_keys=["hsh256"])
+        hashed = add_port_hash(port)
         result = copy.deepcopy(doc)
         result["ip"] = ip
         result["id"] = port_document_uuid(ip, hashed)
@@ -205,7 +220,9 @@ def write_dump(connection, output):
             handle.write(json.dumps({"old_uid": old, "new_uid": new}) + "\n")
 
 
-def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None, workers=None):
+def prepare(
+    input_dir, output_dir, *, dry_run=False, client=None, work_dir=None, workers=None
+):
     """Prepare only; never mutate external databases or existing directories."""
     if workers is None:
         workers = DEFAULT_WORKERS
@@ -275,7 +292,9 @@ def prepare(input_dir, output_dir, *, dry_run=False, client=None, work_dir=None,
 
             if workers == 1:
                 for doc, first, last, fallback in source_documents():
-                    consume(doc["id"], first, last, fallback, hashed_port_documents(doc))
+                    consume(
+                        doc["id"], first, last, fallback, hashed_port_documents(doc)
+                    )
             else:
                 # Keep at most two reports per worker in flight; only the parent
                 # reads Kvrocks and writes SQLite. Ordered consumption bounds RAM.
@@ -332,7 +351,9 @@ def main(argv=None):
         help="Override IN_KVROCKS_HOST from tools/config.yaml",
     )
     parser.add_argument(
-        "--kvrocks-port", type=int, help="Override IN_KVROCKS_PORT from tools/config.yaml"
+        "--kvrocks-port",
+        type=int,
+        help="Override IN_KVROCKS_PORT from tools/config.yaml",
     )
     parser.add_argument(
         "--use-time-companions",

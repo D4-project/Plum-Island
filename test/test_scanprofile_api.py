@@ -2,16 +2,16 @@
 
 import importlib.util
 import json
-from pathlib import Path
 import sqlite3
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from flask import Flask
-from flask_appbuilder import AppBuilder, SQLA
-from sqlalchemy.exc import IntegrityError
 from app import apis
-from app.models import Ports, Protos, ScanProfiles
+from app.models import Bots, Ports, Protos, ScanProfiles
+from flask import Flask
+from flask_appbuilder import SQLA, AppBuilder
+from sqlalchemy.exc import IntegrityError
 
 
 class ProfileApiFixture(unittest.TestCase):
@@ -26,6 +26,7 @@ class ProfileApiFixture(unittest.TestCase):
         return "sqlite://"
 
     def setUp(self):
+        """Create isolated state for the regression checks."""
         self.app = Flask(__name__)
         self.app.config.update(
             SECRET_KEY="isolated-test-key-for-jwt-0123456789",
@@ -96,6 +97,7 @@ class ProfileRestTest(ProfileApiFixture):
         self.ports(2)
 
         def create(name):
+            """Provide the create test fixture."""
             response = self.client.post(
                 self.url, headers=self.admin, json={"name": name, "port_ids": [1]}
             )
@@ -106,6 +108,7 @@ class ProfileRestTest(ProfileApiFixture):
         create("A")
 
         def update(**fields):
+            """Provide the update test fixture."""
             return self.client.put(path, headers=self.admin, json=fields)
 
         self.assertEqual(update(name="B2", port_ids=[2]).status_code, 200)
@@ -138,6 +141,94 @@ class ProfileRestTest(ProfileApiFixture):
         with self.assertRaises(IntegrityError):
             self.db.session.commit()
         self.db.session.rollback()
+
+    def test_masscan_preferences_are_editable(self):
+        """A Masscan profile is active configuration, not a paused draft."""
+        self.ports(1)
+        response = self.client.post(
+            self.url, headers=self.admin, json={"name": "example", "port_ids": [1]}
+        )
+        self.assertEqual(response.status_code, 201)
+        profile = response.json["result"]
+        self.assertEqual(
+            (profile["scan_tool"], profile["detect_protocol"]), ("nmap", False)
+        )
+        url = self.url + str(profile["id"])
+        for key, value in (("scan_tool", "unknown"), ("detect_protocol", "true")):
+            response = self.client.put(url, headers=self.admin, json={key: value})
+            self.assertEqual(response.status_code, 400)
+        response = self.client.put(
+            url,
+            headers=self.admin,
+            json={"scan_tool": "masscan", "detect_protocol": True},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.db.session.refresh(
+            self.db.session.query(ScanProfiles).filter_by(id=profile["id"]).one()
+        )
+        self.assertEqual(
+            self.client.get(url, headers=self.admin).json["result"]["scan_tool"], "nmap"
+        )
+        from app.utils.timeutils import utcnow_naive
+
+        bot = Bots(
+            uid="banner-fixture",
+            ip="192.0.2.1",
+            country="LU",
+            device_model="test",
+            agent_version="test",
+            system_version="test",
+            has_masscan=True,
+            masscan_ip="192.0.2.2",
+            last_seen=utcnow_naive(),
+        )
+        self.db.session.add(bot)
+        self.db.session.commit()
+        response = self.client.put(
+            url,
+            headers=self.admin,
+            json={"scan_tool": "masscan", "detect_protocol": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        response = self.client.put(url, headers=self.admin, json={"name": "edited"})
+        self.assertEqual(response.json["result"]["scan_tool"], "masscan")
+        self.assertTrue(response.json["result"]["detect_protocol"])
+        bot.masscan_ip = None
+        self.db.session.commit()
+        response = self.client.put(url, headers=self.admin, json={"name": "blocked"})
+        self.assertEqual(response.status_code, 400)
+        response = self.client.put(
+            url, headers=self.admin, json={"detect_protocol": False}
+        )
+        self.assertEqual(response.status_code, 200)
+        response = self.client.put(url, headers=self.admin, json={"scan_tool": "nmap"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.delete(url, headers=self.admin).status_code, 200)
+
+    def test_profile_forms_accept_unchecked_detection_and_preserve_inactive_fields(
+        self,
+    ):
+        """Verify profile forms accept unchecked detection and preserve inactive fields."""
+        from app import appbuilder
+        from app.views import ScanprofilesView
+
+        view = next(
+            view for view in appbuilder.baseviews if isinstance(view, ScanprofilesView)
+        )
+        with self.app.test_request_context():
+            for form_class in (view.add_form, view.edit_form):
+                form = form_class()
+                self.assertFalse(form.detect_protocol.data)
+                self.assertTrue(form.detect_protocol.validate(form))
+                view.process_form(form, False)
+                self.assertNotIn("detect_protocol", form)
+                self.assertIn("nses", form)
+                form = form_class()
+                form.scan_tool.data = "masscan"
+                view.process_form(form, False)
+                self.assertIn("detect_protocol", form)
+                self.assertNotIn("nses", form)
+                self.assertNotIn("nmap_additional_params", form)
 
     def test_permissions(self):
         """List-only credentials grant exactly one of the five methods."""
@@ -173,6 +264,7 @@ class ProfileRestTest(ProfileApiFixture):
         body = json.dumps({"name": "Fixture", "port_ids": ids}, separators=(",", ":"))
 
         def post():
+            """Provide the post test fixture."""
             return self.client.post(
                 self.url, headers=self.admin, data=body, content_type="application/json"
             )

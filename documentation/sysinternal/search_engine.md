@@ -16,6 +16,31 @@ Related references: [key schema](../kvrocks_objects.md), [user search syntax](..
 and [repository instructions](../../AGENT.md).
 Function names below are navigation anchors; line numbers drift as code changes.
 
+## Sparse scanner provenance
+
+nmap2json 2611.4 emits `engine: masscan` only for Masscan host reports. It adds
+no engine field to Nmap reports and excludes this host metadata from content
+hashes. Island interprets missing engine metadata as Nmap without inferring a
+scanner from ports, banners or service names.
+
+Kvrocks physically stores only `engine:masscan` (UID set) and `engines:<uid>`
+(the Masscan reverse membership). There is no `engine:nmap` index or per-UID Nmap
+marker, including no empty copy-on-write tombstone for an unmarked Nmap ingestion.
+Normalized parser/rule documents may expose the logical value `engine: [nmap]`;
+this does not create physical Nmap memberships.
+
+The planner must not treat an absent `engine:nmap` key as a zero-cardinality
+predicate. `get_engine_uids` implements Nmap as candidates minus Masscan, applying
+selective positive predicates first. It uses the Masscan set or bounded membership
+pipelines inside an existing scope. A standalone Nmap search still needs the
+whole candidate population and can be expensive on a large installation.
+
+This design avoids backfilling and storing two million redundant Nmap markers.
+No engine-specific migration, reimport or history rewrite is needed or performed.
+An old Masscan report without a marker is intentionally treated as Nmap. New
+ingestion uses the explicit report metadata; replacing a retained document with
+an unmarked Nmap observation removes its previous Masscan membership.
+
 ## Ownership and data flow
 
 The read-only [Discovery API v1](../discovery.md) in `app/discovery_api.py`

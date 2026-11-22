@@ -92,6 +92,9 @@ def _counter_key(node):
     if node.kind != "term":
         return None
     field, (value,) = node.fields[0]
+    if field == "engine" and value == "nmap":
+        # No physical Nmap set exists: a missing key must never imply no matches.
+        return None
     if "." in field:
         return None
     if field == "net":
@@ -203,7 +206,9 @@ class CandidatePlanner:  # pylint: disable=too-many-instance-attributes
                 )
         else:
             field, (value,) = node.fields[0]
-            if field == "net":
+            if field == "engine":
+                result = self.indexer.get_engine_uids(value, scope)
+            elif field == "net":
                 # Reused predicates need a root-scope cache; other CIDRs can
                 # filter IP mappings inside the already narrowed candidates.
                 network_scope = self.scope if self.uses[node] > 1 else scope

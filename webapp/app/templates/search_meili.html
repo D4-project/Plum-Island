@@ -1,6 +1,11 @@
 {% extends "appbuilder/base.html" %}
 {% import 'appbuilder/general/lib.html' as lib %}
 
+{% block head_js %}
+{{ super() }}
+{% include 'scan_report_assets.html' %}
+{% endblock %}
+
 {% block content %}
 {{ lib.panel_begin(title, "Query Scans") }}
 
@@ -34,11 +39,9 @@ async function search() {
         const collapse = document.createElement('div');
         collapse.id = `collapse${index}`;
         collapse.className = 'panel-collapse collapse';
-        const bodyPre = document.createElement('pre');
-        bodyPre.textContent = JSON.stringify(hit.body, null, 2);
         const bodyDiv = document.createElement('div');
         bodyDiv.className = 'panel-body';
-        bodyDiv.appendChild(bodyPre);
+        window.PlumScanReport.render(bodyDiv, hit.body);
         collapse.appendChild(bodyDiv);
         panel.appendChild(collapse);
         hitsDiv.appendChild(panel);

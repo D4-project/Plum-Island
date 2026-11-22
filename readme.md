@@ -19,6 +19,7 @@ The project is designed for repeated monitoring rather than one-shot scans: targ
 ## Main features
 
 - Distributed scan orchestration with agents and server-side job queues.
+- Nmap and Masscan scan profiles, with server-side dispatch by agent capability.
 - Target and scan profile management.
 - Per-profile scan tracking for each target.
 - Indexed search over IPs, networks, ports, DNS names, HTTP metadata, favicons, TLS certificates, banners, and computed tags.
@@ -29,6 +30,7 @@ The project is designed for repeated monitoring rather than one-shot scans: targ
 - Favicon-based tagging using MD5, SHA-256, and mmhash indicators.
 - Scheduled Markdown reports from the same search syntax used by the UI.
 - CSV/JSON export workflows for search results.
+- Scan activity graphs by minute, hour, day and month, backed by SQL counters.
 
 ## Search options
 
@@ -40,10 +42,16 @@ The search index supports fields such as:
 - `http_header`, `http_headval`
 - `http_favicon_path`, `http_favicon_mmhash`, `http_favicon_md5`, `http_favicon_sha256`
 - `banner`
+- `service`, `engine`
 - `x509_issuer`, `x509_issuer_cn`, `x509_subject`, `x509_subject_cn`, `x509_san`, `x509_md5`, `x509_sha1`, `x509_sha256`
 
 `fqdn`, `host`, and `domain` include normalized hostnames found in TLS certificate DNS SAN and subject CN data. Rebuild or reimport the Kvrocks index to apply parser improvements to existing scans.
 - `tag`
+
+`engine:masscan` selects explicitly marked Masscan reports. `engine:nmap`
+selects all other candidate reports, including existing unmarked scans. Only
+Masscan markers are stored: no bulk Nmap migration is required for large indexes.
+Scanner metadata does not change deduplication hashes. See [Search](documentation/search.md).
 
 Certificate searches distinguish common names (`x509_issuer_cn`,
 `x509_subject_cn`) from available serialized DN attributes (`x509_issuer`,
@@ -120,6 +128,7 @@ See [Reports documentation](documentation/reports.md) for setup, query semantics
 - [Tools](documentation/tools.md)
 - [Search index recovery](documentation/recovery-tools.md)
 - [Kvrocks objects](documentation/kvrocks_objects.md)
+- [Scan activity counters](documentation/sysinternal/scan_stats.md)
 
 ## Technical requirements
 

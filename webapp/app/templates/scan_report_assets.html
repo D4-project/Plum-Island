@@ -1,0 +1,2 @@
+<script type="module" src="{{ url_for('static', filename='vendor/vitrine/esm/vt-json.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
+<script defer src="{{ url_for('static', filename='js/scan_report_viewer.js') }}" data-indexed-report-url="{{ url_for('MeiliSearchView.getuid') }}" nonce="{{ baselib.get_nonce() }}"></script>

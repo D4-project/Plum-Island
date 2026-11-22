@@ -281,7 +281,7 @@ function buildSearchFieldSuggestions(prefix) {
         .filter(keyword => keyword.startsWith(prefix))
         .map(keyword => ({value: `${keyword}:`, label: `${keyword}:`, kind: 'keyword'}));
     const [field, modifier] = prefix.split('.');
-    if (!SEARCH_KEYWORDS.has(field) || ['tag', 'since', 'http_headval'].includes(field)) {
+    if (!SEARCH_KEYWORDS.has(field) || ['tag', 'engine', 'since', 'http_headval'].includes(field)) {
         return suggestions;
     }
     const modifiers = modifier === undefined

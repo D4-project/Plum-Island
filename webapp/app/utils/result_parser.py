@@ -23,8 +23,10 @@ import re
 
 try:
     from .domains import parse_hostname
+    from .scanner_reports import normalize_masscan_port, report_engine
 except ImportError:
     from domains import parse_hostname
+    from scanner_reports import normalize_masscan_port, report_engine
 
 try:
     from .tagrules import apply_tag_rules_to_document
@@ -108,6 +110,7 @@ default_parsing = [
     "get_hosts:p.ssl-cert.extensions.X509v3_Subject_Alternative_Name",
     "get_hosts:p.banner.output",
     "get_banner:p.banner.output",
+    "get_banner:p.masscan-detection.output",
     "get_favicon:p.http-mm-sha-favicon",
 ]
 
@@ -366,6 +369,7 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
     if subject_dns:
         indexed_doc["x509_subject"] = subject_dns
 
+    indexed_doc["engine"] = [report_engine(raw_doc)]
     if tag_rules is not None:
         indexed_doc.pop("tag", None)
         computed_tags = apply_tag_rules_to_document(indexed_doc, tag_rules=tag_rules)
@@ -566,7 +570,7 @@ def get_banner(data: dict, target: str):
     """
     body = get_body(data, target)
     banner = []
-    if body:
+    if isinstance(body, str) and body:
         banner = [body]
     return {"banner": banner}
 
@@ -680,6 +684,26 @@ def fuse_dicts(d1, d2):
     return fused
 
 
+def observed_services(ports):
+    """Extract service names supported by observations in a saved report."""
+    names = set()
+    for port in ports:
+        service = port.get("service") or {}
+        candidates = [
+            script.get("service")
+            for script in port.get("scripts") or []
+            if script.get("id") == "masscan-detection"
+        ]
+        if isinstance(service, dict) and service.get("method") == "probed":
+            candidates.append(service.get("name"))
+        names.update(
+            name.strip().lower()
+            for name in candidates
+            if isinstance(name, str) and name.strip()
+        )
+    return sorted(names)
+
+
 def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-locals
     """
     Parse one Nmap-like document into the Kvrocks search fields.
@@ -688,6 +712,11 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         return None
 
     db_conf = normalize_db_conf(db_conf_local)
+
+    # Historical source documents need the same HTTP extraction as new captures.
+    body = dict(doc["body"])
+    body["ports"] = [normalize_masscan_port(port) for port in body.get("ports") or []]
+    doc = dict(doc, body=body)
 
     final_result = {}  # Parsing result array
     for parsing_rule in default_parsing:
@@ -728,9 +757,11 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
 
         final_result = fuse_dicts(final_result, parse_result)
 
-    ports = []
-    for port in doc.get("body").get("ports"):
-        ports.append(port.get("portid"))
+    raw_ports = doc["body"]["ports"]
+    ports = [port.get("portid") for port in raw_ports]
+    services = observed_services(raw_ports)
+    if services:
+        final_result["service"] = services
 
     uid = doc.get("id")
     ip = doc.get("ip")
@@ -738,6 +769,7 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
 
     final_result = final_result | {
         "uid": uid,
+        "engine": [report_engine(doc)],
         "ip": ip,
         "last_seen": last_seen,
         "port": ports,

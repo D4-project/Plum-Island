@@ -201,21 +201,9 @@ class GenerationCopyIntegrationTest(ReconciliationCase):
         generation = "test-child"
         self.raw.set(f"{CONTROL}g:{generation}:parent", self.raw.get(ACTIVE))
         child = GenerationClient(self.raw, generation, writable=True)
-        original = self.raw.pipeline
-
-        def failing_pipeline(*args, **kwargs):
-            pipe = original(*args, **kwargs)
-            execute = pipe.execute
-
-            def execute_copy():
-                if any(command[0][0] == "COPY" for command in pipe.command_stack):
-                    raise redis.ResponseError("storage unavailable")
-                return execute()
-
-            pipe.execute = execute_copy
-            return pipe
-
-        with patch.object(self.raw, "pipeline", failing_pipeline):
+        with patch.object(
+            self.raw, "eval", side_effect=redis.ResponseError("storage unavailable")
+        ):
             with self.assertRaisesRegex(redis.ResponseError, "storage unavailable"):
                 child.hset("doc:one", mapping={"last_seen": "9999999999"})
         self.assertFalse(self.raw.sismember(child.owned(generation), "doc:one"))
@@ -225,6 +213,27 @@ class GenerationCopyIntegrationTest(ReconciliationCase):
         self.assertNotEqual(
             GenerationClient(self.raw).hget("doc:one", "last_seen"), "9999999999"
         )
+
+    def test_lost_copy_response_does_not_repeat_completed_copy(self):
+        self.publish(self.first)
+        generation = "lost-copy-response"
+        self.raw.set(f"{CONTROL}g:{generation}:parent", self.raw.get(ACTIVE))
+        child = GenerationClient(self.raw, generation, writable=True)
+        original = self.raw.eval
+
+        def lost_response(*args):
+            original(*args)
+            raise redis.TimeoutError("response lost after COPY")
+
+        with patch.object(self.raw, "eval", side_effect=lost_response):
+            with self.assertRaises(redis.TimeoutError):
+                child.hset("doc:one", mapping={"last_seen": "9999999999"})
+        self.assertTrue(self.raw.sismember(child.owned(generation), "doc:one"))
+        with patch.object(
+            self.raw, "eval", side_effect=AssertionError("COPY repeated")
+        ):
+            child.hset("doc:one", mapping={"last_seen": "9999999999"})
+        self.assertEqual(child.hget("doc:one", "first_seen"), "100")
 
     def test_failed_copy_job_resumes_same_frozen_inputs(self):
         """Recovery keeps its generation, candidates and rules despite later edits."""

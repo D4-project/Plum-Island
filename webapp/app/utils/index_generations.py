@@ -85,12 +85,14 @@ def pinned_read(function):
 
 
 @contextmanager
-def file_lock(path, blocking=True):
+def file_lock(path, blocking=True, shared=False):
     """Serialize local processes without a stale-PID takeover race."""
     location = Path(path)
     location.parent.mkdir(parents=True, exist_ok=True)
     with location.open("a", encoding="utf-8") as handle:
-        flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+        flags = (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | (
+            0 if blocking else fcntl.LOCK_NB
+        )
         fcntl.flock(handle.fileno(), flags)
         try:
             yield
@@ -195,20 +197,27 @@ class GenerationClient:
             for key, source in resolved.items()
             if source != targets[key]
         ]
-        # Empty fields and tombstones own a logical key without a physical key.
-        # Kvrocks COPY raises for these; check in one batch under the write barrier.
-        pipe = self.raw.pipeline(transaction=False)
-        for source, _target in inherited:
-            pipe.exists(source)
-        present = pipe.execute()
-        pipe = self.raw.pipeline(transaction=False)
-        for (source, target), exists in zip(inherited, present):
-            # Discard an unowned partial copy even when the parent is now empty.
-            pipe.delete(target)
-            if exists:
-                pipe.copy(source, target, replace=True)
-        pipe.execute()
-        # On a failed COPY, leave ownership unchanged so a retry copies again.
+        # A batch of large COPY commands can exceed the socket timeout. Record
+        # each successful copy on the server, even if its response is lost, so
+        # the next export resumes instead of deleting and copying it again.
+        copy_and_own = """
+            redis.call('DEL', KEYS[2])
+            if redis.call('EXISTS', KEYS[1]) == 1 then
+                redis.call('COPY', KEYS[1], KEYS[2], 'REPLACE')
+            end
+            redis.call('SADD', KEYS[3], ARGV[1])
+            return 1
+        """
+        logical_keys = {target: key for key, target in targets.items()}
+        for source, target in inherited:
+            self.raw.eval(
+                copy_and_own,
+                3,
+                source,
+                target,
+                self.owned(self.generation),
+                logical_keys[target],
+            )
         if keys:
             self.raw.sadd(self.owned(self.generation), *sorted(keys))
         return targets

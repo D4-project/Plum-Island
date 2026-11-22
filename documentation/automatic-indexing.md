@@ -29,6 +29,34 @@ The scheduler must be running under the deployment's existing scheduler startup
 contract; opening the GUI does not start it. The child explicitly removes
 `WERKZEUG_RUN_MAIN` to prevent recursively starting another scheduler.
 
+### Transient backend failures
+
+Kvrocks connection/read timeouts and disconnections, Meili communication/timeouts,
+and temporary HTTP responses (408, 429, 500, 502, 503, 504) retry automatically.
+Delays grow from about 30 seconds to at most five minutes, with jitter to avoid
+reconnecting all clients at once. Retries continue while the controller is running.
+
+The supervisor defers snapshot-publication failures to later scheduler ticks;
+it never sleeps in the scheduler thread or holds the ingestion write barrier
+while backing off. Committed SQL rule changes are polled again after recovery.
+The worker waits outside publication barriers, then reloads the same frozen
+inputs and last durable cursor. A failed or unacknowledged unit can be repeated
+through the existing idempotent writes; checkpoints are not advanced on failure.
+
+Status says **Backend temporarily unavailable; automatically retrying from saved
+checkpoint. Active index retained.** when Kvrocks can store it. If Kvrocks itself
+is unavailable, status persistence is best effort: failure to write the error
+cannot prevent the retry. A publication whose reply was lost is checked against
+the active generation before any retry status is recorded.
+
+The first transport failure includes its traceback in the application logs;
+later failures in that retry cycle log concise warnings with the next delay.
+Malformed reports, unsupported commands, authentication failures and frozen-input
+incompatibilities are not suppressed by the transient-retry wrapper. Stop signals
+and parent exit interrupt the backoff; no browser action or index reset is needed.
+This operational retry layer does not change extraction fingerprints or invalidate
+existing frozen reconciliation jobs.
+
 Initial tuning values in `webapp/config.py.template`:
 
 | Setting | Default | Purpose |

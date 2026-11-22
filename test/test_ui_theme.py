@@ -3,9 +3,9 @@
 import ast
 import importlib.util
 import os
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase, skipUnless
@@ -19,6 +19,11 @@ SPEC = importlib.util.spec_from_file_location(
 )
 UI_THEME = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UI_THEME)
+SCANNER_SPEC = importlib.util.spec_from_file_location(
+    "plum_scanner_reports", ROOT / "webapp/app/utils/scanner_reports.py"
+)
+SCANNER_REPORTS = importlib.util.module_from_spec(SCANNER_SPEC)
+SCANNER_SPEC.loader.exec_module(SCANNER_REPORTS)
 
 
 class UiThemeTest(TestCase):
@@ -126,6 +131,9 @@ class UiThemeTest(TestCase):
         for theme in ("readable.css", "plum.css"):
             with self.subTest(theme=theme):
                 app = Flask("ui-theme-paths", root_path=str(root))
+                app.jinja_env.filters["scanner_scripts"] = (
+                    SCANNER_REPORTS.display_scripts
+                )
                 app.config["APP_THEME"] = theme
                 UI_THEME.configure_ui_templates(app)
                 expected = root / "templates"

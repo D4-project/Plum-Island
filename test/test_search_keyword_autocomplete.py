@@ -3,15 +3,14 @@
 import ast
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
-from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
-
+from pathlib import Path
 from test.test_kvrocks_search import isolated_search_view, make_indexer
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from jinja2 import Environment
 
@@ -178,7 +177,7 @@ class SearchKeywordAutocompleteTest(unittest.TestCase):
     def test_suggested_field_modifiers_are_accepted_by_parser(self):
         view = isolated_search_view(make_indexer())
         for field in self.view.search_keywords():
-            if field == "tag":
+            if field in {"tag", "engine"}:
                 continue
             for modifier in ("bg", "begin", "lk", "like"):
                 with self.subTest(field=field, modifier=modifier):

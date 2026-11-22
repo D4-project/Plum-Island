@@ -1,14 +1,14 @@
 """Verify dump history before destructive replacement, without live services."""
 
-from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import fnmatch
 import importlib
 import io
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,10 +24,14 @@ class MemoryPipeline:
     """Execute queued operations against an isolated in-memory store."""
 
     def __init__(self, store):
+        """Provide the init test fixture."""
         self.store, self.calls = store, []
 
     def __getattr__(self, name):
+        """Provide the getattr test fixture."""
+
         def queue(*args, **kwargs):
+            """Provide the queue test fixture."""
             self.calls.append((name, args, kwargs))
             return self
 
@@ -48,41 +52,52 @@ class MemoryStore:
 
     # pylint: disable=missing-function-docstring
     def __init__(self):
+        """Provide the init test fixture."""
         self.data = {
             "doc:u": {"ip": "8.8.8.8", "first_seen": "100", "last_seen": "500"}
         }
 
     def pipeline(self, **_kwargs):
+        """Provide the pipeline test fixture."""
         return MemoryPipeline(self)
 
     def scan_iter(self, match, **_kwargs):
+        """Provide the scan iter test fixture."""
         return iter([key for key in self.data if fnmatch.fnmatchcase(key, match)])
 
     def delete(self, *keys):
+        """Provide the delete test fixture."""
         found = sum(key in self.data for key in keys)
         for key in keys:
             self.data.pop(key, None)
         return found
 
     def hgetall(self, key):
+        """Provide the hgetall test fixture."""
         return dict(self.data.get(key, {}))
 
     def smembers(self, key):
+        """Provide the smembers test fixture."""
         return set(self.data.get(key, set()))
 
     def hset(self, key, mapping):
+        """Provide the hset test fixture."""
         self.data.setdefault(key, {}).update(mapping)
 
     def zadd(self, key, mapping):
+        """Provide the zadd test fixture."""
         self.data.setdefault(key, {}).update(mapping)
 
     def sadd(self, key, *values):
+        """Provide the sadd test fixture."""
         self.data.setdefault(key, set()).update(values)
 
     def srem(self, key, value):
+        """Provide the srem test fixture."""
         self.data.setdefault(key, set()).discard(value)
 
     def set(self, key, value):
+        """Provide the set test fixture."""
         self.data[key] = value
 
 
@@ -92,6 +107,7 @@ class ReimportHistoryTests(unittest.TestCase):
     def setUp(self):
         # unittest owns this context and closes it even when setUp/test fails.
         # pylint: disable=consider-using-with
+        """Create isolated state for the regression checks."""
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         # pylint: enable=consider-using-with
         self.document = self.root / "renamed-file.json"
@@ -249,3 +265,21 @@ class ReimportHistoryTests(unittest.TestCase):
         )
         self.assertEqual(store.data["first_seen_index"]["u"], 100)
         self.assertEqual(store.data["last_seen_index"]["u"], 500)
+
+    def test_same_uid_in_one_batch_preserves_earliest_and_latest(self):
+        """A repeated observation cannot shrink history written in its own batch."""
+        indexer = KVrocksIndexer.__new__(KVrocksIndexer)
+        for stamps in ((700, 0, 200), (0, 200, 700)):
+            with self.subTest(stamps=stamps):
+                indexer.r = MemoryStore()
+                docs = [
+                    {"uid": "u", "ip": "8.8.8.8", "last_seen": stamp}
+                    for stamp in stamps
+                ]
+                indexer.add_documents_batch(docs)
+                history = indexer.r.hgetall("doc:u")
+                self.assertEqual(
+                    (history["first_seen"], history["last_seen"]), ("0", "700")
+                )
+                self.assertEqual(indexer.r.data["first_seen_index"]["u"], 0)
+                self.assertEqual(indexer.r.data["last_seen_index"]["u"], 700)

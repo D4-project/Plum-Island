@@ -16,6 +16,8 @@ import ipaddress
 import logging
 import re
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 from netaddr import IPNetwork
 
 logger = logging.getLogger("flask_appbuilder")
@@ -29,7 +31,7 @@ class KVrocksIndexer:
     TAG_CATALOGUE_BATCH_SIZE = 500
     accepts_source_documents = True
 
-    def __init__(self, host="localhost", port=6666, socket_timeout=None):
+    def __init__(self, host="localhost", port=6666, socket_timeout=10):
         self.raw = redis.Redis(
             host=host,
             port=port,
@@ -37,6 +39,10 @@ class KVrocksIndexer:
             db=0,
             socket_connect_timeout=socket_timeout,
             socket_timeout=socket_timeout,
+            protocol=2,
+            lib_name=None,
+            lib_version=None,
+            retry=Retry(NoBackoff(), 0),
         )
         self._endpoint = (host, port)
         self._r = GenerationClient(self.raw)
@@ -116,6 +122,20 @@ class KVrocksIndexer:
         if first_seen > last_seen:
             first_seen, last_seen = last_seen, first_seen
         return first_seen, last_seen
+
+    @classmethod
+    def merged_seen_range(cls, *records):
+        """Keep both ends of the observation interval across repeated reports."""
+        bounds = [
+            stamp
+            for record in records
+            if record
+            for stamp in cls.normalize_seen_range(
+                record.get("first_seen"), record.get("last_seen")
+            )
+            if stamp is not None
+        ]
+        return (min(bounds), max(bounds)) if bounds else (None, None)
 
     def flushdb(self):
         """
@@ -264,12 +284,27 @@ class KVrocksIndexer:
             # "ttl_count",
             # "hsh"
             "banner",
+            "service",
+            "engine",
         ]
         if not include_tags:
             keywords.remove("tag")
 
         for i in range(0, len(docs), batch_size):
-            batch = docs[i : i + batch_size]
+            # The reads below see the database before this pipeline. Coalesce
+            # repeated UIDs so a later write cannot erase an earlier interval.
+            by_uid = {}
+            for document in docs[i : i + batch_size]:
+                uid = document["uid"]
+                if uid in by_uid:
+                    first_seen, last_seen = self.merged_seen_range(
+                        by_uid[uid], document
+                    )
+                    document = dict(
+                        document, first_seen=first_seen, last_seen=last_seen
+                    )
+                by_uid[uid] = document
+            batch = list(by_uid.values())
             existing_pipe = self.r.pipeline(transaction=False)
             for doc in batch:
                 existing_pipe.hgetall(f"doc:{doc['uid']}")
@@ -288,40 +323,8 @@ class KVrocksIndexer:
                 uid = doc["uid"]
                 ip = doc["ip"]
 
-                # http_servers = doc.get("http_servers, [])
-                # http_cookies = doc.get("http_cookies", [])
-                # http_titles = doc.get("http_titles", [])
-                last_seen = doc.get("last_seen")  # Document last time scanned.
-
                 uid_key = f"doc:{uid}"
-                first_seen = doc.get("first_seen", last_seen)
-                first_seen, last_seen = self.normalize_seen_range(first_seen, last_seen)
-
-                if existing:
-                    # For the same UID ( meaning same scan result hsh256)
-                    # we recompute last seen and first seen.
-                    # We do like that because if case of insert bulk
-                    existing_first_seen = self.normalize_timestamp(
-                        existing.get("first_seen")
-                    )
-                    existing_last_seen = self.normalize_timestamp(
-                        existing.get("last_seen")
-                    )
-                    if existing_first_seen is not None:
-                        first_seen = (
-                            existing_first_seen
-                            if first_seen is None
-                            else min(existing_first_seen, first_seen)
-                        )
-                    if existing_last_seen is not None:
-                        last_seen = (
-                            existing_last_seen
-                            if last_seen is None
-                            else max(existing_last_seen, last_seen)
-                        )
-                    first_seen, last_seen = self.normalize_seen_range(
-                        first_seen, last_seen
-                    )
+                first_seen, last_seen = self.merged_seen_range(existing, doc)
 
                 # Set the "LastSeen/FirstSeen" Index
                 if first_seen is not None and last_seen is not None:
@@ -352,12 +355,24 @@ class KVrocksIndexer:
                 # uid = unique identifier for the entry
                 for field in keywords:
                     previous_values = next(existing_values_iter, set()) or set()
+                    values = doc.get(field, [])
+                    if field == "engine":
+                        values = values or []
+                        if isinstance(values, str):
+                            values = [values]
+                        values = (
+                            ["masscan"]
+                            if any(str(v).strip().lower() == "masscan" for v in values)
+                            else []
+                        )
+                        if not values and not previous_values:
+                            # Do not create empty generation tombstones for every
+                            # legacy/Nmap UID: only Masscan needs physical storage.
+                            continue
                     for previous_value in previous_values:
                         if previous_value:
                             pipe.srem(f"{field}:{previous_value}", uid)
                     pipe.delete(f"{field}s:{uid}")
-
-                    values = doc.get(field, [])
                     # print(f"{field} - {values} - {uid}")
                     # We have still NONE in table
                     for v in values:
@@ -402,6 +417,10 @@ class KVrocksIndexer:
                     values.append(candidate)
 
                 normalized_batch.append({"uid": uid, field: values})
+                if field == "engine":
+                    normalized_batch[-1][field] = (
+                        ["masscan"] if "masscan" in values else []
+                    )
 
             if not normalized_batch:
                 continue
@@ -414,6 +433,8 @@ class KVrocksIndexer:
             pipe = self.r.pipeline(transaction=False)
             for doc, previous_values in zip(normalized_batch, existing_values):
                 uid = doc["uid"]
+                if field == "engine" and not doc[field] and not previous_values:
+                    continue
                 for value in previous_values or []:
                     candidate = str(value).strip().lower()
                     if candidate:
@@ -573,6 +594,41 @@ class KVrocksIndexer:
             matching_uids.update(key_uids)
         return matching_uids
 
+    def get_engine_uids(self, engine, scoped_uids=None):
+        """Only Masscan is indexed; all other existing reports default to Nmap."""
+        engine = str(engine).strip().lower()
+        if engine not in ("nmap", "masscan"):
+            return set()
+        if scoped_uids is None:
+            if engine == "masscan":
+                return set(self.r.smembers("engine:masscan"))
+            candidates = set(self.r.smembers("all_uids"))
+        else:
+            candidates = set(scoped_uids)
+        if not candidates:
+            return set()
+        count = self.r.scard("engine:masscan")
+        if count <= len(candidates):
+            matches = (
+                set(self.r.smembers("engine:masscan")).intersection(candidates)
+                if count
+                else set()
+            )
+        else:
+            matches = set()
+            values = list(candidates)
+            for offset in range(0, len(values), 500):
+                batch = values[offset : offset + 500]
+                pipe = self.r.pipeline(transaction=False)
+                for uid in batch:
+                    pipe.sismember("engine:masscan", uid)
+                matches.update(
+                    uid for uid, present in zip(batch, pipe.execute()) if present
+                )
+        if engine == "masscan":
+            return matches
+        return candidates.difference(matches) if matches else candidates
+
     def get_uids_by_criteria(self, criteria: dict):
         """
         multi-criteria search:
@@ -610,6 +666,18 @@ class KVrocksIndexer:
             1 and 2 user with sscan
             Cache Results a couple of min ( hash query -> set + timeout).
         """
+
+        if "engine" in criteria:
+            remaining = {
+                key: value for key, value in criteria.items() if key != "engine"
+            }
+            candidates = (
+                set(self.get_uids_by_criteria(remaining)) if remaining else None
+            )
+            engines = criteria["engine"]
+            for engine in engines if isinstance(engines, list) else [engines]:
+                candidates = self.get_engine_uids(engine, candidates)
+            return list(candidates or [])
 
         remaining_criteria = dict(criteria)  # dict with all the key to seach.
 
@@ -781,6 +849,19 @@ class KVrocksIndexer:
         partial_result = set(scoped_uids or [])
         if not criteria or not partial_result:
             return []
+
+        if "engine" in criteria:
+            remaining = {
+                key: value for key, value in criteria.items() if key != "engine"
+            }
+            if remaining:
+                partial_result = set(
+                    self.get_uids_by_criteria_scoped(remaining, partial_result)
+                )
+            engines = criteria["engine"]
+            for engine in engines if isinstance(engines, list) else [engines]:
+                partial_result = self.get_engine_uids(engine, partial_result)
+            return list(partial_result)
 
         remaining_criteria = dict(criteria)
         scoped_base = set()

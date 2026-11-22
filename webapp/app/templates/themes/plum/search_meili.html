@@ -3,7 +3,7 @@
 
 {% block head_js %}
 {{ super() }}
-{% include 'plum_json_assets.html' %}
+{% include 'scan_report_assets.html' %}
 {% endblock %}
 
 {% block content %}
@@ -46,14 +46,9 @@ async function search() {
             const collapse = document.createElement('div');
             collapse.id = `collapse${index}`;
             collapse.className = 'panel-collapse collapse';
-            const viewer = document.createElement('vt-json');
-            viewer.setAttribute('variant', 'full');
-            viewer.setAttribute('theme', document.documentElement.getAttribute('data-plum-color-mode') || 'light');
-            viewer.setAttribute('label', 'Scan report');
-            viewer.textContent = JSON.stringify(hit.body, null, 2);
             const bodyDiv = document.createElement('div');
             bodyDiv.className = 'panel-body';
-            bodyDiv.appendChild(viewer);
+            window.PlumScanReport.render(bodyDiv, hit.body);
             collapse.appendChild(bodyDiv);
             panel.appendChild(collapse);
             hitsDiv.appendChild(panel);

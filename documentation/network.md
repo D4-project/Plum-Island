@@ -55,7 +55,7 @@ SQLite and scan files are local storage, not extra network services by default.
 | Source | Destination | Protocol / port | Purpose |
 | --- | --- | --- | --- |
 | Users, API consumers and import clients | Configured Island URL | HTTP TCP 5000 directly, or the configured proxy port (typically HTTPS TCP 443) | UI, authenticated API, exports and reports |
-| Plum-Agent | Same Island URL | Same configured HTTP(S) endpoint | `/bot_api/beacon`, `/bot_api/getjob`, `/bot_api/sndjob`; jobs and NSE scripts return through the API |
+| Plum-Agent | Same Island URL | Same configured HTTP(S) endpoint | `/bot_api/beacon`, `/bot_api/getjob`, `/bot_api/sndjob`, `/bot_api/releasejob`; jobs, NSE scripts, results and interrupted-job release use the API |
 | Reverse proxy, if deployed | Island application | HTTP TCP 5000 by default | Forward application requests |
 | Island and explicitly authorized maintenance hosts | Meilisearch | HTTP TCP 7700 by default | Read/write scan documents; `MEILI_DATABASE_URI`, `MEILI_KEY` |
 | Island and explicitly authorized maintenance hosts | Kvrocks | TCP 6666 by default | Read/write the structured search index and observation history; `KVROCKS_HOST`, `KVROCKS_PORT` |
@@ -129,6 +129,11 @@ the bundled `pyfaup` data offline.
   from Island's enrichment traffic; there is no fixed list of scan destination
   ports. Use the [agent documentation](https://github.com/D4-project/Plum-Agent)
   for scanner-specific deployment requirements.
+- Masscan sends raw scan packets directly from the agent host. On Linux the
+  Masscan executable needs `CAP_NET_RAW` (or the agent must run as root, which is
+  not recommended). Stateful firewalls, source-address policy and return traffic
+  must permit the selected targets, ports and packet rate. Protocol detection
+  adds response exchanges for supported banners but no new Island connection.
 
 ## Installation, updates and optional tools
 
@@ -171,3 +176,12 @@ Check connectivity from the actual runtime network namespace (inside
    Test WHOIS separately on its own tab. A fresh cached result verifies the UI
    but does not exercise the server’s TCP 43 path.
 5. Confirm browser-originated target links work from the analyst’s network.
+# Masscan banner source
+
+Banner jobs use the dedicated `masscan_ip` announced by Plum-Agent at startup.
+Reserve an unused address on the scanner's local subnet, outside the host's
+kernel interfaces. Permit return traffic to that address on the scanning network.
+The operator must verify address ownership, uniqueness and return routing.
+Configure it with `python agent.py -s --masscan-ip ADDRESS` and restart the agent.
+Source and targets must use the same IP family. Island dispatches banner jobs
+only to agents announcing a dedicated source address.

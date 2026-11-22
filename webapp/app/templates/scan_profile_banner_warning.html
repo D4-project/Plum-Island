@@ -1,0 +1,5 @@
+{% if not masscan_banner_agent_available() %}
+<div class="alert alert-warning" data-masscan-banner-warning role="status" hidden>
+    Cannot save banner detection: no active Masscan agent has announced a dedicated source IP.
+</div>
+{% endif %}
