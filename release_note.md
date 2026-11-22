@@ -1,5 +1,6 @@
 # Unreleased
 
+- Open Stats on Graphs by default and place Graphs before Overview in both themes.
 - Prefer agent-reported targeted-port counts; fall back to unique job IP/CIDR
   targets multiplied by configured ports when absent. Keep unresolved hostname
   jobs unknown. Use finer chart lines, smaller points and lighter grid axes.

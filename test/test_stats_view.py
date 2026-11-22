@@ -85,7 +85,7 @@ class StatsViewTest(unittest.TestCase):
             "IPNetwork": None,
             "KVrocksIndexer": None,
             "utcnow_naive": lambda: None,
-            "request": SimpleNamespace(args={}),
+            "request": SimpleNamespace(args={"tab": "overview"}),
             "activity_series": Mock(return_value={}),
         }
         module = ast.fix_missing_locations(ast.Module(body=[view], type_ignores=[]))
@@ -101,7 +101,7 @@ class StatsViewTest(unittest.TestCase):
         namespace["activity_series"].assert_not_called()
 
         # Graphs read only the activity buckets, never the old inventory totals.
-        namespace["request"].args = {"tab": "graphs", "period": "bad", "tool": "bad"}
+        namespace["request"].args = {"period": "bad", "tool": "bad"}
         namespace["db"].session.query = Mock(
             side_effect=AssertionError("inventory query")
         )

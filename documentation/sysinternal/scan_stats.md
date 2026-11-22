@@ -1,7 +1,7 @@
 # Scan activity counters
 
-The **Status → Stats** page has two tabs: **Overview** retains the original
-inventory totals; **Graphs** shows completed jobs, open port observations and
+The **Status → Stats** page opens on **Graphs**, the first tab. **Overview**
+retains the original inventory totals; **Graphs** shows completed jobs, open port observations and
 targeted ports as pastel line charts with points, with exact values
 available under **View data**. Unavailable targeted-port counts break the line,
 rather than being drawn as zeros. Selecting an interval or scanner immediately

@@ -4927,7 +4927,7 @@ class StatsView(BaseView):
     @expose("/")
     @has_access
     def index(self):
-        stats_tab = "graphs" if request.args.get("tab") == "graphs" else "overview"
+        stats_tab = "overview" if request.args.get("tab") == "overview" else "graphs"
         period = request.args.get("period", "hour")
         tool = request.args.get("tool", "all")
         period = period if period in ("minute", "hour", "day", "month") else "hour"
