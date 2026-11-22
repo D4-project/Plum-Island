@@ -84,12 +84,13 @@ class IndexSupervisor:
         job = read_json(self.raw, "job", {})
         failure = read_json(self.raw, "failure", {})
         published = read_json(self.raw, "published", {})
+        force_full = bool(self.raw.get(CONTROL + "force_full"))
         pending = snapshot.get("revision") != published.get("revision")
-        pending = pending or self.raw.get(CONTROL + "force_full")
+        pending = pending or force_full
         if (
             job.get("phase") == "blocked"
             and snapshot.get("revision") == processing_revision(job)
-            and not self.raw.get(CONTROL + "force_full")
+            and not force_full
         ):
             job = requeue_orphan_exclusion(self.raw, job)
             if job.get("phase") == "blocked":
@@ -97,7 +98,10 @@ class IndexSupervisor:
         if not pending and job.get("phase", "done") == "done":
             return
         if (
-            max(float(job.get("retry_at") or 0), float(failure.get("retry_at") or 0))
+            not force_full
+            and max(
+                float(job.get("retry_at") or 0), float(failure.get("retry_at") or 0)
+            )
             > time.time()
         ):
             return

@@ -3,6 +3,7 @@
 from copy import deepcopy
 from contextlib import nullcontext
 import os
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -142,6 +143,34 @@ class SupervisorTest(unittest.TestCase):
         ), patch("app.utils.index_supervisor.subprocess.Popen") as process:
             supervisor.tick({"revision": "current"})
         process.assert_not_called()
+
+    def test_full_rebuild_bypasses_old_job_and_failure_retry_deadlines(self):
+        """Explicit recovery starts despite the superseded parser failure cooldown."""
+        for forced in (False, True):
+            with self.subTest(forced=forced):
+                raw = Mock()
+                raw.get.return_value = "1" if forced else None
+                supervisor = IndexSupervisor(raw, {})
+                deadline = time.time() + 3600
+                state = {
+                    "job": {
+                        "phase": "blocked",
+                        "snapshot_revision": "current",
+                        "retry_at": deadline,
+                    },
+                    "failure": {"retry_at": deadline},
+                    "published": {"revision": "old"},
+                }
+                with patch("app.utils.index_supervisor.queue_snapshot"), patch(
+                    "app.utils.index_supervisor.read_json",
+                    side_effect=lambda _raw, key, _default, _state=state: _state[key],
+                ), patch(
+                    "app.utils.index_supervisor.file_lock", return_value=nullcontext()
+                ), patch(
+                    "app.utils.index_supervisor.subprocess.Popen"
+                ) as process:
+                    supervisor.tick({"revision": "current"})
+                self.assertEqual(process.call_count, int(forced))
 
     def test_tick_starts_only_one_child_without_werkzeug_scheduler_flag(self):
         """Launching the child cannot recursively import another scheduler."""

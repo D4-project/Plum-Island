@@ -1,5 +1,7 @@
 # Unreleased
 
+- Start an explicitly requested full index rebuild without waiting for the
+  superseded parser failure's retry deadline; retain the active index and history.
 - Retry transient Kvrocks/Meili indexing failures automatically, with exponential
   backoff capped at five minutes and explicit retry status. Resume durable frozen
   work even when saving its error status failed. Keep snapshot retries outside

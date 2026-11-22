@@ -236,6 +236,13 @@ a full background rebuild and never clears the active generation first:
 .venv/bin/python tools/tag_mgmt.py reindex --allrules --flush
 ```
 
+An explicit full rebuild bypasses the old job/failure retry deadline at the
+next scheduler tick. Keep the controller and scheduler running. The existing
+blocked message can remain visible until the replacement worker starts;
+backend connection backoff, disabled reconciliation or an already running worker
+can still delay that start. The active generation stays available, and its
+accumulated `first_seen`/`last_seen` bounds are merged into reparsed documents.
+
 `tools/index_kvrocks.py --rebuild-from-meili` also queues a full background rebuild,
 using the controller configuration and rejecting a mismatched output endpoint.
 The old `--workers` and `--batch-size` flags do not tune this managed path; use the
