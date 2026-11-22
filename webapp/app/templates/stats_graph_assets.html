@@ -4,15 +4,15 @@
   .stats-chart-panel { border: 1px solid var(--plum-border, #e3e8ee); border-radius: 12px; padding: 18px; min-width: 0; box-shadow: 0 3px 14px rgba(30, 45, 65, .04); }
   .stats-chart-panel h4 { margin: 0 0 12px; font-weight: 600; }
   .stats-chart { display: block; width: 100%; height: auto; color: inherit; }
-  .stats-chart-axis { fill: none; stroke: currentColor; opacity: .5; }
-  .stats-chart-grid { fill: none; stroke: currentColor; opacity: .12; }
+  .stats-chart-axis { fill: none; stroke: currentColor; stroke-width: .75; vector-effect: non-scaling-stroke; opacity: .35; }
+  .stats-chart-grid { fill: none; stroke: currentColor; stroke-width: .5; vector-effect: non-scaling-stroke; opacity: .12; }
   .stats-chart-label { fill: currentColor; font-size: 12px; }
   .stats-series-jobs_completed { --stats-series: #97b8e6; }
   .stats-series-open_ports { --stats-series: #8dcdbb; }
   .stats-series-ports_targeted { --stats-series: #e6b79c; }
-  .stats-chart-line { fill: none; stroke: var(--stats-series); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-  .stats-chart-point { fill: var(--stats-series); stroke: var(--plum-card, #fff); stroke-width: 1.5; }
-  .stats-chart-point:hover { r: 5; stroke-width: 2; }
+  .stats-chart-line { fill: none; stroke: var(--stats-series); stroke-width: 1.25; vector-effect: non-scaling-stroke; stroke-linecap: round; stroke-linejoin: round; }
+  .stats-chart-point { fill: var(--stats-series); stroke: var(--plum-card, #fff); stroke-width: .75; vector-effect: non-scaling-stroke; }
+  .stats-chart-point:hover { r: 3; stroke-width: 1; }
   .stats-data summary { cursor: pointer; margin-bottom: 12px; }
 </style>
 <script nonce="{{ baselib.get_nonce() }}">

@@ -1,6 +1,7 @@
 """Small SQL counters written once when Island accepts a completed job."""
 
 from datetime import timedelta
+import ipaddress
 from sqlalchemy import func
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -53,8 +54,43 @@ def claim_completed_job(session, job, now):
     return bool(claimed)
 
 
+def job_targeted_ports(job):
+    """Count intended numeric targets from the job snapshot without DNS or I/O."""
+    targets = getattr(job, "job", None)
+    ports = getattr(job, "scan_ports", None)
+    if not targets or not ports:
+        return None
+    try:
+        networks = [
+            ipaddress.ip_network(value.strip(), strict=False)
+            for value in targets.split(",")
+        ]
+        host_count = sum(
+            network.num_addresses
+            for family in (4, 6)
+            for network in ipaddress.collapse_addresses(
+                item for item in networks if item.version == family
+            )
+        )
+        numbers = set()
+        for value in ports.split(","):
+            bounds = value.strip().split("-")
+            if len(bounds) not in (1, 2):
+                return None
+            start, end = int(bounds[0]), int(bounds[-1])
+            if not 1 <= start <= end <= 65535:
+                return None
+            numbers.update(range(start, end + 1))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    count = host_count * len(numbers)
+    return count if count <= 10**12 else None
+
+
 def increment_completed_counters(session, job, report, now, ports_targeted=None):
     """After a successful claim, upsert immediately before the same commit."""
+    if ports_targeted is None:
+        ports_targeted = job_targeted_ports(job)
     values = dict(
         bucket_start=now.replace(second=0, microsecond=0),
         scan_tool=job.scan_tool or "nmap",

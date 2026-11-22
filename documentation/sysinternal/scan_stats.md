@@ -2,7 +2,7 @@
 
 The **Status → Stats** page has two tabs: **Overview** retains the original
 inventory totals; **Graphs** shows completed jobs, open port observations and
-reported targeted ports as pastel line charts with points, with exact values
+targeted ports as pastel line charts with points, with exact values
 available under **View data**. Unavailable targeted-port counts break the line,
 rather than being drawn as zeros. Selecting an interval or scanner immediately
 reloads the graphs; there is no Apply button.
@@ -34,9 +34,17 @@ metadata, including down hosts. Missing metadata or a nonzero Nmap exit status
 leaves the target count unknown. No result field is sent to an older controller
 that does not request it. This preserves the old agent/Island contract.
 
-Older agents remain accepted. Their jobs and open ports count normally;
-targeted-port counts are **Unknown**, not zero. Mixed totals show the sum of
-known values and the number of jobs omitted from that total.
+Older agents remain accepted. If `PORTS_TARGETED` is absent, Island calculates
+unique IP targets multiplied by distinct configured ports from the completed
+job's stored `job` and `scan_ports` snapshot. Overlapping IPv4/IPv6 networks and
+duplicate ports count once; networks are not expanded into individual addresses.
+The agent value always takes precedence, including an explicit zero.
+No DNS lookup, backend lookup or current scan-profile query is made. If the job
+contains hostnames, lacks its port snapshot or contains invalid definitions,
+the fallback is unavailable and targeted ports remain **Unknown**, not zero.
+Mixed totals show the sum of known values and the number of jobs omitted.
+This calculation measures intended probes; agent options may change actual
+execution. Previously stored statistics are not retroactively recalculated.
 
 ## Storage and transactions
 

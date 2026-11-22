@@ -19,6 +19,7 @@ from app.utils.scan_stats import (
     claim_completed_job,
     count_open_ports,
     increment_completed_counters,
+    job_targeted_ports,
 )
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import mysql
@@ -126,6 +127,44 @@ class ScanStatsTest(unittest.TestCase):
             ),
             (2, 256, 0, 0),
         )
+
+    def test_job_fallback_counts_distinct_numeric_targets_and_ports(self):
+        """Nonresponders count without expanding networks or resolving names."""
+        job = SimpleNamespace(
+            job="192.0.2.0/24,192.0.2.1,2001:db8::/127",
+            scan_ports="22,22,80-81",
+        )
+        self.assertEqual(job_targeted_ports(job), 258 * 3)
+        for targets, ports in (
+            ("example.org", "22"),
+            ("192.0.2.1,example.org", "22"),
+            ("192.0.2.1", None),
+            ("192.0.2.1", "0"),
+            ("192.0.2.1", "65536"),
+            ("192.0.2.1", "80-22"),
+            ("192.0.2.1", "22-23-24"),
+            ("::/0", "22"),
+        ):
+            with self.subTest(targets=targets, ports=ports):
+                self.assertIsNone(
+                    job_targeted_ports(SimpleNamespace(job=targets, scan_ports=ports))
+                )
+
+    def test_agent_count_wins_including_zero_and_absence_uses_job(self):
+        """Old agents get fallback; explicit counts are never overwritten."""
+        for reported, expected in ((None, 512), (0, 0), (17, 17)):
+            with self.subTest(reported=reported):
+                job = self.job()
+                job.job = "192.0.2.0/24"
+                job.scan_ports = "22,443"
+                record_completed_job(self.session, job, [], self.now, reported)
+                self.session.commit()
+                row = self.session.query(ScanStatBucket).one()
+                self.assertEqual(row.ports_targeted, expected)
+                self.assertEqual(row.jobs_without_target_count, 0)
+                self.assertEqual(row.open_ports, 0)
+                self.session.delete(row)
+                self.session.commit()
 
     def test_minute_hour_day_grouping_and_filters(self):
         """Verify minute hour day grouping and filters."""

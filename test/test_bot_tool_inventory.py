@@ -276,7 +276,8 @@ class BotInventoryTest(ProfileApiFixture):
         self.assertTrue(current.finished)
         counters = self.db.session.query(ScanStatBucket).one()
         self.assertEqual((counters.jobs_completed, counters.open_ports), (1, 1))
-        self.assertEqual(counters.jobs_without_target_count, 1)
+        self.assertEqual(counters.jobs_without_target_count, 0)
+        self.assertEqual(counters.ports_targeted, 1)
         # An acknowledged resend must never count again or need the source file.
         self.assertEqual(
             self.client.post("/bot_api/sndjob", json=immediate_result).status_code, 200
@@ -318,4 +319,4 @@ class BotInventoryTest(ProfileApiFixture):
         rows = self.db.session.query(ScanStatBucket).all()
         self.assertEqual(sum(row.jobs_completed for row in rows), 2)
         self.assertEqual(sum(row.open_ports for row in rows), 1)
-        self.assertEqual(sum(row.ports_targeted for row in rows), 256)
+        self.assertEqual(sum(row.ports_targeted for row in rows), 257)

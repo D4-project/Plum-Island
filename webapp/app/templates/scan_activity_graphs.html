@@ -1,5 +1,5 @@
 <div class="stats-charts">
-{% for field, label in [("jobs_completed", "Jobs completed"), ("open_ports", "Open port observations"), ("ports_targeted", "Ports targeted · reported")] %}
+{% for field, label in [("jobs_completed", "Jobs completed"), ("open_ports", "Open port observations"), ("ports_targeted", "Ports targeted")] %}
 {% set maximum = [activity.rows | map(attribute=field) | max, 1] | max %}
 {% set slot = 650 / (activity.rows | length) %}
 <section class="stats-chart-panel stats-series-{{ field }}">
@@ -16,7 +16,7 @@
     {% for row in activity.rows | reverse %}
       {% set unavailable = field == "ports_targeted" and row.jobs_completed and row.jobs_without_target_count == row.jobs_completed %}
       {% if not unavailable %}
-      <circle class="stats-chart-point" cx="{{ 50 + (loop.index0 + 0.5) * slot }}" cy="{{ 180 - row[field] * 150 / maximum }}" r="3.5"><title>{{ row.label }} UTC: {{ row[field] }}{% if field == "ports_targeted" and row.jobs_without_target_count %} (known subtotal; {{ row.jobs_without_target_count }} job(s) unavailable){% endif %}</title></circle>
+      <circle class="stats-chart-point" cx="{{ 50 + (loop.index0 + 0.5) * slot }}" cy="{{ 180 - row[field] * 150 / maximum }}" r="2"><title>{{ row.label }} UTC: {{ row[field] }}{% if field == "ports_targeted" and row.jobs_without_target_count %} (known subtotal; {{ row.jobs_without_target_count }} job(s) unavailable){% endif %}</title></circle>
       {% endif %}
     {% endfor %}
     <text class="stats-chart-label" x="50" y="208">{{ activity.rows[-1].label }}</text>

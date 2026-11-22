@@ -1,5 +1,8 @@
 # Unreleased
 
+- Prefer agent-reported targeted-port counts; fall back to unique job IP/CIDR
+  targets multiplied by configured ports when absent. Keep unresolved hostname
+  jobs unknown. Use finer chart lines, smaller points and lighter grid axes.
 - Start an explicitly requested full index rebuild without waiting for the
   superseded parser failure's retry deadline; retain the active index and history.
 - Retry transient Kvrocks/Meili indexing failures automatically, with exponential
