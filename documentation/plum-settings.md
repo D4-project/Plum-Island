@@ -5,13 +5,23 @@ and background work. The configured Flask-AppBuilder administrator role is
 required for both the menu and direct requests; assigning the view's permissions
 to another role does not grant access.
 
-The page displays 53 Plum settings from `webapp/config.py.template`.
+The page displays 54 Plum settings from `webapp/config.py.template`.
 Authentication, themes, Flask/FAB options and SQLAlchemy configuration remain in
 `config.py`. Runtime clients and scheduler state are not editable.
 
 Lookup cache lifetimes are configurable in hours: WHOIS **24**, Passive DNS **12**,
 and combined IP/AS information **24**. See [cache internals](sysinternal/caching.md)
 for shared consumers, expiry and refresh behavior.
+
+**Enable Passive DNS** (`PDNS_ENABLED`) defaults to **False** in new installations.
+It requires both `PASSIVE_USER` and `PASSIVE_PWD` before settings can be saved
+with the switch on. `setup.sh` enables it only when the operator selects Passive
+DNS and supplies both credentials. Existing installations without the switch
+retain their previous credential-based behavior after upgrade; an explicit
+`PDNS_ENABLED = False` always disables it. Restart Plum-Agent after changing it.
+Disabled Passive DNS stays visible as a status on IP pages; reports and exports
+omit PDNS data. If an enabled lookup fails, IP pages show a failure dialog and
+reports/exports warn that PDNS data is incomplete.
 
 Under **IP detail map**, **Show location map** (`MAP_ENABLED`, default **True**)
 controls the Location card in the IP detail **Informations** tab. Restart

@@ -80,6 +80,13 @@ switches neither move nor invalidate these keys. There is no SQL migration.
 
 ## Passive DNS boundaries
 
+`PDNS_ENABLED = False` prevents both cached reads and CIRCL requests. New
+installations default to disabled; old configurations without the key continue
+using Passive DNS when both credentials exist. Explicit `False` takes precedence.
+Failed lookups are never cached. Reports and exports continue with incomplete
+PDNS data and record a warning; the IP view distinguishes rejected credentials,
+timeouts and invalid upstream responses.
+
 The cache holds complete parsed observations before report-specific filtering.
 A report can reuse an IP-detail lookup and vice versa. Successful empty PDNS
 results are cached. Failures and malformed or partial responses are not.

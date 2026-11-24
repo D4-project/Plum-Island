@@ -22,7 +22,7 @@ class DockerBootstrapTest(unittest.TestCase):
         self.assertTrue((ROOT / "webapp/tags/pyproject.toml").is_file())
 
     def test_config_generation_and_existing_config_preservation(self):
-        """Re-entry keeps a complete custom SMTP config, ignoring new env values."""
+        """Bootstrap enables PDNS with credentials and preserves existing config."""
         with tempfile.TemporaryDirectory(prefix="plum-entrypoint-test-") as folder:
             workdir = Path(folder)
             database = workdir / "app.db"
@@ -67,7 +67,21 @@ class DockerBootstrapTest(unittest.TestCase):
             self.assertIn('SECRET_KEY = "synthetic-test-secret"', generated)
             self.assertIn('KVROCKS_HOST = "plum-kvrocks"', generated)
             self.assertIn(f"sqlite:///{database}", generated)
-            custom = generated + '\nREPORT_SMTP_FROM = "reports@example.org"\n'
+            self.assertIn("PDNS_ENABLED = False", generated)
+            config_path.unlink()
+            env.update(PASSIVE_USER="test@example.org", PASSIVE_PWD="test-pdns-key")
+            subprocess.run(
+                ["bash", str(entrypoint)],
+                cwd=workdir,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            generated = config_path.read_text(encoding="utf-8")
+            self.assertIn("PDNS_ENABLED = True", generated)
+            custom = generated.replace("PDNS_ENABLED = True", "PDNS_ENABLED = False")
+            custom += '\nREPORT_SMTP_FROM = "reports@example.org"\n'
             config_path.write_text(custom, encoding="utf-8")
             config_path.chmod(0o400)
             env.pop("MEILI_KEY")
@@ -83,7 +97,7 @@ class DockerBootstrapTest(unittest.TestCase):
             self.assertEqual(config_path.read_text(encoding="utf-8"), custom)
             self.assertEqual(
                 log.read_text(encoding="utf-8").splitlines(),
-                ["../tools/initial_setup.py --roles-only", "run.py"] * 2,
+                ["../tools/initial_setup.py --roles-only", "run.py"] * 3,
             )
             self.assertEqual(database.stat().st_size, 0)
 

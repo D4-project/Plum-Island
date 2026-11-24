@@ -315,7 +315,7 @@
     </div>
     <div class="ip-pdns-panel">
         <div class="ip-pdns-title"><span>Passive DNS</span>
-            {% if appbuilder.sm.has_access('can_resolve_passive_dns', 'IPDetailView') %}
+            {% if config is defined and config.get('PDNS_ENABLED', False) and appbuilder.sm.has_access('can_resolve_passive_dns', 'IPDetailView') %}
             <button id="ip-pdns-resolve" type="button" class="btn btn-default btn-xs" title="Resolve" aria-label="Resolve" disabled
                 data-endpoint="{{ url_for('IPDetailView.resolve_passive_dns', ip=ip) }}" data-csrf="{{ csrf_token() }}">
                 <i class="fa fa-refresh" aria-hidden="true"></i> Active DNS
@@ -422,6 +422,7 @@
 <script src="{{ url_for('static', filename='js/ip_port_timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_pdns_resolve.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pdns_status.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ip_hostname_groups.js') }}"></script>
 {% if config is not defined or config.MAP_ENABLED is not defined or config.MAP_ENABLED %}
 <div id="ip-map-config" hidden
@@ -566,7 +567,9 @@
                 return;
             }
             if (!ok) {
-                throw new Error(payload && payload.error ? payload.error : `Passive DNS lookup failed (${status})`);
+                const lookupError = new Error(payload && payload.error ? payload.error : `Passive DNS lookup failed (${status})`);
+                lookupError.code = payload && payload.code;
+                throw lookupError;
             }
             const records = Array.isArray(payload) ? payload : [];
             if (!records.length) {
@@ -585,6 +588,7 @@
             pdnsLoadingEl.hidden = true;
             pdnsErrorEl.textContent = error.message;
             pdnsErrorEl.hidden = false;
+            window.PlumPdnsStatus?.showFailure(error.code);
         });
     }
 

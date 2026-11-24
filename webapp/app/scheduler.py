@@ -2530,10 +2530,12 @@ def _build_due_report(report, run_at):
         indexer,
         results.get("results") or {},
     )
+    pdns_warnings = []
     per_ip_pdns_fqdns = collect_report_passive_dns_fqdns(
         db.app.config,
         (results.get("results") or {}).keys(),
         per_ip_requested_fqdns,
+        warning_callback=pdns_warnings.append,
     )
     new_open_ports = {}
     previous_from_dt, previous_to_dt = compute_previous_report_interval(
@@ -2570,6 +2572,7 @@ def _build_due_report(report, run_at):
         per_ip_requested_fqdns=per_ip_requested_fqdns,
         per_ip_pdns_fqdns=per_ip_pdns_fqdns,
         new_open_ports=new_open_ports,
+        pdns_warnings=pdns_warnings,
     )
     return markdown, to_dt
 

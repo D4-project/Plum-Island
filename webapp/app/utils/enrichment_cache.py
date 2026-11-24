@@ -21,6 +21,43 @@ PDNS_TIMEOUT = 15
 PDNS_MAX_BYTES = 8 * 1024 * 1024
 
 
+class PassiveDNSError(LookupError):
+    """Safe Passive DNS failure with a stable UI error code."""
+
+    code = "upstream"
+
+
+class PassiveDNSDisabled(PassiveDNSError):
+    """The operator has disabled Passive DNS."""
+
+    code = "disabled"
+
+
+class PassiveDNSAuthenticationError(PassiveDNSError):
+    """CIRCL rejected the configured credentials."""
+
+    code = "authentication"
+
+
+class PassiveDNSTimeout(PassiveDNSError):
+    """CIRCL did not finish the request within the timeout."""
+
+    code = "timeout"
+
+
+class PassiveDNSInvalidResponse(PassiveDNSError):
+    """CIRCL returned data that cannot be used safely."""
+
+    code = "invalid_response"
+
+
+def passive_dns_enabled(config, username, password):
+    """Preserve legacy credential-based activation when no flag exists."""
+    if "PDNS_ENABLED" in config:
+        return config["PDNS_ENABLED"] is True
+    return bool(str(username or "").strip() and str(password or ""))
+
+
 def network_whois(value, config=None):
     """Cache exact canonical networks; do not infer ownership of other hosts."""
     query = ipaddress.ip_network(value, strict=False).with_prefixlen
@@ -69,16 +106,19 @@ def _pdns_source(address, username, password):
             allow_redirects=False,
             stream=True,
         ) as response:
+            if response.status_code in (401, 403):
+                raise PassiveDNSAuthenticationError(
+                    "Passive DNS credentials were rejected"
+                )
             if response.status_code != 200:
-                raise LookupError("Passive DNS lookup failed")
+                raise PassiveDNSError("Passive DNS service returned an error")
             payload = bytearray()
             for chunk in response.iter_content(chunk_size=65536):
-                if (
-                    time.monotonic() > deadline
-                    or len(payload) + len(chunk) > PDNS_MAX_BYTES
-                ):
-                    raise LookupError(
-                        "Passive DNS response exceeded time or size limit"
+                if time.monotonic() > deadline:
+                    raise PassiveDNSTimeout("Passive DNS lookup timed out")
+                if len(payload) + len(chunk) > PDNS_MAX_BYTES:
+                    raise PassiveDNSInvalidResponse(
+                        "Passive DNS response exceeded its size limit"
                     )
                 payload.extend(chunk)
         records = [
@@ -89,18 +129,26 @@ def _pdns_source(address, username, password):
         if any(not isinstance(record, dict) for record in records):
             raise ValueError("Expected Passive DNS records")
         return records
-    except (requests.RequestException, ValueError, UnicodeError) as error:
-        raise LookupError(
-            "Passive DNS lookup failed, timed out or returned an invalid response"
+    except requests.Timeout as error:
+        raise PassiveDNSTimeout("Passive DNS lookup timed out") from error
+    except requests.RequestException as error:
+        raise PassiveDNSError("Passive DNS service is unavailable") from error
+    except (ValueError, UnicodeError) as error:
+        raise PassiveDNSInvalidResponse(
+            "Passive DNS returned an invalid response"
         ) from error
 
 
 def passive_dns(value, username, password, config=None):
     """Cache raw observations before report filtering or resolve-token signing."""
+    config = configuration(config)
+    if not passive_dns_enabled(config, username, password):
+        raise PassiveDNSDisabled("Passive DNS disabled")
     address = str(ipaddress.ip_address(value))
     if not username or not password:
-        raise LookupError("Passive DNS credentials are not configured")
-    config = configuration(config)
+        raise PassiveDNSAuthenticationError(
+            "Passive DNS credentials are not configured"
+        )
     scope = _credential_scope(config, username, password)
     # Without a deployment secret there is no safe shared credential namespace.
     cache_config = config if scope else {}

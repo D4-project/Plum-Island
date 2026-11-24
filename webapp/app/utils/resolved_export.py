@@ -7,7 +7,7 @@ import math
 
 from .pdns_resolve import normalize_hostname
 from .reports import collect_report_ptr_fqdns
-from .enrichment_cache import passive_dns as cached_passive_dns
+from .enrichment_cache import passive_dns as cached_passive_dns, passive_dns_enabled
 
 CSV_HEADER = ("ip", "last seen", "ptr", "pdns")
 
@@ -93,7 +93,8 @@ def write_resolved_csv(output, results, config, progress, warning, *, document_l
     writer.writerow(CSV_HEADER)
     username = str(config.get("PASSIVE_USER") or "").strip()
     password = str(config.get("PASSIVE_PWD") or "")
-    if not username or not password:
+    enabled = passive_dns_enabled(config, username, password)
+    if enabled and (not username or not password):
         warning(
             "Passive DNS unavailable: configure PASSIVE_USER and PASSIVE_PWD; PDNS cells are empty."
         )
@@ -104,18 +105,19 @@ def write_resolved_csv(output, results, config, progress, warning, *, document_l
             int(ipaddress.ip_address(ip)),
         ),
     )
+    failures = 0
     for done, ip in enumerate(ips, 1):
         names = []
         ptrs = collect_report_ptr_fqdns(document_loader, {ip: results["results"][ip]})[
             ip
         ]
-        if username and password:
+        if enabled and username and password:
             try:
                 names = lookup_pdns(
                     ip, username, password, results["time_range"], config
                 )
-            except LookupError as error:
-                warning(f"{ip}: {error}")
+            except LookupError:
+                failures += 1
         writer.writerow(
             [
                 csv_cell(value)
@@ -130,3 +132,5 @@ def write_resolved_csv(output, results, config, progress, warning, *, document_l
             ]
         )
         progress(done)
+    if failures:
+        warning(f"Passive DNS data incomplete: {failures} IP lookup(s) failed.")

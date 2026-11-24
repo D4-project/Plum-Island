@@ -1,5 +1,9 @@
 # Unreleased
 
+- Add a Passive DNS enable switch, disabled by default on new installations.
+  Preserve active legacy installations with configured credentials, and stop
+  disabled lookups before cache access. Show lookup failures in IP views and
+  keep reports and exports usable with explicit incomplete-data warnings.
 - Open Stats on Graphs by default and place Graphs before Overview in both themes.
 - Prefer agent-reported targeted-port counts; fall back to unique job IP/CIDR
   targets multiplied by configured ports when absent. Keep unresolved hostname

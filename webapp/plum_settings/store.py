@@ -242,6 +242,12 @@ def apply_settings(config):
             snapshot = store.snapshot(snapshot_name)
         else:
             desired = store.desired()
+            if "PDNS_ENABLED" not in baseline:
+                legacy = {**baseline, **desired["overrides"]}
+                baseline["PDNS_ENABLED"] = bool(
+                    str(legacy.get("PASSIVE_USER") or "").strip()
+                    and str(legacy.get("PASSIVE_PWD") or "")
+                )
             values = dict(baseline)
             values.update(desired["overrides"])
             # No overrides means no new defaults or validation changes for legacy config.py.

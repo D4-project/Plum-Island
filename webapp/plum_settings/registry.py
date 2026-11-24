@@ -111,6 +111,12 @@ SECTIONS = (
         "Web application and scheduler",
         (
             Setting(
+                "PDNS_ENABLED",
+                "Enable Passive DNS",
+                False,
+                "Use CIRCL Passive DNS in IP details, reports and exports. Requires both credentials.",
+            ),
+            Setting(
                 "PASSIVE_USER",
                 "Passive DNS username",
                 "",
@@ -688,6 +694,11 @@ def _parse_value(field, value):
 
 def validate_dependencies(values):
     """Reject incompatible options before any configuration is written."""
+    if values.get("PDNS_ENABLED") and not (
+        str(values.get("PASSIVE_USER") or "").strip()
+        and str(values.get("PASSIVE_PWD") or "")
+    ):
+        raise SettingsError("Enable Passive DNS requires a username and password.")
     if values.get("REPORT_SMTP_USE_TLS") and values.get("REPORT_SMTP_USE_SSL"):
         raise SettingsError("Choose either STARTTLS or implicit TLS, not both.")
     for low, high in (

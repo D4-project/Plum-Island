@@ -66,7 +66,8 @@ You may change all this configuration later in config.py
 Are the parameters correct ? (y/n) :
 ```
 
-If Passive DNS is enabled, the setup script writes `PASSIVE_USER` and `PASSIVE_PWD` in `webapp/config.py`.
+If Passive DNS is selected and both credentials are supplied, the setup script
+writes `PDNS_ENABLED = True`, `PASSIVE_USER` and `PASSIVE_PWD` in `webapp/config.py`.
 
 Administrators can subsequently use **Security → Plum Settings** for Plum-specific
 options. See [Plum Settings](plum-settings.md) for explicit defaults, required
@@ -182,6 +183,10 @@ The following settings are exposed by Compose through `.env` (see
 | `PASSIVE_USER` | No | CIRCL Passive DNS username |
 | `PASSIVE_PWD` | No | CIRCL Passive DNS API key |
 
+The entrypoint enables Passive DNS in a newly generated config when both
+credentials are supplied. Use **Enable Passive DNS** in Plum Settings to switch
+it off or back on, then restart Plum-Agent to apply the saved value.
+
 Compose also supplies `MEILI_DATABASE_URI`, `KVROCKS_HOST` and `KVROCKS_PORT`
 using internal service names. The entrypoint generates `webapp/config.py` only
 if that file is absent. Changing environment values does not rewrite an existing
@@ -282,7 +287,8 @@ REPORT_SMTP_USE_SSL = False
 
 The SQLite path is essential: it keeps the database on the existing persistent
 volume. The mounted file is authoritative; the entrypoint skips environment
-substitution, including Passive DNS values. Set those in the file if required.
+substitution, including Passive DNS values. To enable it in the mounted file,
+set `PDNS_ENABLED = True` and both credentials.
 Compose still needs `.env` for the Meilisearch service and initial admin creation.
 
 Create `docker-compose.config.yml` alongside `docker-compose.yml` with this
