@@ -592,12 +592,13 @@ def get_target_profile_stats(pk):
     return rows
 
 
-def get_scanprofile_cycle_rows(pk):
+def get_scanprofile_cycle_table(pk):
     """
-    Return retained scan profile cycles for the profile show page.
+    Return retained scan profile cycles and their target column.
     """
     cycles = (
-        db.session.query(ScanProfileCycles)
+        db.session.query(ScanProfileCycles, ScanProfiles.apply_to_all)
+        .join(ScanProfiles, ScanProfiles.id == ScanProfileCycles.scanprofile_id)
         .filter(ScanProfileCycles.scanprofile_id == pk)
         .order_by(
             ScanProfileCycles.started_at.desc(),
@@ -607,9 +608,10 @@ def get_scanprofile_cycle_rows(pk):
         .all()
     )
 
+    apply_to_all = not cycles or cycles[0].apply_to_all
     rows = []
     finished_count = 0
-    for cycle in cycles:
+    for cycle, _ in cycles:
         if cycle.status == "running":
             label = "Current"
         else:
@@ -624,12 +626,17 @@ def get_scanprofile_cycle_rows(pk):
                 "finished_at": _format_datetime_for_ui(cycle.finished_at),
                 "duration": cycle.duration_html(),
                 "progress": cycle.progress_html(),
-                "max_target_id": cycle.max_target_id,
+                "target_value": (
+                    cycle.max_target_id if apply_to_all else cycle.completed_target_count
+                ),
                 "blockers": cycle.blocker_summary(),
             }
         )
 
-    return rows
+    return {
+        "target_heading": "Max Target ID" if apply_to_all else "Port Scanned",
+        "rows": rows,
+    }
 
 
 def get_target_search_time_range(pk):
@@ -670,7 +677,7 @@ app.jinja_env.globals["csrf_token"] = generate_csrf
 app.jinja_env.globals["get_target_value"] = get_target_value
 app.jinja_env.globals["get_target_requested_hostname"] = get_target_requested_hostname
 app.jinja_env.globals["get_target_profile_stats"] = get_target_profile_stats
-app.jinja_env.globals["get_scanprofile_cycle_rows"] = get_scanprofile_cycle_rows
+app.jinja_env.globals["get_scanprofile_cycle_table"] = get_scanprofile_cycle_table
 app.jinja_env.globals["get_target_search_time_range"] = get_target_search_time_range
 
 
