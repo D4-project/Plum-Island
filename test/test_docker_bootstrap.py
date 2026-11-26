@@ -1,15 +1,33 @@
 """Isolated Docker bootstrap checks; no Docker daemon or application startup."""
 
 from pathlib import Path
+import runpy
 import subprocess
+import sys
 import tempfile
+from types import ModuleType
 import unittest
+from unittest.mock import Mock, patch
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class DockerBootstrapTest(unittest.TestCase):
     """Check local dependency ordering and persistent configuration behavior."""
+
+    def test_launcher_listens_on_compose_port(self):
+        """The container launcher must listen on a port published by Compose."""
+        services = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+        ports = services["plum-webapp"]["ports"]
+        flask_module = ModuleType("app")
+        flask_module.app = Mock()
+        with patch.dict(sys.modules, {"app": flask_module}):
+            runpy.run_path(str(ROOT / "webapp/run.py"))
+        flask_module.app.run.assert_called_once()
+        port = str(flask_module.app.run.call_args.kwargs["port"])
+        self.assertIn(port, [binding.rsplit(":", 1)[-1] for binding in ports])
 
     def test_editable_dependency_available_before_install(self):
         """A clean build must copy the editable package before invoking pip."""
