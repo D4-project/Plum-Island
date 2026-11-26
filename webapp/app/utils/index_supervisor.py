@@ -64,7 +64,7 @@ class IndexSupervisor:
                 "Index supervisor backend unavailable (%s); retrying in %.0fs",
                 type(error).__name__,
                 delay,
-                exc_info=self.retry_attempts == 1,
+                exc_info=self.retry_attempts == 1 and logger.isEnabledFor(logging.DEBUG),
             )
         else:
             if self.retry_attempts:

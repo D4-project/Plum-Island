@@ -93,6 +93,7 @@ from .utils.index_activity import (
     pacing_status,
 )
 from .utils.index_reconciliation import reconciliation_status
+from .utils.index_retry import transient_error
 from .utils.ip_links import port_web_scheme
 from .utils.scanner_reports import display_scripts
 from .utils.scan_stats import activity_series
@@ -4214,9 +4215,15 @@ class TagRulesView(ModelView):
             app.config["KVROCKS_PORT"],
             socket_timeout=5,
         )
-        return jsonify(
-            dict(reconciliation_status(indexer.raw), pacing=pacing_status(indexer.raw))
-        )
+        try:
+            status = reconciliation_status(indexer.raw)
+            status["pacing"] = pacing_status(indexer.raw)
+        except RedisError as error:
+            if not transient_error(error):
+                raise
+            logger.debug("Detection update status backend unavailable", exc_info=True)
+            return jsonify(phase="status_unavailable"), 503, {"Retry-After": "5"}
+        return jsonify(status)
 
     @action(
         "muldelete",

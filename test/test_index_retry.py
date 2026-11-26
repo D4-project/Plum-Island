@@ -12,12 +12,14 @@ from urllib.parse import urlsplit
 
 import meilisearch
 import redis
+from app import app
 from app.utils.index_generations import ACTIVE, CONTROL
 from app.utils.index_pacing import PacedReconciliationWorker
 from app.utils.index_reconciliation import ReconciliationWorker, SnapshotInvalid
 from app.utils.index_retry import retry_delay, transient_error
 from app.utils.index_sources import ReconciliationHttpRequests, SourceDocuments
 from app.utils.index_supervisor import IndexSupervisor
+from app.views import TagRulesView
 from meilisearch.errors import MeilisearchApiError, MeilisearchCommunicationError
 from requests import Response, Session
 from tools.reconcile_index import configure_http_logging
@@ -219,6 +221,34 @@ class RetryPolicyTest(unittest.TestCase):
                 [retry_delay(n) for n in (1, 2, 3, 4, 5, 100)],
                 [30, 60, 120, 240, 300, 300],
             )
+
+
+class ReconciliationStatusTest(unittest.TestCase):
+    """Status polling remains safe while the index backend is unavailable."""
+
+    def test_read_timeout_returns_retryable_status(self):
+        indexer = Mock()
+        indexer.raw.get.side_effect = redis.exceptions.TimeoutError("status read timed out")
+        with app.test_request_context(), patch(
+            "app.views.KVrocksIndexer", return_value=indexer
+        ):
+            result = TagRulesView.reindex_current.__wrapped__(None)
+            response = app.make_response(result)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.headers["Retry-After"], "5")
+        self.assertEqual(response.get_json(), {"phase": "status_unavailable"})
+        indexer.raw.set.assert_not_called()
+
+    def test_authentication_error_remains_visible(self):
+        indexer = Mock()
+        indexer.raw.get.side_effect = redis.exceptions.AuthenticationError(
+            "bad credentials"
+        )
+        with app.test_request_context(), patch(
+            "app.views.KVrocksIndexer", return_value=indexer
+        ):
+            with self.assertRaises(redis.exceptions.AuthenticationError):
+                TagRulesView.reindex_current.__wrapped__(None)
 
 
 class SupervisorRetryTest(unittest.TestCase):

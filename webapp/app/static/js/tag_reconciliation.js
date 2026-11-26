@@ -31,8 +31,10 @@
     }
 
     async function poll() {
+        let retryDelay = 3000;
         try {
             const response = await fetch(root.dataset.statusUrl, {cache: 'no-store'});
+            if (response.status === 503) retryDelay = 5000;
             if (!response.ok) throw new Error('Status unavailable');
             const data = await response.json();
             const complete = data.phase === 'up_to_date' || data.phase === 'done';
@@ -87,11 +89,10 @@
             if (percent === null) bar.removeAttribute('aria-valuenow');
             else bar.setAttribute('aria-valuenow', String(percent));
         } catch (_error) {
-            status.textContent = 'Unable to read detection update status; retrying…';
+            status.textContent = 'Detection update status temporarily unavailable. Retrying…';
             eta.textContent = '· ETA ∞';
-            bar.removeAttribute('aria-valuenow');
         } finally {
-            window.setTimeout(poll, 3000);
+            window.setTimeout(poll, retryDelay);
         }
     }
     poll();

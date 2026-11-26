@@ -22,7 +22,9 @@ const root = {
         '[data-index-progress]': bar, '[data-index-detail]': detail})[key]
 };
 let state = {phase: 'planning', processed: 0, total: null};
+let httpStatus = 200;
 let next;
+let delay;
 let requests = 0;
 const context = vm.createContext({
     document: {querySelector: () => root},
@@ -30,15 +32,16 @@ const context = vm.createContext({
         requests += 1;
         assert.equal(url, root.dataset.statusUrl);
         assert.equal(options.method, undefined); // Status GET never starts work.
-        return {ok: true, json: async () => state};
+        return {ok: httpStatus === 200, status: httpStatus, json: async () => state};
     },
-    window: {setTimeout: callback => { next = callback; }}
+    window: {setTimeout: (callback, ms) => { next = callback; delay = ms; }}
 });
 vm.runInContext(fs.readFileSync(path.join(__dirname,
     '../webapp/app/static/js/tag_reconciliation.js'), 'utf8'), context);
 
-async function advance(value) {
+async function advance(value, responseStatus = 200) {
     state = value;
+    httpStatus = responseStatus;
     await next();
 }
 
@@ -62,9 +65,15 @@ async function advance(value) {
     assert.match(status.textContent, /retrying from checkpoint/);
     assert.equal(bar.style.width, '64%');
     assert(!classes.has('progress-bar-danger'));
+    await advance({phase: 'status_unavailable'}, 503);
+    assert.match(status.textContent, /temporarily unavailable/);
+    assert.equal(bar.style.width, '64%');
+    assert.equal(attributes['aria-valuenow'], '64');
+    assert.equal(delay, 5000);
     await advance({phase: 'reparsing', processed: 64, total: 100, heartbeat: 1,
         pacing: {mode: 'idle_boost', eta_seconds: 3900}});
     assert.match(eta.textContent, /ETA ∞/);
+    assert.equal(delay, 3000);
     await advance({phase: 'catching_up', processed: 100, total: null});
     assert.equal(attributes['aria-valuenow'], undefined);
     await advance({phase: 'blocked', message: '<img src=x onerror=alert(1)>'});
@@ -102,6 +111,6 @@ async function advance(value) {
     assert.equal(status.textContent, 'Detections up to date');
     assert.match(detail.textContent, /2 non-public source exclusions encountered/);
     assert.match(detail.textContent, /5 captures awaiting a Meilisearch source/);
-    assert.equal(requests, 18);
+    assert.equal(requests, 19);
     console.log('Automatic detection progress checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

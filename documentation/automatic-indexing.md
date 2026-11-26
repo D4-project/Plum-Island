@@ -72,9 +72,11 @@ is unavailable, status persistence is best effort: failure to write the error
 cannot prevent the retry. A publication whose reply was lost is checked against
 the active generation before any retry status is recorded.
 
-The worker logs a warning with the next delay. With DEBUG logging enabled, the
-first failure in each retry cycle also includes the traceback. Transport
-failures while recording missing or excluded sources use the same retry path.
+The worker and supervisor log warnings with the next delay. With DEBUG logging
+enabled, the first failure in each retry cycle also includes the traceback.
+Transport failures while recording missing or excluded sources use the same
+retry path. If reading the status times out, Tag Rules keeps showing the last
+progress and polls again after five seconds.
 Malformed reports, unsupported commands, authentication failures and frozen-input
 incompatibilities are not suppressed by the transient-retry wrapper. Stop signals
 and parent exit interrupt the backoff; no browser action or index reset is needed.
