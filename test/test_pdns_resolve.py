@@ -142,6 +142,9 @@ class PdnsResolveRouteTest(unittest.TestCase):
     """Exercise the registered Flask-AppBuilder route and real CSRF validation."""
 
     def setUp(self):
+        pdns_config = patch.dict(app.config, PDNS_ENABLED=True)
+        pdns_config.start()
+        self.addCleanup(pdns_config.stop)
         self.client = app.test_client()
         self.url = f"/ip/pdns/resolve/{IP}"
         self.token = live.add_resolve_tokens(
@@ -218,10 +221,36 @@ class PdnsResolveRouteTest(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.json["status"], "busy")
 
+    def test_disabled_routes_skip_both_lookups_with_credentials(self):
+        with patch.object(appbuilder.sm, "has_access", return_value=True), patch.dict(
+            app.config, PDNS_ENABLED=False, PASSIVE_USER="test", PASSIVE_PWD="test"
+        ), patch("app.views.cached_passive_dns") as cache, patch(
+            "app.views.resolve_a"
+        ) as resolve:
+            passive = self.client.get(f"/ip/pdns/{IP}")
+            active = self.client.post(
+                self.url, json={"token": self.token}, headers={"X-CSRFToken": self.csrf}
+            )
+        self.assertEqual(passive.status_code, 200)
+        self.assertEqual(active.status_code, 503)
+        self.assertTrue(passive.json["disabled"])
+        self.assertTrue(active.json["disabled"])
+        cache.assert_not_called()
+        resolve.assert_not_called()
+
+    def test_enabled_passive_dns_reports_missing_credentials(self):
+        with patch.object(appbuilder.sm, "has_access", return_value=True), patch.dict(
+            app.config, PDNS_ENABLED=True, PASSIVE_USER="test", PASSIVE_PWD=""
+        ), patch("app.views.cached_passive_dns") as cache:
+            response = self.client.get(f"/ip/pdns/{IP}")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json["code"], "authentication")
+        cache.assert_not_called()
+
     def test_pdns_response_signs_eligible_records_without_dns(self):
         """Loading history is not an active lookup; upstream metadata is retained."""
         with patch.object(appbuilder.sm, "has_access", return_value=True), patch.dict(
-            app.config, PASSIVE_USER="test", PASSIVE_PWD="test"
+            app.config, PASSIVE_USER="test", PASSIVE_PWD="test", PDNS_ENABLED=True
         ), patch("app.views.requests.get") as get, patch(
             "app.views.resolve_a"
         ) as lookup:

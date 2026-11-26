@@ -113,6 +113,8 @@ from .utils.ip_whois import WhoisLookupError, lookup_domain_whois
 from .utils.enrichment_cache import (
     network_whois,
     passive_dns as cached_passive_dns,
+    passive_dns_enabled,
+    PassiveDNSError,
     ip_information,
 )
 from .utils.lookup_cache import cache_metadata, LookupBusy
@@ -2952,20 +2954,28 @@ class IPDetailView(BaseView):
 
         passive_user = db.app.config.get("PASSIVE_USER", "")
         passive_pwd = db.app.config.get("PASSIVE_PWD", "")
-        if not passive_user:
+        if not passive_dns_enabled(db.app.config, passive_user, passive_pwd):
             return jsonify(
                 {
                     "disabled": True,
-                    "message": "CIRCL Passive DNS Disabled in configuration",
+                    "message": "Passive DNS disabled",
                 }
             )
-        if not passive_pwd:
-            return jsonify({"error": "Passive DNS password is not configured"}), 503
+        if not passive_user or not passive_pwd:
+            return (
+                jsonify(
+                    error="Passive DNS credentials are not configured",
+                    code="authentication",
+                ),
+                503,
+            )
 
         try:
             cached = cached_passive_dns(ip, passive_user, passive_pwd)
+        except PassiveDNSError as error:
+            return jsonify(error=str(error), code=error.code), 502
         except LookupError:
-            return jsonify({"error": "Passive DNS lookup failed"}), 502
+            return jsonify(error="Passive DNS lookup failed", code="upstream"), 502
 
         records = cached["value"]
         payload = add_resolve_tokens(
@@ -2982,6 +2992,12 @@ class IPDetailView(BaseView):
     @has_access
     def resolve_passive_dns(self, ip):
         """Verify one signed PDNS hostname without modifying observation history."""
+        if not passive_dns_enabled(
+            db.app.config,
+            db.app.config.get("PASSIVE_USER"),
+            db.app.config.get("PASSIVE_PWD"),
+        ):
+            return jsonify(disabled=True, message="Passive DNS disabled"), 503
         try:
             address = str(ipaddress.IPv4Address(ip))
         except ipaddress.AddressValueError:
@@ -4525,6 +4541,7 @@ class ReportsView(ModelView):
                 per_ip_ptr_fqdns.get(ip, []) if per_ip_ptr_fqdns else []
             ) + (per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else [])
         update_progress("pdns", pdns_done=0, pdns_total=len(result_ips))
+        pdns_warnings = []
         per_ip_pdns_fqdns = collect_report_passive_dns_fqdns(
             db.app.config,
             result_ips,
@@ -4534,6 +4551,7 @@ class ReportsView(ModelView):
                 pdns_done=done,
                 pdns_total=total,
             ),
+            warning_callback=pdns_warnings.append,
         )
         update_progress("complete")
         markdown = build_report_markdown(
@@ -4548,6 +4566,7 @@ class ReportsView(ModelView):
             per_ip_ptr_fqdns=per_ip_ptr_fqdns,
             per_ip_pdns_fqdns=per_ip_pdns_fqdns,
             new_open_ports=new_open_ports,
+            pdns_warnings=pdns_warnings,
         )
         return markdown, from_dt, to_dt, results
 

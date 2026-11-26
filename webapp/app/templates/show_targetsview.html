@@ -47,6 +47,7 @@
 </div>
 <script src="{{ url_for('static', filename='js/target_network_info.js') }}"></script>
 {% endif %}
+{% include 'target_pdns_panel.html' %}
 
 
 {% if appbuilder.sm.has_access('can_refresh_network', 'TargetsView') %}

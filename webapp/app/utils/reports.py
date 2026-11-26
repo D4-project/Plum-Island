@@ -24,7 +24,11 @@ from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
 from .timeutils import ensure_utc_naive, utcnow_naive
 from .domains import parse_hostname
-from .enrichment_cache import passive_dns as cached_passive_dns
+from .enrichment_cache import (
+    passive_dns as cached_passive_dns,
+    passive_dns_enabled,
+    PassiveDNSError,
+)
 
 logger = logging.getLogger("flask_appbuilder")
 EMAIL_SPLIT_RE = re.compile(r"[\n,;]+")
@@ -406,6 +410,7 @@ def collect_report_passive_dns_fqdns(
     ips,
     per_ip_requested_fqdns,
     progress_callback=None,
+    warning_callback=None,
 ):
     """
     Collect Passive DNS hostnames to fill each IP's associated FQDN list.
@@ -419,11 +424,17 @@ def collect_report_passive_dns_fqdns(
     update_progress(0)
     passive_user = str(app_config.get("PASSIVE_USER", "") or "").strip()
     passive_pwd = str(app_config.get("PASSIVE_PWD", "") or "")
+    if not passive_dns_enabled(app_config, passive_user, passive_pwd):
+        update_progress(len(ips))
+        return {}
     if not passive_user or not passive_pwd:
+        if warning_callback:
+            warning_callback("Passive DNS data incomplete: credentials are missing.")
         update_progress(len(ips))
         return {}
 
     per_ip_pdns = {}
+    failures = Counter()
     for done, ip in enumerate(ips, start=1):
         requested_fqdns = (
             per_ip_requested_fqdns.get(ip, []) if per_ip_requested_fqdns else []
@@ -437,7 +448,10 @@ def collect_report_passive_dns_fqdns(
         pdns_fqdns = []
         try:
             cached = cached_passive_dns(ip, passive_user, passive_pwd, app_config)
-        except LookupError:
+        except LookupError as error:
+            failures[
+                error.code if isinstance(error, PassiveDNSError) else "upstream"
+            ] += 1
             update_progress(done)
             continue
 
@@ -458,6 +472,13 @@ def collect_report_passive_dns_fqdns(
         if pdns_fqdns:
             per_ip_pdns[ip] = pdns_fqdns
         update_progress(done)
+    if failures and warning_callback:
+        reasons = ", ".join(
+            f"{reason}: {count}" for reason, count in sorted(failures.items())
+        )
+        warning_callback(
+            f"Passive DNS data incomplete: {sum(failures.values())} IP lookup(s) failed ({reasons})."
+        )
     return per_ip_pdns
 
 
@@ -1021,6 +1042,7 @@ def build_report_markdown(  # pylint: disable=too-many-statements
     per_ip_ptr_fqdns=None,
     per_ip_pdns_fqdns=None,
     new_open_ports=None,
+    pdns_warnings=None,
 ):
     """
     Render one report as Markdown.
@@ -1039,12 +1061,20 @@ def build_report_markdown(  # pylint: disable=too-many-statements
         f"- Matching IPs: {total_ips}",
         f"- Matching scans: {total_scans}",
         "",
-        "## Open ports",
-        "",
-        "This section summarizes the total number of hosts exposing each open "
-        "port during the report period.",
-        "",
     ]
+    if pdns_warnings:
+        lines.extend(["## Data warnings", ""])
+        lines.extend(f"- {warning}" for warning in pdns_warnings)
+        lines.append("")
+    lines.extend(
+        [
+            "## Open ports",
+            "",
+            "This section summarizes the total number of hosts exposing each open "
+            "port during the report period.",
+            "",
+        ]
+    )
 
     if port_counter:
         for port, count in sorted(

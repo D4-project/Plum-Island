@@ -21,6 +21,19 @@
   Profiles with a search filter derive exact TCP port sets from matching
   historical reports, group up to 256 targets per Agent job and can be
   suspended. Migration 33 adds profile, cycle and durable preparation state.
+
+- Add a Passive DNS enable switch, disabled by default on new installations.
+  Preserve active legacy installations with configured credentials, and stop
+  disabled lookups before cache access. Show lookup failures in IP views and
+  keep reports and exports usable with explicit incomplete-data warnings.
+
+- Add the manual `tools/purge.py` retention command. It removes captures
+  older than the `last_seen` cutoff from the configured write backends and
+  cleans their relationships. Use `--yes-delete-data --keep XXd`.
+
+- Start incremental retagging with the newest captures. A rule update can
+  supersede a fast retag at a checkpoint and carry forward its journal.
+  Keep indexing incoming captures during the reconciliation.
 - Open Stats on Graphs by default and place Graphs before Overview in both themes.
 - Prefer agent-reported targeted-port counts; fall back to unique job IP/CIDR
   targets multiplied by configured ports when absent. Keep unresolved hostname

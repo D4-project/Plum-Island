@@ -73,7 +73,7 @@ Account for these bindings in your deployment's access policy.
 | Meilisearch | HTTP TCP 7700 by default | `MEILI_DATABASE_URI`, `MEILI_KEY`; UI document retrieval and scheduler export | Documents cannot be retrieved/exported normally |
 | Kvrocks | TCP 6666 by default | `KVROCKS_HOST`, `KVROCKS_PORT`; search, tags, histories and indexing | Structured search/history and indexing are affected |
 | `ip.circl.lu` | HTTPS TCP 443 | `/geolookup/<ip>`; no API key; IP view, target enrichment and routing checks | Missing/stale target routing data can defer CIDR job creation; failed lookup is not ASN 0 |
-| `www.circl.lu` | HTTPS TCP 443 | `/pdns/query/<ip>`; `PASSIVE_USER`, `PASSIVE_PWD`; IP view and reports | Passive DNS enrichment unavailable; omitted when disabled |
+| `www.circl.lu` | HTTPS TCP 443 | `/pdns/query/<ip>`; `PDNS_ENABLED`, `PASSIVE_USER`, `PASSIVE_PWD`; IP view, reports and exports | Passive DNS enrichment unavailable; omitted when disabled |
 | Configured DNS resolver | UDP and TCP 53, for a conventional resolver | OS/container name resolution; Active DNS uses `dnspython` and the system resolver configuration | Hostname-based services and live A-record checks can fail |
 | `whois.iana.org` | TCP 43 | First hop for an uncached IP/CIDR lookup or a domain WHOIS query | Fresh WHOIS lookups fail |
 | `whois.afrinic.net`, `whois.apnic.net`, `whois.arin.net`, `whois.lacnic.net`, `whois.ripe.net` | TCP 43 | Network WHOIS, including inter-RIR referrals | Relevant network WHOIS lookups fail |

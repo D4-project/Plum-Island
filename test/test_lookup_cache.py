@@ -216,7 +216,10 @@ class LookupCacheTest(unittest.TestCase):
         ]
         backend = MemoryRedis()
         with app.app_context(), patch.dict(
-            app.config, PASSIVE_USER="cache-test", PASSIVE_PWD="password"
+            app.config,
+            PASSIVE_USER="cache-test",
+            PASSIVE_PWD="password",
+            PDNS_ENABLED=True,
         ), patch(
             "app.utils.lookup_cache.cache_client", return_value=backend
         ), patch.object(

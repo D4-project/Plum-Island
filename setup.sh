@@ -63,10 +63,15 @@ while true; do
         read -s -p "CIRCL Passive DNS API key/password : " PASSIVE_PWD
         echo ""
     fi
+    PDNS_ENABLED=False
+    if [[ "$ENABLE_PDNS" == "y" || "$ENABLE_PDNS" == "Y" ]] &&
+       [[ -n "${PASSIVE_USER//[[:space:]]/}" && -n "$PASSIVE_PWD" ]]; then
+        PDNS_ENABLED=True
+    fi
     echo "-------------------------"
     echo "KvRocsk Configuration : $REDIS_HOST:$REDIS_PORT"
     echo "Meili Configuration : http://$MEILI_HOST:$MEILI_PORT using $MEILI_PASSWORD"
-    if [[ "$ENABLE_PDNS" == "y" || "$ENABLE_PDNS" == "Y" ]]; then
+    if [[ "$PDNS_ENABLED" == True ]]; then
         echo "CIRCL Passive DNS : enabled for $PASSIVE_USER"
     else
         echo "CIRCL Passive DNS : disabled"
@@ -90,6 +95,7 @@ while true; do
         sed -i "s/^SECRET_KEY *= *.*/SECRET_KEY = \"$CSRF_ESCAPED\"/" "$CONFIG_FILE"
         sed -i "s/^PASSIVE_USER *= *.*/PASSIVE_USER = \"$PASSIVE_USER_ESCAPED\"/" "$CONFIG_FILE"
         sed -i "s/^PASSIVE_PWD *= *.*/PASSIVE_PWD = \"$PASSIVE_PWD_ESCAPED\"/" "$CONFIG_FILE"
+        sed -i "s/^PDNS_ENABLED *= *.*/PDNS_ENABLED = $PDNS_ENABLED/" "$CONFIG_FILE"
         break
     else
         echo "Start over configuration..."

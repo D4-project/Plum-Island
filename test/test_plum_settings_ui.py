@@ -141,6 +141,7 @@ class PlumSettingsUiTest(unittest.TestCase):
                 self.assertEqual(page.count('class="settings-card"'), 12)
                 self.assertEqual(page.count("<strong>Default:</strong>"), 55)
                 self.assertEqual(page.count("<strong>Restart required:</strong>"), 54)
+                self.assertIn('name="PDNS_ENABLED"', page)
                 self.assertIn('name="MAP_ENABLED"', page)
                 self.assertNotIn("MAP_TILE_URL", page)
                 self.assertNotIn("MAP_TILE_ATTRIBUTION", page)

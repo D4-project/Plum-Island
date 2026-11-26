@@ -26,6 +26,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
     if [ -n "${PASSIVE_USER:-}" ]; then
         sed -i "s|^PASSIVE_USER *=.*|PASSIVE_USER = \"${PASSIVE_USER}\"|" "$CONFIG_FILE"
         sed -i "s|^PASSIVE_PWD *=.*|PASSIVE_PWD = \"${PASSIVE_PWD:-}\"|" "$CONFIG_FILE"
+        if [[ -n "${PASSIVE_USER//[[:space:]]/}" && -n "${PASSIVE_PWD:-}" ]]; then
+            sed -i 's|^PDNS_ENABLED *=.*|PDNS_ENABLED = True|' "$CONFIG_FILE"
+        fi
     fi
 fi
 

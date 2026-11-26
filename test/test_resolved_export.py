@@ -256,7 +256,10 @@ class ResolvedCsvTest(unittest.TestCase):
         self.assertFalse(resolved.pdns_in_time_range([], TIME_RANGE))
 
     def test_missing_credentials_and_missing_documents_preserve_rows(self):
-        for config in ({}, {"PASSIVE_USER": "user"}):
+        for config in (
+            {"PDNS_ENABLED": True},
+            {"PDNS_ENABLED": True, "PASSIVE_USER": "user"},
+        ):
             warnings, progress = [], []
             output = io.StringIO(newline="")
             with patch.object(resolved, "lookup_pdns") as pdns:
@@ -376,7 +379,7 @@ class ResolvedExportRoutesTest(unittest.TestCase):
                 "load_meili_document",
                 side_effect=RuntimeError("private backend details"),
             ), patch.dict(
-                app.config, PASSIVE_USER="", PASSIVE_PWD=""
+                app.config, PASSIVE_USER="", PASSIVE_PWD="", PDNS_ENABLED=True
             ):
                 views.KVSearchView._run_resolved_export_job(job_id)
             self.assertEqual(self.states[job_id]["status"], "error")
@@ -420,7 +423,7 @@ class ResolvedExportRoutesTest(unittest.TestCase):
             ) as loader, patch.object(
                 dns.resolver, "Resolver"
             ) as resolver, patch.dict(
-                app.config, PASSIVE_USER="", PASSIVE_PWD=""
+                app.config, PASSIVE_USER="", PASSIVE_PWD="", PDNS_ENABLED=True
             ):
                 views.KVSearchView._run_resolved_export_job(job_id)
             search.assert_called_once_with(self.payload["q"], 100, 300)

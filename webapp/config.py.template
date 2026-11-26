@@ -43,6 +43,7 @@ KVROCKS_PORT = 6666
 KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
 PASSIVE_USER = ""
 PASSIVE_PWD = ""
+PDNS_ENABLED = False
 
 # Shared external lookup cache lifetimes (hours). Restart Plum-Agent after editing.
 WHOIS_CACHE_HOURS = 24

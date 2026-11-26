@@ -271,7 +271,10 @@ class IpDetailLinksTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;", fragment)
         self.assertNotIn("<script", fragment)
         self.assertNotIn('id="ip-whois"', fragment)
-        full = template.render(fragment=False, **values)
+        self.assertNotIn(
+            'id="ip-pdns-resolve"', template.render(fragment=False, **values)
+        )
+        full = template.render(fragment=False, config={"PDNS_ENABLED": True}, **values)
         self.assertIn('id="ip-pdns-resolve"', full)
         self.assertIn('title="Resolve"', full)
         self.assertIn("Active DNS", full)
@@ -280,7 +283,8 @@ class IpDetailLinksTest(unittest.TestCase):
         self.assertIn("#ip-pdns-resolve-progress {\n    height: 24px;", full)
         environment.globals["appbuilder"].sm.has_access = lambda *_args: False
         self.assertNotIn(
-            'id="ip-pdns-resolve"', template.render(fragment=False, **values)
+            'id="ip-pdns-resolve"',
+            template.render(fragment=False, config={"PDNS_ENABLED": True}, **values),
         )
         self.assertEqual(full.count('id="ip-scan-group"'), 1)
         self.assertEqual(full.count('id="ip-scan-summary"'), 1)
