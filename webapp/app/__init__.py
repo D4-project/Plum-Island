@@ -88,6 +88,7 @@ appbuilder = AppBuilder(app, db.session, security_manager_class=CustomSecurityMa
 # pylint: disable=C0413
 from . import views
 from . import apis
+from .logs_view import PlumLogsView
 from .settings_view import PlumSettingsView, settings_template_context
 
 app.context_processor(settings_template_context)
@@ -98,6 +99,14 @@ appbuilder.add_view(
     category="Security",
     icon="fa-sliders",
     menu_cond=appbuilder.sm.is_plum_settings_admin,
+)
+
+appbuilder.add_view(
+    PlumLogsView,
+    "Plum Logs",
+    category="Security",
+    icon="fa-file-text-o",
+    menu_cond=appbuilder.sm.is_plum_admin,
 )
 
 # Scheduler: should only start in main process once

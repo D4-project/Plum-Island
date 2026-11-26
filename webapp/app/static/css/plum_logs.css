@@ -1,0 +1,23 @@
+.plum-logs-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.plum-logs-toolbar label {
+    margin: 0;
+}
+
+.plum-logs-toolbar select {
+    width: auto;
+    max-width: 100%;
+}
+
+.plum-log-content {
+    max-height: 68vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
