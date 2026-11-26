@@ -284,6 +284,10 @@ history. A service name guessed from the port number still qualifies.
 
 Existing captures become searchable with this filter after source reconciliation.
 
+In Scan Profiles, enter `nodata since:90` in **Search query (draft)** to use all
+matching open TCP ports on configured targets. Use `nodata:30 since:90` to
+select one port number.
+
 ### Field reference
 
 | Field | Modifiers | Description |

@@ -28,10 +28,11 @@ from app.utils.tagrules import (
 from app.utils.timeutils import utcnow_naive
 
 logger = logging.getLogger("flask_appbuilder")
-SERVICE_FIELDS = {
+PORT_EVIDENCE_FIELDS = {
     "tag",
     "banner",
     "service",
+    "nodata",
     "http_title",
     "http_header",
     "http_headval",
@@ -44,14 +45,14 @@ SERVICE_FIELDS = {
     "x509_subject_cn",
     "x509_san",
 }
-DIRECT_PORT_FIELDS = SERVICE_FIELDS - {"tag"}
+DIRECT_PORT_FIELDS = PORT_EVIDENCE_FIELDS - {"tag"}
 REQUESTED_HOST_FIELDS = {"fqdn_requested", "domain_requested"}
 
 
 def query_can_prove_port(criteria):
-    """Return whether a positive query term can establish a service port."""
+    """Return whether a positive query term identifies an observed port."""
     return any(
-        field.lstrip("!").partition(".")[0] in SERVICE_FIELDS
+        field.lstrip("!").partition(".")[0] in PORT_EVIDENCE_FIELDS
         and field.lstrip("!").partition(".")[2] not in {"not", "nt"}
         for group in iter_criteria(criteria)
         for field in group

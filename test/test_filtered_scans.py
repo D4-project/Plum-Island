@@ -90,6 +90,40 @@ class FilteredScanPreparationTest(unittest.TestCase):
             set(),
         )
 
+    def test_nodata_selects_only_open_tcp_ports_without_details(self):
+        """Use open-only observations as port evidence in filtered profiles."""
+        document = self.document("nodata", 443)
+        document["body"]["ports"].extend([
+            {
+                "portid": "30",
+                "protocol": "tcp",
+                "state": {"state": "open", "reason_ttl": "0"},
+            },
+            {"portid": "31", "protocol": "tcp", "state": {"state": "closed"}},
+            {"portid": "53", "protocol": "udp", "state": {"state": "open"}},
+        ])
+        for query, expected in (
+            ("nodata", {30}),
+            ("nodata:30", {30}),
+            ("nodata:443", set()),
+        ):
+            with self.subTest(query=query):
+                historical_query = f"{query} since:90"
+                self.assertEqual(
+                    views.validate_profile_search_query(
+                        historical_query, require_candidate=False
+                    ),
+                    historical_query,
+                )
+                criteria = validate_search_query(query)
+                self.assertTrue(filtered_scans.query_can_prove_port(criteria))
+                self.assertEqual(
+                    filtered_scans._matching_ports(
+                        document, criteria, [], self.app.config
+                    ),
+                    expected,
+                )
+
     def test_frequency_uses_start_and_never_overlaps(self):
         """A slow tour restarts once finished, without another full delay."""
         cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
