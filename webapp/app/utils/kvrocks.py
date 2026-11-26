@@ -336,6 +336,9 @@ class KVrocksIndexer:
                 if first_seen is not None and last_seen is not None:
                     doc_mapping["first_seen"] = str(first_seen)
                     doc_mapping["last_seen"] = str(last_seen)
+                # Drop evidence stored by the former NSE marker feature.
+                if "nse_marker" in existing:
+                    pipe.hdel(uid_key, "nse_marker")
                 pipe.hset(uid_key, mapping=doc_mapping)
 
                 # Index IP

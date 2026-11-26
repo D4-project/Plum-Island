@@ -600,6 +600,8 @@ body [hidden] { display: none !important; }
     display: flex;
     flex-wrap: nowrap;
     gap: 0.4rem;
+    width: 100%;
+    min-width: 0;
 }
 :where(.plum-scan-search) .panel-title > a,
 :where(.plum-scan-search) .panel-title > button {
@@ -625,14 +627,42 @@ body [hidden] { display: none !important; }
 }
 :where(.plum-scan-search) .search-ip-tags {
     display: inline-flex;
-    align-items: center;
-    flex-wrap: wrap;
-    flex: 1 1 auto;
-    gap: 0.25rem;
+    flex-direction: column;
+    align-items: flex-start;
+    flex: 1 1 0%;
+    gap: 6px;
     min-width: 0;
+    max-width: 100%;
     margin-left: 0.4rem;
+    overflow: hidden;
     vertical-align: middle;
 }
+:where(.plum-scan-search) .search-ip-tags[hidden] { display: none !important; }
+:where(.plum-scan-search) .search-ip-tags.is-expanded { overflow: visible; }
+:where(.plum-scan-search) .search-ip-tag-list {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+}
+:where(.plum-scan-search) .search-ip-tag-list[hidden] { display: none !important; }
+:where(.plum-scan-search) .search-ip-tag-list[data-expanded="true"] { flex-wrap: wrap; overflow: visible; }
+:where(.plum-scan-search) .search-ip-requested-hostnames {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+}
+:where(.plum-scan-search) .search-ip-requested-hostnames[hidden] { display: none !important; }
+:where(.plum-scan-search) .search-ip-requested-hostnames[data-expanded="true"] { flex-wrap: wrap; overflow: visible; }
 :where(.plum-scan-search) .ip-detail-tag {
     background: #337ab7;
     border-radius: 999px;
@@ -644,8 +674,35 @@ body [hidden] { display: none !important; }
     padding: 0.2rem 0.5rem;
 }
 :where(.plum-scan-search) .search-ip-tag {
+    flex: 0 0 auto;
     white-space: nowrap;
 }
+:where(.plum-scan-search) .search-ip-tag .plum-tag-value {
+    white-space: nowrap;
+}
+:where(.plum-scan-search) .search-ip-requested-hostname {
+    background: #edf4fc;
+    border: 1px solid #ccddf0;
+    color: #315f91;
+}
+:where(.plum-scan-search) .search-ip-ptr-hostname {
+    background: #f1f1f1;
+    border: 1px solid #bdbdbd;
+    color: #000;
+}
+body .plum-scan-search .search-ip-ptr-hostname { color: #000; }
+:where(.plum-scan-search) .search-ip-more {
+    background: transparent;
+    border: 0;
+    color: #687987;
+    cursor: pointer;
+    flex: 0 0 auto;
+    font-size: 12px;
+    padding: 0;
+    white-space: nowrap;
+}
+:where(.plum-scan-search) .search-ip-more:hover,
+:where(.plum-scan-search) .search-ip-more:focus { color: #315f91; text-decoration: underline; }
 :where(.plum-scan-search) .ip-detail-tag-vuln {
     background: #d9534f;
 }
@@ -1176,6 +1233,7 @@ body .timestamp-meta { font-family: inherit; font-size: 12px; }
 /* One badge treatment for IP details, scan results and target results. */
 body .ip-detail-tags { display: flex; flex-basis: 100%; gap: 6px; margin: 8px 0 4px; }
 body .search-ip-tags { gap: 6px; align-items: center; }
+body .plum-scan-search .search-ip-tags { align-items: flex-start; }
 body .search-ip-tags[hidden] { display: none; }
 body .ip-port-observation-tags { display: flex; gap: 6px; margin: 8px 0 0; }
 body .ip-detail-tag, body .target-result-title-row .ip-detail-tag {
@@ -1239,6 +1297,9 @@ body .ip-port-observation-count { color: var(--plum-muted, #777); font-size: 14p
 .ip-port-history { margin: 16px -20px -18px; padding: 12px 20px 7px; border-top: 1px solid #edf1f4; background: #f8fafb; }
 .ip-port-history-label { display: flex; align-items: center; justify-content: space-between; color: #617787; font-size: 13px; font-weight: 500; }
 .ip-port-history-label > span { color: #8a99a5; font-size: 12px; }
+.ip-timeline-history-controls { display: inline-flex; align-items: center; gap: 5px; }
+.ip-timeline-history-controls .ip-timeline-zoom { min-width: 27px; padding: 2px 5px; line-height: 1.2; }
+.ip-timeline-history-controls .ip-timeline-zoom:disabled { opacity: 0.45; color: var(--plum-muted, #8a99a5); cursor: not-allowed; }
 body .ip-port-history .ip-port-timeline { margin-top: 4px; }
 body .ip-timeline-label { fill: #6a7f8d; font-family: inherit; font-size: 12px; }
 body .ip-timeline-dot { fill: #5fa79f; stroke: #f8fafb; }
@@ -1250,6 +1311,10 @@ body .ip-port-observation-meta { margin-bottom: 18px; padding-bottom: 16px; bord
 .ip-observation-dates { display: flex; flex-wrap: wrap; gap: 12px 28px; }
 .ip-observation-dates > span { color: var(--plum-muted, #777); font-size: 13px; }
 .ip-observation-dates strong { display: block; margin-top: 2px; color: #42596b; font-size: 15px; font-weight: 500; }
+.ip-observation-dates strong.ip-ttl-zero { color: var(--plum-muted, #777); }
+.ip-raw-report-toggle { align-self: center; margin-left: auto; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .03em; }
+.ip-raw-report { max-height: 60vh; margin: 0 0 16px; padding: 12px; border: 1px solid var(--plum-border, #dce4e9); border-radius: 6px; background: var(--plum-surface, #f6f8fa); overflow: auto; }
+.ip-raw-report[hidden] { display: none !important; }
 body .ip-port-observation-tags { margin-top: 12px; }
 body .ip-hosts-block { margin: 0 0 16px; }
 body .ip-hosts-title { margin-bottom: 7px; color: #526878; font-size: 14px; font-weight: 600; }

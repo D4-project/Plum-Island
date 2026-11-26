@@ -8,10 +8,11 @@ const helper = fs.readFileSync(path.join(assets, 'lookup_cache.js'), 'utf8');
 const target = fs.readFileSync(path.join(assets, 'target_network_info.js'), 'utf8');
 function element() {
   return {textContent: '', children: [], append(...nodes) { this.children.push(...nodes); },
+    appendChild(node) { this.children.push(node); },
     set innerHTML(_value) { throw new Error('Lookup data must use textContent'); }};
 }
 async function verify(body, ok = true, contentType = 'application/json') {
-  const elements = Object.fromEntries(['target-network-cache', 'target-network-status', 'target-network-result']
+  const elements = Object.fromEntries(['target-network-cache', 'target-network-status', 'ip-info-results']
     .map(id => [id, element()]));
   const context = vm.createContext({
     document: {
@@ -37,7 +38,10 @@ async function verify(body, ok = true, contentType = 'application/json') {
   assert.equal(elements['target-network-cache'].textContent, expected);
   context.PlumLookupCache.show('target-network-cache', {cached: false, fetched_at: fetchedAt});
   assert.equal(elements['target-network-cache'].textContent, expected);
-  assert.equal(elements['target-network-result'].children[3].textContent, '<img src=x onerror=alert(1)>');
+  const [, asCard] = elements['ip-info-results'].children;
+  const [title, box] = asCard.children;
+  assert.equal(title.textContent, 'Autonomous System Informations');
+  assert.equal(box.children[0].children[3].textContent, '<img src=x onerror=alert(1)>');
   assert.equal(elements['target-network-status'].textContent, '');
   vm.runInContext("PlumLookupCache.show('target-network-cache', null);", context);
   assert.equal(elements['target-network-cache'].textContent, '');

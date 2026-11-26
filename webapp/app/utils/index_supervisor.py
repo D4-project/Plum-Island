@@ -11,12 +11,14 @@ from plum_settings import child_settings_environment, publish_controller_setting
 
 from app.utils.index_generations import CONTROL, file_lock, read_json
 from app.utils.index_reconciliation import (
+    has_rule_drift,
     processing_revision,
     queue_snapshot,
     state_directory,
 )
 from app.utils.index_source_recovery import requeue_orphan_exclusion
 from app.utils.index_retry import retry_delay, transient_error
+from app.utils.tag_runtime import queue_committed_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ class IndexSupervisor:
         if self.process is not None and self.process.poll() is None:
             self.process.terminate()
 
-    def tick(self, snapshot):
+    def tick(self, snapshot=None):
         """Defer backend outages to later ticks without sleeping in the scheduler."""
         if self.stopped:
             return
@@ -72,7 +74,10 @@ class IndexSupervisor:
 
     def _tick(self, snapshot):
         """Reconcile committed desired state, reap a child and start pending work."""
-        queue_snapshot(self.raw, snapshot)
+        if snapshot is None:
+            snapshot = queue_committed_snapshot(self.raw)
+        else:
+            queue_snapshot(self.raw, snapshot)
         if self.process is not None:
             if self.process.poll() is None:
                 if not self.config.get("TAG_RECONCILIATION_ENABLED", True):
@@ -95,7 +100,11 @@ class IndexSupervisor:
             job = requeue_orphan_exclusion(self.raw, job)
             if job.get("phase") == "blocked":
                 return
-        if not pending and job.get("phase", "done") == "done":
+        if (
+            not pending
+            and job.get("phase", "done") == "done"
+            and not has_rule_drift(self.raw)
+        ):
             return
         if (
             not force_full

@@ -76,6 +76,10 @@ class MemoryStore:
         """Provide the hgetall test fixture."""
         return dict(self.data.get(key, {}))
 
+    def get(self, key):
+        """Read a string value."""
+        return self.data.get(key)
+
     def smembers(self, key):
         """Provide the smembers test fixture."""
         return set(self.data.get(key, set()))

@@ -26,7 +26,7 @@
     const config = document.getElementById('ip-map-config');
     const tab = document.querySelector('a[href="#ip-informations"]');
     const results = document.getElementById('ip-info-results');
-    if (!config || !tab || !results || !window.jQuery) return;
+    if (!config || !results) return;
     const WORLD = [[-85, -180], [85, 180]];
     let map = null;
 
@@ -185,13 +185,19 @@
             .bindPopup(popupContent(rows, location.country, location.iso));
     }
 
-    window.jQuery(tab).on('shown.bs.tab', function () {
-        if (map) map.invalidateSize();
-    });
+    if (tab && window.jQuery) {
+        window.jQuery(tab).on('shown.bs.tab', function () {
+            if (map) map.invalidateSize();
+        });
+    }
 
     window.PlumShowLocation = function (geoData) {
         // Reuse the Whois tab request when available (single WHOIS query per page).
-        const whoisData = window.PlumWhoisData ? window.PlumWhoisData() : getJson(config.dataset.whois);
+        const whoisData = window.PlumWhoisData
+            ? window.PlumWhoisData()
+            : config.dataset.whois
+                ? getJson(config.dataset.whois)
+                : Promise.resolve({ result: '' });
         const whois = whoisData
             .then((data) => parseWhois(data.result))
             .catch(() => ({}));

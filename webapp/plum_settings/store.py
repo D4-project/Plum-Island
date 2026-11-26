@@ -235,6 +235,9 @@ def apply_settings(config):
     """Load at app boot; supervised children use the parent's frozen snapshot."""
     store = SettingsStore()
     baseline = {key: config[key] for key in SETTINGS if key in config}
+    http_debug = os.environ.get("PLUM_INDEX_HTTP_DEBUG")
+    if http_debug in {"0", "1"}:
+        baseline["TAG_RECONCILIATION_HTTP_DEBUG"] = http_debug == "1"
     inherited = os.environ.get("PLUM_SETTINGS_SNAPSHOT")
     with store.locked():
         if inherited:

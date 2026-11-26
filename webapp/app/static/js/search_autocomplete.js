@@ -13,6 +13,10 @@ function getTagSuggestMenu() {
     return document.getElementById('query-tag-suggest');
 }
 
+function getQueryInput() {
+    return document.querySelector('[data-query-autocomplete]') || document.getElementById('query');
+}
+
 function hideTagSuggestions() {
     tagSuggestRequestId += 1;
     if (tagSuggestAbortController) {
@@ -34,7 +38,7 @@ function hideTagSuggestions() {
 }
 
 function getQueryTagContext() {
-    const input = document.getElementById('query');
+    const input = getQueryInput();
     if (!input) return null;
     const caret = input.selectionStart;
     if (caret === null || caret !== input.selectionEnd) return null;
@@ -184,7 +188,8 @@ async function fetchTagSuggestions(context) {
         const res = await fetch(`/kvsearchview/${suggestPath}?${params.toString()}`, {
             signal: tagSuggestAbortController.signal
         });
-        const data = await readJsonResponse(res);
+        if (!res.ok) throw new Error(`Suggestion request failed (${res.status})`);
+        const data = await res.json();
         const latestContext = getQueryTagContext();
         if (requestId !== tagSuggestRequestId || !latestContext || latestContext.query !== context.query || latestContext.caret !== context.caret) {
             return;
@@ -222,8 +227,10 @@ function handleQueryKeydown(event) {
     const isOpen = menu && menu.style.display !== 'none' && tagSuggestItems.length > 0;
     if (!isOpen) {
         if (event.key === 'Enter') {
-            event.preventDefault();
-            search();
+            if (typeof search === 'function') {
+                event.preventDefault();
+                search();
+            }
         }
         return;
     }
@@ -244,14 +251,14 @@ function handleQueryKeydown(event) {
 }
 
 function bindQueryTagHelper() {
-    const input = document.getElementById('query');
+    const input = getQueryInput();
     if (!input) {
         return;
     }
 
     input.addEventListener('input', () => {
         scheduleTagSuggestionFetch();
-        syncSinceDirectiveState();
+        if (typeof syncSinceDirectiveState === 'function') syncSinceDirectiveState();
     });
     input.addEventListener('click', scheduleTagSuggestionFetch);
     input.addEventListener('keydown', handleQueryKeydown);
@@ -277,11 +284,13 @@ const SEARCH_KEYWORDS = new Set(JSON.parse(
 ));
 
 function buildSearchFieldSuggestions(prefix) {
+    const input = getQueryInput();
+    const excluded = new Set((input?.dataset.queryAutocompleteDisallowed || '').split(',').filter(Boolean));
     const suggestions = [...SEARCH_KEYWORDS]
-        .filter(keyword => keyword.startsWith(prefix))
+        .filter(keyword => keyword.startsWith(prefix) && !excluded.has(keyword))
         .map(keyword => ({value: `${keyword}:`, label: `${keyword}:`, kind: 'keyword'}));
     const [field, modifier] = prefix.split('.');
-    if (!SEARCH_KEYWORDS.has(field) || ['tag', 'engine', 'since', 'http_headval'].includes(field)) {
+    if (!SEARCH_KEYWORDS.has(field) || excluded.has(field) || ['tag', 'engine', 'since', 'http_headval'].includes(field)) {
         return suggestions;
     }
     const modifiers = modifier === undefined

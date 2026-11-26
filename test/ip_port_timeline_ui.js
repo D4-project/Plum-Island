@@ -35,7 +35,9 @@ class Element {
     }
     setAttribute(key, value) { this.attrs[key] = String(value); }
     getAttribute(key) { return this.attrs[key] ?? null; }
-    appendChild(child) { this.children.push(child); return child; }
+    appendChild(child) { this.children.push(child); child.parentNode = this; return child; }
+    get isConnected() { return Boolean(this.parentNode); }
+    querySelectorAll() { return []; }
     replaceChildren(...children) { this.children = children; }
     addEventListener(name, callback) { this.events[name] = callback; }
     click() { if (this.events.click) this.events.click(); }
@@ -68,14 +70,16 @@ const doc = {
 const controller = timeline.mount(doc);
 const points = entry => entry.host.children[0].children.filter(x => x.getAttribute('class') === 'ip-timeline-point');
 assert.equal(points(first).length, 3);
-assert.equal(first.host.children[0].getAttribute('height'), '58');
-assert.deepEqual(points(first).map(point => point.children[1].getAttribute('cy')), ['38', '38', '38']);
+assert.equal(first.host.children[0].getAttribute('height'), '76');
+assert.deepEqual(points(first).map(point => point.children[1].getAttribute('cy')), ['38', '56', '38']);
 const startMarks = first.host.children[0].children.filter(element =>
-    element.tag === 'line' && element.getAttribute('y1') === '32' && element.getAttribute('y2') === '44');
+    element.tag === 'line' && element.getAttribute('pointer-events') === 'stroke'
+    && element.getAttribute('class') === 'ip-timeline-range');
 assert.equal(startMarks.length, 3);
 assert.equal(startMarks[0].getAttribute('x1'), '14');
 assert.equal(startMarks[0].getAttribute('x2'), '14');
 assert.equal(startMarks[0].getAttribute('y2'), '44');
+assert.equal(startMarks[1].getAttribute('y2'), '62');
 assert.equal(startMarks[0].children[0].textContent, '1970-01-01 00:00:10');
 assert.equal(startMarks[0].getAttribute('pointer-events'), 'stroke');
 assert.equal(second.host.children[0].children.some(x => x.getAttribute('class') === 'ip-timeline-start-hit'), false);
@@ -208,12 +212,17 @@ const liveController = pdns.mount(doc, liveContainer, [
 ]);
 assert.equal(liveController.targets.length, 2); // duplicate name, not duplicate requests
 const liveRows = pdnsRows(liveContainer);
+assert.equal(liveRows.length, 3);
+assert.equal(liveRows[0].children[0].textContent, 'one.example.org');
+assert.equal(liveRows[0].children[0].children.length, 1); // one resolution status per hostname
+assert.equal(pdnsPoints(liveRows[0]).length, 2);
+assert.deepEqual(pdnsPoints(liveRows[0]).map(point => point.children[1].getAttribute('cy')), ['18', '18']);
 const livePoints = row => row.children[1].children[0].children.filter(x => x.getAttribute('class') === 'ip-pdns-live-point');
 const liveLines = row => row.children[1].children[0].children.filter(x => x.getAttribute('class') === 'ip-pdns-live-range');
 liveController.setResult('one.example.org', {status: 'matched', checked_at: 100});
 assert.equal(livePoints(liveRows[0]).length, 1);
-assert.equal(livePoints(liveRows[1]).length, 1);
-assert.equal(livePoints(liveRows[3]).length, 0);
+assert.equal(livePoints(liveRows[1]).length, 0);
+assert.equal(livePoints(liveRows[2]).length, 0);
 assert.equal(liveRows[0].children[0].children[0].textContent, '');
 assert.equal(livePoints(liveRows[0])[0].children[0].textContent, '1970-01-01 00:01:40');
 livePoints(liveRows[0])[0].events.focus();
@@ -223,7 +232,7 @@ assert.equal(liveTooltip.children[1].textContent, '1970-01-01 00:01:40');
 livePoints(liveRows[0])[0].events.blur();
 assert.equal(liveTooltip.getAttribute('visibility'), 'hidden');
 assert.equal(livePoints(liveRows[0])[0].children[1].getAttribute('cx'), '814');
-assert.equal(liveLines(liveRows[0])[0].getAttribute('x1'), pdnsPoints(liveRows[0])[0].children[1].getAttribute('cx'));
+assert.equal(liveLines(liveRows[0])[0].getAttribute('x1'), pdnsPoints(liveRows[0])[1].children[1].getAttribute('cx'));
 const liveSvg = liveRows[0].children[1].children[0];
 assert.ok(liveSvg.children.indexOf(liveLines(liveRows[0])[0]) < liveSvg.children.indexOf(pdnsPoints(liveRows[0])[0]));
 assert.ok(liveSvg.children.indexOf(liveLines(liveRows[0])[0]) < liveSvg.children.indexOf(livePoints(liveRows[0])[0]));
@@ -234,16 +243,18 @@ assert.equal(pdnsPoints(liveRows[0])[0].children[0].textContent, timeline.format
 assert.equal(livePoints(liveRows[0])[0].children[0].textContent, timeline.formatDate(100));
 pdnsPoints(liveRows[0])[0].events.pointerleave();
 assert.equal(liveTooltip.getAttribute('visibility'), 'hidden');
-assert.equal(liveRows[0].getAttribute('data-last-seen'), '30'); // preserved historical end
-assert.equal(pdnsPoints(liveRows[0]).length, 1); // historical point retained
+assert.deepEqual(
+    pdnsPoints(liveRows[0]).map(point => point.children[0].textContent),
+    [timeline.formatDate(30), timeline.formatDate(40)]
+);
 liveController.setResult('one.example.org', {status: 'matched', checked_at: 110});
 assert.equal(livePoints(liveRows[0]).length, 1); // no accumulating overlays
 liveController.setResult('unknown.example.org', {status: 'matched', checked_at: 120});
-assert.equal(livePoints(liveRows[2]).length, 1);
-assert.equal(liveLines(liveRows[2]).length, 0); // never invent a last-seen connector
+assert.equal(livePoints(liveRows[1]).length, 1);
+assert.equal(liveLines(liveRows[1]).length, 0); // never invent a last-seen connector
 liveController.setResult('one.example.org', {status: 'mismatch', checked_at: 130});
 assert.equal(livePoints(liveRows[0]).length, 0);
-assert.equal(livePoints(liveRows[1]).length, 0);
+assert.equal(livePoints(liveRows[1]).length, 1); // other hostname remains resolved
 liveController.setResult('unknown.example.org', {status: 'pending'});
-assert.equal(livePoints(liveRows[2]).length, 0);
-console.log('Active DNS overlay: shared axis, original history, duplicate rows and replacement OK');
+assert.equal(livePoints(liveRows[1]).length, 0);
+console.log('Active DNS overlay: shared axis, original history, grouping and replacement OK');

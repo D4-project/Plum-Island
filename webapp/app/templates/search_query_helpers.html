@@ -1,3 +1,3 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/search_query_examples.css') }}">
-<script type="application/json" id="search-keywords">{{ search_keywords|default([])|tojson }}</script>
+<script type="application/json" id="search-keywords">{{ search_keywords|default(get_search_suggestion_keywords() if get_search_suggestion_keywords is defined else [])|tojson }}</script>
 <script src="{{ url_for('static', filename='js/search_autocomplete.js') }}" nonce="{{ baselib.get_nonce() }}"></script>

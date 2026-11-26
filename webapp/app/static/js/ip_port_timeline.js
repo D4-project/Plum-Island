@@ -34,15 +34,28 @@
         }
         return Number.isFinite(min) ? {min, max} : null;
     }
-    function layout(items, domain, width) {
+    function layout(items, domain, width, allowOverlap = false) {
         const inset = 14, span = Math.max(0, width - inset * 2);
         const x = value => domain.max === domain.min ? width / 2
             : inset + (value - domain.min) / (domain.max - domain.min) * span;
+        if (allowOverlap) {
+            return items.filter(item => item.range).map(item => ({
+                item,
+                start: x(item.range.start),
+                end: x(item.range.end),
+                lane: 0,
+            }));
+        }
+        const laneEnds = [];
         return items.filter(item => item.range).slice().sort((a, b) =>
             a.range.start - b.range.start || a.range.end - b.range.end
         ).map(item => {
             const start = x(item.range.start), end = x(item.range.end);
-            return {item, start, end};
+            // Keep overlapping periods and nearby endpoint markers on separate rows.
+            let lane = laneEnds.findIndex(lastEnd => start > lastEnd + 16);
+            if (lane === -1) lane = laneEnds.length;
+            laneEnds[lane] = Math.max(start, end);
+            return {item, start, end, lane};
         });
     }
     function mount(doc, entries, options = {}) {
@@ -54,6 +67,9 @@
             })),
         })).filter(entry => entry.host);
         let domain = null;
+        let baseDomain = null;
+        const zoomWindows = [86400, 7 * 86400, 30 * 86400, 90 * 86400];
+        let zoomLevel = 4; // 0=day, 1=week, 2=month, 3=three months, 4=all.
         const controls = new Map();
         function node(tag, attrs, text) {
             const element = doc.createElementNS(NS, tag);
@@ -72,8 +88,14 @@
             controls.forEach((_tab, control) => { if (host.contains(control)) controls.delete(control); });
             host.replaceChildren();
             const visible = items.filter(item => item.tab.style.display !== 'none');
-            const positions = domain ? layout(visible, domain, width) : [];
-            const height = options.compact ? 36 : 58;
+            const positions = domain ? layout(visible, domain, width, options.allowOverlap) : [];
+            const baseY = options.compact ? 18 : 38;
+            const rowHeight = options.compact ? 16 : 18;
+            const lastHistoryLane = positions.reduce((max, position) => Math.max(max, position.lane), -1);
+            const hasLive = visible.some(item => timestamp(item.verifiedAt) !== null);
+            const liveLane = hasLive ? (options.allowOverlap ? 0 : lastHistoryLane + 1) : 0;
+            const maxLane = Math.max(0, lastHistoryLane, hasLive ? liveLane : -1);
+            const height = (options.compact ? 36 : 58) + maxLane * rowHeight;
             if (domain) {
                 const svg = node('svg', {width: '100%', height, role: 'group', 'aria-label': 'Observation periods (UTC); not continuous availability'});
                 const count = domain.min === domain.max ? 1 : Math.max(2, Math.min(6, Math.floor(width / 140)));
@@ -106,8 +128,8 @@
                     element.addEventListener('focus', show);
                     element.addEventListener('blur', hide);
                 }
-                positions.forEach(({item, start, end}) => {
-                    const y = options.compact ? 18 : 38;
+                positions.forEach(({item, start, end, lane}) => {
+                    const y = baseY + lane * rowHeight;
                     const dateLabel = attribute => formatDate(item.tab.getAttribute(attribute));
                     const label = `First seen: ${dateLabel('data-first-seen')} | Last seen: ${dateLabel('data-last-seen')}`;
                     if (start !== end && timestamp(item.tab.getAttribute('data-first-seen')) !== null) {
@@ -151,7 +173,7 @@
                     const last = timestamp(item.tab.getAttribute('data-last-seen'));
                     const range = {start: last !== null && last <= verifiedAt ? last : verifiedAt, end: verifiedAt};
                     const position = layout([{range}], domain, width)[0];
-                    const y = options.compact ? 18 : 38;
+                    const y = baseY + liveLane * rowHeight;
                     if (position.start !== position.end) {
                         svg.appendChild(node('line', {x1: position.start, x2: position.end, y1: y, y2: y,
                             class: 'ip-pdns-live-range'}));
@@ -193,9 +215,27 @@
         }
         function refresh() {
             // One shared scale across ports, but only for the current hostname.
-            domain = bounds(cards.filter(entry => entry.card.style.display !== 'none')
-                .flatMap(entry => entry.items.filter(item => item.tab.style.display !== 'none')));
+            const visibleItems = cards.filter(entry => entry.card.style.display !== 'none')
+                .flatMap(entry => entry.items.filter(item => item.tab.style.display !== 'none'));
+            baseDomain = bounds(visibleItems);
+            domain = baseDomain;
+            if (baseDomain && zoomLevel < zoomWindows.length) {
+                const latest = visibleItems.reduce((max, item) => Math.max(
+                    max,
+                    item.range ? item.range.end : -Infinity,
+                    timestamp(item.verifiedAt) ?? -Infinity
+                ), -Infinity);
+                const anchor = Number.isFinite(latest) ? latest : baseDomain.max;
+                const span = zoomWindows[zoomLevel];
+                domain = {min: anchor - span, max: anchor};
+            }
             cards.forEach(render);
+            cards.forEach(entry => entry.card.querySelectorAll('.ip-timeline-zoom').forEach(button => {
+                const action = button.getAttribute('data-zoom-action');
+                button.disabled = (action === 'in' && zoomLevel === 0)
+                    || (action === 'out' && zoomLevel === 4)
+                    || (action === 'reset' && zoomLevel === 4);
+            }));
             sync();
             if (options.axisHost && options.gridHost && domain) {
                 const rect = options.axisHost.getBoundingClientRect();
@@ -222,6 +262,17 @@
                 options.gridHost.replaceChildren(grid);
             }
         }
+        cards.forEach(entry => {
+            entry.card.querySelectorAll('.ip-timeline-zoom').forEach(button => {
+                button.addEventListener('click', () => {
+                    const action = button.getAttribute('data-zoom-action');
+                    if (action === 'reset') zoomLevel = 4;
+                    else if (action === 'in') zoomLevel = Math.max(0, zoomLevel - 1);
+                    else if (action === 'out') zoomLevel = Math.min(4, zoomLevel + 1);
+                    refresh();
+                });
+            });
+        });
         let widthObserver = null;
         if (root.ResizeObserver) {
             // Watch width changes only: rendering may change a timeline's height.

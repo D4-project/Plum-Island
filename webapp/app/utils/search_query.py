@@ -1,7 +1,26 @@
 """Quote-aware, non-distributive Boolean queries shared by search and rules."""
 
 from dataclasses import dataclass
+import re
 import shlex
+
+
+def parse_nse_body_term(term):
+    """Compile an exact or scoped text predicate for YAML rules."""
+    key, _, value = term.partition(":")
+    modifier = key.lower().removeprefix("nse.body").removeprefix(".")
+    script_id = ""
+    if key.lower() == "nse.body" and ":" in value:
+        scope, _, value = value.partition(":")
+        script_id, _, modifier = scope.lower().partition(".")
+        if not re.fullmatch(r"[a-z0-9_-]+", script_id):
+            raise ValueError("Invalid NSE script name")
+    if modifier not in {"", "lk", "like", "bg", "begin"}:
+        raise ValueError("Invalid nse.body modifier")
+    if not value.strip():
+        raise ValueError("Missing nse.body text")
+    field = f"nse_body.{modifier}" if modifier else "nse_body"
+    return field, f"{script_id}:{value}"
 
 
 @dataclass(frozen=True)
@@ -116,8 +135,8 @@ def has_positive_bound(node):
 class QueryCompiler:
     """Linear-size syntax tree with at most one user-written grouping level."""
 
-    def __init__(self, parser, tokens):
-        self.parser = parser
+    def __init__(self, parse_group, tokens):
+        self.parse_group = parse_group
         self.tokens = tokens
         self.position = 0
 
@@ -146,8 +165,7 @@ class QueryCompiler:
         def flush():
             if parts:
                 # Reuse the existing field/NOT validator, not a second grammar.
-                # pylint: disable-next=protected-access
-                criteria, valid, error = self.parser._parse_query_group_with_not(
+                criteria, valid, error = self.parse_group(
                     parts, allow_negative_only=True
                 )
                 if not valid:
@@ -187,7 +205,7 @@ class QueryCompiler:
         return combine("all", children)
 
 
-def compile_query(parser, query, allow_since=False, allow_debug=False):
+def compile_query(parse_group, query, allow_since=False, allow_debug=False):
     """Validate offline; retain the old list representation for flat queries."""
     try:
         tokens = tokenize_query(query)
@@ -202,15 +220,38 @@ def compile_query(parser, query, allow_since=False, allow_debug=False):
                 or operand.value.lower().startswith("since:")
             ):
                 raise ValueError("NOT must be followed by a field:value term")
+        if allow_since:
+            since_positions = [
+                position
+                for position, token in enumerate(tokens)
+                if token.value.lower().startswith("since:")
+            ]
+            remove_positions = set()
+            for position in since_positions:
+                previous = tokens[position - 1] if position > 0 else None
+                following = tokens[position + 1] if position + 1 < len(tokens) else None
+                if (previous and previous.kind == "OR") or (
+                    following and following.kind == "OR"
+                ):
+                    raise ValueError("since: cannot be combined with OR")
+                remove_positions.add(position)
+                if previous and previous.kind == "AND":
+                    remove_positions.add(position - 1)
+                elif following and following.kind == "AND":
+                    remove_positions.add(position + 1)
+            tokens = [
+                token
+                for position, token in enumerate(tokens)
+                if position not in remove_positions
+            ]
         tokens = [
             token
             for token in tokens
             if not (allow_debug and token.value.lower() == "debug")
-            and not (allow_since and token.value.lower().startswith("since:"))
         ]
         if not tokens:
             raise ValueError("Empty query")
-        compiler = QueryCompiler(parser, tokens)
+        compiler = QueryCompiler(parse_group, tokens)
         expression = compiler.parse_or()
         if compiler.peek() != "END":
             raise ValueError("Unexpected closing parenthesis")

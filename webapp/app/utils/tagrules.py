@@ -170,7 +170,7 @@ def normalize_tag_rule_fields(description, query, tags_value):
     }
 
 
-def validate_search_query(query):
+def validate_search_query(query, *, for_tag_rule=False):
     """
     Validate and compile one search query using the live parser semantics.
     """
@@ -179,7 +179,9 @@ def validate_search_query(query):
     except ImportError:
         from views import KVSearchView
 
-    criteria_groups, status, msg_error = KVSearchView().parse_query(query)
+    criteria_groups, status, msg_error = KVSearchView().parse_query(
+        query, for_tag_rule=for_tag_rule
+    )
     if not status:
         raise ValueError(msg_error or "Invalid search query")
     return map_criteria(criteria_groups, lowercase_dict)
@@ -189,12 +191,18 @@ def compile_tag_rule_definition(name, description, query, tags):
     """
     Compile one normalized tag rule to an in-memory structure.
     """
+    criteria = validate_search_query(query, for_tag_rule=True)
     return {
         "name": str(name or description or "").strip(),
         "description": str(description or "").strip(),
         "query": str(query or "").strip(),
         "tags": normalize_tags(tags),
-        "criteria_groups": validate_search_query(query),
+        "criteria_groups": criteria,
+        "uses_nse_body": any(
+            field.removeprefix("!").partition(".")[0] == "nse_body"
+            for group in iter_criteria(criteria)
+            for field in group
+        ),
     }
 
 
@@ -222,7 +230,19 @@ def compile_tag_rule_records(records):
     return compiled_rules
 
 
-def _normalized_document_values(document, field):
+def nse_output_by_script(source):
+    """Read port-script output directly from a raw scan document."""
+    outputs = {}
+    for port in (source.get("body") or {}).get("ports") or []:
+        for script in port.get("scripts") or []:
+            name = script.get("id")
+            output = script.get("output")
+            if isinstance(name, str) and name and isinstance(output, str) and output:
+                outputs.setdefault(name.lower(), []).append(output)
+    return outputs
+
+
+def _normalized_document_values(document, field, script_id=""):
     """
     Read one parsed-document field as lowercase comparable strings.
     """
@@ -230,6 +250,13 @@ def _normalized_document_values(document, field):
         values = [document.get("ip")]
     elif field == "tag":
         values = []
+    elif field == "nse_body":
+        outputs = document.get("nse_body", {})
+        values = (
+            outputs.get(script_id, [])
+            if script_id
+            else [output for group in outputs.values() for output in group]
+        )
     else:
         values = document.get(field, [])
 
@@ -271,7 +298,13 @@ def _document_field_matches(document, field, suffix, value):
             return not is_inside
         return is_inside
 
-    candidates = _normalized_document_values(document, field)
+    script_id = ""
+    if field == "nse_body":
+        script_id, _, value = value.partition(":")
+        value = value.strip()
+        if not value:
+            return False
+    candidates = _normalized_document_values(document, field, script_id)
     if suffix in ("like", "lk"):
         return any(value in candidate for candidate in candidates)
     if suffix in ("begin", "bg"):
@@ -315,12 +348,18 @@ def document_matches_criteria_groups(document, criteria_groups):
     return False
 
 
-def apply_tag_rules_to_document(parsed_doc, tag_rules=None):
+def apply_tag_rules_to_document(parsed_doc, tag_rules=None, *, source=None):
     """
     Return tags computed from matched rules.
     """
     merged_tags = []
     for compiled_rule in tag_rules or []:
+        if (
+            source is not None
+            and compiled_rule.get("uses_nse_body")
+            and "nse_body" not in parsed_doc
+        ):
+            parsed_doc = dict(parsed_doc, nse_body=nse_output_by_script(source))
         if document_matches_criteria_groups(
             parsed_doc, compiled_rule.get("criteria_groups", [])
         ):

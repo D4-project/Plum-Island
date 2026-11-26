@@ -91,6 +91,89 @@ class StalledJobWatchdogTest(TestCase):
         session.commit()
         return models, session, profile, cycle, states
 
+    def test_filtered_targets_become_agent_jobs_grouped_by_ports(self):
+        """Prepared rows preserve exact ports and 256-target job boundary."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.Model.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        profile = models.ScanProfiles(
+            name="Filtered", search_query="tag:vendor:nginx", filter_revision=1
+        )
+        cycle = models.ScanProfileCycles(
+            scanprofile=profile,
+            status="running",
+            filter_revision=1,
+            preparation_status="ready",
+        )
+        target = models.Targets(value="93.184.216.0/24", is_ip_cidr=True)
+        session.add_all([profile, cycle, target])
+        session.flush()
+        for offset in range(257):
+            session.add(
+                models.FilteredScanTargets(
+                    cycle=cycle,
+                    configured_target=target,
+                    target_kind="ip",
+                    target_value=f"93.184.{offset // 256}.{offset % 256}",
+                    ports="80,443" if offset < 256 else "8443",
+                )
+            )
+        session.commit()
+        with mock.patch.object(self.scheduler.db, "session", session):
+            created = self.scheduler._stage_filtered_jobs(
+                profile, cycle, "banner.nse", max_jobs=2
+            )
+            session.commit()
+        self.assertEqual(created, 2)
+        jobs = session.query(models.Jobs).order_by(models.Jobs.scan_ports).all()
+        self.assertEqual(
+            [(job.scan_ports, len(job.job.split(","))) for job in jobs],
+            [("80,443", 256), ("8443", 1)],
+        )
+        self.assertTrue(all(row.status == "queued" for row in cycle.filtered_targets))
+
+    def test_filtered_restart_and_revision_preserve_completed_ports(self):
+        """Interrupted extraction resumes; repeated edits retain completed receipts."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.Model.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        profile = models.ScanProfiles(
+            name="recovery", search_query="banner.lk:hello", filter_revision=1,
+            filter_enabled=True, apply_to_all=False,
+        )
+        cycle = models.ScanProfileCycles(
+            scanprofile=profile, filter_revision=1, status="running",
+            preparation_status="extracting",
+        )
+        target = models.Targets(value="8.8.8.8", is_ip_cidr=True)
+        receipt = models.FilteredScanTargets(
+            cycle=cycle, configured_target=target, target_kind="ip",
+            target_value="8.8.8.8", ports="8443", completed_ports="443",
+            status="pending",
+        )
+        session.add_all([cycle, receipt])
+        session.commit()
+        with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
+            session, "remove", create=True
+        ), mock.patch.object(self.scheduler, "prepare_cycle", return_value=1) as prepare:
+            self.assertNotIn("error", self.scheduler.task_prepare_filtered_scans())
+            prepare.assert_called_once_with(cycle.id, self.scheduler.index)
+            prepare.reset_mock()
+            profile.filter_revision = 2
+            session.commit()
+            self.assertNotIn("error", self.scheduler.task_prepare_filtered_scans())
+            session.expire_all()
+            self.assertEqual(receipt.completed_ports, "443")
+            self.assertEqual(receipt.status, "completed")
+            self.assertEqual(cycle.filter_revision, 2)
+            prepare.assert_called_once_with(cycle.id, self.scheduler.index)
+
     def test_cached_unannounced_jobs_finish_without_scanner_or_export(self):
         """Fresh ASN zero completes IPv4/IPv6 while FQDN work stays queued."""
         models, session, profile, cycle, states = self._routing_fixture()
@@ -447,8 +530,8 @@ class StalledJobWatchdogTest(TestCase):
         self.assertEqual(call_order, ["watchdog", "create_jobs", "profile_sync"])
 
     def test_profile_sync_changes_only_queued_job_tool_snapshot(self):
-        """Profile transitions update queued jobs without mutating active attempts."""
-        models, session, profile, _, _ = self._routing_fixture()
+        """Regenerate queued familyless jobs while the active attempt finishes."""
+        models, session, profile, _, states = self._routing_fixture()
         profile.scan_tool = "masscan"
         profile.detect_protocol = True
         profile.priority_retag_pending = True
@@ -459,14 +542,23 @@ class StalledJobWatchdogTest(TestCase):
             scan_tool="nmap",
             active=True,
         )
+        queued.targets.append(states[0].target)
+        states[0].working = True
+        states[0].target.working = True
         profile.jobs.extend([queued, active])
         session.commit()
         with mock.patch.object(self.scheduler.db, "session", session):
             summary = self.scheduler.task_sync_queued_profile_jobs()
         session.refresh(queued)
         session.refresh(active)
-        self.assertEqual(summary["jobs_synchronized"], 1)
-        self.assertEqual((queued.scan_tool, queued.detect_protocol), ("masscan", True))
+        self.assertEqual(summary["profiles_completed"], 1)
+        self.assertFalse(profile.priority_retag_pending)
+        self.assertTrue(queued.finished)
+        self.assertTrue(queued.exported)
+        self.assertFalse(states[0].working)
+        self.assertFalse(states[0].target.working)
+        self.assertTrue(active.active)
+        self.assertFalse(active.finished)
         self.assertEqual((active.scan_tool, active.detect_protocol), ("nmap", False))
 
     def test_due_state_query_applies_cycle_target_boundary(self):
@@ -731,6 +823,7 @@ class StalledJobWatchdogTest(TestCase):
             id=7,
             name="profile",
             priority=2,
+            scan_tool="nmap",
             nmap_additional_params="-4",
         )
         target = SimpleNamespace(id=1, value="8.8.0.0/16", working=False)
@@ -855,6 +948,7 @@ class StalledJobWatchdogTest(TestCase):
                 priority=3,
                 scan_cycle_minutes=60,
                 apply_to_all=True,
+                scan_enabled=True,
                 nmap_additional_params=None,
             ),
             SimpleNamespace(
@@ -863,6 +957,7 @@ class StalledJobWatchdogTest(TestCase):
                 priority=2,
                 scan_cycle_minutes=60,
                 apply_to_all=True,
+                scan_enabled=True,
                 nmap_additional_params=None,
             ),
         ]
@@ -915,6 +1010,7 @@ class StalledJobWatchdogTest(TestCase):
                 "_stage_jobs_for_profile",
                 return_value={
                     "scheduled_states": 256,
+                    "unsupported_state_ids": set(),
                     "range_jobs": 1,
                     "host_jobs": 0,
                 },
@@ -943,6 +1039,7 @@ class StalledJobWatchdogTest(TestCase):
             priority=3,
             scan_cycle_minutes=60,
             apply_to_all=True,
+            scan_enabled=True,
             nmap_additional_params=None,
         )
         cycle = SimpleNamespace(
@@ -993,6 +1090,7 @@ class StalledJobWatchdogTest(TestCase):
                 "_stage_jobs_for_profile",
                 return_value={
                     "scheduled_states": 256,
+                    "unsupported_state_ids": set(),
                     "range_jobs": 0,
                     "host_jobs": 1,
                 },

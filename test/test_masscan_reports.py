@@ -1,13 +1,21 @@
 """Protocol evidence from stored reports must survive indexing and retagging."""
 
+from copy import deepcopy
 from pathlib import Path
 from unittest import TestCase
 
 import yaml
-from app.utils.index_reconciliation import FIELDS
+from app.utils.index_reconciliation import (
+    FIELDS,
+    exact_anchor,
+    index_for,
+    load_document,
+)
 from app.utils.result_parser import parse_json, prepare_kvrocks_document
 from app.utils.tag_reconciliation import RulePlan
 from app.utils.tagrules import compile_tag_rule_definition
+from app.views import KVSearchView
+from test.test_reimport_history import MemoryStore
 
 
 class SavedReportTests(TestCase):
@@ -93,6 +101,84 @@ class SavedReportTests(TestCase):
         )
         detection = {"id": "masscan-detection", "service": "rdp"}
         self.check_tags({"portid": "3390", "scripts": [detection]}, ["proto:rdp"])
+
+    def test_rdp_nse_evidence_is_indexed(self):
+        """Use structured detection even when Nmap only labels the port by number."""
+        port = {
+            "portid": "3389",
+            "service": {"name": "ms-wbt-server", "method": "table"},
+        }
+        for script_id in ("rdp", "rdp-info"):
+            with self.subTest(script_id=script_id):
+                port["scripts"] = [{"id": script_id, "rdp": "unknown"}]
+                self.check_tags(port, [])
+                port["scripts"] = [{"id": script_id, "rdp": "detected"}]
+                indexed = self.check_tags(port, ["proto:rdp"])
+                self.assertEqual(indexed["service"], ["rdp"])
+
+    def test_rdp_rule_matches_nse_output_without_persisting_it(self):
+        """Read raw output on ingestion and again when retagging."""
+        marker = "tag: _plum_tag_:proto:rdp"
+        output = f"target_name: BETZDORF-WASSER\n{marker}"
+        raw = {
+            "id": "tagged-nse",
+            "ip": "93.184.216.34",
+            "body": {
+                "endtime": "100",
+                "ports": [
+                    {
+                        "portid": "3389",
+                        "scripts": [
+                            {
+                                "id": "rdp",
+                                "output": output,
+                            },
+                        ],
+                    }
+                ],
+            },
+        }
+        evidence = parse_json(raw, {}, tag_rules=[])
+        self.assertNotIn("tag", evidence)
+        self.assertNotIn("nse_body", evidence)
+        self.assertNotIn("service", evidence)
+        self.assertEqual(parse_json(raw, {}, tag_rules=self.rules)["tag"], ["proto:rdp"])
+        other_script = deepcopy(raw)
+        other_script["body"]["ports"][0]["scripts"][0]["id"] = "other-nse"
+        self.assertNotIn("tag", parse_json(other_script, {}, tag_rules=self.rules))
+        site_rule = compile_tag_rule_definition(
+            "site",
+            "",
+            'nse.body.lk:"target_name: BETZDORF-WASSER"',
+            ["site:betzdorf-wasser"],
+        )
+        self.assertEqual(
+            parse_json(raw, {}, tag_rules=[site_rule])["tag"], ["site:betzdorf-wasser"]
+        )
+        indexed = prepare_kvrocks_document(raw, evidence, tag_rules=self.rules)
+        self.assertEqual(indexed["tag"], ["proto:rdp"])
+        store = MemoryStore()
+        indexer = index_for(store)
+        indexer.add_documents_batch([evidence])
+        self.assertFalse(store.smembers("tag:proto:rdp"))
+        restored = load_document(store, raw["id"])
+        self.assertNotIn("nse_body", restored)
+        tags, _ = self.plan.evaluate(restored, force=True, source=raw)
+        self.assertEqual(tags, ["proto:rdp"])
+        self.assertEqual(
+            RulePlan(dict(self.plan.snapshot, rules={})).evaluate(restored, source=raw)[0],
+            [],
+        )
+        self.assertFalse(
+            KVSearchView().parse_query(f'nse.body:rdp.lk:"{marker}"')[1]
+        )
+        self.assertIsNone(
+            exact_anchor(store, {"nse_body": [f"rdp:{marker}"]}, {})
+        )
+        indexer.add_documents_batch([indexed])
+        self.assertEqual(store.smembers("tag:proto:rdp"), {raw["id"]})
+        self.assertFalse(any(key.startswith("nse_body") for key in store.data))
+        self.assertNotIn("nse_body", store.hgetall(f"doc:{raw['id']}"))
 
     def test_ftp_protocol_requires_observed_evidence(self):
         """Verify ftp protocol requires observed evidence."""

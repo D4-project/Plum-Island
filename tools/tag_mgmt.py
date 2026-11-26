@@ -1121,11 +1121,10 @@ def request_reconciliation(full=False, endpoint=None):
         KVrocksIndexer,
     )  # pylint: disable=import-outside-toplevel
     from app.utils.index_reconciliation import (
-        queue_snapshot,
         reconciliation_status,
     )  # pylint: disable=import-outside-toplevel
     from app.utils.tag_runtime import (
-        desired_snapshot,
+        queue_committed_snapshot,
     )  # pylint: disable=import-outside-toplevel
 
     configured = (app.config["KVROCKS_HOST"], int(app.config["KVROCKS_PORT"]))
@@ -1135,7 +1134,7 @@ def request_reconciliation(full=False, endpoint=None):
         )
     with app.app_context():
         raw = KVrocksIndexer(*configured).raw
-        queue_snapshot(raw, desired_snapshot(), full=full)
+        queue_committed_snapshot(raw, full=full)
         return reconciliation_status(raw)
 
 
@@ -1204,6 +1203,14 @@ def run_import(args):
     Run an import/flush operation and print its summary.
     """
     summary = import_rules(args)
+    if not args.dry_run and any(
+        summary.get(key) for key in ("inserted", "updated", "deleted")
+    ):
+        from app.utils.tag_runtime import (  # pylint: disable=import-outside-toplevel
+            notify_rule_change,
+        )
+
+        notify_rule_change()
     print_import_summary(args, summary)
     return summary
 
@@ -1304,6 +1311,12 @@ def run_delete(args):
     Run a DB tag-rule delete operation and print its summary.
     """
     summary = delete_rules(args)
+    if not args.dry_run and summary["deleted"]:
+        from app.utils.tag_runtime import (  # pylint: disable=import-outside-toplevel
+            notify_rule_change,
+        )
+
+        notify_rule_change()
     print(
         "Tag delete complete: "
         f"selector={summary['selector']} "

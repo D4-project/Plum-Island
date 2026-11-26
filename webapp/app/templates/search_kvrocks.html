@@ -155,6 +155,42 @@ function resetTagLookups() {
 function renderIpTags(ip, tags) {
     const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
     window.renderIpTagBadges(target, tags);
+    updateSearchIpTagsVisibility(ip);
+    window.fitSearchBadgeRow(target);
+}
+
+function updateSearchIpTagsVisibility(ip) {
+    const container = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`)?.parentElement;
+    if (!container) return;
+    const tagList = container.querySelector('.search-ip-tag-list');
+    const hostnameList = container.querySelector('.search-ip-requested-hostnames');
+    container.hidden = (!tagList || tagList.hidden) && (!hostnameList || hostnameList.hidden);
+}
+
+function renderIpRequestedHostnames(ip, hostnames, ptrHostnames) {
+    const target = document.querySelector(`[data-search-ip-requested-hostnames="${CSS.escape(ip)}"]`);
+    if (!target) return;
+    const ptrs = [...new Set((ptrHostnames || []).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b));
+    const ptrSet = new Set(ptrs);
+    const requested = [...new Set((hostnames || []).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean))]
+        .filter((name) => !ptrSet.has(name))
+        .sort((a, b) => a.localeCompare(b));
+    const hostnameBadges = [
+        ...ptrs.map((name) => ({name, isPtr: true})),
+        ...requested.map((name) => ({name, isPtr: false}))
+    ];
+    target.replaceChildren();
+    target.hidden = hostnameBadges.length === 0;
+    for (const {name: hostname, isPtr} of hostnameBadges) {
+        const badge = document.createElement('span');
+        badge.className = `ip-detail-tag search-ip-tag ${isPtr ? 'search-ip-ptr-hostname' : 'search-ip-requested-hostname'}`;
+        badge.title = isPtr ? `PTR: ${hostname}` : `Requested hostname: ${hostname}`;
+        badge.textContent = hostname;
+        target.appendChild(badge);
+    }
+    updateSearchIpTagsVisibility(ip);
+    window.fitSearchBadgeRow(target);
 }
 
 function updateIpTimestamps(ip, timestampData) {
@@ -273,6 +309,7 @@ async function readJsonResponse(res) {
 ipTagEnricher = window.createIpTagEnricher({
     readJsonResponse,
     renderTags: renderIpTags,
+    renderRequestedHostnames: renderIpRequestedHostnames,
     renderTimestamps: updateIpTimestamps
 });
 
@@ -1139,8 +1176,17 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
 
         const tagContainer = document.createElement('span');
         tagContainer.className = 'search-ip-tags';
-        tagContainer.dataset.searchIpTags = ipLabel;
         tagContainer.hidden = true;
+        const tagList = document.createElement('span');
+        tagList.className = 'search-ip-tag-list';
+        tagList.dataset.searchIpTags = ipLabel;
+        tagList.hidden = true;
+        tagContainer.appendChild(tagList);
+        const requestedHostnamesRow = document.createElement('span');
+        requestedHostnamesRow.className = 'search-ip-requested-hostnames';
+        requestedHostnamesRow.dataset.searchIpRequestedHostnames = ipLabel;
+        requestedHostnamesRow.hidden = true;
+        tagContainer.appendChild(requestedHostnamesRow);
         title.appendChild(tagContainer);
 
         if (ipMeta) {
@@ -1373,6 +1419,8 @@ document.addEventListener('DOMContentLoaded', () => {
     display: flex;
     flex-wrap: nowrap;
     gap: 0.4rem;
+    width: 100%;
+    min-width: 0;
 }
 .panel-title > a,
 .panel-title > button {
@@ -1398,14 +1446,40 @@ document.addEventListener('DOMContentLoaded', () => {
 }
 .search-ip-tags {
     display: inline-flex;
-    align-items: center;
-    flex-wrap: wrap;
-    flex: 1 1 auto;
-    gap: 0.25rem;
+    flex-direction: column;
+    align-items: flex-start;
+    flex: 1 1 0%;
+    gap: 6px;
     min-width: 0;
+    max-width: 100%;
     margin-left: 0.4rem;
+    overflow: hidden;
     vertical-align: middle;
 }
+.search-ip-tags[hidden], .search-ip-tag-list[hidden] { display: none !important; }
+.search-ip-tags.is-expanded { overflow: visible; }
+.search-ip-tag-list {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+}
+.search-ip-requested-hostnames {
+    display: flex;
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 0.25rem;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+}
+.search-ip-requested-hostnames[hidden] { display: none !important; }
+.search-ip-tag-list[data-expanded="true"], .search-ip-requested-hostnames[data-expanded="true"] { flex-wrap: wrap; overflow: visible; }
 .ip-detail-tag {
     background: #337ab7;
     border-radius: 999px;
@@ -1417,8 +1491,14 @@ document.addEventListener('DOMContentLoaded', () => {
     padding: 0.2rem 0.5rem;
 }
 .search-ip-tag {
+    flex: 0 0 auto;
     white-space: nowrap;
 }
+.search-ip-tag .plum-tag-value { white-space: nowrap; }
+.search-ip-requested-hostname { background: #edf4fc; border: 1px solid #ccddf0; color: #315f91; }
+.search-ip-ptr-hostname { background: #f1f1f1; border: 1px solid #bdbdbd; color: #000; }
+.search-ip-more { background: transparent; border: 0; color: #687987; cursor: pointer; flex: 0 0 auto; font-size: 12px; padding: 0; white-space: nowrap; }
+.search-ip-more:hover, .search-ip-more:focus { color: #315f91; text-decoration: underline; }
 .ip-detail-tag-vuln {
     background: #d9534f;
 }

@@ -41,6 +41,7 @@ class PlumSettingsUiTest(unittest.TestCase):
         )
         self.enterContext(patch.dict(os.environ))
         os.environ.pop("PLUM_SETTINGS_SNAPSHOT", None)
+        os.environ.pop("PLUM_INDEX_HTTP_DEBUG", None)
         self.app = Flask("settings-ui", root_path=str(ROOT / "webapp/app"))
         self.app.config.update(
             SECRET_KEY="test-settings-csrf-only",
@@ -137,21 +138,33 @@ class PlumSettingsUiTest(unittest.TestCase):
             ):
                 self.app.jinja_env.cache.clear()
                 page = self.page()
-                self.assertEqual(page.count('<section class="settings-card"'), 11)
-                self.assertEqual(page.count("<strong>Default:</strong>"), 53)
-                self.assertEqual(page.count("<strong>Restart required:</strong>"), 52)
+                self.assertEqual(page.count('class="settings-card"'), 12)
+                self.assertEqual(page.count("<strong>Default:</strong>"), 55)
+                self.assertEqual(page.count("<strong>Restart required:</strong>"), 54)
                 self.assertIn('name="MAP_ENABLED"', page)
                 self.assertNotIn("MAP_TILE_URL", page)
                 self.assertNotIn("MAP_TILE_ATTRIBUTION", page)
                 self.assertNotIn("LOG_ROTATION_DAYS", page)
                 self.assertNotIn("Legacy rotation interval", page)
                 self.assertIn('name="LOG_RETENTION_DAYS"', page)
+                logging_tab = page.partition("<h2>Logging</h2>")[2].partition(
+                    "</section>"
+                )[0]
+                self.assertRegex(
+                    logging_tab,
+                    r'(?s)name="LOG_LEVEL".*?name="TAG_RECONCILIATION_HTTP_DEBUG"[^>]*>\s*'
+                    r'<option value="true">[^<]*</option>\s*'
+                    r'<option value="false" selected>',
+                )
                 self.assertIn("Restart Plum-Agent to apply changes.", page)
                 self.assertNotIn("Web application and scheduler", page)
                 self.assertNotIn("Use runtime default", page)
                 self.assertRegex(page, r'name="KVROCKS_PORT"[^>]*value="6666"')
                 self.assertRegex(
                     page, r'name="MEILI_HTTP_TIMEOUT_SECONDS"[^>]*value="10"'
+                )
+                self.assertRegex(
+                    page, r'name="TAG_RECONCILIATION_MEILI_BATCH_SIZE"[^>]*value="32"'
                 )
                 self.assertIn('<option value="false" selected>False', page)
                 self.assertIn("<option selected>WARNING</option>", page)
@@ -208,7 +221,12 @@ class PlumSettingsUiTest(unittest.TestCase):
         self.assertEqual(self.runtime.store.desired()["revision"], "0")
         response = self.client.post(
             "/plumsettings/",
-            data={**form, "KVROCKS_PORT": "7777"},
+            data={
+                **form,
+                "KVROCKS_PORT": "7777",
+                "TAG_RECONCILIATION_HTTP_DEBUG": "true",
+                "TAG_RECONCILIATION_MEILI_BATCH_SIZE": "24",
+            },
             follow_redirects=True,
         )
         self.assertEqual(response.status_code, 200)
@@ -218,7 +236,14 @@ class PlumSettingsUiTest(unittest.TestCase):
         )
         self.assertIn(b"Default:</strong> 6666", response.data)
         saved = self.runtime.store.desired()
-        self.assertEqual(saved["overrides"], {"KVROCKS_PORT": 7777})
+        self.assertEqual(
+            saved["overrides"],
+            {
+                "KVROCKS_PORT": 7777,
+                "TAG_RECONCILIATION_HTTP_DEBUG": True,
+                "TAG_RECONCILIATION_MEILI_BATCH_SIZE": 24,
+            },
+        )
         self.assertNotIn("KVROCKS_PORT", self.app.config)
         response = self.client.post(
             "/plumsettings/", data={**form, "KVROCKS_PORT": "8888"}

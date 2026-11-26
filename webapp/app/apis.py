@@ -27,11 +27,11 @@ from flask_appbuilder.api import API_RESULT_RES_KEY, BaseApi, expose, safe, prot
 from flask_appbuilder.filemanager import FileManager
 from flask import request
 
-from sqlalchemy import func, distinct, false, or_
+from sqlalchemy import and_, exists, func, distinct, false, or_
 from sqlalchemy.exc import IntegrityError, NoResultFound
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
-from marshmallow import Schema, fields, validate, validates, ValidationError
+from marshmallow import EXCLUDE, Schema, fields, validate, validates, ValidationError
 from .utils.scan_stats import claim_completed_job, increment_completed_counters
 from .models import (
     Targets,
@@ -41,7 +41,9 @@ from .models import (
     Nses,
     Ports,
     Protos,
+    FilteredScanTargets,
     ScanProfiles,
+    ScanProfileCycles,
     TargetScanStates,
     assoc_jobs_targets,
 )
@@ -55,7 +57,7 @@ from .utils.tagrules import normalize_tags
 from .utils.timeutils import utcnow_naive, ensure_utc_naive
 from .utils.scan_cycles import reconcile_scanprofile_cycle
 from .utils.network_enrichment import request_network_refresh
-from .views import TargetsView
+from .views import SearchFilterUnavailable, TargetsView, validate_profile_search_query
 
 
 class BotInfoSchema(Schema):
@@ -116,6 +118,12 @@ class BotInfoSchema(Schema):
         metadata={"description": "Tools reported by the agent at startup"},
     )
     masscan_ip = fields.String(allow_none=True)
+    masscan_ip_v4 = fields.String(allow_none=True)
+    masscan_ip_v6 = fields.String(allow_none=True)
+    masscan_families = fields.List(
+        fields.String(validate=validate.OneOf(("ipv4", "ipv6"))),
+        validate=validate.Length(max=2),
+    )
 
     @validates("masscan_ip")
     def validate_masscan_source(self, value, **_kwargs):
@@ -133,6 +141,28 @@ class BotInfoSchema(Schema):
             or address.is_link_local
         ):
             raise ValidationError("Masscan source must be a unicast address")
+
+    @validates("masscan_ip_v4")
+    def validate_masscan_ipv4_source(self, value, **_kwargs):
+        self._validate_masscan_family_source(value, 4)
+
+    @validates("masscan_ip_v6")
+    def validate_masscan_ipv6_source(self, value, **_kwargs):
+        self._validate_masscan_family_source(value, 6)
+
+    @staticmethod
+    def _validate_masscan_family_source(value, version):
+        if value is None:
+            return
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as error:
+            raise ValidationError("Invalid Masscan source IP") from error
+        if address.version != version or any((
+            address.is_unspecified, address.is_multicast,
+            address.is_loopback, address.is_link_local,
+        )):
+            raise ValidationError(f"Masscan source must be a unicast IPv{version} address")
 
     # Custom validator for the parameters
     @validates("UID")
@@ -207,6 +237,11 @@ class BotJobReleaseSchema(Schema):
         allow_none=True,
         metadata={"description": "Optional interruption reason"},
     )
+
+    class Meta:
+        # Agent releases reuse its standard beacon payload; ignore metadata
+        # fields that are not relevant to returning the claimed job.
+        unknown = EXCLUDE
 
     @validates("UID")
     def validate_uid(self, value, **_kwargs):
@@ -349,13 +384,64 @@ def _compatible_job_filter(bot):
     if bot.has_nmap:
         predicates.append(or_(Jobs.scan_tool == "nmap", Jobs.scan_tool.is_(None)))
     if bot.has_masscan:
-        masscan_filter = Jobs.scan_tool == "masscan"
-        if not bot.masscan_ip:
-            masscan_filter = masscan_filter & or_(
-                Jobs.detect_protocol == False, Jobs.detect_protocol.is_(None)
-            )
+        supported = []
+        if getattr(bot, "masscan_ipv4", False):
+            supported.append(Jobs.scan_family == "ipv4")
+        if getattr(bot, "masscan_ipv6", False):
+            supported.append(Jobs.scan_family == "ipv6")
+        if not supported:
+            return or_(*predicates) if predicates else false()
+        family = or_(*supported)
+        legacy_source = getattr(bot, "masscan_ip", None)
+        try:
+            legacy_version = ipaddress.ip_address(legacy_source).version
+        except (TypeError, ValueError):
+            legacy_version = None
+        source_v4 = bool(
+            getattr(bot, "masscan_ip_v4", None)
+            or (legacy_source if legacy_version == 4 else None)
+        )
+        source_v6 = bool(
+            getattr(bot, "masscan_ip_v6", None)
+            or (legacy_source if legacy_version == 6 else None)
+        )
+        banner_source = or_(
+            and_(Jobs.scan_family == "ipv4", source_v4),
+            and_(Jobs.scan_family == "ipv6", source_v6),
+        )
+        masscan_filter = and_(Jobs.scan_tool == "masscan", family)
+        masscan_filter = masscan_filter & or_(
+            Jobs.detect_protocol == False,
+            Jobs.detect_protocol.is_(None),
+            banner_source,
+        )
         predicates.append(masscan_filter)
     return or_(*predicates) if predicates else false()
+
+
+def _dispatchable_profile_filter():
+    """Reject jobs belonging to disabled profiles or stale search cycles."""
+    current_filter = exists().where(
+        and_(
+            ScanProfiles.id == Jobs.scanprofile_id,
+            ScanProfiles.scan_enabled.is_(True),
+            ScanProfileCycles.id == Jobs.scanprofile_cycle_id,
+            ScanProfileCycles.scanprofile_id == ScanProfiles.id,
+            ScanProfileCycles.filter_revision == ScanProfiles.filter_revision,
+        )
+    )
+    ordinary_profile = exists().where(
+        and_(
+            ScanProfiles.id == Jobs.scanprofile_id,
+            ScanProfiles.scan_enabled.is_(True),
+            or_(
+                ScanProfiles.apply_to_all.is_(True),
+                ScanProfiles.search_query.is_(None),
+                ScanProfiles.search_query == "",
+            ),
+        )
+    )
+    return or_(Jobs.scanprofile_id.is_(None), ordinary_profile, current_filter)
 
 
 def _claim_job_for_bot(job_id, bot, now, attempt_uid=None):
@@ -372,6 +458,7 @@ def _claim_job_for_bot(job_id, bot, now, attempt_uid=None):
             Jobs.active == False,
             Jobs.finished == False,
             _compatible_job_filter(bot),
+            _dispatchable_profile_filter(),
         )
         .update(
             {
@@ -430,7 +517,10 @@ def _get_available_job_priorities(bot):
     rows = (
         db.session.query(Jobs.priority)
         .filter(
-            Jobs.active == False, Jobs.finished == False, _compatible_job_filter(bot)
+            Jobs.active == False,
+            Jobs.finished == False,
+            _compatible_job_filter(bot),
+            _dispatchable_profile_filter(),
         )
         .distinct()
         .all()
@@ -703,6 +793,21 @@ class Api(BaseApi):
 
         tools = botinfo.get("capabilities", ["nmap"])
         capabilities_reported = "capabilities" in botinfo
+        families = botinfo.get("masscan_families")
+        if families is None:
+            families = ["ipv4"] if "masscan" in tools else []
+        legacy_masscan_ip = botinfo.get("masscan_ip") if "masscan" in tools else None
+        masscan_ip_v4 = botinfo.get("masscan_ip_v4") if "masscan" in tools else None
+        masscan_ip_v6 = botinfo.get("masscan_ip_v6") if "masscan" in tools else None
+        if legacy_masscan_ip:
+            try:
+                legacy_version = ipaddress.ip_address(legacy_masscan_ip).version
+                if legacy_version == 4 and masscan_ip_v4 is None:
+                    masscan_ip_v4 = legacy_masscan_ip
+                elif legacy_version == 6 and masscan_ip_v6 is None:
+                    masscan_ip_v6 = legacy_masscan_ip
+            except ValueError:
+                pass
         new_bot = Bots(
             # Last Seen is autoupdated at creation
             uid=botinfo.get("UID"),
@@ -713,7 +818,11 @@ class Api(BaseApi):
             system_version=botinfo.get("SYSTEM_VERSION"),
             has_nmap="nmap" in tools,
             has_masscan="masscan" in tools,
-            masscan_ip=botinfo.get("masscan_ip") if "masscan" in tools else None,
+            masscan_ip=legacy_masscan_ip,
+            masscan_ip_v4=masscan_ip_v4,
+            masscan_ip_v6=masscan_ip_v6,
+            masscan_ipv4="ipv4" in families and "masscan" in tools,
+            masscan_ipv6="ipv6" in families and "masscan" in tools,
             supports_job_attempts=capabilities_reported,
         )
 
@@ -733,9 +842,11 @@ class Api(BaseApi):
                     Bots.system_version: botinfo.get("SYSTEM_VERSION"),
                     Bots.has_nmap: "nmap" in tools,
                     Bots.has_masscan: "masscan" in tools,
-                    Bots.masscan_ip: (
-                        botinfo.get("masscan_ip") if "masscan" in tools else None
-                    ),
+                    Bots.masscan_ip: legacy_masscan_ip,
+                    Bots.masscan_ip_v4: masscan_ip_v4,
+                    Bots.masscan_ip_v6: masscan_ip_v6,
+                    Bots.masscan_ipv4: "ipv4" in families and "masscan" in tools,
+                    Bots.masscan_ipv6: "ipv6" in families and "masscan" in tools,
                     Bots.supports_job_attempts: capabilities_reported,
                 },
                 synchronize_session="fetch",
@@ -796,6 +907,7 @@ class Api(BaseApi):
                     Jobs.finished == False,
                     Jobs.priority == prio,
                     _compatible_job_filter(job_bot),
+                    _dispatchable_profile_filter(),
                 )
                 .order_by(Jobs.job_creation.asc())  # oldest first
                 .first()
@@ -829,6 +941,7 @@ class Api(BaseApi):
                 "job": job_todo.job,
                 "job_uid": job_todo.uid,
                 "scan_tool": scan_tool,
+                "scan_family": getattr(job_todo, "scan_family", None),
                 "report_target_count": True,
                 "attempt_uid": job_todo.attempt_uid,
                 "scan_ports": (
@@ -1109,6 +1222,19 @@ class Api(BaseApi):
         job_bot.finished = True
         job_bot.active = False
         job_bot.job_end = now
+        for work in (
+            db.session.query(FilteredScanTargets)
+            .filter(FilteredScanTargets.job_id == job_bot.id)
+            .all()
+        ):
+            completed_ports = {
+                int(port) for port in (work.completed_ports or "").split(",") if port
+            }
+            completed_ports.update(
+                int(port) for port in (work.ports or "").split(",") if port
+            )
+            work.status = "completed"
+            work.completed_ports = ",".join(map(str, sorted(completed_ports)))
         submitting_bot.running = False
         submitting_bot.last_seen = now
 
@@ -1224,6 +1350,9 @@ class ScanProfilesApi(BaseApi):
         "scan_cycle_minutes",
         "priority",
         "apply_to_all",
+        "search_query",
+        "scan_enabled",
+        "filter_enabled",
     }
 
     @staticmethod
@@ -1236,12 +1365,18 @@ class ScanProfilesApi(BaseApi):
             "scan_cycle_minutes": profile.scan_cycle_minutes,
             "priority": profile.priority,
             "apply_to_all": profile.apply_to_all,
+            "scan_enabled": profile.scan_enabled,
+            "filter_enabled": profile.scan_enabled,
         }
 
     @classmethod
     def _serialize(cls, profile):
         return {
             **cls._summary(profile),
+            "search_query": profile.search_query,
+            "scan_enabled": profile.scan_enabled,
+            "filter_enabled": profile.scan_enabled,
+            "filter_revision": profile.filter_revision,
             "port_ids": sorted(port.id for port in profile.ports),
             "nse_ids": sorted(nse.id for nse in profile.nses),
         }
@@ -1344,6 +1479,33 @@ class ScanProfilesApi(BaseApi):
             raise ValueError("'scan_tool' must be 'nmap' or 'masscan'")
         return value
 
+    @staticmethod
+    def _validate_search_draft(payload, item=None):
+        apply_to_all = payload.get("apply_to_all", item.apply_to_all if item else False)
+        if apply_to_all:
+            if payload.get("search_query") is not None:
+                raise ValueError("'search_query' requires 'apply_to_all' to be false")
+            if not payload.get("ports", item.ports if item else []):
+                raise ValueError("'port_ids' must contain at least one port ID")
+            return
+        query = payload.get("search_query", item.search_query if item else None)
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError(
+                "A non-empty 'search_query' is required unless 'apply_to_all' is true"
+            )
+        if query is not None or "search_query" in payload:
+            validated = validate_profile_search_query(
+                query,
+                require_candidate=payload.get(
+                    "scan_enabled",
+                    payload.get(
+                        "filter_enabled", item.scan_enabled if item else True
+                    ),
+                ),
+            )
+            if "search_query" in payload:
+                payload["search_query"] = validated
+
     def _validated_create_payload(self, data):
         self._require_json_object(data)
         self._reject_unknown_fields(data)
@@ -1358,7 +1520,7 @@ class ScanProfilesApi(BaseApi):
         port_ids = self._normalize_id_list(
             data.get("port_ids", []),
             "port_ids",
-            allow_empty=False,
+            allow_empty=bool(data.get("search_query")) and not data.get("apply_to_all"),
         )
         nse_ids = self._normalize_id_list(data.get("nse_ids", []), "nse_ids")
 
@@ -1377,11 +1539,16 @@ class ScanProfilesApi(BaseApi):
                 data.get("apply_to_all", False),
                 "apply_to_all",
             ),
+            "search_query": data.get("search_query"),
+            "scan_enabled": self._normalize_boolean(
+                data.get("scan_enabled", data.get("filter_enabled", True)),
+                "scan_enabled",
+            ),
             "ports": self._get_related_records(Ports, port_ids, "port"),
             "nses": self._get_related_records(Nses, nse_ids, "NSE"),
         }
 
-    def _validated_update_payload(self, data, pk):
+    def _validated_update_payload(self, data, pk, item):
         self._require_json_object(data)
         self._reject_unknown_fields(data)
         self._require_update_fields(data)
@@ -1414,11 +1581,20 @@ class ScanProfilesApi(BaseApi):
                 "apply_to_all",
             )
 
+        if "search_query" in data:
+            payload["search_query"] = data["search_query"]
+        if "scan_enabled" in data or "filter_enabled" in data:
+            enabled_value = data.get("scan_enabled", data.get("filter_enabled"))
+            payload["scan_enabled"] = self._normalize_boolean(
+                enabled_value, "scan_enabled"
+            )
+
         if "port_ids" in data:
             port_ids = self._normalize_id_list(
                 data["port_ids"],
                 "port_ids",
-                allow_empty=False,
+                allow_empty=bool(payload.get("search_query", item.search_query))
+                and not payload.get("apply_to_all", item.apply_to_all),
             )
             payload["ports"] = self._get_related_records(Ports, port_ids, "port")
 
@@ -1497,11 +1673,12 @@ class ScanProfilesApi(BaseApi):
         post:
           summary: Create a new scan profile.
           description: |
-            Accepts a JSON body with ``name`` and at least one port ID in
-            ``port_ids``. Optional fields are ``nse_ids``,
+            Accepts a JSON body with ``name``. Target-based profiles require
+            at least one port ID in ``port_ids``. Optional fields are ``nse_ids``,
             ``scan_cycle_minutes`` (default 720), ``priority`` (0-4, default 0),
             ``apply_to_all`` (default false), ``scan_tool`` (default nmap), and
-            ``detect_protocol`` (default false).
+            ``detect_protocol`` (default false). An optional ``search_query``
+            stores a verified historical search draft when ``apply_to_all`` is false.
           requestBody:
             required: true
             content:
@@ -1510,7 +1687,6 @@ class ScanProfilesApi(BaseApi):
                   type: object
                   required:
                     - name
-                    - port_ids
                   properties:
                     name:
                       type: string
@@ -1521,7 +1697,6 @@ class ScanProfilesApi(BaseApi):
                       type: boolean
                     port_ids:
                       type: array
-                      minItems: 1
                       items:
                         type: integer
                     nse_ids:
@@ -1536,6 +1711,14 @@ class ScanProfilesApi(BaseApi):
                       enum: [0, 1, 2, 3, 4]
                     apply_to_all:
                       type: boolean
+                    scan_enabled:
+                      type: boolean
+                    filter_enabled:
+                      type: boolean
+                      deprecated: true
+                    search_query:
+                      type: string
+                      nullable: true
           responses:
             "201":
               description: Scan profile created successfully.
@@ -1543,19 +1726,27 @@ class ScanProfilesApi(BaseApi):
               description: Request exceeds the configured body size limit.
             "400":
               description: Missing/invalid fields or duplicate name.
+            "503":
+              description: Historical search verification unavailable.
         """
         try:
             data = request.get_json(silent=True)
             payload = self._validated_create_payload(data)
-            ScanProfiles.validate_banner_support(
-                db.session, payload["scan_tool"], payload["detect_protocol"]
-            )
+            if payload["scan_enabled"]:
+                ScanProfiles.validate_banner_support(
+                    db.session, payload["scan_tool"], payload["detect_protocol"]
+                )
+            self._validate_search_draft(payload)
+        except SearchFilterUnavailable as error:
+            return self.response(503, message=str(error))
         except RequestEntityTooLarge:
             return self.response(413, message="Request exceeds configured size limit")
         except ValueError as error:
             return self.response_400(message=str(error))
 
         item = ScanProfiles(**payload)
+        if item.search_query and not item.apply_to_all:
+            item.filter_revision = 1
         db.session.add(item)
         try:
             db.session.commit()
@@ -1608,6 +1799,9 @@ class ScanProfilesApi(BaseApi):
                             type: integer
                           apply_to_all:
                             type: boolean
+                          search_query:
+                            type: string
+                            nullable: true
                           port_ids:
                             type: array
                             items:
@@ -1637,7 +1831,7 @@ class ScanProfilesApi(BaseApi):
           description: |
             Accepts a JSON body with any subset of ``name``, ``port_ids``,
             ``nse_ids``, ``scan_cycle_minutes``, ``priority``, ``apply_to_all``,
-            ``scan_tool``, and ``detect_protocol``.
+            ``scan_tool``, ``detect_protocol``, and ``search_query``.
           parameters:
             - in: path
               name: pk
@@ -1661,7 +1855,6 @@ class ScanProfilesApi(BaseApi):
                       type: boolean
                     port_ids:
                       type: array
-                      minItems: 1
                       items:
                         type: integer
                     nse_ids:
@@ -1676,6 +1869,14 @@ class ScanProfilesApi(BaseApi):
                       enum: [0, 1, 2, 3, 4]
                     apply_to_all:
                       type: boolean
+                    scan_enabled:
+                      type: boolean
+                    filter_enabled:
+                      type: boolean
+                      deprecated: true
+                    search_query:
+                      type: string
+                      nullable: true
           responses:
             "200":
               description: Updated scan profile object.
@@ -1685,6 +1886,8 @@ class ScanProfilesApi(BaseApi):
               description: Invalid fields or name collision.
             "404":
               description: Scan profile not found.
+            "503":
+              description: Historical search verification unavailable.
         """
         item = (
             db.session.query(ScanProfiles).filter(ScanProfiles.id == pk).one_or_none()
@@ -1694,12 +1897,16 @@ class ScanProfilesApi(BaseApi):
 
         try:
             data = request.get_json(silent=True)
-            payload = self._validated_update_payload(data, pk)
-            ScanProfiles.validate_banner_support(
-                db.session,
-                payload.get("scan_tool", item.scan_tool),
-                payload.get("detect_protocol", item.detect_protocol),
-            )
+            payload = self._validated_update_payload(data, pk, item)
+            if payload.get("scan_enabled", item.scan_enabled):
+                ScanProfiles.validate_banner_support(
+                    db.session,
+                    payload.get("scan_tool", item.scan_tool),
+                    payload.get("detect_protocol", item.detect_protocol),
+                )
+            self._validate_search_draft(payload, item)
+        except SearchFilterUnavailable as error:
+            return self.response(503, message=str(error))
         except RequestEntityTooLarge:
             return self.response(413, message="Request exceeds configured size limit")
         except ValueError as error:
@@ -1707,6 +1914,8 @@ class ScanProfilesApi(BaseApi):
 
         for field_name, value in payload.items():
             setattr(item, field_name, value)
+        if item.search_query and not item.apply_to_all:
+            item.filter_revision = int(item.filter_revision or 0) + 1
         item.priority_retag_pending = True
 
         try:

@@ -1,7 +1,83 @@
 (function (global) {
     'use strict';
 
-    const DEFAULT_BATCH_SIZE = 200;
+    const DEFAULT_BATCH_SIZE = 5;
+    const MAX_CONCURRENT_BATCHES = 4;
+    const badgeRowObservers = new WeakMap();
+
+    function fitBadgeRow(target) {
+        if (!target || target.hidden || target.clientWidth <= 0) {
+            return;
+        }
+        const badges = [...target.children].filter(
+            (badge) => !badge.classList.contains('search-ip-more')
+        );
+        if (target.dataset.expanded === 'true') {
+            badges.forEach((badge) => badge.style.removeProperty('display'));
+            target.querySelector('.search-ip-more')?.remove();
+            return;
+        }
+        let summary = target.querySelector('.search-ip-more');
+        if (!summary) {
+            summary = document.createElement('button');
+            summary.type = 'button';
+            summary.className = 'search-ip-more';
+            summary.addEventListener('click', () => {
+                target.dataset.expanded = 'true';
+                target.closest('.search-ip-tags')?.classList.add('is-expanded');
+                fitBadgeRow(target);
+            });
+            target.appendChild(summary);
+        }
+        badges.forEach((badge) => badge.style.removeProperty('display'));
+        summary.style.display = 'none';
+        if (badges.length === 0) {
+            return;
+        }
+        const styles = global.getComputedStyle(target);
+        const gap = Number.parseFloat(styles.columnGap || styles.gap) || 0;
+        const availableWidth = target.clientWidth;
+        const fullWidth = badges.reduce(
+            (width, badge) => width + badge.getBoundingClientRect().width,
+            0
+        ) + gap * Math.max(0, badges.length - 1);
+        if (fullWidth <= availableWidth) {
+            return;
+        }
+
+        let visibleCount = 0;
+        for (let count = badges.length - 1; count >= 0; count -= 1) {
+            summary.textContent = `+${badges.length - count} more`;
+            summary.style.removeProperty('display');
+            const shownWidth = badges
+                .slice(0, count)
+                .reduce((width, badge) => width + badge.getBoundingClientRect().width, 0);
+            const neededWidth = shownWidth + summary.getBoundingClientRect().width
+                + gap * count;
+            if (neededWidth <= availableWidth) {
+                visibleCount = count;
+                break;
+            }
+            summary.style.display = 'none';
+        }
+        badges.slice(visibleCount).forEach((badge) => {
+            badge.style.display = 'none';
+        });
+        summary.textContent = `+${badges.length - visibleCount} more`;
+        summary.style.removeProperty('display');
+    }
+
+    global.fitSearchBadgeRow = function fitSearchBadgeRow(target) {
+        if (!target) {
+            return;
+        }
+        if (typeof ResizeObserver !== 'undefined' && !badgeRowObservers.has(target)) {
+            const observer = new ResizeObserver(() => fitBadgeRow(target));
+            observer.observe(target);
+            badgeRowObservers.set(target, observer);
+        }
+        global.requestAnimationFrame(() => fitBadgeRow(target));
+    };
 
     function normalizeTag(value) {
         let normalized = String(value || '').trim().toLowerCase();
@@ -34,6 +110,7 @@
             target.appendChild(badge);
         }
         target.hidden = tags.length === 0;
+        global.fitSearchBadgeRow(target);
     };
 
     global.createIpTagEnricher = function createIpTagEnricher(options) {
@@ -41,13 +118,12 @@
         const pendingIps = new Set();
         const resolvedIps = new Set();
         let timer = null;
-        let controller = null;
-        let inFlight = false;
+        const controllers = new Set();
         let generation = 0;
         let timeRange = {fromTs: null, toTs: null};
 
         function schedule() {
-            if (timer || inFlight || pendingIps.size === 0) {
+            if (timer || controllers.size >= MAX_CONCURRENT_BATCHES || pendingIps.size === 0) {
                 return;
             }
             timer = setTimeout(() => {
@@ -56,19 +132,17 @@
             }, 0);
         }
 
-        async function processQueue() {
-            if (inFlight || pendingIps.size === 0) {
+        function processQueue() {
+            if (controllers.size >= MAX_CONCURRENT_BATCHES || pendingIps.size === 0) {
                 return;
             }
             const requestGeneration = generation;
             const batch = [...pendingIps].slice(0, settings.batchSize || DEFAULT_BATCH_SIZE);
             batch.forEach((ip) => pendingIps.delete(ip));
 
-            inFlight = true;
             const requestController = new AbortController();
-            controller = requestController;
-            try {
-                const response = await fetch(settings.endpoint || '/kvsearchview/tags', {
+            controllers.add(requestController);
+            fetch(settings.endpoint || '/kvsearchview/tags', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
@@ -77,31 +151,39 @@
                         to_ts: timeRange.toTs
                     }),
                     signal: requestController.signal
-                });
-                const data = await settings.readJsonResponse(response);
-                if (requestGeneration !== generation) {
-                    return;
-                }
-                for (const [ip, rawTags] of Object.entries(data.tags_by_ip || {})) {
-                    const tags = [...new Set((rawTags || []).map(normalizeTag).filter(Boolean))]
-                        .sort((a, b) => a.localeCompare(b));
-                    resolvedIps.add(ip);
-                    settings.renderTags(ip, tags);
-                    if (settings.renderTimestamps) {
-                        settings.renderTimestamps(ip, (data.timestamps_by_ip || {})[ip]);
+                })
+                .then((response) => settings.readJsonResponse(response))
+                .then((data) => {
+                    if (requestGeneration !== generation) {
+                        return;
                     }
-                }
-            } catch (error) {
-                if (error?.name !== 'AbortError') {
-                    console.warn('Tag lookup failed', error);
-                }
-            } finally {
-                if (controller === requestController) {
-                    controller = null;
-                    inFlight = false;
+                    for (const [ip, rawTags] of Object.entries(data.tags_by_ip || {})) {
+                        const tags = [...new Set((rawTags || []).map(normalizeTag).filter(Boolean))]
+                            .sort((a, b) => a.localeCompare(b));
+                        resolvedIps.add(ip);
+                        settings.renderTags(ip, tags);
+                        if (settings.renderRequestedHostnames) {
+                            settings.renderRequestedHostnames(
+                                ip,
+                                (data.requested_hostnames_by_ip || {})[ip] || [],
+                                (data.ptr_hostnames_by_ip || {})[ip] || []
+                            );
+                        }
+                        if (settings.renderTimestamps) {
+                            settings.renderTimestamps(ip, (data.timestamps_by_ip || {})[ip]);
+                        }
+                    }
+                })
+                .catch((error) => {
+                    if (error?.name !== 'AbortError') {
+                        console.warn('Tag lookup failed', error);
+                    }
+                })
+                .finally(() => {
+                    controllers.delete(requestController);
                     schedule();
-                }
-            }
+                });
+            schedule();
         }
 
         return {
@@ -125,16 +207,11 @@
                     clearTimeout(timer);
                     timer = null;
                 }
-                if (controller) {
-                    controller.abort();
-                    controller = null;
-                }
-                inFlight = false;
+                controllers.forEach((requestController) => requestController.abort());
+                controllers.clear();
             },
             abort() {
-                if (controller) {
-                    controller.abort();
-                }
+                controllers.forEach((requestController) => requestController.abort());
             }
         };
     };

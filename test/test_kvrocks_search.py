@@ -8,6 +8,7 @@ import shlex
 import sys
 import time
 import unittest
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -415,6 +416,7 @@ def isolated_search_view(indexer):
         "profile_search_page": profile_search_page,
         "prioritized_search": lambda function: function,
         "compile_query": compile_query,
+        "partial": partial,
         "CandidatePlanner": CandidatePlanner,
         "search_timestamps": search_timestamps,
         "logger": logging.getLogger(__name__),

@@ -1,0 +1,23 @@
+{% extends "appbuilder/general/model/list.html" %}
+
+{% block head_css %}
+{{ super() }}
+<style>
+    .bot-tools {
+        display: inline-grid;
+        gap: 0.25em;
+        white-space: nowrap;
+    }
+    .bot-masscan {
+        display: grid;
+        gap: 0.25em;
+    }
+    .bot-masscan-capabilities {
+        display: grid;
+        grid-template-columns: repeat(3, max-content);
+        gap: 0.125em 0.65em;
+        font-size: 0.9em;
+        padding-inline-start: 1.5em;
+    }
+</style>
+{% endblock %}

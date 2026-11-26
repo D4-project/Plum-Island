@@ -106,8 +106,8 @@ SECTIONS = (
         ),
     ),
     Section(
-        "Connectivity to CIRCL services",
-        "Configure passive DNS credentials and background network enrichment.",
+        "Passive DNS",
+        "CIRCL Passive DNS credentials used by IP details, reports and exports.",
         "Web application and scheduler",
         (
             Setting(
@@ -125,11 +125,31 @@ SECTIONS = (
                 secret=True,
                 optional=True,
             ),
+        ),
+    ),
+    Section(
+        "Geolocation",
+        "Show the country location returned by the CIRCL IP lookup on IP and network target pages.",
+        "Web application",
+        (
+            Setting(
+                "MAP_ENABLED",
+                "Show location map",
+                True,
+                "Display the location map on IP details and network targets.",
+            ),
+        ),
+    ),
+    Section(
+        "BGP Information",
+        "CIRCL returns ASN details and country coordinates in one IP lookup. These lookup controls apply to both BGP information and geolocation.",
+        "Web application and scheduler",
+        (
             Setting(
                 "NETWORK_LOOKUP_TIMEOUT_SECONDS",
                 "Network lookup timeout",
                 10,
-                "Maximum duration of one network enrichment request.",
+                "Maximum duration of one CIRCL geolocation and BGP lookup.",
                 "seconds",
                 minimum=1,
             ),
@@ -176,20 +196,7 @@ SECTIONS = (
         ),
     ),
     Section(
-        "IP detail map",
-        "Location card in the IP detail Informations tab.",
-        "Web application",
-        (
-            Setting(
-                "MAP_ENABLED",
-                "Show location map",
-                True,
-                "Display the location map card. When disabled, the other cards use the full width.",
-            ),
-        ),
-    ),
-    Section(
-        "Connectivity to the mail server",
+        "Mail configuration",
         "Deliver scheduled report summaries and PDF attachments through SMTP.",
         "Web application and scheduler",
         (
@@ -334,7 +341,7 @@ SECTIONS = (
         ),
     ),
     Section(
-        "Background indexing",
+        "Indexing parameters",
         "Tune automatic rule reconciliation and its protection of search performance. Changes do "
         "not restart a running job when saved.",
         "Web application, scheduler and indexing worker",
@@ -358,6 +365,14 @@ SECTIONS = (
                 "Processing batch size",
                 25,
                 "Documents processed per worker batch.",
+                "documents",
+                minimum=1,
+            ),
+            Setting(
+                "TAG_RECONCILIATION_MEILI_BATCH_SIZE",
+                "Meilisearch source batch size",
+                32,
+                "Maximum source documents per Meilisearch request during indexing. Use 1 for individual reads.",
                 "documents",
                 minimum=1,
             ),
@@ -419,6 +434,13 @@ SECTIONS = (
                 "seconds",
                 minimum=0.001,
             ),
+            Setting(
+                "TLDADD",
+                "Additional private suffixes",
+                ("local",),
+                "One suffix per line. Changing parsing rules can trigger automatic reparsing after restart.",
+                kind="suffixes",
+            ),
         ),
     ),
     Section(
@@ -460,9 +482,9 @@ SECTIONS = (
         ),
     ),
     Section(
-        "Search, reports and domain parsing",
-        "Configure search sessions, report history and additional private domain suffixes.",
-        "Web application, scheduler and indexing worker for domain parsing",
+        "Search and reports",
+        "Configure search sessions and report history.",
+        "Web application and scheduler",
         (
             Setting(
                 "SEARCH_SESSION_TTL_SECONDS",
@@ -480,13 +502,6 @@ SECTIONS = (
                 "months",
                 minimum=1,
             ),
-            Setting(
-                "TLDADD",
-                "Additional private suffixes",
-                ("local",),
-                "One suffix per line. Changing parsing rules can trigger automatic reparsing after restart.",
-                kind="suffixes",
-            ),
         ),
     ),
     Section(
@@ -500,6 +515,13 @@ SECTIONS = (
                 "WARNING",
                 "Minimum severity sent to application log handlers.",
                 kind="level",
+            ),
+            Setting(
+                "TAG_RECONCILIATION_HTTP_DEBUG",
+                "Log Meilisearch HTTP requests",
+                False,
+                "Log requests and connections made by the indexing worker. "
+                "Requires Log level DEBUG.",
             ),
             Setting(
                 "LOG_ENABLED",

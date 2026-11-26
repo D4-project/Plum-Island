@@ -5,7 +5,7 @@ and background work. The configured Flask-AppBuilder administrator role is
 required for both the menu and direct requests; assigning the view's permissions
 to another role does not grant access.
 
-The page displays 53 Plum settings from `webapp/config.py.template`.
+The page displays 55 Plum settings from `webapp/config.py.template`.
 Authentication, themes, Flask/FAB options and SQLAlchemy configuration remain in
 `config.py`. Runtime clients and scheduler state are not editable.
 
@@ -28,9 +28,12 @@ after saving a different value. Empty defaults say **Not set**; the insecure
 example Meilisearch key is never offered as a usable default.
 
 `SCAN_DELAY` is an inactive legacy setting: scan frequency belongs to scan
-profiles. It is explained and read-only; the remaining 52 fields are editable.
+profiles. It is explained and read-only; the remaining 54 fields are editable.
 The obsolete `LOG_ROTATION_DAYS` field is omitted: log files always rotate daily
 at local midnight. **Log retention** controls how long old log files are kept.
+**Log Meilisearch HTTP requests** under **Logging** is disabled by
+default. Enable it with **Log level** set to **DEBUG** to trace requests from
+automatic indexing. See [Automatic indexing](automatic-indexing.md#meilisearch-connections-and-http-tracing).
 Older `ONLINETLD`/`TLDS` flags are retired and remain ignored, as described in
 [Scanning](scanning.md); suffix extraction is offline, with `TLDADD` for additional
 private suffixes. Those removed flags are not reintroduced as controls.

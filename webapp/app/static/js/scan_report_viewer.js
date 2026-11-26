@@ -81,5 +81,11 @@
     }
 
     window.PlumScanReport = {render, toggleIndexed};
+    document.addEventListener('click', (event) => {
+        const toggle = event.target.closest('[data-indexed-report-toggle]');
+        if (!toggle) return;
+        event.preventDefault();
+        toggleIndexed(toggle);
+    });
     document.querySelectorAll('[data-job-report-url]').forEach(loadJobReport);
 })();

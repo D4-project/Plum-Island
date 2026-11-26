@@ -212,6 +212,30 @@ When an agent fetches a job:
 - NSE files are synchronized to the agent by filename and SHA-256 hash
 - the file body is transferred only when the agent cache does not already have the expected hash
 
+## NSE output in tag rules
+
+The YAML-only `nse.body` criterion reads the raw `output` text of port NSE scripts.
+Dedicated parsers still extract fields such as `http_header` and `x509_subject`.
+Use `nse.body.lk:"text"` to match a fragment in any script output on the port,
+or `nse.body:rdp.lk:"text"` to match only the `rdp` script. Omit the modifier
+for an exact match. Use `.bg` for a prefix match.
+
+The RDP script emits `tag: _plum_tag_:proto:rdp`. YAML matches it as text and
+assigns the searchable tag.
+
+```yaml
+query: 'service:rdp OR nse.body:rdp.lk:"tag: _plum_tag_:proto:rdp"'
+tags:
+- proto:rdp
+```
+
+Plum evaluates `nse.body` in memory during ingestion. The raw NSE text stays in
+the full report in Meilisearch. Kvrocks indexes only the resulting tags.
+Changing a rule that uses `nse.body` can take time because the background worker
+must reread each candidate's full report. An indexed criterion in the same
+`AND` group can narrow the candidates. An `OR` branch that contains only
+`nse.body` can require rereading the full corpus.
+
 ## Global target stats
 
 The legacy fields on `targets` are kept as global aggregates:

@@ -1,6 +1,11 @@
 {% extends "ip_detail_fragment_base.html" if fragment else "appbuilder/base.html" %}
 {% import 'appbuilder/general/lib.html' as lib %}
 
+{% block head_js %}
+{{ super() }}
+{% include 'scan_report_assets.html' %}
+{% endblock %}
+
 {% macro render_ip_tag(tag) -%}
     {%- set tag_prefix = tag.split(':', 1)[0] -%}
     {%- if tag_prefix == 'vendor' and ':' in tag -%}
@@ -154,6 +159,12 @@
     color: #5f6b76;
     font-size: 0.92rem;
 }
+.ip-port-history { margin-top: 12px; }
+.ip-port-history-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #586c7a; font-size: 0.9rem; }
+.ip-timeline-history-controls { display: inline-flex; align-items: center; gap: 5px; }
+.ip-timeline-history-controls > span { color: #8a99a5; font-size: 0.85rem; }
+.ip-timeline-history-controls .ip-timeline-zoom { min-width: 27px; padding: 2px 5px; line-height: 1.2; }
+.ip-timeline-history-controls .ip-timeline-zoom:disabled { opacity: 0.45; color: #8a99a5; cursor: not-allowed; }
 .ip-port-tabs {
     display: flex;
     flex-wrap: wrap;
@@ -202,6 +213,12 @@
     color: #4d5963;
     line-height: 1.6;
 }
+.ip-observation-dates { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 1.25rem; }
+.ip-observation-dates > span { font-size: 0.9rem; }
+.ip-observation-dates strong { display: block; font-size: 1rem; font-weight: 500; }
+.ip-raw-report-toggle { margin-left: auto; font-family: monospace; letter-spacing: 0.03em; }
+.ip-raw-report { max-height: 60vh; margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #e5e5e5; border-radius: 4px; background: #f8f9fa; overflow: auto; }
+.ip-raw-report[hidden] { display: none !important; }
 .ip-port-extra {
     margin-top: 0.45rem;
     color: #4d5963;
@@ -582,7 +599,18 @@
         <div class="ip-port-summary">
             <span class="ip-port-observation-count">{{ port_card.observation_count }} observation{% if port_card.observation_count != 1 %}s{% endif %}</span>
         </div>
-        <div class="ip-port-timeline" aria-label="Observation history for {{ port_card.protocol | upper }}/{{ port_card.portid }}"></div>
+        <div class="ip-port-history">
+            <div class="ip-port-history-label">
+                <span>Observation history</span>
+                <span class="ip-timeline-history-controls">
+                    <span>UTC</span>
+                    <button type="button" class="btn btn-default btn-xs ip-timeline-zoom" data-zoom-action="reset" aria-label="Show full timeline" title="Show full timeline"><i class="fa fa-arrows-h" aria-hidden="true"></i></button>
+                    <button type="button" class="btn btn-default btn-xs ip-timeline-zoom" data-zoom-action="out" aria-label="Zoom out timeline" title="Zoom out">−</button>
+                    <button type="button" class="btn btn-default btn-xs ip-timeline-zoom" data-zoom-action="in" aria-label="Zoom in timeline" title="Zoom in">+</button>
+                </span>
+            </div>
+            <div class="ip-port-timeline" aria-label="Observation history for {{ port_card.protocol | upper }}/{{ port_card.portid }}"></div>
+        </div>
     </div>
     <div class="panel-body">
         <ul class="nav nav-tabs ip-port-tabs" role="tablist">
@@ -617,8 +645,12 @@
                 data-web-scheme="{{ observation.web_scheme }}"
             >
                 <div class="ip-port-observation-meta">
-                    First seen: {{ observation.first_seen or "N/A" }}
-                    | Last seen: {{ observation.last_seen or "N/A" }}
+                    <div class="ip-observation-dates">
+                        <span>First seen <strong>{{ observation.first_seen or "N/A" }}</strong></span>
+                        <span>Last seen <strong>{{ observation.last_seen or "N/A" }}</strong></span>
+                        <span>TTL <strong{% if observation.reason_ttl is not none and observation.reason_ttl|string == '0' %} class="text-muted"{% endif %}>{{ observation.reason_ttl if observation.reason_ttl is not none else "N/A" }}</strong></span>
+                        <button type="button" class="btn btn-default btn-xs ip-raw-report-toggle" data-indexed-report-toggle data-uid="{{ observation.uid }}" data-target="ip-raw-{{ port_idx }}-{{ loop.index0 }}" aria-controls="ip-raw-{{ port_idx }}-{{ loop.index0 }}" aria-expanded="false" title="Show raw scan report">RAW</button>
+                    </div>
                     {% if observation.tags %}
                     <span class="ip-port-observation-tags" aria-label="Tags">
                         {% for tag in observation.tags %}
@@ -627,6 +659,7 @@
                     </span>
                     {% endif %}
                 </div>
+                <div id="ip-raw-{{ port_idx }}-{{ loop.index0 }}" class="ip-raw-report" hidden></div>
                 {% if observation.resolved_hosts or observation.ptr_records %}
                 <div class="ip-hosts-block">
                     <div class="ip-hosts-title">Hosts:</div>

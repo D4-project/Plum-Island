@@ -68,6 +68,8 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
         self.comparisons = 0
         self.candidates = None
         self.excluded = 0
+        self.eta_seconds = None
+        self.uses_meilisearch = False
 
     def observe_latency(self):
         """Compare only matching first-page requests with uncontended baselines."""
@@ -118,6 +120,8 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
                     "slowdown_factor": self.effective_factor,
                     "candidates": self.candidates,
                     "excluded_sources": self.excluded,
+                    "eta_seconds": self.eta_seconds,
+                    "uses_meilisearch": self.uses_meilisearch,
                 }
             ),
         )
@@ -185,11 +189,14 @@ class PacedReconciliationWorker(ReconciliationWorker):
     def __init__(self, raw, meili, config):
         super().__init__(
             raw,
-            SourceDocuments(meili),
+            SourceDocuments(
+                meili, config.get("TAG_RECONCILIATION_MEILI_BATCH_SIZE", 32)
+            ),
             batch_size=config.get("TAG_RECONCILIATION_BATCH_SIZE", 25),
             pause_seconds=config.get("TAG_RECONCILIATION_PAUSE_SECONDS", 0.1),
         )
         self.load = LoadController(raw, config)
+        self._scan_checkpoint_at = None
 
     def run(self):
         """Resume durable work after transport outages, with interruptible waits."""
@@ -293,11 +300,24 @@ class PacedReconciliationWorker(ReconciliationWorker):
             time.sleep(min(0.5, remaining))
         return False
 
-    def start(self):
+    def start(self, *, supersede=False):
         """Restore operational counters alongside the original frozen inputs."""
-        started = super().start()
+        self.meili.use_candidates(())
+        self._scan_checkpoint_at = None
+        self.load.eta_seconds = None
+        started = super().start(supersede=supersede)
         if started:
+            self.load.candidates = None
             self.load.excluded = self.job.get("excluded_sources", 0)
+            previous = self.job.get("previous") or {}
+            snapshot = self.job["snapshot"]
+            self.load.uses_meilisearch = (
+                self.job.get("uses_meilisearch", False)
+                or self.job["full"]
+                or previous.get("code") != snapshot["code"]
+                or previous.get("parser") != snapshot["parser"]
+                or self.plan.needs_nse_source(previous={})
+            )
         return started
 
     @property
@@ -312,9 +332,13 @@ class PacedReconciliationWorker(ReconciliationWorker):
     def pause_seconds(self, value):
         self._base_pause = value
 
+    def _wait_for_priority(self):
+        """Leave a pacing wait when the current retag target is superseded."""
+        return self.load.wait(lambda: self.stopping or self.retag_pending())
+
     def prepare_candidates_batch(self):
         """Inventory IDs in independent, bounded batches; preserve saved cursors."""
-        if not self.load.wait(lambda: self.stopping):
+        if not self._wait_for_priority():
             return
         if self.job["phase"] != "planning":
             self.checkpoint(phase="planning", total=None)
@@ -330,9 +354,7 @@ class PacedReconciliationWorker(ReconciliationWorker):
         started = time.monotonic()
         try:
             super().prepare_candidates_batch()
-            self.load.candidates = self.raw.scard(
-                CONTROL + "candidates:" + self.job["id"]
-            )
+            self.load.candidates = self.candidate_count()
         finally:
             self.load.planning_observed(
                 backend, self.batch_size, time.monotonic() - started
@@ -341,16 +363,35 @@ class PacedReconciliationWorker(ReconciliationWorker):
 
     def scan_batch(self):
         """A stop while waiting leaves the durable pending UID list untouched."""
-        if self.load.wait(lambda: self.stopping):
+        if self._scan_checkpoint_at is None:
+            self._scan_checkpoint_at = time.monotonic()
+        if self._wait_for_priority():
             super().scan_batch()
+
+    def _claim_candidates(self):
+        """Allow a source fetch to span several processing checkpoints."""
+        original = self.batch_size
+        if self.load.uses_meilisearch:
+            size = self.meili.batch_size
+            source_batches = (original + size - 1) // size
+            self.batch_size = source_batches * size
+        try:
+            super()._claim_candidates()
+        finally:
+            self.batch_size = original
 
     def process_uid(self, uid):
         """Yield between captures, then finish a claimed unit even on SIGTERM."""
         self.load.wait(lambda: self.stopping)
+        self.meili.use_candidates(self.job.get("pending_uids", ()))
         try:
             super().process_uid(uid)
         except ExcludedSource as error:
             self.exclude_source(uid, error.address)
+        finally:
+            if self.job["phase"] == "reparsing":
+                self.job["uses_meilisearch"] = True
+                self.load.uses_meilisearch = True
 
     def exclude_source(self, uid, address):
         """Count unindexed exclusions, preserving detached historical dates."""
@@ -375,7 +416,7 @@ class PacedReconciliationWorker(ReconciliationWorker):
         self.batch_size = 1
         try:
             for _ in range(original):
-                if not self.load.wait(lambda: self.stopping):
+                if not self._wait_for_priority():
                     return False
                 if super().replay_batch():
                     self._stopped()
@@ -385,7 +426,23 @@ class PacedReconciliationWorker(ReconciliationWorker):
             self.batch_size = original
 
     def checkpoint(self, **changes):
-        """Publish stopped activity while still holding the worker ownership lock."""
+        """Keep elapsed scanning time with its durable progress counter."""
+        if "processed" in changes and self._scan_checkpoint_at is not None:
+            now = time.monotonic()
+            elapsed = self.job.get("scan_elapsed_seconds", 0) + (
+                now - self._scan_checkpoint_at
+            )
+            baseline = self.job.get("scan_baseline_processed", self.job["processed"])
+            changes.update(
+                scan_elapsed_seconds=elapsed, scan_baseline_processed=baseline
+            )
+            self._scan_checkpoint_at = now
+            measured = changes["processed"] - baseline
+            total = self.job.get("total")
+            if measured > 0 and total and elapsed > 0:
+                self.load.eta_seconds = (
+                    max(0, total - changes["processed"]) * elapsed / measured
+                )
         super().checkpoint(**changes)
         if changes.get("phase") in {"paused", "failed", "blocked"}:
             self._stopped()

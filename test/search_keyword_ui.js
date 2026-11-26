@@ -15,6 +15,7 @@ const helpers = shared.slice(shared.indexOf('const SEARCH_KEYWORDS'));
 
 const input = {
     value: 'net:192.0.2.0/24',
+    dataset: {},
     focusCalls: 0,
     selection: null,
     events: [],
@@ -188,12 +189,12 @@ function node(tag = 'div') {
     };
 }
 const menu = node();
+context.document.querySelector = selector => selector === '[data-query-autocomplete]' ? input : null;
 context.document.getElementById = id => ({query: input, 'query-tag-suggest': menu, 'search-keywords': keywordData})[id];
 context.document.createElement = node;
 Object.assign(context, {
     AbortController, URLSearchParams,
     setTimeout, clearTimeout,
-    readJsonResponse: async response => response,
     search() { throw new Error('completion must not submit search'); },
     syncSinceDirectiveState() {}
 });
@@ -227,6 +228,12 @@ async function checkAutocomplete() {
     assert.equal(input.value, 'port:');
     assert.equal(input.selectionStart, 5);
     assert.equal(menu.style.display, 'none');
+    input.dataset.queryAutocompleteDisallowed = 'port';
+    for (const prefix of ['po', 'port', 'port.']) {
+        query(prefix);
+        assert.equal(menu.style.display, 'none');
+    }
+    delete input.dataset.queryAutocompleteDisallowed;
 
     query('port:443 AND (po OR tag:proto:ssh)', 16);
     assert.deepEqual(labels(), ['port:']);
@@ -322,6 +329,7 @@ async function checkAutocomplete() {
 
     const calls = [];
     context.fetch = (url, options) => new Promise((resolve, reject) => calls.push({url, options, resolve, reject}));
+    const suggestionsResponse = (...suggestions) => ({ok: true, json: async () => ({suggestions})});
     query('ta');
     choose();
     assert.equal(input.value, 'tag:');
@@ -334,7 +342,7 @@ async function checkAutocomplete() {
     context.hideTagSuggestions();
     query('(tag:proto:s');
     let pending = context.fetchTagSuggestions(context.getQueryTagContext());
-    calls[0].resolve({suggestions: [{label: 'proto:ssh', value: 'tag:proto:ssh', kind: 'tag'}]});
+    calls[0].resolve(suggestionsResponse({label: 'proto:ssh', value: 'tag:proto:ssh', kind: 'tag'}));
     await pending;
     key('Enter');
     assert.equal(input.value, '(tag:proto:ssh ');
@@ -342,7 +350,7 @@ async function checkAutocomplete() {
     query('http_headval:ser');
     pending = context.fetchTagSuggestions(context.getQueryTagContext());
     assert.ok(calls[1].url.startsWith('/kvsearchview/header_suggest?'));
-    calls[1].resolve({suggestions: [{label: 'server', value: 'http_headval:server:', kind: 'header'}]});
+    calls[1].resolve(suggestionsResponse({label: 'server', value: 'http_headval:server:', kind: 'header'}));
     await pending;
     choose();
     assert.equal(input.value, 'http_headval:server:');
@@ -355,7 +363,7 @@ async function checkAutocomplete() {
         query('po');
         assert.equal(stale.options.signal.aborted, true);
         if (fail) stale.reject(new Error('late failure'));
-        else stale.resolve({suggestions: [{label: 'stale', value: 'stale', kind: 'tag'}]});
+        else stale.resolve(suggestionsResponse({label: 'stale', value: 'stale', kind: 'tag'}));
         await pending;
         assert.deepEqual(labels(), ['port:']);
     }

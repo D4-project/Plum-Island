@@ -1,0 +1,176 @@
+"""Bounded existence checks over indexed historical observations."""
+
+from itertools import islice
+import ipaddress
+import time
+
+from app.utils.search_plan import build_plan
+
+BATCH_SIZE = 64
+
+
+def _seed_keys(node):
+    """Choose exact index sets that cover every possible match, when available."""
+    if node.kind == "term":
+        field, (value,) = node.fields[0]
+        if "." in field or field == "net" or (field == "engine" and value == "nmap"):
+            return ()
+        return (f"{field}:{value}",)
+    if node.kind == "not":
+        return ()
+    seeds = [_seed_keys(child) for child in node.children]
+    if node.kind == "all":
+        return min((keys for keys in seeds if keys), key=len, default=())
+    if all(seeds):
+        return tuple(dict.fromkeys(key for keys in seeds for key in keys))
+    return ()
+
+
+def _candidate_batches(client, keys, start, end, check_deadline):
+    if keys:
+        for key in keys:
+            cursor = 0
+            while True:
+                check_deadline()
+                cursor, uids = client.sscan(key, cursor=cursor, count=BATCH_SIZE)
+                # COUNT is advisory. Keep the subsequent reads bounded.
+                entries = iter(uids)
+                while batch := list(islice(entries, BATCH_SIZE)):
+                    yield batch
+                if not cursor:
+                    break
+        return
+
+    offset = 0
+    while True:
+        check_deadline()
+        entries = client.zrangebyscore(
+            "last_seen_index", start, end, start=offset, num=BATCH_SIZE, withscores=True
+        )
+        if not entries:
+            return
+        yield [uid for uid, _ in entries]
+        score = entries[-1][1]
+        if score != start:
+            start, offset = score, 0
+        offset += sum(seen == score for _, seen in entries)
+
+
+def _terms(node):
+    if node.kind == "term":
+        yield node
+    for child in node.children:
+        yield from _terms(child)
+
+
+def _matches(node, matches):
+    if node.kind == "term":
+        return matches[node]
+    if node.kind == "not":
+        return not _matches(node.children[0], matches)
+    combine = all if node.kind == "all" else any
+    return combine(_matches(child, matches) for child in node.children)
+
+
+def _evaluate_term(indexer, pipe, term, uid, ip):
+    """Queue the index read and return how to interpret its response."""
+    field, (value,) = term.fields[0]
+    base, _, modifier = field.partition(".")
+    if base == "net":
+        network = ipaddress.ip_network(value, strict=False)
+        return False, lambda _response: ip in network
+    if field == "engine" and value not in {"nmap", "masscan"}:
+        return False, lambda _response: False
+    if not modifier:
+        key = "engine:masscan" if field == "engine" else f"{field}:{value}"
+        pipe.sismember(key, uid)
+        return True, (
+            (lambda present: not present)
+            if field == "engine" and value == "nmap"
+            else bool
+        )
+    if modifier in {"not", "nt"}:
+        # Search Scans' time-scoped matcher has no matches for these modifiers.
+        return False, lambda _response: False
+
+    pipe.smembers(f"{base}s:{uid}")
+
+    def match_value(values):
+        # pylint: disable=protected-access
+        if base == "http_headval":
+            header, _, expected = value.partition(":")
+            prefix = header.strip() + ":"
+            return any(
+                indexed.startswith(prefix)
+                and indexer._modifier_matches(
+                    indexed[len(prefix) :], expected.strip(), modifier
+                )
+                for indexed in values
+            )
+        return any(
+            indexer._modifier_matches(indexed, value, modifier) for indexed in values
+        )
+
+    return True, match_value
+
+
+def _recent_candidates(client, uids, start, end):
+    """Read observation metadata in one pipeline and discard stale entries."""
+    pipe = client.pipeline(transaction=False)
+    for uid in uids:
+        pipe.get(f"uid:{uid}")
+        pipe.zscore("last_seen_index", uid)
+    metadata = pipe.execute()
+    for uid, ip, seen in zip(uids, metadata[::2], metadata[1::2]):
+        if ip and seen is not None and start <= seen <= end:
+            try:
+                address = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            yield uid, address
+
+
+def _batch_matches(indexer, plan, terms, candidates):
+    """Yield matching UIDs from one page of recent observations."""
+    pipe = indexer.r.pipeline(transaction=False)
+    checks = [
+        [_evaluate_term(indexer, pipe, term, uid, ip) for term in terms]
+        for uid, ip in candidates
+    ]
+    responses = iter(pipe.execute())
+    for (uid, _ip), per_observation in zip(candidates, checks):
+        matches = {
+            term: check(next(responses, None) if reads_index else None)
+            for term, (reads_index, check) in zip(terms, per_observation)
+        }
+        if _matches(plan, matches):
+            yield uid
+
+
+def matching_observations(indexer, query, start, end, timeout=10):
+    """Stream matching UIDs without materializing the result set."""
+    deadline = time.monotonic() + timeout if timeout is not None else None
+
+    def check_deadline():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("Search filter verification timed out.")
+
+    client = indexer.r
+    plan = build_plan(query, scoped_membership=True)
+    terms = tuple(dict.fromkeys(_terms(plan)))
+    for uids in _candidate_batches(
+        client, _seed_keys(plan), start, end, check_deadline
+    ):
+        check_deadline()
+        candidates = list(_recent_candidates(client, uids, start, end))
+        if candidates:
+            yield from _batch_matches(indexer, plan, terms, candidates)
+        check_deadline()
+
+
+def has_observation(indexer, query, start, end, timeout=10):
+    """Stop on the first match without counting or sorting search results."""
+    return (
+        next(matching_observations(indexer, query, start, end, timeout), None)
+        is not None
+    )

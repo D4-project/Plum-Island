@@ -12,7 +12,14 @@ from test.test_scanprofile_api import ProfileApiFixture
 from unittest.mock import patch
 
 from app import apis
-from app.models import ApiKeys, Bots, Jobs, ScanStatBucket
+from app.models import (
+    ApiKeys,
+    Bots,
+    Jobs,
+    ScanProfileCycles,
+    ScanProfiles,
+    ScanStatBucket,
+)
 from werkzeug.security import generate_password_hash
 
 
@@ -22,6 +29,79 @@ class BotInventoryTest(ProfileApiFixture):
     def configure_catalogue(self):
         """Provide the configure catalogue test fixture."""
         self.builder.add_api(apis.Api)
+
+    def test_filtered_job_uses_existing_agent_contract(self):
+        """Current filtered revision dispatches as an ordinary scanner job."""
+        key = "fedcba9876543210" + "2" * 64
+        self.db.session.add(
+            ApiKeys(
+                keyidx=key[:16],
+                key=generate_password_hash(key),
+                description="filtered dispatch",
+            )
+        )
+        profile = ScanProfiles(
+            name="Filtered",
+            search_query="tag:vendor:nginx",
+            filter_enabled=True,
+            filter_revision=2,
+            apply_to_all=False,
+        )
+        current = ScanProfileCycles(
+            scanprofile=profile,
+            status="running",
+            filter_revision=2,
+            preparation_status="queued",
+        )
+        stale = ScanProfileCycles(
+            scanprofile=profile,
+            status="finished",
+            filter_revision=1,
+            preparation_status="queued",
+        )
+        self.db.session.add_all(
+            [
+                Jobs(
+                    uid=str(uuid.uuid4()),
+                    job="203.0.113.1",
+                    priority=4,
+                    scanprofile=profile,
+                    scanprofile_cycle=stale,
+                    scan_ports="80",
+                    scan_tool="nmap",
+                ),
+                Jobs(
+                    uid=str(uuid.uuid4()),
+                    job="www.example.org",
+                    priority=3,
+                    scanprofile=profile,
+                    scanprofile_cycle=current,
+                    scan_ports="80,443",
+                    scan_nses="banner.nse",
+                    scan_tool="nmap",
+                ),
+            ]
+        )
+        self.db.session.commit()
+        payload = {
+            "UID": str(uuid.uuid4()),
+            "AGENT_KEY": key,
+            "EXT_IP": "93.184.216.34",
+            "DEVICE_MODEL": "fixture",
+            "SYSTEM_VERSION": "fixture",
+            "AGENT_VERSION": "fixture",
+        }
+        self.enterContext(patch.object(apis, "get_country", return_value="LU"))
+        self.assertEqual(
+            self.client.post("/bot_api/beacon", json=payload).status_code, 200
+        )
+        response = self.client.post("/bot_api/getjob", json=payload)
+        self.assertEqual(response.status_code, 200)
+        message = response.json["message"]
+        self.assertEqual(message["job"], "www.example.org")
+        self.assertEqual(message["scan_ports"], ["80", "443"])
+        self.assertEqual(message["scan_tool"], "nmap")
+        self.assertIn("nmap_nse", message)
 
     def test_beacon_and_poll(self):
         """Verify beacon and poll."""
@@ -60,8 +140,12 @@ class BotInventoryTest(ProfileApiFixture):
         self.db.session.refresh(bot)
         self.assertEqual((bot.has_nmap, bot.has_masscan), (False, True))
         self.assertTrue(bot.supports_job_attempts)
-        self.assertIn("Masscan available", str(bot.reported_tools_html()))
-        self.assertIn("Nmap unavailable", str(bot.reported_tools_html()))
+        inventory = str(bot.reported_tools_html())
+        self.assertIn("Masscan available", inventory)
+        self.assertIn("Nmap unavailable", inventory)
+        self.assertLess(inventory.index(">Scanner<"), inventory.index(">Banner<"))
+        self.assertIn("Masscan Scanner IPv4 available", inventory)
+        self.assertIn("Masscan Scanner IPv6 unavailable", inventory)
 
         def poll_empty_queue():
             """Provide the poll empty queue test fixture."""
@@ -141,6 +225,7 @@ class BotInventoryTest(ProfileApiFixture):
                     priority=4,
                     scan_ports="443",
                     scan_tool="masscan",
+                    scan_family="ipv4",
                     detect_protocol=True,
                 ),
                 Jobs(
@@ -195,7 +280,7 @@ class BotInventoryTest(ProfileApiFixture):
         response = self.client.post("/bot_api/getjob", json=masscan)
         reported_bot = self.db.session.query(Bots).filter_by(uid=masscan["UID"]).one()
         self.assertIn(
-            "Masscan Banner available (192.0.2.10)",
+            "Masscan Banner IPv4 available (192.0.2.10)",
             str(reported_bot.reported_tools_html()),
         )
         self.assertEqual(response.status_code, 200)
@@ -291,6 +376,7 @@ class BotInventoryTest(ProfileApiFixture):
             priority=4,
             scan_ports="443",
             scan_tool="masscan",
+            scan_family="ipv4",
         )
         self.db.session.add(empty)
         self.db.session.commit()

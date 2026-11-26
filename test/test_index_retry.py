@@ -1,18 +1,178 @@
 """Backend outages back off without losing checkpoints or masking data errors."""
 
+import json
+import logging
 import os
 import unittest
 from contextlib import nullcontext
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from unittest.mock import Mock, patch
+from urllib.parse import urlsplit
 
+import meilisearch
 import redis
 from app.utils.index_generations import ACTIVE, CONTROL
 from app.utils.index_pacing import PacedReconciliationWorker
 from app.utils.index_reconciliation import ReconciliationWorker, SnapshotInvalid
 from app.utils.index_retry import retry_delay, transient_error
+from app.utils.index_sources import ReconciliationHttpRequests, SourceDocuments
 from app.utils.index_supervisor import IndexSupervisor
 from meilisearch.errors import MeilisearchApiError, MeilisearchCommunicationError
-from requests import Response
+from requests import Response, Session
+from tools.reconcile_index import configure_http_logging
+
+
+class MeilisearchFixtureHandler(BaseHTTPRequestHandler):
+    """Serve minimal HTTP/1.1 source reads over a real persistent socket."""
+
+    protocol_version = "HTTP/1.1"
+    wbufsize = -1
+    disable_nagle_algorithm = True
+
+    def log_request(self, code="-", size="-"):
+        """Keep fixture output quiet."""
+
+    def _reply(self, payload, *, status=200, close=False, truncate=False):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body) + int(truncate)))
+        if close or truncate:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):  # pylint: disable=invalid-name
+        """Return a document or exercise connection closure."""
+        uid = urlsplit(self.path).path.rsplit("/", 1)[1]
+        self.server.reads.append(("GET", uid))
+        if uid == "missing":
+            self._reply(
+                {"message": "Document not found", "code": "document_not_found"},
+                status=404,
+            )
+            return
+        self._reply(
+            {"id": uid, "ip": "93.184.216.34"},
+            close=uid == "close",
+            truncate=uid == "truncate",
+        )
+
+    def do_POST(self):  # pylint: disable=invalid-name
+        """Return inventory or a reversed list of requested source documents."""
+        query = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        uids = query.get("ids")
+        self.server.reads.append(("POST", query))
+        results = (
+            [
+                {"id": uid, "ip": "93.184.216.34"}
+                for uid in reversed(uids)
+                if uid != "missing"
+            ]
+            if uids is not None
+            else [{"id": "one"}]
+        )
+        self._reply(
+            {
+                "results": results,
+                "offset": 0,
+                "limit": query["limit"],
+                "total": len(results),
+            }
+        )
+
+
+class MeilisearchFixture(ThreadingHTTPServer):
+    """Count TCP connections accepted by the HTTP fixture."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", 0), MeilisearchFixtureHandler)
+        self.connections = 0
+        self.reads = []
+
+    def get_request(self):
+        """Count new sockets separately from HTTP requests."""
+        connection, address = super().get_request()
+        self.connections += 1
+        return connection, address
+
+
+class ReconciliationTransportTest(unittest.TestCase):
+    """Use the real SDK and session with isolated source reads."""
+
+    def setUp(self):
+        self.server = self.enterContext(MeilisearchFixture())
+        thread = Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(self.server.shutdown)
+        session = self.enterContext(Session())
+        session.trust_env = False
+        index = meilisearch.Client(
+            f"http://127.0.0.1:{self.server.server_port}", "fixture", timeout=2
+        ).index("plum")
+        index.http = ReconciliationHttpRequests(index.config, session)
+        self.source = SourceDocuments(index)
+
+    def test_document_gets_and_inventory_post_share_a_connection(self):
+        """Document and inventory reads reuse the same TCP connection."""
+        self.assertEqual(self.source.get_document("one").id, "one")
+        self.assertEqual(self.source.get_documents({"limit": 1}).results[0].id, "one")
+        self.assertEqual(self.source.get_document("two").id, "two")
+        self.assertEqual(self.server.connections, 1)
+
+    def test_closed_connection_reopens_and_truncated_response_is_retryable(self):
+        """Reconnect after a close and classify a lost response as transient."""
+        self.source.get_document("close")
+        self.source.get_document("two")
+        self.assertEqual(self.server.connections, 2)
+        with self.assertRaises(MeilisearchCommunicationError) as raised:
+            self.source.get_document("truncate")
+        self.assertTrue(transient_error(raised.exception))
+        self.assertEqual(self.source.get_document("three").id, "three")
+        self.assertEqual(self.server.connections, 3)
+
+    def test_batch_maps_sources_by_id_and_preserves_missing_document_error(self):
+        """The original 404 is raised for the absent UID when it is consumed."""
+        self.source.batch_size = 32
+        self.source.use_candidates(["newest", "missing", "older"])
+        self.assertEqual(self.source.get_document("newest").id, "newest")
+        with self.assertRaises(MeilisearchApiError) as raised:
+            self.source.get_document("missing")
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertEqual(raised.exception.code, "document_not_found")
+        self.assertFalse(transient_error(raised.exception))
+        self.assertEqual(self.source.get_document("older").id, "older")
+        self.assertEqual(
+            self.server.reads,
+            [
+                ("POST", {"ids": ["newest", "missing", "older"], "limit": 3}),
+                ("GET", "missing"),
+            ],
+        )
+
+
+class ReconciliationHttpLoggingTest(unittest.TestCase):
+    """Keep per-request traces separate from normal worker DEBUG logs."""
+
+    def test_http_debug_requires_explicit_opt_in(self):
+        """Opt in to traces while retaining warning and root log levels."""
+        root = logging.getLogger()
+        http = logging.getLogger("urllib3.connectionpool")
+        self.addCleanup(root.setLevel, root.level)
+        self.addCleanup(http.setLevel, http.level)
+        root.setLevel(logging.DEBUG)
+        configure_http_logging({})
+        self.assertFalse(http.isEnabledFor(logging.DEBUG))
+        self.assertTrue(http.isEnabledFor(logging.WARNING))
+        self.assertTrue(root.isEnabledFor(logging.DEBUG))
+        config = {"TAG_RECONCILIATION_HTTP_DEBUG": True}
+        configure_http_logging(config)
+        self.assertTrue(http.isEnabledFor(logging.DEBUG))
+        root.setLevel(logging.INFO)
+        configure_http_logging(config)
+        self.assertFalse(http.isEnabledFor(logging.DEBUG))
 
 
 class RetryPolicyTest(unittest.TestCase):

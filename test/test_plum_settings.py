@@ -38,6 +38,7 @@ class PlumSettingsTest(unittest.TestCase):
         self.enterContext(patch.dict(os.environ, PLUM_SETTINGS_DIR=str(self.directory)))
         self.enterContext(patch.dict(os.environ))
         os.environ.pop("PLUM_SETTINGS_SNAPSHOT", None)
+        os.environ.pop("PLUM_INDEX_HTTP_DEBUG", None)
         self.baseline = {
             "KVROCKS_HOST": "old-backend",
             "MEILI_KEY": "existing-secret",
@@ -116,6 +117,27 @@ class PlumSettingsTest(unittest.TestCase):
         self.assertNotIn("MEILI_HTTP_TIMEOUT_SECONDS", self.config)
         self.assertEqual(self.config["MEILI_KEY"], self.baseline["MEILI_KEY"])
         self.assertEqual(self.store.desired()["overrides"], {})
+
+    def test_saved_http_debug_overrides_deployment_flag_after_restart(self):
+        """An explicit Off in the GUI takes precedence over the deployment flag."""
+        key = "TAG_RECONCILIATION_HTTP_DEBUG"
+        with patch.dict(os.environ, PLUM_INDEX_HTTP_DEBUG="1"):
+            controller = dict(self.baseline, **{key: False})
+            runtime = apply_settings(controller)
+            self.assertIs(controller[key], True)
+            saved = self.store.save("0", {key: False}, runtime.baseline)
+            self.assertEqual(runtime.pending(saved), [key])
+            with patch.dict(os.environ, child_settings_environment(controller)):
+                worker = {}
+                apply_settings(worker)
+                self.assertIs(worker[key], True)
+            restarted = dict(self.baseline)
+            apply_settings(restarted)
+            self.assertIs(restarted[key], False)
+            with patch.dict(os.environ, child_settings_environment(restarted)):
+                worker = {}
+                apply_settings(worker)
+                self.assertIs(worker[key], False)
 
     def test_explicit_default_for_absent_setting_is_a_real_pending_change(self):
         """A displayed template default must not masquerade as an applied value."""

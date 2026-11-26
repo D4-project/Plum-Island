@@ -84,11 +84,7 @@ class ReconciliationCase(unittest.TestCase):
         self.meili.get_document.side_effect = lambda uid: Document(
             deepcopy(self.documents[uid])
         )
-        self.meili.get_documents.side_effect = lambda query: SimpleNamespace(
-            results=[Document({"id": uid}) for uid in sorted(self.documents)][
-                query["offset"] : query["offset"] + query["limit"]
-            ]
-        )
+        self.meili.get_documents.side_effect = self.source_page
         self.first = snapshot([("a", "port:443", ["proto:https"])])
         # Existing legacy index has accumulated history absent from Meilisearch.
         index_for(GenerationClient(self.raw, "", writable=True)).add_documents_batch(
@@ -103,6 +99,19 @@ class ReconciliationCase(unittest.TestCase):
                 }
             ]
         )
+
+    def source_page(self, query):
+        """Model both batches by primary key and paginated inventory."""
+        if "ids" in query:
+            return SimpleNamespace(
+                results=[
+                    Document(deepcopy(self.documents[uid]))
+                    for uid in reversed(query["ids"])
+                    if uid in self.documents
+                ]
+            )
+        ids = sorted(self.documents)[query["offset"] : query["offset"] + query["limit"]]
+        return SimpleNamespace(results=[Document({"id": uid}) for uid in ids])
 
     def worker(self):
         """Worker."""
@@ -166,6 +175,7 @@ class GenerationCopyIntegrationTest(ReconciliationCase):
         worker.start()
         self.scan(worker)
         self.assertTrue(ingest_indexer_sources(indexer, [source("during")]))
+        self.assertEqual(parent.smembers("tags:during"), {"type:server"})
         while not worker.replay_batch():
             pass
         self.assertTrue(ingest_indexer_sources(indexer, [source("after")]))
@@ -178,6 +188,39 @@ class GenerationCopyIntegrationTest(ReconciliationCase):
         self.assertEqual(current.smembers("ports:during"), {"22"})
         self.assertEqual(parent.smembers("ports:during"), {"443"})
         self.assertFalse(current.exists("banners:during"))
+
+    def test_new_rules_survive_publishing_an_older_revision_and_revert(self):
+        """Live ingest may lead a frozen job and remains reconcilable after a revert."""
+        self.publish(self.first)
+        frozen = snapshot([("a", "port:443", ["type:server"])])
+        saved = snapshot([("a", "port:443", ["proto:tls"])])
+        queue_snapshot(self.raw, frozen)
+        worker = self.worker()
+        self.assertTrue(worker.start())
+        self.scan(worker)
+        indexer = SimpleNamespace(raw=self.raw, accepts_source_documents=True)
+        incoming = source("recent")
+        self.documents["recent"] = incoming
+        self.assertTrue(
+            ingest_indexer_sources(indexer, [incoming], live_snapshot=saved)
+        )
+        old = GenerationClient(self.raw)
+        self.assertEqual(old.smembers("tags:recent"), {"proto:tls"})
+        self.assertEqual(old.smembers("tags:one"), {"proto:https"})
+        while not worker.replay_batch():
+            pass
+        active = GenerationClient(self.raw)
+        self.assertEqual(active.smembers("tags:recent"), {"proto:tls"})
+        self.assertEqual(active.smembers("tags:one"), {"type:server"})
+
+        # Saving the just-published rule again leaves matching desired and
+        # published snapshots, but the later live contributions still need repair.
+        self.assertEqual(reconciliation_status(self.raw)["phase"], "queued")
+        self.publish(frozen)
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tags:recent"), {"type:server"}
+        )
+        self.assertEqual(reconciliation_status(self.raw)["phase"], "up_to_date")
 
     def test_missing_parent_key_clears_partial_copy_and_keeps_tombstone(self):
         """Unowned leftovers cannot resurrect an empty field or mutate its parent."""
@@ -413,7 +456,7 @@ class ReconciliationIntegrationTest(ReconciliationCase):
         self.assertEqual(worker.job["total"], 1)
         self.assertEqual(worker.job["processed"], 1)
         self.assertEqual(
-            self.raw.smembers(CONTROL + "candidates:" + worker.job["id"]), {"one"}
+            self.raw.smembers(CONTROL + "processed:" + worker.job["id"]), {"one"}
         )
 
     def test_lost_commit_reply_does_not_corrupt_published_state(self):
@@ -547,6 +590,292 @@ class ReconciliationIntegrationTest(ReconciliationCase):
         self.assertEqual(profile["parser"], changed["parser"])
 
 
+class ReparseDeltaIntegrationTest(ReconciliationCase):
+    """Verify the selective writer against full writes and journal replay."""
+
+    def reparse(self, rules):
+        """Queue an incremental coverage change and return its worker."""
+        queue_snapshot(self.raw, snapshot(rules, {"server": True}))
+        worker = self.worker()
+        self.assertTrue(worker.start())
+        return worker
+
+    def test_identical_capture_updates_coverage_and_inherits_history(self):
+        """Skip unchanged fields, dates, tags and rule contributions."""
+        self.publish(self.first)
+        parent = GenerationClient(self.raw, self.raw.get(ACTIVE))
+        worker = self.reparse([("a", "port:443", ["proto:https"])])
+        self.scan(worker)
+        staged = GenerationClient(self.raw, worker.job["id"])
+        self.assertEqual(
+            self.raw.smembers(staged.owned(staged.generation)),
+            {"coverage:one", "tag_catalogue"},
+        )
+        self.assertNotEqual(staged.get("coverage:one"), parent.get("coverage:one"))
+        self.assertEqual(staged.hgetall("doc:one"), parent.hgetall("doc:one"))
+        self.assertEqual(staged.zscore("first_seen_index", "one"), 100)
+        self.assertEqual(staged.smembers("tag:proto:https"), {"one"})
+        self.assertTrue(worker.replay_batch())
+
+    def test_changed_tags_and_producers_update_both_index_directions(self):
+        """Remove old memberships and retain unchanged shared tags."""
+        self.first = snapshot(
+            [
+                ("a", "port:443", ["proto:https", "type:server"]),
+                ("shared", "port:443", ["type:server"]),
+            ]
+        )
+        self.publish(self.first)
+        parent = GenerationClient(self.raw, self.raw.get(ACTIVE))
+        worker = self.reparse(
+            [
+                ("b", "port:443", ["proto:tls"]),
+                ("shared", "port:443", ["type:server"]),
+            ]
+        )
+        self.scan(worker)
+        self.assertTrue(worker.replay_batch())
+        active = GenerationClient(self.raw, worker.job["id"])
+        self.assertNotIn(
+            "ports:one", self.raw.smembers(active.owned(active.generation))
+        )
+        self.assertEqual(active.smembers("tags:one"), {"proto:tls", "type:server"})
+        self.assertEqual(active.smembers("tag:proto:tls"), {"one"})
+        self.assertEqual(active.smembers("tag:type:server"), {"one"})
+        self.assertFalse(active.smembers("tag:proto:https"))
+        self.assertFalse(active.smembers("rule_matches:a"))
+        self.assertEqual(active.smembers("rule_matches:b"), {"one"})
+        self.assertEqual(active.smembers("rule_matches:shared"), {"one"})
+        self.assertEqual(
+            json.loads(active.get("contributions:one")),
+            {"b": ["proto:tls"], "shared": ["type:server"]},
+        )
+        self.assertIn("proto:tls", active.smembers("tag_catalogue"))
+        self.assertEqual(parent.smembers("tag:proto:https"), {"one"})
+
+    def test_changed_capture_fields_and_legacy_metadata_use_full_write(self):
+        """Refresh changed search fields and remove old storage markers."""
+        self.documents["legacy"] = source("legacy")
+        self.publish(self.first)
+        parent = GenerationClient(self.raw, self.raw.get(ACTIVE), writable=True)
+        parent.hset("doc:legacy", mapping={"nse_marker": "old"})
+        self.documents["one"] = source("one", "22", "2026-09-12T00:00:00")
+        worker = self.reparse([("a", "port:443", ["proto:https"])])
+        self.scan(worker)
+        self.assertTrue(worker.replay_batch())
+        active = GenerationClient(self.raw)
+        self.assertEqual(active.smembers("ports:one"), {"22"})
+        self.assertEqual(active.smembers("port:22"), {"one"})
+        self.assertEqual(active.smembers("port:443"), {"legacy"})
+        self.assertEqual(active.zscore("first_seen_index", "one"), 100)
+        self.assertGreater(
+            active.zscore("last_seen_index", "one"),
+            parent.zscore("last_seen_index", "one"),
+        )
+        self.assertIsNone(active.hget("doc:legacy", "nse_marker"))
+
+    def test_parent_write_between_read_and_save_uses_full_path_and_replays(self):
+        """A foreground mutation invalidates the batch's comparison snapshot."""
+        self.publish(self.first)
+        worker = self.reparse([("a", "port:443", ["type:server"])])
+        latest = source("one", "22", "2026-09-12T00:00:00")
+
+        def ingest_during_read(uid):
+            """Mutate the active capture after the worker has loaded it."""
+            ingest_sources(self.raw, [latest], self.first)
+            return Document(deepcopy(self.documents[uid]))
+
+        self.meili.get_document.side_effect = ingest_during_read
+        self.scan(worker)
+        self.assertIn(
+            "doc:one", self.raw.smembers(GenerationClient.owned(worker.job["id"]))
+        )
+        self.assertFalse(worker.replay_batch())
+        self.assertTrue(worker.replay_batch())
+        active = GenerationClient(self.raw)
+        self.assertEqual(active.smembers("ports:one"), {"22"})
+        self.assertFalse(active.smembers("port:443"))
+        self.assertFalse(active.smembers("tag:type:server"))
+        self.assertEqual(active.zscore("first_seen_index", "one"), 100)
+
+    def test_retry_after_delta_write_rechecks_staging(self):
+        """An interrupted progress write keeps the staged data resumable."""
+        self.publish(self.first)
+        worker = self.reparse([("b", "port:443", ["type:server"])])
+        generation = worker.job["id"]
+        sadd = self.raw.sadd
+
+        def fail_progress(key, *values):
+            """Let the delta commit, then interrupt its progress update."""
+            if key == CONTROL + "processed:" + generation:
+                raise redis.ConnectionError("Progress write interrupted")
+            return sadd(key, *values)
+
+        with patch.object(self.raw, "sadd", side_effect=fail_progress):
+            with self.assertRaisesRegex(
+                redis.ConnectionError, "Progress write interrupted"
+            ):
+                worker.run()
+        staged = GenerationClient(self.raw, generation)
+        self.assertEqual(staged.smembers("tags:one"), {"type:server"})
+        self.assertNotIn("doc:one", self.raw.smembers(staged.owned(generation)))
+        self.worker().run()
+        self.assertEqual(self.raw.get(ACTIVE), generation)
+        self.assertIn("doc:one", self.raw.smembers(staged.owned(generation)))
+        self.assertEqual(staged.smembers("rule_matches:b"), {"one"})
+        self.assertFalse(staged.smembers("rule_matches:a"))
+
+
+class RetagIntegrationTest(ReconciliationCase):
+    """Chronological retagging and checkpoint handoff regressions."""
+
+    def test_newest_first_retag_resumes_after_a_partially_processed_batch(self):
+        """Planning order is independent of UID, insertion and restart order."""
+        self.publish(self.first)
+        captures = [
+            source("z-old", endtime="2026-09-11T00:00:00"),
+            source("a-new", endtime="2026-09-13T00:00:00"),
+            source("b-middle", endtime="2026-09-12T00:00:00"),
+        ]
+        ingest_sources(self.raw, captures, self.first)
+        changed = snapshot([("a", "port:443", ["type:server"])])
+        queue_snapshot(self.raw, changed)
+        worker = self.worker()
+        worker.batch_size = 3
+        worker.start()
+        while not worker.job["candidates_ready"]:
+            worker.prepare_candidates_batch()
+        worker._claim_candidates()  # pylint: disable=protected-access
+        self.assertEqual(worker.job["pending_uids"], ["a-new", "b-middle", "z-old"])
+        worker.process_uid("a-new")  # Interrupted before the batch checkpoint.
+        self.meili.get_document.reset_mock()
+        resumed = self.worker()
+        with patch.object(resumed, "process_uid", wraps=resumed.process_uid) as process:
+            resumed.run()
+        self.assertEqual(
+            [call.args[0] for call in process.call_args_list],
+            ["b-middle", "z-old", "one"],
+        )
+        self.meili.get_document.assert_not_called()
+        self.assertEqual(read_json(self.raw, "published"), changed)
+
+    def test_fast_retag_switches_at_checkpoint_and_replays_inherited_journal(self):
+        """Replace staging at a batch boundary, including writes absent from the parent."""
+        self.publish(self.first)
+        parent = self.raw.get(ACTIVE)
+        old = snapshot([("a", "port:443", ["type:server"])])
+        skipped = snapshot([("a", "port:443", ["proto:ssh"])])
+        latest = snapshot([("a", "port:443", ["proto:tls"])])
+        ingest_sources(self.raw, [source("removed")], self.first)
+        queue_snapshot(self.raw, old)
+        worker = self.worker()
+        worker.start()
+        original_job = worker.job["id"]
+
+        def process(uid):
+            """Edit twice and inject ingestion failure at the old batch boundary."""
+            ReconciliationWorker.process_uid(worker, uid)
+            if worker.job["id"] != original_job:
+                self.assertNotIn(
+                    CONTROL + "journal:" + original_job, set(retired_keys(self.raw))
+                )
+                ingest_sources(self.raw, [source("after-switch")], latest)
+                return
+            queue_snapshot(self.raw, skipped)
+            with patch(
+                "app.utils.index_reconciliation.save_document",
+                side_effect=OSError("active write failed"),
+            ):
+                with self.assertRaisesRegex(OSError, "active write failed"):
+                    ingest_sources(
+                        self.raw, [source("journal-only")], old, live_snapshot=skipped
+                    )
+            delete_capture(self.raw, "removed")
+            ingest_sources(
+                self.raw,
+                [source("one", endtime="2026-09-14T00:00:00")],
+                old,
+                live_snapshot=skipped,
+            )
+            queue_snapshot(self.raw, latest)
+
+        with patch.object(worker, "process_uid", side_effect=process):
+            worker.run()
+        index = GenerationClient(self.raw)
+        job = read_json(self.raw, "job")
+        self.assertEqual(job["parent"], parent)
+        self.assertEqual(job["journal_id"], original_job)
+        self.assertEqual(job["journal_offset"], 4)
+        self.assertEqual(read_json(self.raw, "published"), latest)
+        expected = {"one", "journal-only", "after-switch"}
+        self.assertEqual(index.smembers("all_uids"), expected)
+        self.assertEqual(index.smembers("tag:proto:tls"), expected)
+        self.assertFalse(index.smembers("tag:proto:ssh"))
+        self.assertFalse(index.smembers("tag:type:server"))
+        self.assertEqual(index.hget("doc:one", "first_seen"), "100")
+        self.assertEqual(index.hget("doc:one", "last_seen"), "1789344000")
+
+    def test_retag_revert_at_cutover_skips_obsolete_publication(self):
+        """A revision received after scanning still wins before the pointer flip."""
+        self.publish(self.first)
+        parent = self.raw.get(ACTIVE)
+        changed = snapshot([("a", "port:443", ["type:server"])])
+        queue_snapshot(self.raw, changed)
+        worker = self.worker()
+        worker.start()
+        self.scan(worker)
+        queue_snapshot(self.raw, self.first)
+        self.assertFalse(worker.replay_batch())
+        self.assertEqual(self.raw.get(ACTIVE), parent)
+        self.worker().run()
+        self.assertEqual(read_json(self.raw, "job")["parent"], parent)
+        self.assertEqual(read_json(self.raw, "published"), self.first)
+
+    def test_retag_switch_lost_reply_recovers_new_job_and_journal(self):
+        """A crash after the handoff transaction resumes the installed job."""
+        self.publish(self.first)
+        changed = snapshot([("a", "port:443", ["type:server"])])
+        latest = snapshot([("a", "port:443", ["proto:tls"])])
+        queue_snapshot(self.raw, changed)
+        worker = self.worker()
+        worker.start()
+        original_job = worker.job["id"]
+        ingest_sources(self.raw, [source("journalled")], changed)
+        queue_snapshot(self.raw, latest)
+        factory = self.raw.pipeline
+
+        def pipeline(*args, **kwargs):
+            pipe = factory(*args, **kwargs)
+            execute = pipe.execute
+
+            def drop_handoff_reply():
+                handoff = any(
+                    cmd[0][0] == "SET" and cmd[0][1].endswith(":parent")
+                    for cmd in pipe.command_stack
+                )
+                result = execute()
+                if handoff:
+                    raise redis.ConnectionError(
+                        "Handoff committed before connection lost"
+                    )
+                return result
+
+            pipe.execute = drop_handoff_reply
+            return pipe
+
+        with patch.object(self.raw, "pipeline", side_effect=pipeline):
+            with self.assertRaisesRegex(redis.ConnectionError, "Handoff committed"):
+                worker.run()
+        job = read_json(self.raw, "job")
+        self.assertEqual(job["snapshot_revision"], latest["revision"])
+        self.assertEqual(job["journal_id"], original_job)
+        self.worker().run()
+        self.assertEqual(self.raw.get(ACTIVE), job["id"])
+        self.assertEqual(
+            GenerationClient(self.raw).smembers("tag:proto:tls"), {"one", "journalled"}
+        )
+
+
 class ReconciliationRecoveryTest(ReconciliationCase):
     """Recover historical persisted jobs and interrupted checkpoint creation."""
 
@@ -558,6 +887,7 @@ class ReconciliationRecoveryTest(ReconciliationCase):
             "candidate_source",
             "candidate_cursor",
             "candidates_ready",
+            "ordered_candidates",
             "planned_total",
             "snapshot_revision",
         ):
@@ -586,12 +916,13 @@ class ReconciliationRecoveryTest(ReconciliationCase):
     def test_inline_job_migration_preserves_frozen_rules_and_journal(self):
         """Replan old scan cursors while retaining staged data and ordered ingestion."""
         self.publish(self.first)
-        frozen = snapshot([("a", "port:443", ["type:server"])])
+        frozen = snapshot([("a", "port:443", ["type:server"])], {"server": True})
         queue_snapshot(self.raw, frozen)
         worker = self.worker()
         worker.start()
         self.scan(worker)
-        ingest_sources(self.raw, [source("two")], frozen)
+        self.documents["two"] = source("two")
+        ingest_sources(self.raw, [self.documents["two"]], frozen)
         legacy = self.legacy_job(worker, "paused")
         latest = snapshot([("a", "port:22", ["proto:ssh"])])
         queue_snapshot(self.raw, latest)
@@ -636,7 +967,7 @@ class ReconciliationRecoveryTest(ReconciliationCase):
         self.assertEqual(read_json(self.raw, "job")["phase"], "done")
 
     def test_first_checkpoint_failure_cannot_leave_job_without_inputs(self):
-        """The failure checkpoint must persist the snapshot with compact metadata."""
+        """A failed initial transaction leaves no partially installed job."""
         queue_snapshot(self.raw, self.first)
         factory = self.raw.pipeline
         failed = False
@@ -662,18 +993,19 @@ class ReconciliationRecoveryTest(ReconciliationCase):
         with patch.object(self.raw, "pipeline", side_effect=pipeline):
             with self.assertRaises(redis.ConnectionError):
                 self.worker().run()
+        self.assertIsNone(read_json(self.raw, "job"))
+        self.assertEqual(read_json(self.raw, "failure")["phase"], "failed")
+        self.worker().run()
         job = read_json(self.raw, "job")
-        self.assertEqual(job["phase"], "failed")
         inputs = read_json(self.raw, "g:" + job["id"] + ":inputs")
         self.assertEqual(inputs["snapshot"], self.first)
-        self.worker().run()
-        self.assertEqual(read_json(self.raw, "job")["phase"], "done")
+        self.assertEqual(job["phase"], "done")
 
 
 class ReconciliationPacingTest(ReconciliationCase):
     """Exercise pacing against real Redis commands and existing frozen jobs."""
 
-    def paced(self):
+    def paced(self, **overrides):
         """Use immediate quiet detection in protocol checks, not production tuning."""
         return PacedReconciliationWorker(
             self.raw,
@@ -683,6 +1015,7 @@ class ReconciliationPacingTest(ReconciliationCase):
                 "TAG_RECONCILIATION_QUIET_SECONDS": 0,
                 "TAG_RECONCILIATION_IDLE_SECONDS": 0,
                 "TAG_RECONCILIATION_PAUSE_SECONDS": 0,
+                **overrides,
             },
         )
 
@@ -697,6 +1030,60 @@ class ReconciliationPacingTest(ReconciliationCase):
             self.raw.scard(CONTROL + "candidates:" + worker.job["id"]), 201
         )
         self.assertEqual(worker.batch_size, 1)
+
+    def test_source_batch_spans_checkpoints_and_resumes_in_last_seen_order(self):
+        """Prefetch 32, checkpoint at 25, and resume with the live journal."""
+        self.publish(self.first)
+        captures = [
+            source(f"capture-{i:02}", endtime=f"2026-09-15T00:{i // 60:02}:{i % 60:02}")
+            for i in range(69)
+        ]
+        self.documents.update((capture["id"], capture) for capture in captures)
+        ingest_sources(self.raw, captures, self.first)
+        expected = [capture["id"] for capture in reversed(captures)] + ["one"]
+        newest = expected[0]
+        changed = snapshot([("a", "port:443", ["type:server"])], {"server": True})
+        queue_snapshot(self.raw, changed)
+        self.meili.reset_mock()
+        worker = self.paced(TAG_RECONCILIATION_BATCH_SIZE=25)
+        seen = []
+
+        def interrupt(uid):
+            """Stop with a partially consumed batch and a journal entry."""
+            seen.append(uid)
+            if len(seen) == 26:
+                self.assertEqual(read_json(self.raw, "job")["processed"], 25)
+            PacedReconciliationWorker.process_uid(worker, uid)
+            if len(seen) == 27:
+                ingest_sources(
+                    self.raw, [source(newest, "22", "2026-09-16T00:00:00")], changed
+                )
+                worker.stopping = True
+
+        with patch.object(worker, "process_uid", side_effect=interrupt):
+            worker.run()
+        saved = read_json(self.raw, "job")
+        self.assertEqual(saved["processed"], 27)
+        self.assertEqual(saved["pending_uids"], expected[27:32])
+        self.assertEqual(saved["phase"], "paused")
+        resumed = self.paced(
+            TAG_RECONCILIATION_BATCH_SIZE=25, TAG_RECONCILIATION_MEILI_BATCH_SIZE=24
+        )
+        with patch.object(resumed, "process_uid", wraps=resumed.process_uid) as process:
+            resumed.run()
+        self.assertEqual(
+            seen + [call.args[0] for call in process.call_args_list], expected
+        )
+        self.assertEqual(
+            [call.args[0]["ids"] for call in self.meili.get_documents.call_args_list],
+            [expected[:32], expected[27:32], expected[32:56], expected[56:]],
+        )
+        self.meili.get_document.assert_not_called()
+        self.assertEqual(self.raw.get(ACTIVE), saved["id"])
+        self.assertEqual(read_json(self.raw, "job")["journal_offset"], 1)
+        index = GenerationClient(self.raw)
+        self.assertEqual(index.smembers(f"ports:{newest}"), {"22"})
+        self.assertEqual(index.smembers("tag:type:server"), set(expected) - {newest})
 
     def test_bootstrap_excludes_private_meili_only_source_and_resumes(self):
         """Reference parsing ignores private-only sources; bootstrap must finish."""

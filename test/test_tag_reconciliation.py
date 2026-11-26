@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from app.utils.tag_reconciliation import RulePlan, fingerprint, rule_snapshot
+from app.utils.index_reconciliation import ReconciliationWorker, coverage_profile
 from app.utils.index_supervisor import IndexSupervisor
 
 
@@ -43,6 +44,56 @@ class RulePlanTest(unittest.TestCase):
         match.assert_not_called()
         self.assertEqual(tags, ["proto:https"])
         self.assertEqual(contributions, {"a": ["proto:https"]})
+
+    def test_retag_reads_full_nse_report_only_for_a_rule_being_evaluated(self):
+        """Access full reports only for evaluations that depend on NSE text."""
+        query = 'service:rdp AND nse.body:rdp.lk:"target_name: BETZDORF-WASSER"'
+        state = snapshot([("a", query, ["site:betzdorf-wasser"])])
+        source = {
+            "body": {
+                "ports": [
+                    {
+                        "scripts": [
+                            {"id": "rdp", "output": "target_name: BETZDORF-WASSER"}
+                        ]
+                    }
+                ]
+            }
+        }
+        for previous, should_read in ((snapshot([]), True), (state, False)):
+            with self.subTest(should_read=should_read):
+                raw = Mock()
+                raw.sismember.return_value = False
+                meili = Mock()
+                meili.get_document.return_value = source
+                worker = ReconciliationWorker(raw, meili)
+                worker.plan = RulePlan(state, previous)
+                worker.job = {
+                    "id": "job",
+                    "parent": "parent",
+                    "full": False,
+                    "snapshot": state,
+                }
+                client = Mock()
+                client.get.side_effect = [
+                    "coverage-id",
+                    "{}" if should_read else '{"a": ["site:betzdorf-wasser"]}',
+                ]
+                module = "app.utils.index_reconciliation"
+                with (
+                    patch(f"{module}.GenerationClient", return_value=client),
+                    patch(f"{module}.read_json", return_value=coverage_profile(state)),
+                    patch(f"{module}.load_document", return_value={"service": ["rdp"]}),
+                    patch(f"{module}.write_barrier", return_value=nullcontext()),
+                    patch(f"{module}.save_document") as save,
+                ):
+                    worker.process_uid("one")
+                if should_read:
+                    meili.get_document.assert_called_once_with("one")
+                else:
+                    meili.get_document.assert_not_called()
+                self.assertFalse(save.call_args.kwargs["full"])
+                self.assertEqual(save.call_args.args[1]["tag"], ["site:betzdorf-wasser"])
 
     def test_removed_producer_and_negative_dependency(self):
         """Removed producer and negative dependency."""

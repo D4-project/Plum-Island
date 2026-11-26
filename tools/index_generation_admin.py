@@ -24,6 +24,7 @@ from index_generations import (  # pylint: disable=wrong-import-position
     read_json,
 )
 from index_reconciliation import (  # pylint: disable=wrong-import-position
+    journal_id,
     reconciliation_status,
     state_directory,
     write_barrier,
@@ -36,6 +37,7 @@ def retired_keys(raw):
     retained = set(GenerationClient(raw, active).chain())
     job = read_json(raw, "job", {})
     unfinished = job.get("id") if job.get("phase", "done") != "done" else None
+    journal = journal_id(job) if unfinished else None
     if unfinished:
         retained.update(GenerationClient(raw, unfinished).chain())
     pattern = re.compile(re.escape(CONTROL) + r"g:([a-f0-9]{32}):")
@@ -48,9 +50,10 @@ def retired_keys(raw):
         match = pattern.match(key)
         if match and match.group(1) not in retained:
             yield key
-    for kind in ("journal", "processed", "candidates", "deleted"):
+    for kind in ("journal", "journal_rules", "processed", "candidates", "deleted"):
+        keep = unfinished if kind in ("processed", "candidates") else journal
         for key in raw.scan_iter(match=f"{CONTROL}{kind}:*", count=500):
-            if key.rsplit(":", 1)[-1] != unfinished:
+            if key.rsplit(":", 1)[-1] != keep:
                 yield key
 
 

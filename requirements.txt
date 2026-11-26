@@ -10,7 +10,7 @@ idna>=3.0
 dnspython>=2.8.0
 pybgpranking2>=2.0.2
 pyipasnhistory>=0.1
-nmap2json>=2611.4
+nmap2json>=2611.5
 rich
 reportlab>=4.0.0
 -e ./webapp/tags

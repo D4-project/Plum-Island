@@ -35,15 +35,99 @@
 {% block show_form %}
     <div id="Home" class="tab-pane active">
         {{ widgets.get('show')()|safe }}
+{% set target_query = get_target_value(pk) %}
+{% if target_query.startswith('ip:') or target_query.startswith('net:') %}
+<div class="plum-ip-page">
 <div class="panel panel-default" data-target-network-url="{{ url_for('TargetsView.network_info', pk=pk) }}">
   <div class="panel-heading">IP and AS information</div>
   <div class="panel-body">
     <p id="target-network-status" role="status"><i class="fa fa-spinner fa-spin" aria-hidden="true"></i> Loading IP and AS information…</p>
     <p id="target-network-cache" class="text-muted small"></p>
-    <dl id="target-network-result"></dl>
+    <div id="ip-info-results"></div>
   </div>
 </div>
+{% if (target_query.startswith('ip:') or target_query.startswith('net:')) and (config is not defined or config.MAP_ENABLED is not defined or config.MAP_ENABLED) %}
+<div id="ip-map-config" hidden data-ip="{{ target_query.split(':', 1)[1] }}"></div>
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ip_map.css') }}">
+<script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_map.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/target_network_info.js') }}"></script>
+
+{% if target_query.startswith('ip:') %}
+{% set target_ip = target_query[3:] %}
+  <div class="ip-pdns-panel">
+    <div class="ip-pdns-title">
+      <span>Passive DNS</span>
+      {% if appbuilder.sm.has_access('can_resolve_passive_dns', 'IPDetailView') %}
+      <button id="target-pdns-resolve" type="button" class="btn btn-default btn-xs" title="Resolve" aria-label="Resolve" disabled
+        data-endpoint="{{ url_for('IPDetailView.resolve_passive_dns', ip=target_ip) }}" data-csrf="{{ csrf_token() }}">
+        <i class="fa fa-refresh" aria-hidden="true"></i> Active DNS
+      </button>
+      {% endif %}
+    </div>
+    <div class="ip-pdns-box">
+      <div id="target-pdns-loading" class="ip-section-loading" role="status" aria-live="polite">Loading Passive DNS…</div>
+      <div id="target-pdns-error" class="alert alert-warning" role="alert" hidden></div>
+      <p id="target-pdns-cache" class="text-muted small" role="status"></p>
+      <div id="target-pdns-results"></div>
+    </div>
+  </div>
+<script src="{{ url_for('static', filename='js/ip_port_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_pdns_timeline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/ip_pdns_resolve.js') }}"></script>
+<script nonce="{{ baselib.get_nonce() }}">
+(() => {
+  const ip = {{ target_ip | tojson }};
+  const loading = document.getElementById('target-pdns-loading');
+  const error = document.getElementById('target-pdns-error');
+  const results = document.getElementById('target-pdns-results');
+  const resolveButton = document.getElementById('target-pdns-resolve');
+  let resolver = null;
+  window.addEventListener('pagehide', () => { if (resolver) resolver.cancel(); });
+  fetch({{ url_for('IPDetailView.passive_dns', ip=target_ip) | tojson }}, {
+    credentials: 'same-origin',
+    headers: {Accept: 'application/json'}
+  }).then(async (response) => {
+    if (typeof PlumLookupCache !== 'undefined') {
+      PlumLookupCache.show('target-pdns-cache', PlumLookupCache.headers(response));
+    }
+    const payload = await response.json();
+    if (payload && payload.disabled) {
+      const message = document.createElement('div');
+      message.className = 'text-muted';
+      message.textContent = payload.message || '';
+      results.appendChild(message);
+      return;
+    }
+    if (!response.ok) throw new Error(payload?.error || `Passive DNS lookup failed (${response.status})`);
+    const records = Array.isArray(payload) ? payload : [];
+    if (!records.length) {
+      results.textContent = 'No Passive DNS data returned.';
+      return;
+    }
+    const timelines = window.PlumPdnsTimeline.mount(document, results, records);
+    if (resolveButton) {
+      resolver = window.PlumPdnsResolve.mount(
+        resolveButton,
+        document.getElementById('ip-pdns-resolve-progress'),
+        timelines,
+        resolveButton.dataset.endpoint,
+        resolveButton.dataset.csrf
+      );
+    }
+  }).catch((lookupError) => {
+    error.textContent = lookupError.message || 'Passive DNS lookup failed.';
+    error.hidden = false;
+  }).finally(() => {
+    loading.hidden = true;
+  });
+})();
+</script>
+{% endif %}
+ </div>
+{% endif %}
 
 
 {% if appbuilder.sm.has_access('can_refresh_network', 'TargetsView') %}

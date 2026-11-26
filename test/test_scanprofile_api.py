@@ -92,6 +92,77 @@ class ProfileRestTest(ProfileApiFixture):
         )
         self.db.session.commit()
 
+    def test_search_draft_requires_a_match_and_preserves_profile_on_failure(self):
+        """Both REST mutations share validation and keep old data on failure."""
+        self.ports(1)
+        self.app.config.update(KVROCKS_HOST="localhost", KVROCKS_PORT=6666)
+        data = {"name": "draft", "port_ids": [1], "search_query": "tag:vendor:nginx"}
+        with patch("app.views.first_scan_candidate", return_value=None) as probe:
+            response = self.client.post(self.url, headers=self.admin, json=data)
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("no scan candidates", response.json["message"])
+            self.assertEqual(self.db.session.query(ScanProfiles).count(), 0)
+            probe.return_value = (object(), "ip", "8.8.8.8", {443})
+            response = self.client.post(self.url, headers=self.admin, json=data)
+            self.assertEqual(response.status_code, 201)
+            original = response.json["result"]
+            self.assertEqual(original["search_query"], data["search_query"])
+
+            path = self.url + str(original["id"])
+            probe.side_effect = TimeoutError
+            response = self.client.put(
+                path, headers=self.admin, json={"name": "blocked"}
+            )
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(
+                self.client.get(path, headers=self.admin).json["result"], original
+            )
+
+            probe.reset_mock(side_effect=True)
+            for query in (
+                "tag:vendor:nginx since:91",
+                "tag:vendor:nginx AND NOT port:443",
+            ):
+                response = self.client.put(
+                    path, headers=self.admin, json={"search_query": query}
+                )
+                self.assertEqual(response.status_code, 400)
+            probe.assert_not_called()
+
+    def test_search_draft_can_be_saved_without_manual_ports(self):
+        """Filtered source derives ports later, while target profiles need ports."""
+        self.app.config.update(KVROCKS_HOST="localhost", KVROCKS_PORT=6666)
+        with patch(
+            "app.views.first_scan_candidate",
+            return_value=(object(), "ip", "8.8.8.8", {443}),
+        ):
+            response = self.client.post(
+                self.url,
+                headers=self.admin,
+                json={"name": "filter only", "search_query": "tag:vendor:nginx"},
+            )
+        self.assertEqual(response.status_code, 201, response.json)
+        self.assertEqual(response.json["result"]["port_ids"], [])
+        path = self.url + str(response.json["result"]["id"])
+        response = self.client.put(
+            path, headers=self.admin, json={"apply_to_all": True}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(
+            self.client.get(path, headers=self.admin).json["result"]["apply_to_all"]
+        )
+        with patch("app.views.first_scan_candidate", side_effect=TimeoutError) as probe:
+            response = self.client.put(
+                path, headers=self.admin, json={"filter_enabled": False}
+            )
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertFalse(response.json["result"]["filter_enabled"])
+            probe.assert_not_called()
+            response = self.client.put(
+                path, headers=self.admin, json={"filter_enabled": True}
+            )
+            self.assertEqual(response.status_code, 503)
+
     def test_crud_and_rollback(self):
         """A rejected partial update preserves the entire record."""
         self.ports(2)
@@ -99,7 +170,9 @@ class ProfileRestTest(ProfileApiFixture):
         def create(name):
             """Provide the create test fixture."""
             response = self.client.post(
-                self.url, headers=self.admin, json={"name": name, "port_ids": [1]}
+                self.url,
+                headers=self.admin,
+                json={"name": name, "apply_to_all": True, "port_ids": [1]},
             )
             self.assertEqual(response.status_code, 201, response.json)
             return self.url + str(response.json["result"]["id"])
@@ -146,7 +219,9 @@ class ProfileRestTest(ProfileApiFixture):
         """A Masscan profile is active configuration, not a paused draft."""
         self.ports(1)
         response = self.client.post(
-            self.url, headers=self.admin, json={"name": "example", "port_ids": [1]}
+            self.url,
+            headers=self.admin,
+            json={"name": "example", "apply_to_all": True, "port_ids": [1]},
         )
         self.assertEqual(response.status_code, 201)
         profile = response.json["result"]
@@ -179,7 +254,8 @@ class ProfileRestTest(ProfileApiFixture):
             agent_version="test",
             system_version="test",
             has_masscan=True,
-            masscan_ip="192.0.2.2",
+            masscan_ipv4=True,
+            masscan_ip_v4="192.0.2.2",
             last_seen=utcnow_naive(),
         )
         self.db.session.add(bot)
@@ -193,7 +269,7 @@ class ProfileRestTest(ProfileApiFixture):
         response = self.client.put(url, headers=self.admin, json={"name": "edited"})
         self.assertEqual(response.json["result"]["scan_tool"], "masscan")
         self.assertTrue(response.json["result"]["detect_protocol"])
-        bot.masscan_ip = None
+        bot.masscan_ip_v4 = None
         self.db.session.commit()
         response = self.client.put(url, headers=self.admin, json={"name": "blocked"})
         self.assertEqual(response.status_code, 400)
@@ -261,7 +337,15 @@ class ProfileRestTest(ProfileApiFixture):
         count = 65535
         self.ports(count)
         ids = list(range(1, count + 1))
-        body = json.dumps({"name": "Fixture", "port_ids": ids}, separators=(",", ":"))
+        body = json.dumps(
+            {
+                "name": "Fixture",
+                "apply_to_all": True,
+                "scan_enabled": False,
+                "port_ids": ids,
+            },
+            separators=(",", ":"),
+        )
 
         def post():
             """Provide the post test fixture."""
@@ -276,7 +360,8 @@ class ProfileRestTest(ProfileApiFixture):
         self.assertEqual(response.status_code, 201, response.json.get("message"))
         url = self.url + str(response.json["result"]["id"])
         result = self.client.get(url, headers=self.admin).json["result"]
-        self.assertFalse(result["apply_to_all"])
+        self.assertTrue(result["apply_to_all"])
+        self.assertFalse(result["scan_enabled"])
         self.assertEqual(result["port_ids"], ids)
 
 

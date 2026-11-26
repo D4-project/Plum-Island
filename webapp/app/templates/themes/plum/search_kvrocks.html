@@ -157,6 +157,42 @@ function resetTagLookups() {
 function renderIpTags(ip, tags) {
     const target = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`);
     window.renderIpTagBadges(target, tags);
+    updateSearchIpTagsVisibility(ip);
+    window.fitSearchBadgeRow(target);
+}
+
+function updateSearchIpTagsVisibility(ip) {
+    const container = document.querySelector(`[data-search-ip-tags="${CSS.escape(ip)}"]`)?.parentElement;
+    if (!container) return;
+    const tagList = container.querySelector('.search-ip-tag-list');
+    const hostnameList = container.querySelector('.search-ip-requested-hostnames');
+    container.hidden = (!tagList || tagList.hidden) && (!hostnameList || hostnameList.hidden);
+}
+
+function renderIpRequestedHostnames(ip, hostnames, ptrHostnames) {
+    const target = document.querySelector(`[data-search-ip-requested-hostnames="${CSS.escape(ip)}"]`);
+    if (!target) return;
+    const ptrs = [...new Set((ptrHostnames || []).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b));
+    const ptrSet = new Set(ptrs);
+    const requested = [...new Set((hostnames || []).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean))]
+        .filter((name) => !ptrSet.has(name))
+        .sort((a, b) => a.localeCompare(b));
+    const hostnameBadges = [
+        ...ptrs.map((name) => ({name, isPtr: true})),
+        ...requested.map((name) => ({name, isPtr: false}))
+    ];
+    target.replaceChildren();
+    target.hidden = hostnameBadges.length === 0;
+    for (const {name: hostname, isPtr} of hostnameBadges) {
+        const badge = document.createElement('span');
+        badge.className = `ip-detail-tag search-ip-tag ${isPtr ? 'search-ip-ptr-hostname' : 'search-ip-requested-hostname'}`;
+        badge.title = isPtr ? `PTR: ${hostname}` : `Requested hostname: ${hostname}`;
+        badge.textContent = hostname;
+        target.appendChild(badge);
+    }
+    updateSearchIpTagsVisibility(ip);
+    window.fitSearchBadgeRow(target);
 }
 
 function updateIpTimestamps(ip, timestampData) {
@@ -275,6 +311,7 @@ async function readJsonResponse(res) {
 ipTagEnricher = window.createIpTagEnricher({
     readJsonResponse,
     renderTags: renderIpTags,
+    renderRequestedHostnames: renderIpRequestedHostnames,
     renderTimestamps: updateIpTimestamps
 });
 
@@ -1140,8 +1177,17 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
 
         const tagContainer = document.createElement('span');
         tagContainer.className = 'search-ip-tags';
-        tagContainer.dataset.searchIpTags = ipLabel;
         tagContainer.hidden = true;
+        const tagList = document.createElement('span');
+        tagList.className = 'search-ip-tag-list';
+        tagList.dataset.searchIpTags = ipLabel;
+        tagList.hidden = true;
+        tagContainer.appendChild(tagList);
+        const requestedHostnamesRow = document.createElement('span');
+        requestedHostnamesRow.className = 'search-ip-requested-hostnames';
+        requestedHostnamesRow.dataset.searchIpRequestedHostnames = ipLabel;
+        requestedHostnamesRow.hidden = true;
+        tagContainer.appendChild(requestedHostnamesRow);
         title.appendChild(tagContainer);
 
         if (ipMeta) {

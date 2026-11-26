@@ -16,6 +16,7 @@ try:
         analyze_header_dependencies,
         compile_tag_rule_definition,
         document_matches_criteria_groups,
+        nse_output_by_script,
         parse_tags_text,
     )
     from .result_parser import has_indexed_tls_certificate
@@ -26,6 +27,7 @@ except ImportError:
         analyze_header_dependencies,
         compile_tag_rule_definition,
         document_matches_criteria_groups,
+        nse_output_by_script,
         parse_tags_text,
     )
     from result_parser import has_indexed_tls_certificate
@@ -120,6 +122,9 @@ class RulePlan:
         for rule_id in self.rules:
             self._visit(rule_id, set())
         self._find_changed(previous)
+        self.nse_body_rules = {
+            rule_id for rule_id, rule in self.rules.items() if rule["uses_nse_body"]
+        }
         if not self.covered({"code": snapshot["code"], "parser": snapshot["parser"]}):
             raise ValueError(
                 "Required HTTP headers are not enabled in the frozen collection configuration"
@@ -191,8 +196,16 @@ class RulePlan:
                     return False
         return True
 
-    def evaluate(self, document, previous=None, force=False):
+    def needs_nse_source(self, previous=None, force=False):
+        """Read raw NSE text only when a text-dependent rule will be evaluated."""
+        if force or previous is None:
+            return bool(self.nse_body_rules)
+        return not self.nse_body_rules.isdisjoint(self.changed)
+
+    def evaluate(self, document, previous=None, force=False, *, source=None):
         """Retain unchanged contributions and evaluate changed rules in DAG order."""
+        if source is not None and self.needs_nse_source(previous, force):
+            document = dict(document, nse_body=nse_output_by_script(source))
         force = force or previous is None
         previous = previous or {}
         contributions = {}

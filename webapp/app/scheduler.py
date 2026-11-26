@@ -29,10 +29,18 @@ from meilisearch.errors import MeilisearchError
 from nmap2json.smarthash import port_smart_hash
 from .utils.scanner_reports import normalize_masscan_port
 from requests.exceptions import HTTPError
-from sqlalchemy import bindparam, func, text
+from sqlalchemy import bindparam, false, func, or_, text
 from sqlalchemy.orm import joinedload
 from . import db
-from .models import Jobs, ScanProfiles, TargetScanStates, assoc_jobs_targets
+from .models import (
+    Bots,
+    FilteredScanTargets,
+    ScanProfileCycles,
+    Jobs,
+    ScanProfiles,
+    TargetScanStates,
+    assoc_jobs_targets,
+)
 from .models import Reports
 from .models import (
     CollectedHeaders,
@@ -46,7 +54,6 @@ from .utils.kvrocks import KVrocksIndexer
 from .utils.index_activity import prioritized_read as pinned_read, prioritized_ingestion
 from .utils.index_reconciliation import ingest_indexer_sources
 from .utils.index_supervisor import IndexSupervisor
-from .utils.tag_runtime import desired_snapshot
 from .utils.result_parser import parse_json, prepare_kvrocks_document
 from .utils.reports import (
     build_report_markdown,
@@ -62,6 +69,7 @@ from .utils.reports import (
     send_report_markdown,
 )
 from .utils.tagrules import compile_tag_rule_records
+from .utils.tag_reconciliation import rule_snapshot
 from .utils.network_enrichment import (
     enrichment_due,
     process_pending_network_refreshes,
@@ -69,6 +77,7 @@ from .utils.network_enrichment import (
 )
 from .utils.ip2asn import target_type
 from .utils.timeutils import utcnow_aware, utcnow_naive
+from .utils.filtered_scans import prepare_cycle, start_due_cycle
 from .utils.scan_cycles import (
     get_current_max_target_id,
     get_or_create_running_cycle,
@@ -152,6 +161,7 @@ class ExportContext:
     input_dir: str
     parser_config: dict
     active_tag_rules: list
+    live_rule_snapshot: dict | None = None
 
 
 def _get_meili_task_uid(queued_task):
@@ -164,6 +174,25 @@ def _get_meili_task_uid(queued_task):
             "Meilisearch add_documents returned no task identifier"
         )
     return int(task_uid)
+
+
+def _available_masscan_families(detect_protocol=False):
+    """Return address families supported by enabled Masscan agents."""
+    available = []
+    for family, capability, source in (
+        ("ipv4", Bots.masscan_ipv4, Bots.masscan_ip_v4),
+        ("ipv6", Bots.masscan_ipv6, Bots.masscan_ip_v6),
+    ):
+        query = db.session.query(Bots.id).filter(
+            Bots.active.is_(True),
+            Bots.has_masscan.is_(True),
+            capability.is_(True),
+        )
+        if detect_protocol:
+            query = query.filter(source.isnot(None), source != "")
+        if query.first() is not None:
+            available.append(family)
+    return tuple(available)
 
 
 def _clean_banner_outputs(port):
@@ -1044,13 +1073,16 @@ def _append_large_network_chunks(target, state, range_chunks, network):
         range_chunks.append(
             {
                 "cidrs": [str(subnet)],
+                "scan_family": "ipv4" if network.version == 4 else "ipv6",
                 "targets": [target],
                 "states": [state],
             }
         )
 
 
-def _merge_small_ranges_into_chunks(small_ranges, range_chunks, max_chunks=None):
+def _merge_small_ranges_into_chunks(
+    small_ranges, range_chunks, max_chunks=None, split_families=False
+):
     """
     Merge small IP ranges across states into 256-IP jobs.
     """
@@ -1058,12 +1090,14 @@ def _merge_small_ranges_into_chunks(small_ranges, range_chunks, max_chunks=None)
     current_targets = {}
     current_states = {}
     chunks_added = 0
+    current_family = None
 
     def append_current_block():
-        nonlocal chunks_added, current_block, current_targets, current_states
+        nonlocal chunks_added, current_block, current_targets, current_states, current_family
         range_chunks.append(
             {
                 "cidrs": [str(cidr) for cidr in cidr_merge(current_block)],
+                "scan_family": "ipv4" if current_family == 4 else "ipv6",
                 "targets": list(current_targets.values()),
                 "states": list(current_states.values()),
             }
@@ -1072,11 +1106,20 @@ def _merge_small_ranges_into_chunks(small_ranges, range_chunks, max_chunks=None)
         current_block = []
         current_targets = {}
         current_states = {}
+        current_family = None
 
-    for record in sorted(small_ranges, key=lambda item: item["ips"][0]):
+    sort_key = (
+        (lambda item: (item["ips"][0].version, item["ips"][0]))
+        if split_families
+        else (lambda item: item["ips"][0])
+    )
+    for record in sorted(small_ranges, key=sort_key):
         if max_chunks is not None and chunks_added >= max_chunks:
             break
         for ip in record["ips"]:
+            if split_families and current_block and current_family != ip.version:
+                append_current_block()
+            current_family = ip.version
             current_block.append(ip)
             current_targets[record["target"].id] = record["target"]
             current_states[id(record["state"])] = record["state"]
@@ -1170,7 +1213,8 @@ def _classify_due_states_for_chunks(due_states, max_large_range_jobs=None):
 
 
 def _enqueue_profile_job(
-    profile, job_value, scan_ports, scan_nses, chunk, scan_cycle, completed=False
+    profile, job_value, scan_ports, scan_nses, chunk, scan_cycle, completed=False,
+    scan_family=None,
 ):
     """
     Add one queued job and mark its linked targets/states working.
@@ -1186,6 +1230,7 @@ def _enqueue_profile_job(
     new_job.nmap_additional_params = profile.nmap_additional_params
     new_job.scan_tool = getattr(profile, "scan_tool", None) or "nmap"
     new_job.detect_protocol = bool(getattr(profile, "detect_protocol", False))
+    new_job.scan_family = scan_family
     new_job.scan_unit_count = compute_scan_unit_count_list(job_value)
     new_job.priority = profile.priority or 0
     new_job.scanprofile_cycle = scan_cycle
@@ -1295,37 +1340,58 @@ def _complete_unannounced_states(
     return len(ranges), completed_ids
 
 
-def _enqueue_range_jobs(profile, range_chunks, scan_ports, scan_nses, scan_cycle):
+def _enqueue_range_jobs(
+    profile, range_chunks, scan_ports, scan_nses, scan_cycle,
+    available_families=None,
+):
     """
     Add queued range jobs and return their scheduled state IDs.
     """
     scheduled_state_ids = set()
     for chunk in range_chunks:
+        family = chunk.get("scan_family") if profile.scan_tool == "masscan" else None
+        if (
+            family is not None
+            and available_families is not None
+            and family not in available_families
+        ):
+            continue
         job_value = ",".join(str(cidr) for cidr in cidr_merge(chunk["cidrs"]))
         scheduled_state_ids.update(
             _enqueue_profile_job(
-                profile, job_value, scan_ports, scan_nses, chunk, scan_cycle
+                profile, job_value, scan_ports, scan_nses, chunk, scan_cycle,
+                scan_family=family,
             )
         )
     return scheduled_state_ids
 
 
-def _enqueue_hostname_jobs(profile, hostname_chunks, scan_ports, scan_nses, scan_cycle):
+def _enqueue_hostname_jobs(
+    profile, hostname_chunks, scan_ports, scan_nses, scan_cycle,
+    available_families=None,
+):
     """
     Add queued FQDN jobs and return their scheduled state IDs.
     """
     scheduled_state_ids = set()
+    families = (
+        tuple(available_families or ())
+        if profile.scan_tool == "masscan"
+        else (None,)
+    )
     for chunk in hostname_chunks:
-        scheduled_state_ids.update(
-            _enqueue_profile_job(
-                profile,
-                ",".join(chunk["hosts"]),
-                scan_ports,
-                scan_nses,
-                chunk,
-                scan_cycle,
+        for family in families:
+            scheduled_state_ids.update(
+                _enqueue_profile_job(
+                    profile,
+                    ",".join(chunk["hosts"]),
+                    scan_ports,
+                    scan_nses,
+                    chunk,
+                    scan_cycle,
+                    scan_family=family,
+                )
             )
-        )
     return scheduled_state_ids
 
 
@@ -1340,6 +1406,32 @@ def _stage_jobs_for_profile(
     """
     Convert due states into queued jobs for one profile.
     """
+    available_families = None
+    unsupported_state_ids = set()
+    if profile.scan_tool == "masscan":
+        available_families = _available_masscan_families(
+            bool(profile.detect_protocol)
+        )
+        supported_states = []
+        for state in due_states:
+            target = state.target
+            if target is None:
+                unsupported_state_ids.add(state.id)
+                continue
+            try:
+                version = ipaddress.ip_network(target.value, strict=False).version
+            except (TypeError, ValueError):
+                if available_families and is_hostname_syntax(target.value):
+                    supported_states.append(state)
+                else:
+                    unsupported_state_ids.add(state.id)
+            else:
+                family = "ipv4" if version == 4 else "ipv6"
+                if family in available_families:
+                    supported_states.append(state)
+                else:
+                    unsupported_state_ids.add(state.id)
+        due_states = supported_states
     range_chunks, small_ranges, hostname_records = _classify_due_states_for_chunks(
         due_states,
         max_large_range_jobs=max_jobs,
@@ -1354,27 +1446,260 @@ def _stage_jobs_for_profile(
             small_ranges,
             range_chunks,
             jobs_remaining,
+            split_families=profile.scan_tool == "masscan",
         )
         if jobs_remaining is not None:
             jobs_remaining = max(0, jobs_remaining - range_jobs_added)
 
     if hostname_records and (jobs_remaining is None or jobs_remaining > 0):
-        _merge_hostnames_into_chunks(hostname_records, hostname_chunks, jobs_remaining)
+        hostname_job_limit = jobs_remaining
+        if profile.scan_tool == "masscan" and hostname_job_limit is not None:
+            family_count = len(available_families or ())
+            if family_count:
+                # FQDN work is emitted once per supported family. Keep the
+                # family jobs together, allowing a one-job queue deficit to
+                # generate its indivisible IPv4/IPv6 pair.
+                hostname_job_limit = max(
+                    1, hostname_job_limit // family_count
+                )
+        _merge_hostnames_into_chunks(hostname_records, hostname_chunks, hostname_job_limit)
 
     scheduled_state_ids = _enqueue_range_jobs(
-        profile, range_chunks, scan_ports, scan_nses, scan_cycle
+        profile, range_chunks, scan_ports, scan_nses, scan_cycle,
+        available_families=available_families,
     )
     scheduled_state_ids.update(
         _enqueue_hostname_jobs(
-            profile, hostname_chunks, scan_ports, scan_nses, scan_cycle
+            profile, hostname_chunks, scan_ports, scan_nses, scan_cycle,
+            available_families=available_families,
         )
     )
 
     return {
         "scheduled_states": len(scheduled_state_ids),
+        "unsupported_state_ids": unsupported_state_ids,
         "range_jobs": len(range_chunks),
-        "host_jobs": len(hostname_chunks),
+        "host_jobs": len(hostname_chunks)
+        * (
+            len(available_families or ())
+            if profile.scan_tool == "masscan"
+            else 1
+        ),
     }
+
+
+def _stage_filtered_jobs(profile, cycle, scan_nses, max_jobs):
+    """Queue prepared targets grouped by identical port sets."""
+    jobs_created = 0
+    available_families = (
+        _available_masscan_families(bool(profile.detect_protocol))
+        if profile.scan_tool == "masscan"
+        else None
+    )
+    if available_families is not None:
+        unsupported = db.session.query(FilteredScanTargets).filter_by(
+            cycle_id=cycle.id, status="pending", job_id=None
+        )
+        if available_families:
+            unsupported = unsupported.filter(
+                ~FilteredScanTargets.scan_family.in_(available_families)
+            )
+        unsupported_families = sorted(
+            {row[0] for row in unsupported.with_entities(
+                FilteredScanTargets.scan_family
+            ).all()}
+        )
+        discarded = unsupported.delete(synchronize_session=False)
+        if discarded:
+            logger.warning(
+                "Filtered Masscan profile %s skipped %s target families with no enabled agent: %s",
+                profile.name,
+                discarded,
+                ", ".join(str(family or "unknown") for family in unsupported_families),
+            )
+    while jobs_created < max_jobs:
+        pending_query = db.session.query(FilteredScanTargets).filter_by(
+            cycle_id=cycle.id, status="pending"
+        )
+        if profile.scan_tool == "masscan":
+            if available_families:
+                pending_query = pending_query.filter(
+                    FilteredScanTargets.scan_family.in_(available_families)
+                )
+            else:
+                cycle.preparation_status = "queued"
+                break
+        first = pending_query.order_by(FilteredScanTargets.id).first()
+        if first is None:
+            cycle.preparation_status = "queued"
+            break
+        rows = (
+            db.session.query(FilteredScanTargets)
+            .filter_by(
+                cycle_id=cycle.id,
+                status="pending",
+                ports=first.ports,
+                target_kind=first.target_kind,
+                scan_family=first.scan_family,
+            )
+            .order_by(FilteredScanTargets.id)
+            .limit(JOB_TARGET_CHUNK_SIZE)
+            .all()
+        )
+        targets = {row.configured_target.id: row.configured_target for row in rows}
+        job = Jobs(
+            uid=str(uuid.uuid4()),
+            job=",".join(row.target_value for row in rows),
+            scanprofile=profile,
+            scanprofile_name=profile.name,
+            scanprofile_cycle=cycle,
+            scan_ports=first.ports,
+            scan_nses=scan_nses,
+            nmap_additional_params=profile.nmap_additional_params,
+            scan_tool=profile.scan_tool or "nmap",
+            scan_family=first.scan_family,
+            detect_protocol=bool(profile.detect_protocol),
+            scan_unit_count=len(rows),
+            priority=profile.priority or 0,
+        )
+        job.targets.extend(targets.values())
+        db.session.add(job)
+        db.session.flush()
+        for row in rows:
+            row.status = "queued"
+            row.job = job
+        jobs_created += 1
+    return jobs_created
+
+
+def task_prepare_filtered_scans():
+    """Prepare at most one filtered cycle in scheduler background."""
+    db.session.remove()
+    try:
+        from app.views import KVSearchView  # pylint: disable=import-outside-toplevel
+
+        profiles = (
+            db.session.query(ScanProfiles)
+            .filter(
+            ScanProfiles.search_query.isnot(None),
+                ScanProfiles.search_query != "",
+                ScanProfiles.apply_to_all.is_(False),
+            )
+            .order_by(ScanProfiles.priority.desc(), ScanProfiles.id)
+            .all()
+        )
+        for profile in profiles:
+            cycle = get_running_scanprofile_cycle(profile.id)
+            if cycle and (
+                not profile.scan_enabled
+                or cycle.filter_revision != profile.filter_revision
+            ):
+                queued_jobs = (
+                    db.session.query(Jobs)
+                    .filter(
+                        Jobs.scanprofile_cycle_id == cycle.id,
+                        Jobs.active.is_(False),
+                        Jobs.finished.is_(False),
+                    )
+                    .all()
+                )
+                queued_job_ids = [job.id for job in queued_jobs]
+                if queued_job_ids:
+                    db.session.query(Jobs).filter(Jobs.id.in_(queued_job_ids)).update(
+                        {
+                            Jobs.finished: True,
+                            Jobs.exported: True,
+                            Jobs.job_end: utcnow_naive(),
+                        },
+                        synchronize_session=False,
+                    )
+                db.session.query(FilteredScanTargets).filter(
+                    FilteredScanTargets.cycle_id == cycle.id,
+                    or_(
+                        FilteredScanTargets.status == "pending",
+                        (
+                            FilteredScanTargets.job_id.in_(queued_job_ids)
+                            if queued_job_ids
+                            else false()
+                        ),
+                    ),
+                ).update(
+                    {FilteredScanTargets.status: "cancelled"},
+                    synchronize_session=False,
+                )
+                cycle.preparation_status = (
+                    "cancelled" if not profile.scan_enabled else "revising"
+                )
+                active_jobs = (
+                    db.session.query(Jobs.id)
+                    .filter_by(
+                        scanprofile_cycle_id=cycle.id, active=True, finished=False
+                    )
+                    .first()
+                )
+                if active_jobs is None and not profile.scan_enabled:
+                    cycle.status = "finished"
+                    cycle.finished_at = utcnow_naive()
+                    profile.current_cycle_id = None
+                    profile.last_cycle_finished_at = cycle.finished_at
+                db.session.commit()
+                if active_jobs is None and profile.scan_enabled:
+                    cancelled = db.session.query(FilteredScanTargets).filter_by(
+                        cycle_id=cycle.id, status="cancelled"
+                    )
+                    cancelled.filter(
+                        FilteredScanTargets.completed_ports.isnot(None),
+                        FilteredScanTargets.completed_ports != "",
+                    ).update(
+                        {FilteredScanTargets.status: "completed",
+                         FilteredScanTargets.ports: FilteredScanTargets.completed_ports,
+                         FilteredScanTargets.job_id: None},
+                        synchronize_session=False,
+                    )
+                    cancelled.delete(synchronize_session=False)
+                    cycle.filter_revision = profile.filter_revision
+                    cycle.filter_query = profile.search_query
+                    cycle.preparation_status = "pending"
+                    db.session.commit()
+                elif active_jobs is None:
+                    cycle = None
+            if not profile.scan_enabled:
+                continue
+            if cycle and cycle.preparation_status == "cancelled":
+                continue
+            if cycle is None:
+                cycle = start_due_cycle(profile, KVSearchView())
+            # This scheduler task has max_instances=1. An extracting row here
+            # therefore belongs to an interrupted prior invocation.
+            if cycle and cycle.preparation_status in {"pending", "retry", "extracting"}:
+                unfinished_cycle_job = (
+                    db.session.query(Jobs.id)
+                    .filter(
+                        Jobs.scanprofile_cycle_id == cycle.id,
+                        Jobs.finished.is_(False),
+                    )
+                    .first()
+                )
+                if unfinished_cycle_job is not None:
+                    continue
+                try:
+                    result = {
+                        "cycle_id": cycle.id,
+                        "targets": prepare_cycle(cycle.id, index),
+                    }
+                    cycle = db.session.get(ScanProfileCycles, cycle.id)
+                    if cycle.preparation_status == "no_matches":
+                        reconcile_scanprofile_cycle(profile.id, cycle=cycle)
+                        db.session.commit()
+                    return result
+                except Exception as error:  # pylint: disable=broad-except
+                    logger.exception(
+                        "Filtered scan preparation failed for cycle %s", cycle.id
+                    )
+                    return {"cycle_id": cycle.id, "error": type(error).__name__}
+        return {"cycle_id": None, "targets": 0}
+    finally:
+        db.session.remove()
 
 
 def task_create_jobs():
@@ -1528,6 +1853,39 @@ def task_create_jobs():
             time_budget_exhausted = True
             break
         last_processed_profile_id = profile.id
+
+        if not profile.scan_enabled:
+            continue
+
+        if getattr(profile, "search_query", None) and not profile.apply_to_all:
+            waiting_before = waiting_counts.get(profile.id, 0)
+            queue_deficit = min(
+                queue_target - waiting_before,
+                max_new_jobs_per_tick - (totals["range_jobs"] + totals["host_jobs"]),
+            )
+            scan_cycle = get_running_scanprofile_cycle(profile.id)
+            if (
+                queue_deficit <= 0
+                or scan_cycle is None
+                or scan_cycle.filter_revision != profile.filter_revision
+                or scan_cycle.preparation_status not in {"ready", "queued"}
+            ):
+                continue
+            created = _stage_filtered_jobs(
+                profile,
+                scan_cycle,
+                _serialize_profile_nses(profile),
+                queue_deficit,
+            )
+            db.session.commit()
+            if scan_cycle.preparation_status == "queued":
+                reconcile_scanprofile_cycle(profile.id, cycle=scan_cycle)
+                db.session.commit()
+            totals["host_jobs"] += created
+            waiting_counts[profile.id] = waiting_before + created
+            if created:
+                profiles_with_jobs += 1
+            continue
 
         # Step 5: skip profiles that cannot produce executable Nmap jobs.
         # A job without ports or scan frequency is not actionable.
@@ -1763,6 +2121,7 @@ def task_create_jobs():
                     scan_cycle,
                     max_jobs=max(0, job_limit - completed_jobs),
                 )
+            excluded_state_ids.update(job_counts["unsupported_state_ids"])
             stage_elapsed = time.perf_counter() - stage_started
 
             _mark_queue_generation_stage(
@@ -1944,6 +2303,108 @@ def task_create_jobs():
     }
 
 
+def _requeue_familyless_masscan_jobs(profile, limit):
+    """Regenerate queued pre-family jobs as explicit Masscan family slices."""
+    if profile.scan_tool != "masscan":
+        return 0
+    jobs = (
+        db.session.query(Jobs)
+        .filter(
+            Jobs.scanprofile_id == profile.id,
+            Jobs.scan_family.is_(None),
+            Jobs.active.is_(False),
+            Jobs.finished.is_(False),
+        )
+        .order_by(Jobs.job_creation.asc())
+        .limit(limit)
+        .all()
+    )
+    if not jobs:
+        return 0
+
+    job_ids = [job.id for job in jobs]
+    for job in jobs:
+        rows = (
+            db.session.query(FilteredScanTargets)
+            .filter(FilteredScanTargets.job_id == job.id)
+            .all()
+        )
+        for row in rows:
+            if row.target_kind == "fqdn":
+                families = ("ipv4", "ipv6")
+            else:
+                try:
+                    version = ipaddress.ip_address(row.target_value).version
+                except ValueError:
+                    logger.warning("Cannot infer family for filtered target %s", row.target_value)
+                    continue
+                families = ("ipv4" if version == 4 else "ipv6",)
+            original_family = families[0]
+            row.scan_family = original_family
+            row.status = "pending"
+            row.job = None
+            if row.cycle is not None:
+                row.cycle.preparation_status = "ready"
+            for family in families[1:]:
+                db.session.add(
+                    FilteredScanTargets(
+                        cycle_id=row.cycle_id,
+                        configured_target_id=row.configured_target_id,
+                        target_kind=row.target_kind,
+                        target_value=row.target_value,
+                        scan_family=family,
+                        ports=row.ports,
+                        completed_ports=row.completed_ports,
+                        status="pending",
+                    )
+                )
+        for target in job.targets:
+            state = (
+                db.session.query(TargetScanStates)
+                .filter_by(target_id=target.id, scanprofile_id=profile.id)
+                .one_or_none()
+            )
+            if state is not None:
+                state.working = False
+        if job.bot_id is not None:
+            assigned_bot = db.session.query(Bots).filter_by(id=job.bot_id).one_or_none()
+            if assigned_bot is not None:
+                assigned_bot.running = False
+                assigned_bot.last_seen = utcnow_naive()
+        job.active = False
+        job.finished = True
+        job.exported = True
+        job.job_end = utcnow_naive()
+        job.scan_unit_count = 0
+
+    db.session.flush()
+    for job in jobs:
+        for target in job.targets:
+            state = (
+                db.session.query(TargetScanStates)
+                .filter_by(target_id=target.id, scanprofile_id=profile.id)
+                .one_or_none()
+            )
+            if state is not None and not state.working:
+                has_pending = (
+                    db.session.query(Jobs.id)
+                    .join(assoc_jobs_targets, assoc_jobs_targets.c.job_id == Jobs.id)
+                    .filter(
+                        assoc_jobs_targets.c.target_id == target.id,
+                        Jobs.scanprofile_id == profile.id,
+                        Jobs.finished.is_(False),
+                    )
+                    .first()
+                    is not None
+                )
+                state.working = has_pending
+            target.working = any(item.working for item in target.scan_states)
+    logger.info(
+        "Requeued %s familyless Masscan jobs for profile %s", len(job_ids), profile.id
+    )
+    return len(job_ids)
+
+
 def task_sync_queued_profile_jobs():
     """
     Gradually converge queued job snapshots to their scan profile settings.
@@ -1959,7 +2420,19 @@ def task_sync_queued_profile_jobs():
     )
     profiles = (
         db.session.query(ScanProfiles)
-        .filter(ScanProfiles.priority_retag_pending == True)
+        .filter(
+            or_(
+                ScanProfiles.priority_retag_pending.is_(True),
+                ScanProfiles.id.in_(
+                    db.session.query(Jobs.scanprofile_id).filter(
+                        Jobs.scanprofile_id.isnot(None),
+                        Jobs.scan_tool == "masscan",
+                        Jobs.scan_family.is_(None),
+                        Jobs.finished.is_(False),
+                    )
+                ),
+            )
+        )
         .order_by(ScanProfiles.priority.desc(), ScanProfiles.id.asc())
         .all()
     )
@@ -1970,16 +2443,21 @@ def task_sync_queued_profile_jobs():
     total_synchronized = 0
     completed_profiles = 0
     for profile in profiles:
+        _requeue_familyless_masscan_jobs(profile, batch_size)
         updated = (
             db.session.execute(
                 text("""
                     UPDATE jobs
                        SET priority = :priority,
                            scanprofile_name = :profile_name,
-                           scan_ports = :scan_ports,
+                           scan_ports = CASE
+                               WHEN :filtered_profile = 1 THEN scan_ports
+                               ELSE :scan_ports
+                           END,
                            scan_nses = :scan_nses,
                            nmap_additional_params = :nmap_additional_params,
                            scan_tool = :scan_tool,
+                           scan_family = CASE WHEN :scan_tool = 'nmap' THEN NULL ELSE scan_family END,
                            detect_protocol = :detect_protocol
                      WHERE id IN (
                             SELECT id
@@ -1987,13 +2465,18 @@ def task_sync_queued_profile_jobs():
                              WHERE scanprofile_id = :profile_id
                                AND active = 0
                                AND finished = 0
+                               AND NOT (:scan_tool = 'masscan' AND scan_family IS NULL)
                                AND (
                                   priority != :priority
                                OR COALESCE(scanprofile_name, '') != COALESCE(:profile_name, '')
-                               OR COALESCE(scan_ports, '') != COALESCE(:scan_ports, '')
+                               OR (
+                                  :filtered_profile = 0
+                                  AND COALESCE(scan_ports, '') != COALESCE(:scan_ports, '')
+                               )
                                OR COALESCE(scan_nses, '') != COALESCE(:scan_nses, '')
                                OR COALESCE(nmap_additional_params, '') != COALESCE(:nmap_additional_params, '')
                                OR COALESCE(scan_tool, 'nmap') != :scan_tool
+                               OR (:scan_tool = 'nmap' AND scan_family IS NOT NULL)
                                OR COALESCE(detect_protocol, 0) != :detect_protocol
                              )
                              ORDER BY job_creation ASC
@@ -2010,6 +2493,9 @@ def task_sync_queued_profile_jobs():
                     "nmap_additional_params": profile.nmap_additional_params,
                     "scan_tool": profile.scan_tool or "nmap",
                     "detect_protocol": int(bool(profile.detect_protocol)),
+                    "filtered_profile": int(
+                        bool(profile.search_query and not profile.apply_to_all)
+                    ),
                 },
             ).rowcount
             or 0
@@ -2030,6 +2516,8 @@ def task_sync_queued_profile_jobs():
                      OR COALESCE(scan_nses, '') != COALESCE(:scan_nses, '')
                      OR COALESCE(nmap_additional_params, '') != COALESCE(:nmap_additional_params, '')
                      OR COALESCE(scan_tool, 'nmap') != :scan_tool
+                     OR (:scan_tool = 'nmap' AND scan_family IS NOT NULL)
+                     OR (:scan_tool = 'masscan' AND scan_family IS NULL)
                      OR COALESCE(detect_protocol, 0) != :detect_protocol
                    )
                  LIMIT 1
@@ -2175,6 +2663,7 @@ def _finalize_ready_export_jobs(job_states, export_context):
             managed = ingest_indexer_sources(
                 export_context.kvrocks_idx,
                 meili_documents[offset : offset + MEILI_EXPORT_BATCH_SIZE],
+                live_snapshot=export_context.live_rule_snapshot,
             )
             if not managed:
                 export_context.kvrocks_idx.add_documents_batch(
@@ -2282,15 +2771,14 @@ def _build_export_context():
     """Load immutable config and parser state for one export transition."""
     meili_idx = db.app.config.get("MEILI_IDX")
     kvrocks_idx = db.app.config.get("KVROCKS_IDX")
-    active_tag_rules = compile_tag_rule_records(
-        db.session.query(TagRules).filter(TagRules.active == True).all()
-    )
     parser_config = dict(db.app.config)
     ensure_default_collected_headers(db.session)
     ensure_rule_required_headers(db.session)
+    rules = db.session.query(TagRules).filter(TagRules.active == True).all()
+    headers = db.session.query(CollectedHeaders).all()
     parser_config["HTTP_HEADER_COLLECTION"] = {
         str(row.header_name or "").strip().lower(): bool(row.collect_value)
-        for row in db.session.query(CollectedHeaders).all()
+        for row in headers
         if str(row.header_name or "").strip()
     }
     return ExportContext(
@@ -2298,7 +2786,8 @@ def _build_export_context():
         kvrocks_idx=kvrocks_idx,
         input_dir=os.path.expanduser(db.app.config.get("JSON_FOLDER")),
         parser_config=parser_config,
-        active_tag_rules=active_tag_rules,
+        active_tag_rules=compile_tag_rule_records(rules),
+        live_rule_snapshot=rule_snapshot(rules, parser_config, headers),
     )
 
 
@@ -2790,7 +3279,7 @@ def task_supervise_indexing():
     """Observe committed rule changes and supervise the independent child."""
     db.session.remove()
     try:
-        return index_supervisor.tick(desired_snapshot())
+        return index_supervisor.tick()
     finally:
         db.session.remove()
 
@@ -2808,6 +3297,13 @@ scheduler.add_job(
     func=process_pending_network_refreshes,
     trigger="interval",
     id="network_enrichment",
+    max_instances=1,
+    minutes=db.app.config.get("SCHEDULER_DELAY"),
+)
+scheduler.add_job(
+    func=task_prepare_filtered_scans,
+    trigger="interval",
+    id="filtered_scan_preparation",
     max_instances=1,
     minutes=db.app.config.get("SCHEDULER_DELAY"),
 )

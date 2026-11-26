@@ -23,7 +23,7 @@ def _junction(kind, children):
     return combine(kind, result)
 
 
-def _group_plan(fields):
+def _group_plan(fields, scoped_membership):
     """Preserve IP/net union and the order-sensitive legacy header fallback."""
     positive = tuple(
         (field, values) for field, values in fields if not field.startswith("!")
@@ -34,7 +34,9 @@ def _group_plan(fields):
         if field.startswith("!")
         for value in values
     ]
-    if any(field.split(".")[0] == "http_headval" for field, _ in positive):
+    if not scoped_membership and any(
+        field.split(".")[0] == "http_headval" for field, _ in positive
+    ):
         positives = [Expression("legacy", fields=positive)] if positive else []
     else:
         networks = []
@@ -49,7 +51,7 @@ def _group_plan(fields):
     return _junction("all", positives + negative)
 
 
-def build_plan(query):
+def build_plan(query, scoped_membership=False):
     """Factor common conjunctions without ever expanding into a Cartesian product."""
     node = query_expression(query)
     if node.kind == "criteria":
@@ -57,8 +59,10 @@ def build_plan(query):
             (field.lower(), tuple(str(v).lower() for v in values))
             for field, values in node.fields
         )
-        return _group_plan(fields)
-    node = _junction(node.kind, [build_plan(child) for child in node.children])
+        return _group_plan(fields, scoped_membership)
+    node = _junction(
+        node.kind, [build_plan(child, scoped_membership) for child in node.children]
+    )
     if node.kind != "any" or len(node.children) < 2:
         return node
     branches = [

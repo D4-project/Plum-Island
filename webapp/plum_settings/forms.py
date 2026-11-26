@@ -6,7 +6,7 @@ from .store import WEBAPP_DIR
 
 def overrides_from_form(form, desired, baseline):
     """Accept only declared controls; retain secrets unless explicitly replaced."""
-    allowed = {"csrf_token", "revision"}
+    allowed = {"csrf_token", "revision", "active_section"}
     for key, field in SETTINGS.items():
         if field.inactive:
             continue

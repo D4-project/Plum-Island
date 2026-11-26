@@ -10,6 +10,7 @@ This module contains all code related to the GUI.
 
 import calendar
 from datetime import datetime, timedelta, timezone
+from functools import partial
 import hashlib
 import io
 import ipaddress
@@ -24,8 +25,8 @@ import uuid
 import zipfile
 import yaml
 
-from flask import render_template, redirect, make_response, send_file, flash, url_for
-from flask import request, jsonify, abort
+from flask import render_template, redirect, make_response, send_file, flash, url_for, g
+from flask import request, jsonify, abort, current_app
 from flask_appbuilder import BaseView
 from flask_appbuilder import ModelView, action, has_access
 from flask_appbuilder.api import expose
@@ -49,6 +50,7 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 from wtforms import (
     BooleanField,
+    StringField,
     TextAreaField,
     SubmitField,
     Field,
@@ -72,6 +74,7 @@ from .models import (
     Ports,
     TargetScanStates,
     ScanProfileCycles,
+    FilteredScanTargets,
     ensure_default_collected_headers,
     ensure_rule_required_headers,
     is_valid_http_header_name,
@@ -94,8 +97,14 @@ from .utils.ip_links import port_web_scheme
 from .utils.scanner_reports import display_scripts
 from .utils.scan_stats import activity_series
 from .utils.search_debug import profile_search_page
-from .utils.search_query import compile_query, tokenize_query
+from .utils.search_query import (
+    compile_query,
+    iter_criteria,
+    parse_nse_body_term,
+    tokenize_query,
+)
 from .utils.search_plan import CandidatePlanner
+from .utils.filtered_scans import first_scan_candidate
 from .utils.search_timestamps import search_timestamps
 from .utils.resolved_export import write_resolved_csv
 from .utils.report_query import validate_report_query
@@ -114,6 +123,7 @@ from .utils.tagrules import (
     normalize_tags,
     normalize_tag_rule_fields,
 )
+from .utils.tag_runtime import notify_rule_change
 from .utils.reports import (
     build_report_markdown,
     compute_new_open_ports,
@@ -742,7 +752,8 @@ class KVSearchView(BaseView):
     TAG_CATALOGUE_TTL_SECONDS = 60
     _tag_catalogue_cache = None
     _tag_catalogue_lock = threading.Lock()
-    TAG_LOOKUP_BATCH_LIMIT = 200
+    TAG_LOOKUP_BATCH_LIMIT = 5
+    IP_EXPANSION_BATCH_LIMIT = 200
     HTTP_HEADER_SUGGEST_LIMIT = 128
     TAG_NAMESPACE_PREFERRED_ORDER = ["lang", "soft", "hard"]
     SINCE_PREFIX = "since:"
@@ -828,7 +839,7 @@ class KVSearchView(BaseView):
             return None, False, "Only one since: directive is allowed"
 
         raw_value = since_values[0]
-        if not raw_value.isdigit() or int(raw_value) <= 0:
+        if not raw_value.isdecimal() or int(raw_value) <= 0:
             return None, False, "since: expects a positive integer number of days"
 
         return int(raw_value), True, None
@@ -1697,7 +1708,7 @@ class KVSearchView(BaseView):
             set(cls.search_keywords()) | {"http_headval", cls.SINCE_PREFIX[:-1]}
         )
 
-    def parse_query_group(self, query):
+    def parse_query_group(self, query, *, for_tag_rule=False):
         """Validate one AND-only group using the shared field catalogue."""
         valid_keywords = self.search_keywords()
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
@@ -1714,6 +1725,13 @@ class KVSearchView(BaseView):
                 return {}, False, f"Invalid query syntax: {error}"
         for part in parts:
             if str(part).upper() == "AND":
+                continue
+            if for_tag_rule and part.lower().startswith(("nse.body:", "nse.body.")):
+                try:
+                    key, value = parse_nse_body_term(part)
+                except ValueError as error:
+                    return {}, False, str(error)
+                result.setdefault(key, []).append(value)
                 continue
             if str(part).lower().startswith("http_headval:"):
                 key, value, term_status, term_error = self._parse_http_headval_term(
@@ -1749,6 +1767,15 @@ class KVSearchView(BaseView):
                 msg_error = f"Bad modifier for keyword: {key}"
                 continue
 
+            if base_key == "engine":
+                value = value.strip().lower()
+                if value not in {"nmap", "masscan"}:
+                    msg_error = (
+                        f"Invalid engine: {value or '(empty)'}. "
+                        "Expected nmap or masscan"
+                    )
+                    continue
+
             # store values in list to allow multiple occurrences
             if key not in result:
                 result[key] = [value]
@@ -1760,7 +1787,9 @@ class KVSearchView(BaseView):
             status = False
         return result, status, msg_error
 
-    def _parse_query_group_with_not(self, parts, allow_negative_only=False):
+    def _parse_query_group_with_not(
+        self, parts, allow_negative_only=False, *, for_tag_rule=False
+    ):
         """Compile unary NOT terms separately from the existing positive AND group."""
         positive_parts = []
         negative_parts = []
@@ -1775,11 +1804,15 @@ class KVSearchView(BaseView):
                 positive_parts.append(part)
         if negative_parts and not positive_parts and not allow_negative_only:
             return {}, False, "Each OR group with NOT requires a positive search term"
-        result, status, error = self.parse_query_group(positive_parts)
+        result, status, error = self.parse_query_group(
+            positive_parts, for_tag_rule=for_tag_rule
+        )
         if not status:
             return result, status, error
         for part in negative_parts:
-            negative, status, error = self.parse_query_group([part])
+            negative, status, error = self.parse_query_group(
+                [part], for_tag_rule=for_tag_rule
+            )
             if not status:
                 return {}, False, error
             for field, values in negative.items():
@@ -1793,10 +1826,18 @@ class KVSearchView(BaseView):
         return result, True, ""
 
     def parse_query(
-        self, query, allow_since_directive=False, allow_debug_directive=False
+        self,
+        query,
+        allow_since_directive=False,
+        allow_debug_directive=False,
+        *,
+        for_tag_rule=False,
     ):
         """Compile flat queries or one-level parentheses without backend I/O."""
-        return compile_query(self, query, allow_since_directive, allow_debug_directive)
+        parse_group = partial(self._parse_query_group_with_not, for_tag_rule=for_tag_rule)
+        return compile_query(
+            parse_group, query, allow_since_directive, allow_debug_directive
+        )
 
     @prioritized_search
     def execute_search(self, query, from_ts=None, to_ts=None):
@@ -2185,7 +2226,7 @@ class KVSearchView(BaseView):
                 break
 
         if not ips:
-            return jsonify({"tags_by_ip": {}})
+            return jsonify({"tags_by_ip": {}, "requested_hostnames_by_ip": {}})
 
         time_range, time_status, time_error = self._resolve_time_range(
             payload.get("from_ts"), payload.get("to_ts")
@@ -2204,7 +2245,12 @@ class KVSearchView(BaseView):
         }
         all_uids = sorted({uid for uids in ip_uids.values() for uid in uids})
         if not all_uids:
-            return jsonify({"tags_by_ip": {ip: [] for ip in ips}})
+            return jsonify(
+                {
+                    "tags_by_ip": {ip: [] for ip in ips},
+                    "requested_hostnames_by_ip": {ip: [] for ip in ips},
+                }
+            )
 
         doc_pipeline = indexer.r.pipeline(transaction=False)
         for uid in all_uids:
@@ -2228,16 +2274,25 @@ class KVSearchView(BaseView):
         for uid in eligible_list:
             tag_pipeline.smembers(f"tags:{uid}")
         tags_by_uid = dict(zip(eligible_list, tag_pipeline.execute()))
+        hostname_pipeline = indexer.r.pipeline(transaction=False)
+        for uid in eligible_list:
+            hostname_pipeline.smembers(f"fqdn_requesteds:{uid}")
+        hostnames_by_uid = dict(zip(eligible_list, hostname_pipeline.execute()))
         tags_by_ip = {}
+        requested_hostnames_by_ip = {}
+        ptr_hostnames_by_ip = {ip: [] for ip in ips}
         timestamps_by_ip = {}
+        newest_uid_by_ip = {}
         for ip in ips:
             tags = []
+            requested_hostnames = set()
             first_seen_values = []
             last_seen_values = []
             for uid in ip_uids[ip]:
                 tags.extend(tags_by_uid.get(uid) or [])
                 if uid not in eligible_uids:
                     continue
+                requested_hostnames.update(hostnames_by_uid.get(uid) or [])
                 document = documents.get(uid) or {}
                 first_seen, last_seen = indexer.normalize_seen_range(
                     document.get("first_seen"), document.get("last_seen")
@@ -2246,12 +2301,64 @@ class KVSearchView(BaseView):
                     first_seen_values.append(first_seen)
                 if last_seen is not None:
                     last_seen_values.append(last_seen)
+                    current_newest = newest_uid_by_ip.get(ip)
+                    if current_newest is None or last_seen > current_newest[0]:
+                        newest_uid_by_ip[ip] = (last_seen, uid)
             tags_by_ip[ip] = sorted(normalize_tags(tags), key=str.lower)
+            requested_hostnames_by_ip[ip] = sorted(
+                {
+                    str(hostname or "").strip().lower()
+                    for hostname in requested_hostnames
+                    if str(hostname or "").strip()
+                }
+            )
             timestamps_by_ip[ip] = {
                 "min_seen": min(first_seen_values) if first_seen_values else None,
                 "max_seen": max(last_seen_values) if last_seen_values else None,
             }
-        return jsonify({"tags_by_ip": tags_by_ip, "timestamps_by_ip": timestamps_by_ip})
+
+        # Fetch PTR labels only for the newest in-range report per displayed IP.
+        # This keeps the async enrichment bounded to at most one Meilisearch
+        # document per IP instead of loading every report in the date window.
+        newest_uids = sorted({value[1] for value in newest_uid_by_ip.values()})
+        if newest_uids:
+            try:
+                ptr_documents = client.index("plum").get_documents(
+                    {
+                        "ids": newest_uids,
+                        "fields": ["id", "body.hostnames"],
+                        "limit": len(newest_uids),
+                    }
+                )
+                ptr_by_uid = {}
+                for document in ptr_documents.results:
+                    value = vars(document)
+                    body = value.get("body") or {}
+                    ptr_by_uid[str(value.get("id") or "")] = sorted(
+                        {
+                            str(entry.get("name") or entry.get("hostname") or "")
+                            .strip()
+                            .lower()
+                            .rstrip(".")
+                            for entry in body.get("hostnames") or []
+                            if isinstance(entry, dict)
+                            and str(entry.get("type") or "").upper() == "PTR"
+                            and str(entry.get("name") or entry.get("hostname") or "").strip()
+                        },
+                        key=str.lower,
+                    )
+                for ip, (_last_seen, uid) in newest_uid_by_ip.items():
+                    ptr_hostnames_by_ip[ip] = ptr_by_uid.get(uid, [])
+            except Exception:  # Keep tags and requested hostnames available if Meili is unavailable.
+                logger.exception("Unable to enrich search results with PTR hostnames")
+        return jsonify(
+            {
+                "tags_by_ip": tags_by_ip,
+                "timestamps_by_ip": timestamps_by_ip,
+                "requested_hostnames_by_ip": requested_hostnames_by_ip,
+                "ptr_hostnames_by_ip": ptr_hostnames_by_ip,
+            }
+        )
 
     @expose("/expand_ips", methods=["POST"])
     @has_access
@@ -2271,7 +2378,7 @@ class KVSearchView(BaseView):
             if ip and ip not in seen_ips and is_valid_ip(ip):
                 seen_ips.add(ip)
                 ips.append(ip)
-            if len(ips) >= self.TAG_LOOKUP_BATCH_LIMIT:
+            if len(ips) >= self.IP_EXPANSION_BATCH_LIMIT:
                 break
         if not ips:
             return jsonify({"results": {}, "timestamps": {}, "tags_by_ip": {}})
@@ -2686,6 +2793,11 @@ class KVSearchView(BaseView):
         )
 
 
+app.jinja_env.globals["get_search_suggestion_keywords"] = (
+    KVSearchView._search_suggestion_keywords
+)
+
+
 class IPDetailView(BaseView):
     """
     Display the cumulative details for one IP without time filtering.
@@ -3026,6 +3138,12 @@ class IPDetailView(BaseView):
             for port in ports:
                 protocol = str(port.get("protocol") or "unknown").lower()
                 portid = str(port.get("portid") or "?")
+                port_state = port.get("state") or {}
+                reason_ttl = (
+                    port_state.get("reason_ttl")
+                    if isinstance(port_state, dict)
+                    else None
+                )
                 group_key = f"{protocol}:{portid}"
                 service_name = ((port.get("service") or {}).get("name")) or None
                 group = port_groups.setdefault(
@@ -3052,6 +3170,7 @@ class IPDetailView(BaseView):
                         or 0,
                         "scan_start": scan_start,
                         "scan_end": scan_end,
+                        "reason_ttl": reason_ttl,
                         "ptr_records": ptr_records,
                         "resolved_hosts": resolved_hosts,
                         "user_hostnames": sorted(set(user_hostnames), key=str.lower),
@@ -3224,10 +3343,7 @@ class TargetsView(ModelView):
         value = item.value
         db.session.rollback()
         if target_type(value) == "FQDN":
-            return jsonify(
-                disabled=True,
-                message="IP and AS information is unavailable for FQDN targets.",
-            )
+            return jsonify(disabled=True)
         try:
             cached = ip_information(value)
             info = parse_network_information(cached["value"])
@@ -3498,6 +3614,7 @@ class BotsView(ModelView):
     """
 
     datamodel = SQLAInterface(Bots)
+    list_template = "list_botsview.html"
     list_columns = [
         "uid",
         "agent_version",
@@ -3521,6 +3638,7 @@ class JobsView(ModelView):
         "uid",
         "scanprofile_label_html",
         "scan_tool",
+        "scan_family",
         "detect_protocol",
         "job_html",
         "banner_status_html",
@@ -3541,6 +3659,7 @@ class JobsView(ModelView):
         "job_creation",
         "scanprofile_label_html",
         "scan_tool",
+        "scan_family",
         "job_start",
         "job_end",
         "job_summary_html",
@@ -3569,9 +3688,110 @@ class JobsView(ModelView):
         "targets_count_html": "Targets",
         "duration_html": "Duration",
         "scan_tool": "Scan tool",
+        "scan_family": "Address family",
         "detect_protocol": "Detect protocol",
         "banner_status_html": "Banner detection",
     }
+
+    @staticmethod
+    def _reset_filtered_work(job_ids):
+        """Detach deleted jobs and requeue work only in the current cycle."""
+        if not job_ids:
+            return
+        work_rows = (
+            db.session.query(FilteredScanTargets)
+            .filter(FilteredScanTargets.job_id.in_(job_ids))
+            .all()
+        )
+        linked_ids = {work.id for work in work_rows}
+        jobs = db.session.query(Jobs).filter(Jobs.id.in_(job_ids)).all()
+        for job in jobs:
+            # A filter revision can detach completed work from its old job.
+            # Deleting that job must still make its exact target/family/ports
+            # runnable again instead of leaving a completed orphan behind.
+            if job.scanprofile_cycle_id is None or not job.job:
+                continue
+            target_values = [
+                value.strip() for value in job.job.split(",") if value.strip()
+            ]
+            if not target_values:
+                continue
+            detached = (
+                db.session.query(FilteredScanTargets)
+                .filter(
+                    FilteredScanTargets.cycle_id == job.scanprofile_cycle_id,
+                    FilteredScanTargets.target_value.in_(target_values),
+                    FilteredScanTargets.scan_family == job.scan_family,
+                    FilteredScanTargets.status == "completed",
+                    FilteredScanTargets.job_id.is_(None),
+                )
+                .all()
+            )
+            work_rows.extend(
+                work for work in detached if work.id not in linked_ids
+            )
+            linked_ids.update(work.id for work in detached)
+
+        cycle_ids = {work.cycle_id for work in work_rows}
+        profile_ids = {
+            work.cycle.scanprofile_id for work in work_rows if work.cycle is not None
+        }
+        retry_cycles = {}
+        for profile_id in sorted(profile_ids):
+            cycle = (
+                db.session.query(ScanProfileCycles)
+                .filter(
+                    ScanProfileCycles.scanprofile_id == profile_id,
+                    ScanProfileCycles.status.in_(("running", "finished")),
+                )
+                .order_by(
+                    (ScanProfileCycles.status == "running").desc(),
+                    ScanProfileCycles.started_at.desc(),
+                    ScanProfileCycles.id.desc(),
+                )
+                .first()
+            )
+            if cycle is None or cycle.id not in cycle_ids:
+                continue
+            profile = cycle.scanprofile
+            if (
+                profile is not None
+                and profile.scan_enabled
+                and not profile.apply_to_all
+                and profile.search_query
+                and cycle.preparation_status != "cancelled"
+            ):
+                retry_cycles[cycle.id] = cycle
+
+        for work in work_rows:
+            work.job = None
+            if work.cycle_id in retry_cycles:
+                work.status = "pending"
+                work.completed_ports = None
+        for cycle in retry_cycles.values():
+            # Run the saved search again to get the current matching ports.
+            cycle.preparation_status = "pending"
+            cycle.status = "running"
+            cycle.finished_at = None
+            cycle.scanprofile.current_cycle_id = cycle.id
+
+    def pre_delete(self, item):
+        """Detach filtered work before FAB deletes a job referenced by that work."""
+        target_ids = [target.id for target in item.targets]
+        g.jobs_delete_context = getattr(g, "jobs_delete_context", {})
+        g.jobs_delete_context[item.id] = (item.scanprofile_id, target_ids)
+        self._reset_filtered_work([item.id])
+        return self
+
+    def post_delete(self, item):
+        """Release target state after a single FAB/API job deletion."""
+        context = getattr(g, "jobs_delete_context", {}).pop(item.id, None)
+        if context:
+            profile_id, target_ids = context
+            if profile_id is not None:
+                release_orphaned_scan_states_for_profile(profile_id, target_ids)
+                reconcile_scanprofile_cycle(profile_id)
+                db.session.commit()
 
     @action(
         "mulraisepriority",
@@ -3600,9 +3820,14 @@ class JobsView(ModelView):
     )
     def muldelete(self, items):
         """
-        Implement Multiple Delete for Targets
+        Delete jobs and return any filtered-scan work to its pending queue.
         """
         selected_items = items if isinstance(items, list) else [items]
+        selected_items = [item for item in selected_items if item is not None]
+        if not selected_items:
+            self.update_redirect()
+            return redirect(self.get_redirect())
+
         affected_profiles = {}
         for item in selected_items:
             if item.scanprofile_id is None:
@@ -3610,9 +3835,12 @@ class JobsView(ModelView):
             affected_profiles.setdefault(item.scanprofile_id, set()).update(
                 target.id for target in item.targets
             )
-        for profile_id in affected_profiles:
-            reconcile_scanprofile_cycle(profile_id)
-        self.datamodel.delete_all(items)
+        self._reset_filtered_work([item.id for item in selected_items])
+        deleted = self.datamodel.delete_all(selected_items)
+        if not deleted:
+            flash(*self.datamodel.message)
+            self.update_redirect()
+            return redirect(self.get_redirect())
         for profile_id, target_ids in affected_profiles.items():
             release_orphaned_scan_states_for_profile(profile_id, target_ids)
             reconcile_scanprofile_cycle(profile_id)
@@ -3920,17 +4148,20 @@ class TagRulesView(ModelView):
 
     def post_add(self, item):
         _ = item
-        reconciliation = ensure_rule_required_headers(db.session)
-        self._flash_header_reconciliation(reconciliation)
+        self._after_rule_change()
 
     def post_update(self, item):
         _ = item
-        reconciliation = ensure_rule_required_headers(db.session)
-        self._flash_header_reconciliation(reconciliation)
+        self._after_rule_change()
 
     def post_delete(self, item):
         _ = item
+        self._after_rule_change()
+
+    def _after_rule_change(self):
+        """Submit the committed rules after any required header configuration."""
         self._flash_header_reconciliation(ensure_rule_required_headers(db.session))
+        notify_rule_change()
 
     @staticmethod
     def _flash_header_reconciliation(summary):
@@ -3983,7 +4214,7 @@ class TagRulesView(ModelView):
         Delete selected tag rules from the list checkbox action.
         """
         self.datamodel.delete_all(items)
-        self._flash_header_reconciliation(ensure_rule_required_headers(db.session))
+        self._after_rule_change()
         self.update_redirect()
         return redirect(self.get_redirect())
 
@@ -4492,6 +4723,80 @@ class ReportsView(ModelView):
         return redirect(url_for("ReportsView.show", pk=pk))
 
 
+class SearchFilterUnavailable(RuntimeError):
+    """Search verification could not complete."""
+
+
+@pinned_read
+def validate_profile_search_query(query, require_candidate=True):
+    """Validate a historical search draft and require at least one observation."""
+    if query is None:
+        return None
+    if not isinstance(query, str):
+        raise ValueError("Search query must be a string.")
+    query = query.strip()
+    if not query:
+        return None
+    if len(query) > 2048:
+        raise ValueError("Search query must be at most 2048 characters.")
+    search = KVSearchView()
+    query = validate_report_query(query, search)
+    criteria, valid, error = search.parse_query(query, allow_since_directive=True)
+    if not valid:
+        raise ValueError(error)
+    if any(
+        field.lstrip("!").partition(".")[0] == "port"
+        for group in iter_criteria(criteria)
+        for field in group
+    ):
+        raise ValueError("port: is unavailable in this search filter.")
+    # pylint: disable=protected-access
+    days, _, _ = search._extract_since_days(query)
+    if days is not None and days > 90:
+        raise ValueError("since: must be between 1 and 90 days.")
+    if not require_candidate:
+        return query
+    window, _, _ = search._resolve_since_time_range(days or 30)
+
+    config = current_app.config
+    indexer = KVrocksIndexer(
+        config["KVROCKS_HOST"], config["KVROCKS_PORT"], socket_timeout=4
+    )
+    try:
+        candidate = first_scan_candidate(
+            indexer,
+            client.index("plum"),
+            criteria,
+            window["from_ts"],
+            window["to_ts"],
+            config,
+        )
+    except (MeilisearchApiError, RedisError, TimeoutError, OSError) as error:
+        logger.warning("Scan profile search validation unavailable", exc_info=True)
+        raise SearchFilterUnavailable(
+            "Search filter validation is unavailable. Try again."
+        ) from error
+    if candidate is None:
+        raise ValueError("This filter returned no scan candidates.")
+    return query
+
+
+def validate_profile_search_query_field(form, field):
+    """Keep an invalid draft in the form with its validation error."""
+    if form.apply_to_all.data:
+        return
+    if not str(field.data or "").strip():
+        raise ValidationError(
+            "Enter a Search query or enable Apply to all scans."
+        )
+    try:
+        field.data = validate_profile_search_query(
+            field.data, require_candidate=bool(form.scan_enabled.data)
+        )
+    except (ValueError, SearchFilterUnavailable) as error:
+        raise ValidationError(str(error)) from error
+
+
 class ScanprofilesView(ModelView):
     """
     This class implements GUI for
@@ -4511,6 +4816,7 @@ class ScanprofilesView(ModelView):
         "nses",
         "nmap_additional_params",
         "apply_to_all",
+        "scan_enabled",
         "current_cycle_summary_html",
     ]
     search_columns = [
@@ -4520,11 +4826,13 @@ class ScanprofilesView(ModelView):
         "apply_to_all",
     ]
     add_columns = [
+        "scan_enabled",
         "name",
         "scan_cycle_minutes",
         "priority",
         "ports",
         "apply_to_all",
+        "search_query",
         "scan_tool",
         "nses",
         "nmap_additional_params",
@@ -4542,8 +4850,21 @@ class ScanprofilesView(ModelView):
         "nses",
         "nmap_additional_params",
         "apply_to_all",
+        "search_query",
+        "scan_enabled",
     ]
     add_form_extra_fields = {
+        "search_query": StringField(
+            "Search query (draft)",
+            description="Validates against historical results. Default window 30 days, maximum 90.",
+            validators=[validate_profile_search_query_field],
+            render_kw={"class": "form-control", "maxlength": 2048},
+        ),
+        "scan_enabled": BooleanField(
+            "Scan enabled",
+            default=True,
+            description="Disable to suspend job creation and dispatch for this profile, for both target and search-based scans.",
+        ),
         "scan_tool": SelectField(
             "Scan tool",
             choices=[("nmap", "Nmap"), ("masscan", "Masscan")],
@@ -4568,6 +4889,8 @@ class ScanprofilesView(ModelView):
         ),
     }
     edit_form_extra_fields = {
+        "search_query": add_form_extra_fields["search_query"],
+        "scan_enabled": add_form_extra_fields["scan_enabled"],
         "scan_tool": add_form_extra_fields["scan_tool"],
         "detect_protocol": add_form_extra_fields["detect_protocol"],
         "priority": build_priority_field(),
@@ -4587,6 +4910,8 @@ class ScanprofilesView(ModelView):
         ),
     }
     label_columns = {
+        "search_query": "Search query (draft)",
+        "scan_enabled": "Scan enabled",
         "scan_tool": "Scan tool",
         "detect_protocol": "Detect protocol",
         "nses": "Nse Scripts",
@@ -4600,6 +4925,8 @@ class ScanprofilesView(ModelView):
 
     def process_form(self, form, is_created):
         # The browser omits disabled controls. Leave their stored values intact.
+        if form.apply_to_all.data:
+            del form["search_query"]
         if form.scan_tool.data == "masscan":
             del form["nses"]
             del form["nmap_additional_params"]
@@ -4609,26 +4936,40 @@ class ScanprofilesView(ModelView):
 
     def pre_add(self, item):
         normalize_priority(item)
-        ScanProfiles.validate_banner_support(
-            db.session, item.scan_tool, item.detect_protocol
-        )
-        if len(item.ports) == 0:
+        if not item.apply_to_all and not str(item.search_query or "").strip():
+            raise ValueError(
+                "Enter a Search query or enable Apply to all scans."
+            )
+        if item.scan_enabled:
+            ScanProfiles.validate_banner_support(
+                db.session, item.scan_tool, item.detect_protocol
+            )
+        if len(item.ports) == 0 and not (item.search_query and not item.apply_to_all):
             raise ValueError("At least one port is mandatory")
         if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
             raise ValueError("Scan frequency must be greater than 0 minute")
+        if item.search_query and not item.apply_to_all:
+            item.filter_revision = 1
         return self
 
     def pre_update(self, item):
         normalize_priority(item)
-        ScanProfiles.validate_banner_support(
-            db.session, item.scan_tool, item.detect_protocol
-        )
+        if not item.apply_to_all and not str(item.search_query or "").strip():
+            raise ValueError(
+                "Enter a Search query or enable Apply to all scans."
+            )
+        if item.scan_enabled:
+            ScanProfiles.validate_banner_support(
+                db.session, item.scan_tool, item.detect_protocol
+            )
         # Flask-AppBuilder updates the model instance before pre_update is
         # called, so old/new priority comparison is not reliable here. Marking
         # pending on every profile edit is cheap: the scheduler only updates
         # queued jobs whose priority actually differs from the current profile.
         item.priority_retag_pending = True
-        if len(item.ports) == 0:
+        if item.search_query and not item.apply_to_all:
+            item.filter_revision = int(item.filter_revision or 0) + 1
+        if len(item.ports) == 0 and not (item.search_query and not item.apply_to_all):
             raise ValueError("At least one port is mandatory")
         if not item.scan_cycle_minutes or item.scan_cycle_minutes <= 0:
             raise ValueError("Scan frequency must be greater than 0 minute")

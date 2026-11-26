@@ -1,0 +1,27 @@
+{% include 'search_query_helpers.html' %}
+<style>
+.search-query-wrapper { position: relative; width: 100%; }
+.tag-suggest-menu {
+  position: absolute; top: calc(100% + .25rem); left: 0; right: 0; z-index: 30;
+  display: none; overflow: hidden; border: 1px solid var(--plum-border, #ccd5df);
+  border-radius: 6px; background: var(--plum-surface, #fff);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .15);
+}
+.tag-suggest-item {
+  display: flex; width: 100%; align-items: center; justify-content: space-between;
+  gap: 1rem; padding: .6rem .8rem; border: 0;
+  border-bottom: 1px solid var(--plum-border, #e3e7eb);
+  background: var(--plum-surface, #fff); color: var(--plum-ink, #253344);
+  text-align: left; cursor: pointer;
+}
+.tag-suggest-item:last-child { border-bottom: 0; }
+.tag-suggest-item:hover, .tag-suggest-item:focus, .tag-suggest-item.active {
+  outline: 0; background: var(--plum-accent-soft, #eaf6f3);
+}
+.tag-suggest-label { font-weight: 500; }
+.tag-suggest-kind { color: var(--plum-muted, #6c757d); font-size: .78rem; text-transform: uppercase; }
+</style>
+<span data-profile-filter-status role="status" hidden>
+  <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+  Validating filter…
+</span>

@@ -372,7 +372,9 @@ def prepare_kvrocks_document(raw_doc, parsed_doc, tag_rules=None):
     indexed_doc["engine"] = [report_engine(raw_doc)]
     if tag_rules is not None:
         indexed_doc.pop("tag", None)
-        computed_tags = apply_tag_rules_to_document(indexed_doc, tag_rules=tag_rules)
+        computed_tags = apply_tag_rules_to_document(
+            indexed_doc, tag_rules=tag_rules, source=raw_doc
+        )
         if has_tls_certificate(raw_doc) and "proto:tls" not in computed_tags:
             computed_tags.append("proto:tls")
         if computed_tags:
@@ -689,13 +691,15 @@ def observed_services(ports):
     names = set()
     for port in ports:
         service = port.get("service") or {}
-        candidates = [
-            script.get("service")
-            for script in port.get("scripts") or []
-            if script.get("id") == "masscan-detection"
-        ]
+        candidates = []
         if isinstance(service, dict) and service.get("method") == "probed":
             candidates.append(service.get("name"))
+        for script in port.get("scripts") or []:
+            script_id = script.get("id")
+            if script_id == "masscan-detection":
+                candidates.append(script.get("service"))
+            elif script_id in ("rdp", "rdp-info") and script.get("rdp") == "detected":
+                candidates.append("rdp")
         names.update(
             name.strip().lower()
             for name in candidates
@@ -716,6 +720,7 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
     # Historical source documents need the same HTTP extraction as new captures.
     body = dict(doc["body"])
     body["ports"] = [normalize_masscan_port(port) for port in body.get("ports") or []]
+    source = doc
     doc = dict(doc, body=body)
 
     final_result = {}  # Parsing result array
@@ -775,7 +780,9 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
         "port": ports,
     }
 
-    computed_tags = apply_tag_rules_to_document(final_result, tag_rules=tag_rules)
+    computed_tags = apply_tag_rules_to_document(
+        final_result, tag_rules=tag_rules, source=source
+    )
     if has_tls_certificate(doc) and "proto:tls" not in computed_tags:
         computed_tags.append("proto:tls")
     if computed_tags:

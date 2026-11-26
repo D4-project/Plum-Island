@@ -17,6 +17,7 @@ from sqlalchemy import and_, exists, func, text
 from .. import db
 from ..models import (
     Jobs,
+    FilteredScanTargets,
     ScanProfileCycles,
     ScanProfiles,
     TargetScanStates,
@@ -94,9 +95,9 @@ def prune_scanprofile_cycles(scanprofile_id, keep=SCANPROFILE_CYCLES_RETAINED):
     - fill remaining slots with newest finished cycles,
     - if no running cycle exists, keep the two newest finished cycles.
 
-    Jobs may reference old cycle rows, so old jobs are unlinked before deleting
-    old cycles. The job still keeps its scan profile label via
-    `jobs.scanprofile_name`.
+    Jobs and filtered target rows may reference old cycle rows. Filtered work
+    is deleted and old jobs are unlinked before deleting cycles. Jobs still
+    keep their scan profile label via `jobs.scanprofile_name`.
     """
     keep = max(1, int(keep or SCANPROFILE_CYCLES_RETAINED))
     cycles = (
@@ -166,6 +167,9 @@ def prune_scanprofile_cycles(scanprofile_id, keep=SCANPROFILE_CYCLES_RETAINED):
     if not obsolete_ids:
         return 0
 
+    db.session.query(FilteredScanTargets).filter(
+        FilteredScanTargets.cycle_id.in_(obsolete_ids)
+    ).delete(synchronize_session=False)
     db.session.query(Jobs).filter(Jobs.scanprofile_cycle_id.in_(obsolete_ids)).update(
         {Jobs.scanprofile_cycle_id: None},
         synchronize_session=False,
@@ -267,6 +271,47 @@ def reconcile_scanprofile_cycle(
 
     if cycle.max_target_id is None:
         cycle.max_target_id = get_current_max_target_id()
+
+    if cycle.filter_revision is not None:
+        target_count = (
+            db.session.query(func.count(FilteredScanTargets.id))
+            .filter(FilteredScanTargets.cycle_id == cycle.id)
+            .scalar()
+            or 0
+        )
+        completed_count = (
+            db.session.query(func.count(FilteredScanTargets.id))
+            .join(Jobs, FilteredScanTargets.job_id == Jobs.id)
+            .filter(
+                FilteredScanTargets.cycle_id == cycle.id,
+                FilteredScanTargets.status != "cancelled",
+                Jobs.finished.is_(True),
+            )
+            .scalar()
+            or 0
+        )
+        queued_jobs, active_jobs = _unfinished_job_counts(cycle.id)
+        cycle.target_count = target_count
+        cycle.completed_target_count = completed_count
+        cycle.scan_unit_count = target_count
+        cycle.completed_scan_unit_count = completed_count
+        preparation_done = cycle.preparation_status in {
+            "queued",
+            "no_matches",
+            "cancelled",
+        }
+        if preparation_done and queued_jobs + active_jobs == 0:
+            cycle.status = "finished"
+            cycle.finished_at = cycle.finished_at or now
+            profile.current_cycle_id = None
+            profile.last_cycle_finished_at = cycle.finished_at
+        else:
+            cycle.status = "running"
+            cycle.finished_at = None
+            profile.current_cycle_id = cycle.id
+        if prune_history:
+            prune_scanprofile_cycles(scanprofile_id)
+        return cycle
 
     state_query = _active_applicable_state_query(profile, cycle.max_target_id)
     target_count = state_query.count()

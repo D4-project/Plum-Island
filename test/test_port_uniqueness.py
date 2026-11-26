@@ -173,7 +173,7 @@ class PortHttpTest(ProfileApiFixture):
         created = self.client.post(
             self.url,
             headers=self.admin,
-            json={"name": "legacy", "port_ids": [kept, udp]},
+            json={"name": "legacy", "apply_to_all": True, "port_ids": [kept, udp]},
         )
         self.assertEqual(created.status_code, 201, created.json)
         profile_id = created.json["result"]["id"]

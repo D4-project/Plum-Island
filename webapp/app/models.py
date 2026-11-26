@@ -19,6 +19,7 @@ from flask_appbuilder.models.decorators import renders
 from markupsafe import Markup as Esc
 from sqlalchemy import (
     BigInteger,
+    and_,
     CheckConstraint,
     Column,
     Integer,
@@ -31,10 +32,11 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    or_,
 )
 from flask_appbuilder.models.mixins import FileColumn
 from sqlalchemy import event, func, inspect
-from sqlalchemy.orm import relationship, object_session, validates
+from sqlalchemy.orm import relationship, object_session, synonym, validates
 from .utils.mutils import classify_target_is_ip_cidr, compute_scan_unit_count
 from .utils.timeutils import utcnow_naive
 from .utils.ip2asn import target_type
@@ -134,38 +136,69 @@ class Bots(Model):
     has_nmap = Column(Boolean, nullable=False, default=True, server_default="1")
     has_masscan = Column(Boolean, nullable=False, default=False, server_default="0")
     masscan_ip = Column(String(45), nullable=True)
+    masscan_ip_v4 = Column(String(45), nullable=True)
+    masscan_ip_v6 = Column(String(45), nullable=True)
+    masscan_ipv4 = Column(Boolean, nullable=False, default=False, server_default="0")
+    masscan_ipv6 = Column(Boolean, nullable=False, default=False, server_default="0")
     supports_job_attempts = Column(
         Boolean, nullable=False, default=False, server_default="0"
     )
 
     def reported_tools_html(self):
         """Render the last announced inventory in both Bot Status themes."""
-        badges = []
-        for name, available in (
-            ("Nmap", self.has_nmap),
-            ("Masscan", self.has_masscan),
-            ("Masscan Banner", self.has_masscan and bool(self.masscan_ip)),
-        ):
+
+        def badge(label, available, *, description=None, address=None):
             status = "available" if available else "unavailable"
-            icon = "fa-check-circle" if available else "fa-minus-circle"
-            badges.append(
-                Esc(
-                    '<span class="{}" title="{}"><i class="fa {}" aria-hidden="true"></i> {}'
-                    '<span class="sr-only"> {}</span></span>'
-                ).format(
-                    "" if available else "text-muted",
-                    f"{name} {status}"
-                    + (
-                        f" ({self.masscan_ip})"
-                        if name == "Masscan Banner" and available
-                        else ""
-                    ),
-                    icon,
-                    name,
-                    status,
-                )
+            title = f"{description or label} {status}"
+            if available and address:
+                title += f" ({address})"
+            return Esc(
+                '<span class="{}" title="{}"><i class="fa fa-fw {}" aria-hidden="true"></i> {}'
+                '<span class="sr-only"> {}</span></span>'
+            ).format(
+                "" if available else "text-muted",
+                title,
+                "fa-check-circle text-success" if available else "fa-minus-circle",
+                label,
+                status,
             )
-        return Esc(" &nbsp; ").join(badges)
+
+        source_v4 = self.masscan_ip_v4 or self.masscan_ip
+        return Esc(
+            '<div class="bot-tools">'
+            '<strong>{}</strong>'
+            '<div class="bot-masscan">'
+            '<strong>{}</strong>'
+            '<div class="bot-masscan-capabilities">'
+            '<span class="text-muted">Scanner</span>{}{}'
+            '<span class="text-muted">Banner</span>{}{}'
+            "</div></div></div>"
+        ).format(
+            badge("Nmap", self.has_nmap),
+            badge("Masscan", self.has_masscan),
+            badge(
+                "IPv4",
+                self.has_masscan and self.masscan_ipv4,
+                description="Masscan Scanner IPv4",
+            ),
+            badge(
+                "IPv6",
+                self.has_masscan and self.masscan_ipv6,
+                description="Masscan Scanner IPv6",
+            ),
+            badge(
+                "IPv4",
+                self.has_masscan and bool(source_v4),
+                description="Masscan Banner IPv4",
+                address=source_v4,
+            ),
+            badge(
+                "IPv6",
+                self.has_masscan and bool(self.masscan_ip_v6),
+                description="Masscan Banner IPv6",
+                address=self.masscan_ip_v6,
+            ),
+        )
 
 
 # Job to Target pivot table
@@ -249,6 +282,7 @@ class Jobs(Model):
     scan_tool = Column(
         String(16), nullable=False, default="nmap", server_default="nmap"
     )
+    scan_family = Column(String(4), nullable=True)
     detect_protocol = Column(Boolean, nullable=False, default=False, server_default="0")
     attempt_uid = Column(String(36), nullable=True)
     scanprofile = relationship("ScanProfiles", back_populates="jobs")
@@ -300,29 +334,19 @@ class Jobs(Model):
             or self.finished
         ):
             return ""
-        available = (
-            getattr(g, "masscan_banner_available", None)
-            if has_request_context()
-            else None
-        )
+        family = getattr(self, "scan_family", None)
+        availability = getattr(g, "masscan_banner_available", {}) if has_request_context() else {}
+        available = availability.get(family)
         if available is None:
             session = object_session(self)
             if session is None:
                 return ""
-            available = (
-                session.query(Bots.id)
-                .filter(
-                    Bots.active == True,
-                    Bots.has_masscan == True,
-                    Bots.masscan_ip.isnot(None),
-                    Bots.masscan_ip != "",
-                    Bots.last_seen >= utcnow_naive() - timedelta(minutes=15),
-                )
-                .first()
-                is not None
+            available = ScanProfiles.banner_agent_available(
+                session, family
             )
             if has_request_context():
-                g.masscan_banner_available = available
+                availability[family] = available
+                g.masscan_banner_available = availability
         if available:
             return ""
         return Esc(
@@ -1153,6 +1177,11 @@ class ScanProfileCycles(Model):
     scan_unit_count = Column(BigInteger, default=0, nullable=False)
     completed_scan_unit_count = Column(BigInteger, default=0, nullable=False)
     max_target_id = Column(Integer, default=None)
+    filter_revision = Column(Integer, default=None)
+    preparation_status = Column(String(32), default=None)
+    filter_query = Column(Text, default=None)
+    filter_from_ts = Column(BigInteger, default=None)
+    filter_to_ts = Column(BigInteger, default=None)
 
     scanprofile = relationship(
         "ScanProfiles",
@@ -1160,6 +1189,9 @@ class ScanProfileCycles(Model):
         back_populates="cycles",
     )
     jobs = relationship("Jobs", back_populates="scanprofile_cycle")
+    filtered_targets = relationship(
+        "FilteredScanTargets", back_populates="cycle", cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
         if self.scanprofile is not None:
@@ -1402,6 +1434,34 @@ class ScanProfileCycles(Model):
         )
 
 
+class FilteredScanTargets(Model):
+    """Prepared target and exact port set for one filtered scan cycle."""
+
+    __tablename__ = "filtered_scan_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "cycle_id", "target_kind", "target_value", "scan_family",
+            name="uq_filtered_cycle_target_family"
+        ),
+        Index("idx_filtered_cycle_status_ports", "cycle_id", "status", "ports"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    cycle_id = Column(Integer, ForeignKey("scanprofile_cycles.id"), nullable=False)
+    configured_target_id = Column(Integer, ForeignKey("targets.id"), nullable=False)
+    target_kind = Column(String(8), nullable=False)
+    target_value = Column(String(253), nullable=False)
+    scan_family = Column(String(4), nullable=True)
+    ports = Column(Text, nullable=False)
+    completed_ports = Column(Text, nullable=True)
+    status = Column(String(16), nullable=False, default="pending")
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True)
+
+    cycle = relationship("ScanProfileCycles", back_populates="filtered_targets")
+    configured_target = relationship("Targets")
+    job = relationship("Jobs")
+
+
 class ScanProfiles(Model):
     """
     A Scan profile define for a target range which are the
@@ -1418,16 +1478,35 @@ class ScanProfiles(Model):
     __tablename__ = "scanprofiles"
 
     @staticmethod
-    def banner_agent_available(session):
+    def banner_agent_available(session, scan_family=None):
         """Share the same availability rule across forms and API validation."""
+        ipv4_source = and_(
+            Bots.masscan_ipv4.is_(True), Bots.masscan_ip_v4.isnot(None),
+            Bots.masscan_ip_v4 != "",
+        )
+        ipv6_source = and_(
+            Bots.masscan_ipv6.is_(True), Bots.masscan_ip_v6.isnot(None),
+            Bots.masscan_ip_v6 != "",
+        )
+        source_filter = {
+            "ipv4": ipv4_source,
+            "ipv6": ipv6_source,
+        }.get(scan_family)
+        if source_filter is None:
+            source_filter = or_(
+                ipv4_source, ipv6_source,
+                and_(Bots.masscan_ip.isnot(None), Bots.masscan_ip != ""),
+            )
         return (
             session.query(Bots.id)
             .filter(
                 Bots.active == True,
                 Bots.has_masscan == True,
-                Bots.masscan_ip.isnot(None),
-                Bots.masscan_ip != "",
-                Bots.last_seen >= utcnow_naive() - timedelta(minutes=15),
+                source_filter,
+                or_(
+                    Bots.running.is_(True),
+                    Bots.last_seen >= utcnow_naive() - timedelta(minutes=15),
+                ),
             )
             .first()
             is not None
@@ -1453,6 +1532,13 @@ class ScanProfiles(Model):
     )
     detect_protocol = Column(Boolean, nullable=False, default=False, server_default="0")
     apply_to_all = Column(Boolean, default=False)  # Name of the profile.
+    search_query = Column(Text, nullable=True)  # Historical search draft.
+    scan_enabled = Column(
+        "filter_enabled", Boolean, nullable=False, default=True, server_default="1"
+    )
+    # Backward-compatible ORM name for databases and clients using migration 33.
+    filter_enabled = synonym("scan_enabled")
+    filter_revision = Column(Integer, nullable=False, default=0, server_default="0")
     ports = relationship(
         "Ports",
         secondary=assoc_scanprofiles_ports,

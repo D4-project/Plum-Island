@@ -187,6 +187,7 @@ SCHEDULER_DELAY = 10
 TAG_RECONCILIATION_ENABLED = True
 TAG_RECONCILIATION_POLL_SECONDS = 30
 TAG_RECONCILIATION_BATCH_SIZE = 25
+TAG_RECONCILIATION_MEILI_BATCH_SIZE = 32
 TAG_RECONCILIATION_PAUSE_SECONDS = 0.1
 # Runtime pacing does not invalidate a frozen job or restart its saved cursor.
 TAG_RECONCILIATION_PLANNING_BATCH_SIZE = 1000
@@ -204,6 +205,8 @@ NETWORK_REFRESH_BATCH_SIZE = 32
 # Root logging level, including console output: DEBUG, INFO, WARNING, ERROR, CRITICAL.
 # Missing or invalid values fall back to WARNING; applies even without file logging.
 LOG_LEVEL = "WARNING"
+# Log Meilisearch HTTP requests from the indexing worker when LOG_LEVEL is DEBUG.
+TAG_RECONCILIATION_HTTP_DEBUG = False
 # Optional persistent application logging. Files use <prefix>-YYMMDD.log.
 LOG_ENABLED = False
 LOG_DIR = "./log"

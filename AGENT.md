@@ -254,7 +254,10 @@ The structured search capability is part of the product, not an auxiliary admin 
 
 The scheduler owns the lifecycle of `tools/reconcile_index.py`. GUI status reads
 must never launch recovery/index threads. Rule imports and GUI changes converge
-through committed SQL snapshots; worker inputs remain frozen until publication.
+through committed SQL snapshots. Each staging generation uses frozen inputs.
+At a checkpoint, a fast retag can replace its staging generation and inherit
+the unfinished journal. New incremental jobs use the existing `last_seen` index
+to process the most recent captures first.
 Managed Kvrocks clients resolve logical keys through pinned generations. Route
 source ingestion through `ingest_indexer_sources` and the common journal/write
 barrier; never mutate a retired reader generation or clear the live index.

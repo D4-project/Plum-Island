@@ -1,12 +1,17 @@
 # Automatic detection updates
 
 The scheduler observes committed tag rules and header collection configuration.
-Imports through `tools/tag_mgmt.py` and edits/deletions through the GUI converge
-through the same worker. A Git checkout alone does not import rules. The existing
+Imports and deletions through `tools/tag_mgmt.py` and GUI rule changes submit the
+committed revision directly to the same worker. A Git checkout alone does not
+import rules. The existing
 UUID/YAML version policy still determines which imported definitions are accepted.
 Names and descriptions do not cause reindexing. Dry runs do not change desired
 state. Polling committed SQL state also recovers a crash between a rule save and
 the next scheduler tick, without a separate SQL job migration.
+
+New scan results use the latest saved, valid rules when Island integrates them
+into Kvrocks. The background update applies the change to historical captures.
+Incoming results keep their tags when an older update publishes its generation.
 
 The Tag Rules page shows automatic progress, the processing revision, pending
 changes and errors. There are no manual update/reindex buttons. A browser is not
@@ -22,12 +27,30 @@ The existing scheduler supervises `tools/reconcile_index.py` as a separate Pytho
 process. It does not perform the rebuild in a scheduler thread. SIGTERM/SIGINT
 request a checkpointed stop; shutdown signals only the child owned by that
 supervisor. The child exits between units when its parent disappears. Backend
-calls use the configured connection timeouts. Restart resumes the frozen rule
-and parser inputs, not whichever rules happen to be latest at that instant.
+calls use the configured connection timeouts. Restart reloads the frozen job and
+its checkpoint. The job can switch to newer rules if it meets the retag criteria
+below.
 
 The scheduler must be running under the deployment's existing scheduler startup
 contract; opening the GUI does not start it. The child explicitly removes
 `WERKZEUG_RUN_MAIN` to prevent recursively starting another scheduler.
+
+### Meilisearch connections and HTTP tracing
+
+The worker owns one HTTP session for Meilisearch document reads and source
+inventory. The session reuses an open connection when the server and proxy
+support keep-alive. It opens a new connection after a normal server close and
+closes its pool when the worker exits. Requests use the configured key and
+`MEILI_HTTP_TIMEOUT_SECONDS`. An interrupted response follows the same
+checkpoint and retry path as other transient transport failures.
+
+Per-request HTTP traces are off by default. Open **Logging** in **Security →
+Plum Settings**. Set **Log level** to **DEBUG**, enable **Log Meilisearch HTTP requests**,
+and restart Plum-Agent. The next worker inherits those settings. Backend warnings
+and retry status remain visible
+with HTTP traces off. For deployment configuration, `PLUM_INDEX_HTTP_DEBUG=1`
+or `0` overrides the `config.py` value, and a saved Plum Settings override
+takes precedence over both.
 
 ### Transient backend failures
 
@@ -64,6 +87,7 @@ Initial tuning values in `webapp/config.py.template`:
 | `TAG_RECONCILIATION_ENABLED` | `True` | Allow the supervisor to run its child |
 | `TAG_RECONCILIATION_POLL_SECONDS` | `30` | Observe desired state and supervise work |
 | `TAG_RECONCILIATION_BATCH_SIZE` | `25` | Bounded planning/scanning/replay work per iteration |
+| `TAG_RECONCILIATION_MEILI_BATCH_SIZE` | `32` | Maximum raw captures per Meilisearch request. Set in Plum Settings → Indexing parameters. `1` uses individual reads. |
 | `TAG_RECONCILIATION_PAUSE_SECONDS` | `0.1` | Yield between iterations |
 | `TAG_RECONCILIATION_PLANNING_BATCH_SIZE` | `1000` | Maximum IDs per inventory read, independent of capture batches |
 | `TAG_RECONCILIATION_MIN_PLANNING_BATCH_SIZE` | `25` | Inventory floor to amortize backend overhead, capped by the maximum |
@@ -94,6 +118,13 @@ overhead from collapsing the scan to one ID per request; the duration target is
 therefore soft, even when that minimum is reached. A runtime pacing upgrade
 retains existing frozen
 rules and planning cursors: it does not change the parser/index fingerprint.
+
+When an indexed capture needs its raw source, the worker reads ahead by UID within
+the claimed candidates. Processing follows the existing candidate order even if
+Meilisearch returns the documents in a different order. The read buffer is local
+to the worker. Processing checkpoints and journal replay remain independent of
+the fetch size. An absent batch result is retried through the individual document
+endpoint when its turn arrives. Changes to the fetch size apply on restart.
 
 The requested latency target is **at most +10%**. The controller compares a
 request only with the same anonymized first-page query, dates and page settings,
@@ -153,12 +184,23 @@ generation marker prevents restart loops if normal worker validation discovers
 another conflict. The worker re-reads the source and applies its usual snapshot
 integrity check before progressing.
 
-Each run freezes executable rules, parser configuration and a code fingerprint.
-Subsequent edits queue the latest desired revision. A normal rule-only update
-uses normalized Kvrocks fields and previous per-rule contributions. It scans the
-union of old matches and safe positive exact candidates when possible. Broad
+Each staging generation freezes executable rules, parser configuration and a
+code fingerprint. The worker switches a fast retag to the latest desired rules
+at a checkpoint when the parser configuration and build are compatible. A job
+that reads Meilisearch or rebuilds the index continues with its frozen inputs.
+The previous generation remains searchable until the new one publishes. The
+replacement plans against the active generation and replays the inherited journal
+from the beginning, applying the new rules to entries received before the switch.
+
+A normal rule-only update uses normalized Kvrocks fields and previous per-rule
+contributions. It scans the union of old matches and safe positive exact
+candidates when possible. Broad
 expressions, tag dependencies and uncertain selection fall back to the full
-required scope. Shared tags survive removal of one producer. Explicit tag
+required scope. New incremental generations order candidates by descending
+`last_seen` using the existing Kvrocks timestamp index. The worker processes
+undated captures last and resumes a claimed batch before taking another one.
+Concurrent ingestion still applies live rules and is replayed in journal order.
+Shared tags survive removal of one producer. Explicit tag
 dependencies are evaluated in dependency order; cycles are rejected.
 
 Coverage records reference the parser and HTTP collection profile actually used
@@ -169,6 +211,13 @@ they are reported instead of being treated as negative matches. Missing source
 documents or parsing failures prevent publication and remain visible.
 Changing the collection configuration reparses existing captures so historical
 search fields and their coverage agree with the newly published profile.
+
+Incremental reparsing compares the newly parsed fields and accumulated dates
+against the parent capture. When they match, the worker inherits those indexes
+and updates coverage and changed tag or rule memberships. The worker uses the
+full writer for changes to capture fields, older formats requiring cleanup,
+concurrent writes during a batch, and captures already written in staging.
+Journal replay applies the normal ingestion and deletion paths before publication.
 
 The first migration may require a full historical reparse. For a full rebuild,
 planning includes both existing Kvrocks UIDs and Meilisearch document IDs. That

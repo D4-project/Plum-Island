@@ -85,6 +85,13 @@ rule definitions. Do not route structured filters through Meilisearch as a fallb
 
 ### Preparing the indexed document
 
+Plum uses the port `hsh256` from nmap2json to derive the observation UID.
+The response TTL can vary widely as network routes and hop counts change,
+even for the same service. For Nmap and Masscan, nmap2json excludes nonzero
+`reason_ttl` from the port and host hash inputs. A TTL of zero stays in the
+input to preserve the hashes of existing reports with that value. The original
+TTL remains in the report and can still be displayed on the IP page.
+
 The scheduler and `tools/index_kvrocks.py` use this sequence:
 
 ```text
@@ -108,6 +115,13 @@ instead reads existing Kvrocks fields: it cannot manufacture missing certificate
 attributes. New index writers must use the preparation step, not just the public
 parser. See the [certificate migration](../../migration_full_cert.md) before
 rebuilding old indexes or converting existing rules/report queries.
+
+YAML tag rules can also match raw port NSE output with `nse.body`. The parser
+reads the text from the full report for rule evaluation. Kvrocks indexes the
+assigned tags. When an edited rule needs this text, the reconciler reloads each
+candidate's full document from Meilisearch, which can make the background update
+slow. Indexed criteria in the same rule branch can restrict the number of reads.
+See [NSE output in tag rules](../scanning.md#nse-output-in-tag-rules).
 
 The unit of matching is a document UID, not an IP. Group by IP only after evaluating
 the query. Two different UIDs for the same IP must not jointly satisfy an AND query.
@@ -140,6 +154,11 @@ bounds while rebuilding search indexes. Full replacement with
 `reimport_port_dump.py` instead removes those hashes: it validates dump `.time`
 history before either backend is modified, then restores that loaded history
 under the JSON document IDs. See [rebuild behavior](../kvrocks_objects.md#rebuild-behavior).
+
+Incremental reparsing inherits identical capture fields and dates from the
+parent generation. It updates both directions of changed tag memberships, rule
+contributions and coverage. Parent changes during a batch and existing staging
+writes use the full writer. See [automatic indexing](../automatic-indexing.md).
 
 ## Parsing and field matching
 

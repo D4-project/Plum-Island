@@ -13,6 +13,9 @@ from app.utils.index_activity import (
     request_signature,
 )
 from app.utils.index_pacing import LoadController, PacedReconciliationWorker
+from app.utils.index_reconciliation import ReconciliationWorker
+from app.utils.tag_reconciliation import RulePlan
+from test.test_tag_reconciliation import snapshot
 
 
 class LoadControllerTest(unittest.TestCase):
@@ -128,6 +131,73 @@ class LoadControllerTest(unittest.TestCase):
         """No polling or background work after the stop flag is raised."""
         self.assertFalse(self.controller.wait(lambda: True))
         self.raw.pipeline.assert_not_called()
+
+
+class IndexingModeTest(unittest.TestCase):
+    """Report which backends the current reconciliation uses."""
+
+    def test_new_http_rule_reuses_unchanged_nse_rule_results(self):
+        """An existing NSE text rule does not make an unrelated update full."""
+        nse = ("rdp", 'nse.body:rdp.lk:"target_name: example"', ["proto:rdp"])
+        http = ("http", "http_server:nginx", ["product:nginx"])
+        current = snapshot([nse, http])
+        for previous, expected in ((snapshot([nse]), False), (snapshot([http]), True)):
+            with self.subTest(uses_meilisearch=expected):
+                worker = PacedReconciliationWorker(Mock(), Mock(), {})
+                worker.job = {"full": False, "snapshot": current, "previous": previous}
+                worker.plan = RulePlan(current, previous)
+                with patch.object(ReconciliationWorker, "start", return_value=True):
+                    self.assertTrue(worker.start())
+                worker.load.publish(force=True)
+                pacing = json.loads(worker.raw.set.call_args.args[1])
+                self.assertIs(pacing["uses_meilisearch"], expected)
+
+    def test_unplanned_meilisearch_reads_survive_a_later_kvrocks_batch(self):
+        """A mixed job retains its source mode through a checkpoint and resume."""
+        state = snapshot([])
+        worker = PacedReconciliationWorker(Mock(), Mock(), {})
+        worker.job = {"full": False, "snapshot": state, "previous": state}
+        worker.plan = RulePlan(state, state)
+        with patch.object(worker.load, "wait", return_value=True):
+            for phase in ("reparsing", "retagging"):
+                worker.job["phase"] = phase
+                with patch.object(ReconciliationWorker, "process_uid"):
+                    worker.process_uid("capture")
+        self.assertTrue(worker.job["uses_meilisearch"])
+        self.assertTrue(worker.load.uses_meilisearch)
+
+        resumed = PacedReconciliationWorker(Mock(), Mock(), {})
+        resumed.job = dict(worker.job, phase="scanning")
+        resumed.plan = worker.plan
+        with patch.object(ReconciliationWorker, "start", return_value=True):
+            self.assertTrue(resumed.start())
+        self.assertTrue(resumed.load.uses_meilisearch)
+
+
+class ReconciliationEtaTest(unittest.TestCase):
+    """Measure only work completed while a timer was running."""
+
+    def test_resume_keeps_measured_time_and_excludes_worker_downtime(self):
+        raw = Mock()
+        worker = PacedReconciliationWorker(raw, Mock(), {})
+        worker.job = {"processed": 60, "total": 100}
+        with patch.object(worker.load, "wait", return_value=True), patch.object(
+            ReconciliationWorker, "scan_batch"
+        ), patch("app.utils.index_pacing.time.monotonic", side_effect=[100, 110]):
+            worker.scan_batch()
+            worker.checkpoint(processed=70)
+        self.assertEqual(worker.job["scan_elapsed_seconds"], 10)
+        self.assertEqual(worker.load.eta_seconds, 30)
+
+        resumed = PacedReconciliationWorker(raw, Mock(), {})
+        resumed.job = json.loads(raw.set.call_args.args[1])
+        with patch.object(resumed.load, "wait", return_value=True), patch.object(
+            ReconciliationWorker, "scan_batch"
+        ), patch("app.utils.index_pacing.time.monotonic", side_effect=[500, 520]):
+            resumed.scan_batch()
+            resumed.checkpoint(processed=80)
+        self.assertEqual(resumed.job["scan_elapsed_seconds"], 30)
+        self.assertEqual(resumed.load.eta_seconds, 30)
 
 
 class ActivityMonitorTest(unittest.TestCase):

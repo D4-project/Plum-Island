@@ -35,6 +35,8 @@
 {% block show_form %}
     <div id="Home" class="tab-pane active">
         {{ widgets.get('show')()|safe }}
+{% set target_query = get_target_value(pk) %}
+{% if target_query.startswith('ip:') or target_query.startswith('net:') %}
 <div class="panel panel-default" data-target-network-url="{{ url_for('TargetsView.network_info', pk=pk) }}">
   <div class="panel-heading">IP and AS information</div>
   <div class="panel-body">
@@ -44,6 +46,7 @@
   </div>
 </div>
 <script src="{{ url_for('static', filename='js/target_network_info.js') }}"></script>
+{% endif %}
 
 
 {% if appbuilder.sm.has_access('can_refresh_network', 'TargetsView') %}

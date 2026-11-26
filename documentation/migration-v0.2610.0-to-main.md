@@ -25,6 +25,23 @@ complete the appropriate [versioned migration](migration.md).
   roles before FAB synchronization, fixing repeated startup cleanup warnings
   with Flask-AppBuilder 4.8.1 (#260).
 
+### Scan profile search drafts
+
+Migration 33 adds filtered scan profiles and durable cycle preparation. Run
+`./updisland.sh` to apply the schema change. The form verifies one usable
+target and TCP port when you save the filter. The REST API accepts the same query as
+`search_query`. Use `since:N` to set a window of up to 90 days. Default is
+30 days. Filtered profiles derive open TCP ports from matching port-scoped
+reports, group targets by exact port set and send normal Nmap or Masscan jobs
+to compatible agents. `filter_enabled` suspends preparation and dispatch.
+
+Migration 34 adds scanner address-family capabilities and per-job `scan_family`;
+run `./updisland.sh` before starting Island.
+Masscan jobs target one family only. The scheduler creates separate IPv4 and
+IPv6 jobs for FQDN targets; filtered scan work is tracked separately per family.
+Nmap jobs keep `scan_family` empty. The scheduler safely requeues pending older
+Masscan work so it is regenerated with explicit family metadata.
+
 ### Unique scan profile names
 
 `./updisland.sh` applies migration 25 to the configured SQLite database before
@@ -55,39 +72,41 @@ before restarting. Restoring returns the whole database to the backup timestamp.
 
 ### Scanner capabilities and Masscan jobs
 
-Migration 31 stores the dedicated Masscan banner source address on each bot.
-Configure it with `python agent.py -s --masscan-ip ADDRESS` and restart the agent.
-Reserve an unused address on the scanner's local subnet without assigning it to
-a kernel interface. The agent validates the address format and rejects addresses
-assigned locally. The operator must ensure network uniqueness and routing.
-Banner jobs require an agent announcing this address. Bot Status shows
-**Masscan Banner** and its source address. Queued banner jobs display a warning
-when no enabled compatible agent has contacted Island within 15 minutes.
-An occupied compatible agent still counts as available. The source address and
-targets must use the same IP family.
-Saving a Masscan profile with banner detection requires a recently seen active
-agent announcing a dedicated source IP. This validation applies to forms and the
-REST API. If that capacity later disappears, Scan Profiles displays a warning and
-existing banner jobs wait for a compatible agent.
+Migration 34 adds independent IPv4 and IPv6 Masscan banner source addresses and
+scanner family capabilities. Configure them with `python agent.py -s
+--masscan-ip-v4 ADDRESS --masscan-ip-v6 ADDRESS` and restart the agent. Each
+address is optional; reserve a dedicated address of the matching family without
+assigning it to a kernel interface. The agent validates the family and rejects
+locally assigned addresses. The operator must ensure network uniqueness and
+routing. At startup the agent probes external IPv4 and IPv6 connectivity
+separately, checks Masscan's IPv6 support, and announces only usable families.
+Island only generates jobs for recently seen or currently running agents that
+support that family; banner jobs also
+require a source address of the same family. Bot Status shows family and banner
+capabilities. Queued banner jobs display a warning when no enabled compatible
+agent has contacted Island within 15 minutes. An occupied compatible agent still
+counts as available. Saving a Masscan profile with banner detection requires a
+recently seen active agent with at least one family-matched source. This applies
+to forms and the REST API. If that capacity later disappears, Scan Profiles
+displays a warning and existing banner jobs wait for a compatible agent.
 
-Release order: publish the Masscan-capable `nmap2json` package first, then
+Release order: publish `nmap2json` 2611.5 first, then
 update Plum-Island so it accepts both old and new agents and understands
 observed-service tag rules. Publish the new Antibodies rules after Island is
 deployed: `updisland.sh` fetches the Antibodies remote tip, even when the Island
 checkout pins an older submodule revision. Update Plum-Agent and its
 `nmap2json` dependency next. Enable Masscan profiles only when capable agents
-are available. Plum-Island and Plum-Agent require `nmap2json>=2611.4`.
-The [GitHub release v2611.04](https://github.com/D4-project/nmap2json/releases/tag/v2611.04)
-provides the tested 2611.4 wheel, also published on
-[PyPI](https://pypi.org/project/nmap2json/2611.4/). Earlier wheels do not satisfy
-this requirement. Install the current requirements in each consumer's environment:
+are available. Plum-Island and Plum-Agent require `nmap2json>=2611.5`.
+Version 2611.5 excludes nonzero response TTL values from the host and port
+hashes. Install the current requirements in each consumer's environment from
+a package source that provides at least this version.
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pip check
 ```
 
-nmap2json 2611.4 marks only Masscan host reports with `"engine": "masscan"`.
+Starting with nmap2json 2611.4, only Masscan host reports get `"engine": "masscan"`.
 Search `engine:nmap` includes all unmarked reports automatically. There is no
 engine migration, history rewrite or bulk Nmap index to populate. Restart updated
 agents so their converter emits the new Masscan metadata.

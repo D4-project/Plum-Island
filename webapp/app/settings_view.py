@@ -72,14 +72,52 @@ class PlumSettingsView(BaseView):
                 ),
                 status,
             )
+        cards = cards_for(runtime, desired)
+        db_titles = {"Connectivity to Meilisearch", "Connectivity to Kvrocks"}
+        external_titles = {"Passive DNS", "Geolocation", "BGP Information"}
+        grouped_titles = db_titles | external_titles
+        db_cards = [card for card in cards if card["section"].title in db_titles]
+        external_cards = [
+            card for card in cards if card["section"].title in external_titles
+        ]
+        tabs = [
+            {
+                "title": "Database Connections",
+                "cards": db_cards,
+                "field_count": sum(len(card["fields"]) for card in db_cards),
+            },
+            {
+                "title": "External Services",
+                "cards": external_cards,
+                "field_count": sum(len(card["fields"]) for card in external_cards),
+            },
+        ]
+        tabs.extend(
+            {
+                "title": card["section"].title,
+                "cards": [card],
+                "field_count": len(card["fields"]),
+            }
+            for card in cards
+            if card["section"].title not in grouped_titles
+        )
+        valid_sections = {
+            f"settings-section-{index}" for index in range(1, len(tabs) + 1)
+        }
+        active_section = (
+            request.form.get("active_section") if request.method == "POST" else None
+        )
+        if active_section not in valid_sections:
+            active_section = "settings-section-1" if tabs else ""
         return self._private_response(
             self.render_template(
                 "plum_settings.html",
-                cards=cards_for(runtime, desired),
+                tabs=tabs,
                 error=error,
                 unavailable=False,
                 revision=desired["revision"],
                 pending=runtime.pending(desired),
+                active_section=active_section,
             ),
             status,
         )

@@ -1,5 +1,26 @@
 # Unreleased
 
+- Reuse Meilisearch HTTP connections during automatic reconciliation. Retry
+  interrupted reads from the saved checkpoint and enable verbose HTTP tracing
+  on demand from Plum Settings (#297).
+
+- Classify detected HTTP server implementations with `type:webserver` in
+  Plum-Antibodies. Server products can be derived from imported active rule tags;
+  historical captures receive the new type after reconciliation.
+
+- Masscan jobs carry an IPv4 or IPv6 family. Agents report family support and
+  can configure separate banner source addresses for each family. Filtered
+  Masscan scans track FQDN work independently per family. Agents probe external
+  IPv4 and IPv6 connectivity independently and announce only usable stacks.
+  The scheduler queues work only for recently seen or running agents that
+  support that family, and regenerates pending legacy Masscan jobs with explicit
+  family metadata. Migration 34 adds the persisted job and capability fields.
+
+- Save historical search drafts from Scan Profiles and its REST API. Show a
+  spinner on form submission and verify the first usable target and TCP port.
+  Profiles with a search filter derive exact TCP port sets from matching
+  historical reports, group up to 256 targets per Agent job and can be
+  suspended. Migration 33 adds profile, cycle and durable preparation state.
 - Open Stats on Graphs by default and place Graphs before Overview in both themes.
 - Prefer agent-reported targeted-port counts; fall back to unique job IP/CIDR
   targets multiplied by configured ports when absent. Keep unresolved hostname

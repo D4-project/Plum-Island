@@ -1,5 +1,10 @@
 {% extends "ip_detail_fragment_base.html" if fragment else "appbuilder/base.html" %}
 
+{% block head_js %}
+{{ super() }}
+{% include 'scan_report_assets.html' %}
+{% endblock %}
+
 {% macro render_tag_content(tag) -%}
     {%- set parts = tag.split(':', 1) -%}
     {%- if parts|length == 2 and parts[0] -%}
@@ -150,7 +155,15 @@
             </div>
         </div>
         <div class="ip-port-history">
-            <div class="ip-port-history-label">Observation history <span>UTC</span></div>
+            <div class="ip-port-history-label">
+                <span>Observation history</span>
+                <span class="ip-timeline-history-controls">
+                    <span>UTC</span>
+                    <button type="button" class="btn btn-default btn-xs ip-timeline-zoom" data-zoom-action="reset" aria-label="Show full timeline" title="Show full timeline"><i class="fa fa-arrows-h" aria-hidden="true"></i></button>
+                    <button type="button" class="btn btn-default btn-xs ip-timeline-zoom" data-zoom-action="out" aria-label="Zoom out timeline" title="Zoom out">−</button>
+                    <button type="button" class="btn btn-default btn-xs ip-timeline-zoom" data-zoom-action="in" aria-label="Zoom in timeline" title="Zoom in">+</button>
+                </span>
+            </div>
             <div class="ip-port-timeline" aria-label="Observation history for {{ port_card.protocol | upper }}/{{ port_card.portid }}"></div>
         </div>
     </div>
@@ -190,6 +203,8 @@
                     <div class="ip-observation-dates">
                         <span>First seen <strong>{{ observation.first_seen or "N/A" }}</strong></span>
                         <span>Last seen <strong>{{ observation.last_seen or "N/A" }}</strong></span>
+                        <span>TTL <strong class="{% if observation.reason_ttl is not none and observation.reason_ttl|string == '0' %}ip-ttl-zero{% endif %}">{{ observation.reason_ttl if observation.reason_ttl is not none else "N/A" }}</strong></span>
+                        <button type="button" class="btn btn-default btn-xs ip-raw-report-toggle" data-indexed-report-toggle data-uid="{{ observation.uid }}" data-target="ip-raw-{{ port_idx }}-{{ loop.index0 }}" aria-controls="ip-raw-{{ port_idx }}-{{ loop.index0 }}" aria-expanded="false" title="Show raw scan report">RAW</button>
                     </div>
                     {% if observation.tags %}
                     <span class="ip-port-observation-tags" aria-label="Tags">
@@ -199,6 +214,7 @@
                     </span>
                     {% endif %}
                 </div>
+                <div id="ip-raw-{{ port_idx }}-{{ loop.index0 }}" class="ip-raw-report" hidden></div>
                 {% if observation.resolved_hosts or observation.ptr_records %}
                 <div class="ip-hosts-block">
                     <div class="ip-hosts-title">Hostnames</div>
