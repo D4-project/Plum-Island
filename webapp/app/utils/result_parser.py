@@ -708,6 +708,28 @@ def observed_services(ports):
     return sorted(names)
 
 
+def ports_without_data(ports):
+    """Index open ports that only have transport and observation metadata."""
+    numbers = set()
+    for port in ports:
+        state = port.get("state")
+        if (
+            not isinstance(state, dict)
+            or state.get("state") != "open"
+            or port.get("scripts")
+        ):
+            continue
+        service = port.get("service")
+        if isinstance(service, dict) and service.get("method") == "probed":
+            continue
+        number = str(port.get("portid", ""))
+        if number.isascii() and number.isdecimal() and len(number) <= 5:
+            number = int(number)
+            if 0 <= number <= 65535:
+                numbers.add(number)
+    return ["true", *map(str, sorted(numbers))] if numbers else []
+
+
 def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-locals
     """
     Parse one Nmap-like document into the Kvrocks search fields.
@@ -767,6 +789,9 @@ def parse_json(doc, db_conf_local, tag_rules=None):  # pylint: disable=too-many-
     services = observed_services(raw_ports)
     if services:
         final_result["service"] = services
+    nodata = ports_without_data(raw_ports)
+    if nodata:
+        final_result["nodata"] = nodata
 
     uid = doc.get("id")
     ip = doc.get("ip")

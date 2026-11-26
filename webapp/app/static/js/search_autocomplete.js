@@ -288,9 +288,12 @@ function buildSearchFieldSuggestions(prefix) {
     const excluded = new Set((input?.dataset.queryAutocompleteDisallowed || '').split(',').filter(Boolean));
     const suggestions = [...SEARCH_KEYWORDS]
         .filter(keyword => keyword.startsWith(prefix) && !excluded.has(keyword))
-        .map(keyword => ({value: `${keyword}:`, label: `${keyword}:`, kind: 'keyword'}));
+        .map(keyword => {
+            const value = keyword === 'nodata' ? keyword : `${keyword}:`;
+            return {value, label: value, kind: 'keyword'};
+        });
     const [field, modifier] = prefix.split('.');
-    if (!SEARCH_KEYWORDS.has(field) || excluded.has(field) || ['tag', 'engine', 'since', 'http_headval'].includes(field)) {
+    if (!SEARCH_KEYWORDS.has(field) || excluded.has(field) || ['tag', 'engine', 'nodata', 'since', 'http_headval'].includes(field)) {
         return suggestions;
     }
     const modifiers = modifier === undefined
@@ -308,7 +311,7 @@ function appendSearchKeyword(keyword) {
     if (!SEARCH_KEYWORDS.has(keyword)) {
         return;
     }
-    appendSearchTerm(`${keyword}:`);
+    appendSearchTerm(keyword === 'nodata' ? keyword : `${keyword}:`);
 }
 
 function appendSearchTerm(term) {

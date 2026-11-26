@@ -30,6 +30,7 @@ INDEX_FIELDS = [
     "tag",
     "port",
     "port_protocol",
+    "nodata",
     "http_title",
     "http_favicon_path",
     "http_favicon_mmhash",

@@ -258,6 +258,7 @@ class KVrocksIndexer:
             # "url_path",
             "port",
             "port_protocol",
+            "nodata",
             # "protocol",
             "http_title",
             "http_favicon_path",
@@ -368,10 +369,9 @@ class KVrocksIndexer:
                             if any(str(v).strip().lower() == "masscan" for v in values)
                             else []
                         )
-                        if not values and not previous_values:
-                            # Do not create empty generation tombstones for every
-                            # legacy/Nmap UID: only Masscan needs physical storage.
-                            continue
+                    if field in {"engine", "nodata"} and not values and not previous_values:
+                        # Sparse fields need a tombstone only to remove old values.
+                        continue
                     for previous_value in previous_values:
                         if previous_value:
                             pipe.srem(f"{field}:{previous_value}", uid)

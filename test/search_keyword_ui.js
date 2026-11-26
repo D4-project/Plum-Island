@@ -28,7 +28,7 @@ const input = {
     dispatchEvent(event) { this.events.push(event.type); }
 };
 const keywordData = {textContent: process.env.PLUM_SEARCH_KEYWORDS || JSON.stringify([
-    'http_title', 'http_server', 'http_headval', 'port', 'tag', 'since', 'x509_subject'
+    'http_title', 'http_server', 'http_headval', 'port', 'tag', 'since', 'x509_subject', 'nodata'
 ])};
 const context = vm.createContext({
     document: {getElementById: id => ({query: input, 'search-keywords': keywordData})[id]},
@@ -43,6 +43,12 @@ assert.deepEqual(input.events, ['input']);
 
 context.appendSearchKeyword('unsupported');
 assert.equal(input.value, 'net:192.0.2.0/24 http_title:');
+context.getQueryInput = () => input;
+input.value = 'port:30';
+context.appendSearchKeyword('nodata');
+assert.equal(input.value, 'port:30 nodata');
+assert.equal(context.buildSearchFieldSuggestions('nod')[0].value, 'nodata');
+assert.equal(context.buildSearchFieldSuggestions('nodata').length, 1);
 
 assert.match(
     source,

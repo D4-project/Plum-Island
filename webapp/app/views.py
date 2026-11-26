@@ -1709,6 +1709,7 @@ class KVSearchView(BaseView):
             "banner",
             "service",
             "engine",
+            "nodata",
         ]
 
     @classmethod
@@ -1722,7 +1723,7 @@ class KVSearchView(BaseView):
         """Validate one AND-only group using the shared field catalogue."""
         valid_keywords = self.search_keywords()
         valid_modifiers = {".lk", ".like", ".bg", ".begin", ".not", ".nt"}
-        exact_only_keywords = {"tag", "engine"}
+        exact_only_keywords = {"tag", "engine", "nodata"}
 
         result = {}
         msg_error = None
@@ -1736,6 +1737,8 @@ class KVSearchView(BaseView):
         for part in parts:
             if str(part).upper() == "AND":
                 continue
+            if part.lower() == "nodata":
+                part = "nodata:true"
             if for_tag_rule and part.lower().startswith(("nse.body:", "nse.body.")):
                 try:
                     key, value = parse_nse_body_term(part)
@@ -1785,6 +1788,18 @@ class KVSearchView(BaseView):
                         "Expected nmap or masscan"
                     )
                     continue
+            if base_key == "nodata":
+                value = value.strip().lower()
+                if value != "true":
+                    if not (
+                        value.isascii()
+                        and value.isdecimal()
+                        and len(value) <= 5
+                        and int(value) <= 65535
+                    ):
+                        msg_error = "Expected nodata or nodata:<port number>"
+                        continue
+                    value = str(int(value))
 
             # store values in list to allow multiple occurrences
             if key not in result:
@@ -1792,6 +1807,12 @@ class KVSearchView(BaseView):
             else:
                 result[key].append(value)
 
+        if "true" in result.get("nodata", ()) and "port" in result:
+            # A historical capture may contain several ports. Use the exact
+            # nodata membership for each port requested in this AND group.
+            result["nodata"] = [
+                value for value in result["nodata"] if value != "true"
+            ] + result["port"]
         status = True
         if msg_error:
             status = False

@@ -177,7 +177,7 @@ class SearchKeywordAutocompleteTest(unittest.TestCase):
     def test_suggested_field_modifiers_are_accepted_by_parser(self):
         view = isolated_search_view(make_indexer())
         for field in self.view.search_keywords():
-            if field in {"tag", "engine"}:
+            if field in {"tag", "engine", "nodata"}:
                 continue
             for modifier in ("bg", "begin", "lk", "like"):
                 with self.subTest(field=field, modifier=modifier):

@@ -272,6 +272,18 @@ those candidates. A standalone `engine:nmap` is a broad search and can still
 return most of a large index. Source metadata follows the retained observation
 when deduplication replaces a document; it is excluded from content hashes.
 
+### Open ports without application data
+
+Use `nodata` to find open port observations with no scanner script result or
+probed service. Observation dates, TTL and hostnames still appear in the port
+history. A service name guessed from the port number still qualifies.
+
+- `nodata:30` selects TCP or UDP port 30 without application data.
+- `engine:masscan nodata` limits the search to Masscan observations.
+- `port:30 nodata` applies both conditions to port 30 within an AND group.
+
+Existing captures become searchable with this filter after source reconciliation.
+
 ### Field reference
 
 | Field | Modifiers | Description |
@@ -287,6 +299,7 @@ when deduplication replaces a document; it is excluded from content hashes.
 | `tag` | | Computed document tag |
 | `engine` | exact only | `engine:masscan` selects marked Masscan reports; `engine:nmap` selects all others, including legacy reports. |
 | `port` | | Open port |
+| `nodata` | exact only | Open observation without scanner script results or a probed service. Optionally specify a port with `nodata:30`. |
 | `http_title` | `like`, `begin` | HTML title |
 | `http_cookiename` | `like`, `begin` | HTTP cookie name |
 | `http_etag` | `like`, `begin` | HTTP ETag value |
