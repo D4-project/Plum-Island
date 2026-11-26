@@ -12,12 +12,14 @@ import sqlite3
 import sys
 import tempfile
 import uuid
+from contextlib import closing
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest import TestCase, mock
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import scoped_session, sessionmaker
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(BASE_DIR, "webapp"))
@@ -338,8 +340,8 @@ class StalledJobWatchdogTest(TestCase):
         self.assertIsNone(updates[self.scheduler.Jobs.bot_id])
         self.assertIsNone(updates[self.scheduler.Jobs.job_start])
 
-    def test_watchdog_does_not_commit_when_no_job_matches(self):
-        """No-op watchdog tick does not create an unnecessary transaction."""
+    def test_watchdog_releases_write_lock_when_no_job_matches(self):
+        """A no-op UPDATE must release its SQLite write transaction."""
         session = mock.Mock()
         session.query.return_value.filter.return_value.update.return_value = 0
         with mock.patch.object(self.scheduler.db, "session", session):
@@ -347,6 +349,78 @@ class StalledJobWatchdogTest(TestCase):
 
         self.assertEqual(summary, {"stalled_jobs_released": 0})
         session.commit.assert_not_called()
+        session.rollback.assert_called_once_with()
+
+    def test_scan_tick_retries_stalled_job_after_sqlite_writer_releases_lock(self):
+        """Exercise a real SQLite writer lock and recover on the following tick."""
+        directory = self.enterContext(
+            tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+        )
+        path = Path(directory) / "jobs.db"
+        engine = create_engine(f"sqlite:///{path}")
+        self.addCleanup(engine.dispose)
+        jobs = self.scheduler.Jobs
+        jobs.metadata.create_all(engine)
+        attempt = str(uuid.uuid4())
+        with sessionmaker(bind=engine)() as setup:
+            setup.add(
+                jobs(
+                    uid=str(uuid.uuid4()),
+                    job="192.0.2.1",
+                    job_start=self.scheduler.utcnow_naive() - timedelta(hours=3),
+                    active=True,
+                    finished=False,
+                    attempt_uid=attempt,
+                )
+            )
+            setup.commit()
+
+        with engine.connect() as connection, closing(sqlite3.connect(path)) as writer:
+            connection.exec_driver_sql("PRAGMA busy_timeout=0")
+            session = scoped_session(sessionmaker(bind=connection))
+            with mock.patch.object(
+                self.scheduler.db, "session", session
+            ), mock.patch.object(
+                self.scheduler, "_run_queue_generation_step"
+            ) as create_jobs, mock.patch.object(
+                self.scheduler, "task_sync_queued_profile_jobs"
+            ) as sync_profiles:
+                writer.execute("BEGIN IMMEDIATE")
+                with self.assertLogs(self.scheduler.logger, level="WARNING") as logs:
+                    self.scheduler.task_master_of_puppets()
+                self.assertIn("retrying on the next tick", logs.output[0])
+                self.assertFalse(connection.in_transaction())
+                create_jobs.assert_not_called()
+                sync_profiles.assert_not_called()
+                self.assertEqual(
+                    writer.execute("SELECT active, attempt_uid FROM jobs").fetchone(),
+                    (1, attempt),
+                )
+                writer.rollback()
+
+                self.scheduler.task_master_of_puppets()
+                create_jobs.assert_called_once_with()
+                sync_profiles.assert_called_once_with()
+                self.assertEqual(
+                    writer.execute("SELECT active, attempt_uid FROM jobs").fetchone(),
+                    (0, None),
+                )
+
+    def test_scan_tick_propagates_other_sqlite_operational_errors(self):
+        """A missing table still fails with its original exception."""
+        failure = OperationalError(
+            "UPDATE jobs", {}, sqlite3.OperationalError("no such table: jobs")
+        )
+        with mock.patch.object(
+            self.scheduler.db, "session"
+        ) as session, mock.patch.object(
+            self.scheduler, "task_release_stalled_jobs", side_effect=failure
+        ):
+            with self.assertRaises(OperationalError) as caught:
+                self.scheduler.task_master_of_puppets()
+        self.assertIs(caught.exception, failure)
+        session.rollback.assert_not_called()
+        self.assertEqual(session.remove.call_count, 2)
 
     def test_timeout_is_timedelta(self):
         """Timeout remains a fixed two-hour duration, not scheduler interval."""

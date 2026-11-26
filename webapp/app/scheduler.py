@@ -6,6 +6,7 @@ import os
 import atexit
 import ipaddress
 import logging
+import sqlite3
 from redis.exceptions import RedisError
 import shutil
 import uuid
@@ -30,6 +31,7 @@ from nmap2json.smarthash import port_smart_hash
 from .utils.scanner_reports import normalize_masscan_port
 from requests.exceptions import HTTPError
 from sqlalchemy import bindparam, false, func, or_, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import joinedload
 from . import db
 from .models import (
@@ -536,7 +538,21 @@ def task_release_stalled_jobs(now=None):
             released_jobs,
             cutoff.isoformat(),
         )
+    else:
+        # SQLite acquires a write transaction even when UPDATE matches no rows.
+        db.session.rollback()
     return {"stalled_jobs_released": released_jobs}
+
+
+def _is_sqlite_lock(error):
+    """Recognize SQLite lock contention, including extended result codes."""
+    cause = error.orig
+    if not isinstance(cause, sqlite3.OperationalError):
+        return False
+    code = getattr(cause, "sqlite_errorcode", None)
+    if code is not None:
+        return code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    return str(cause) in ("database is locked", "database table is locked")
 
 
 def task_master_of_puppets():
@@ -570,6 +586,11 @@ def task_master_of_puppets():
             step_durations["create_jobs"]["elapsed"],
             step_durations["profile_sync"]["elapsed"],
         )
+    except OperationalError as error:
+        if not _is_sqlite_lock(error):
+            raise
+        db.session.rollback()
+        logger.warning("Scheduler TASK: SQLite is locked; retrying on the next tick")
     finally:
         db.session.remove()
 
