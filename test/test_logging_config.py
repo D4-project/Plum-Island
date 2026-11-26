@@ -73,8 +73,10 @@ class ApplicationLoggingTest(TestCase):
             root = logging.Logger("isolated-root")
             # Its own manager makes setLevel invalidate this isolated root's cache.
             root.manager = logging.Manager(root)
-            config = {"LOG_ENABLED": True, "LOG_DIR": directory, "LOG_LEVEL": "INFO"}
-            with mock.patch("app.logging_config.logging.getLogger", return_value=root):
+            config = {"LOG_ENABLED": True, "LOG_DIR": "./log", "LOG_LEVEL": "INFO"}
+            with mock.patch(
+                "app.logging_config.logging.getLogger", return_value=root
+            ), mock.patch("app.logging_config.WEBAPP_DIR", Path(directory)):
                 handler = configure_logging(config)
                 self.addCleanup(handler.close)
                 root.debug("hidden")
@@ -85,7 +87,9 @@ class ApplicationLoggingTest(TestCase):
                 root.debug("debug enabled")
             self.assertEqual(root.handlers, [handler])
             self.assertEqual(handler.level, logging.DEBUG)
-            contents = next(Path(directory).glob("*.log")).read_text(encoding="utf-8")
+            contents = next((Path(directory) / "log").glob("*.log")).read_text(
+                encoding="utf-8"
+            )
             self.assertNotIn("hidden", contents)
             self.assertIn("visible", contents)
             self.assertIn("debug enabled", contents)

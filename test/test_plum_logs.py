@@ -15,7 +15,7 @@ from jinja2 import ChoiceLoader, FileSystemLoader
 
 from app import app as island_app
 from app import appbuilder as island_appbuilder
-from app import logs_view
+from app import logging_config, logs_view
 from app.security import CustomSecurityManager
 from app.ui_theme import configure_ui_templates
 
@@ -154,10 +154,10 @@ class PlumLogsTest(unittest.TestCase):
         (archive / "island-261124.log").write_text("historic entry", encoding="utf-8")
         (archive / "island-261126.log").write_text("current entry", encoding="utf-8")
         (self.logs / "other.log").touch()
-        for configured in (str(archive), os.path.relpath(archive)):
+        for configured in (str(archive), archive.name):
             with self.subTest(configured=configured), patch.dict(
                 self.app.config, LOG_DIR=configured
-            ):
+            ), patch.object(logging_config, "WEBAPP_DIR", self.directory):
                 response = self.client.get(URL)
                 self.assertIn(str(archive).encode(), response.data)
                 self.assertIn(b'value="island-261124.log"', response.data)

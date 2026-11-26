@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 LOG_FILE_RE = re.compile(r"^(?P<prefix>.+)-(?P<date>\d{6})\.log$")
+WEBAPP_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_DIR = "./log"
 DEFAULT_LOG_PREFIX = "agent"
 DEFAULT_LOG_LEVEL = "WARNING"
@@ -23,7 +24,8 @@ DEFAULT_LOG_RETENTION_DAYS = 90
 
 def configured_log_directory(config):
     """Resolve the same configured directory for log writing and browsing."""
-    return Path(config.get("LOG_DIR", DEFAULT_LOG_DIR)).expanduser().resolve()
+    path = Path(config.get("LOG_DIR", DEFAULT_LOG_DIR)).expanduser()
+    return (WEBAPP_DIR / path).resolve()
 
 
 class DateFileHandler(logging.Handler):
