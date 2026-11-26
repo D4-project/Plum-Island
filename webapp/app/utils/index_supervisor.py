@@ -16,7 +16,7 @@ from app.utils.index_reconciliation import (
     queue_snapshot,
     state_directory,
 )
-from app.utils.index_source_recovery import requeue_orphan_exclusion
+from app.utils.index_source_recovery import MISSING_SOURCES, requeue_orphan_exclusion
 from app.utils.index_retry import retry_delay, transient_error
 from app.utils.tag_runtime import queue_committed_snapshot
 
@@ -104,6 +104,7 @@ class IndexSupervisor:
             not pending
             and job.get("phase", "done") == "done"
             and not has_rule_drift(self.raw)
+            and not self.raw.zcount(MISSING_SOURCES, "-inf", time.time())
         ):
             return
         if (

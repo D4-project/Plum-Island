@@ -12,17 +12,32 @@ import logging
 import os
 
 import redis
+from meilisearch.errors import MeilisearchApiError
 
 from app.utils.index_activity import ACTIVITY, PACING, SAMPLE_LIMIT, SAMPLES
-from app.utils.index_generations import ACTIVE, CONTROL, GenerationClient, write_json
+from app.utils.index_generations import (
+    ACTIVE,
+    CONTROL,
+    GenerationClient,
+    file_lock,
+    write_json,
+)
 from app.utils.index_retry import retry_delay, transient_error
 from app.utils.index_reconciliation import (
     ReconciliationWorker,
     SnapshotInvalid,
+    state_directory,
     write_barrier,
 )
 from app.utils.index_sources import ExcludedSource, SourceDocuments
-from app.utils.index_source_recovery import SOURCE_CONFLICT, orphan_exclusion_metadata
+from app.utils.index_source_recovery import (
+    MISSING_SOURCES,
+    SOURCE_CONFLICT,
+    defer_missing_source,
+    document_not_found,
+    orphan_exclusion_metadata,
+    retry_missing_sources,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +201,7 @@ class LoadController:  # pylint: disable=too-many-instance-attributes
 class PacedReconciliationWorker(ReconciliationWorker):
     """Keep frozen-job compatibility while changing only runtime work pacing."""
 
-    def __init__(self, raw, meili, config):
+    def __init__(self, raw, meili, config, *, exports_pending=None):
         super().__init__(
             raw,
             SourceDocuments(
@@ -196,6 +211,7 @@ class PacedReconciliationWorker(ReconciliationWorker):
             pause_seconds=config.get("TAG_RECONCILIATION_PAUSE_SECONDS", 0.1),
         )
         self.load = LoadController(raw, config)
+        self.exports_pending = exports_pending
         self._scan_checkpoint_at = None
 
     def run(self):
@@ -204,6 +220,16 @@ class PacedReconciliationWorker(ReconciliationWorker):
         while not self.stopping:
             try:
                 super().run()
+                if not self.stopping and self.raw.zcount(
+                    MISSING_SOURCES, "-inf", time.time()
+                ):
+                    with file_lock(state_directory() / "worker.lock", blocking=False):
+                        retry_missing_sources(
+                            self.raw,
+                            self.meili,
+                            self.exports_pending,
+                            lambda: not self.stopping and self.load.ready(),
+                        )
             except BlockingIOError:
                 # Another worker may take ownership while this one backs off.
                 return
@@ -388,6 +414,11 @@ class PacedReconciliationWorker(ReconciliationWorker):
             super().process_uid(uid)
         except ExcludedSource as error:
             self.exclude_source(uid, error.address)
+        except MeilisearchApiError as error:
+            if not document_not_found(error) or not defer_missing_source(
+                self.raw, self.job, uid
+            ):
+                raise
         finally:
             if self.job["phase"] == "reparsing":
                 self.job["uses_meilisearch"] = True

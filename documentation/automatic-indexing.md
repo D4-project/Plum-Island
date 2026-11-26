@@ -335,6 +335,18 @@ their generation and its ancestors until their lease expires.
 .venv/bin/python tools/index_generation_admin.py cleanup --offline --apply
 ```
 
+## Missing Meilisearch captures
+
+If Meilisearch returns `document_not_found` for a capture already indexed in
+Kvrocks, reconciliation keeps its indexed fields, tags and observation dates.
+It queues the UID for a background recheck without delaying publication. The
+scheduler rechecks at most 16 queued UIDs per run and waits at least five
+minutes between attempts for the same UID. A restored source is indexed with
+the published rules. A capture still missing after 24 hours since its last
+observation can be removed once the scanner export queue is empty and
+Meilisearch has a populated index with no pending tasks. The Tag Rules status
+shows the number of captures waiting for their raw source.
+
 ## Validation before production rollout
 
 Run the full test suite with a disposable SQLite configuration. The explicit

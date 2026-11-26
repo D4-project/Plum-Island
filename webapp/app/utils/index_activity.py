@@ -21,6 +21,7 @@ from redis.backoff import NoBackoff
 from redis.retry import Retry
 
 from app.utils.index_generations import CONTROL, pinned_read
+from app.utils.index_source_recovery import MISSING_SOURCES
 from app.utils.tag_reconciliation import fingerprint
 
 ACTIVITY = CONTROL + "activity:"
@@ -254,5 +255,11 @@ def prioritized_ingestion(function):
 
 def pacing_status(raw):
     """Read public operational pacing data, excluding query fingerprints."""
-    value = raw.get(PACING)
-    return json.loads(value) if value else {}
+    pipe = raw.pipeline(transaction=False)
+    pipe.get(PACING)
+    pipe.zcard(MISSING_SOURCES)
+    value, missing = pipe.execute()
+    status = json.loads(value) if value else {}
+    if missing:
+        status["missing_sources"] = missing
+    return status

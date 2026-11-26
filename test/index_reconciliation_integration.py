@@ -18,7 +18,9 @@ from unittest.mock import Mock, patch
 from test.test_tag_reconciliation import snapshot
 
 import redis
+from meilisearch.errors import MeilisearchApiError
 from meilisearch.models.document import Document
+from requests import Response
 
 from app.utils.index_generations import (
     ACTIVE,
@@ -38,9 +40,19 @@ from app.utils.index_reconciliation import (
     delete_capture,
     reconciliation_status,
 )
-from app.utils.index_activity import ACTIVITY, PACING, SAMPLES, ActivityMonitor
+from app.utils.index_activity import (
+    ACTIVITY,
+    PACING,
+    SAMPLES,
+    ActivityMonitor,
+    pacing_status,
+)
 from app.utils.index_pacing import PacedReconciliationWorker
-from app.utils.index_source_recovery import SOURCE_CONFLICT, requeue_orphan_exclusion
+from app.utils.index_source_recovery import (
+    MISSING_SOURCES,
+    SOURCE_CONFLICT,
+    requeue_orphan_exclusion,
+)
 from app.utils.index_supervisor import IndexSupervisor
 from app.utils.search_timestamps import search_timestamps
 
@@ -1005,7 +1017,7 @@ class ReconciliationRecoveryTest(ReconciliationCase):
 class ReconciliationPacingTest(ReconciliationCase):
     """Exercise pacing against real Redis commands and existing frozen jobs."""
 
-    def paced(self, **overrides):
+    def paced(self, *, exports_pending=None, **overrides):
         """Use immediate quiet detection in protocol checks, not production tuning."""
         return PacedReconciliationWorker(
             self.raw,
@@ -1017,7 +1029,116 @@ class ReconciliationPacingTest(ReconciliationCase):
                 "TAG_RECONCILIATION_PAUSE_SECONDS": 0,
                 **overrides,
             },
+            exports_pending=exports_pending,
         )
+
+    def missing_document(self, code="document_not_found"):
+        """Model a typed Meilisearch 404, including its SDK error code."""
+        response = Response()
+        response.status_code = 404
+        response._content = json.dumps({"code": code, "message": code}).encode()
+        return MeilisearchApiError(code, response)
+
+    def test_missing_source_does_not_block_full_rebuild_or_later_recovery(self):
+        """A full generation copies the capture and the worker retries it later."""
+        del self.documents["one"]
+        self.documents["two"] = source("two")
+
+        def read_source(uid):
+            if uid == "one":
+                raise self.missing_document()
+            return Document(self.documents[uid])
+
+        self.meili.get_document.side_effect = read_source
+        queue_snapshot(self.raw, self.first)
+        worker = self.paced()
+        worker.start()
+        self.scan(worker)
+        worker.checkpoint(phase="paused")
+        self.paced().run()
+        old_generation = self.raw.get(ACTIVE)
+        self.assertEqual(old_generation, worker.job["id"])
+        current = GenerationClient(self.raw)
+        self.assertEqual(current.smembers("all_uids"), {"one", "two"})
+        self.assertEqual(current.smembers("tags:one"), {"type:server"})
+        self.assertEqual(
+            current.hmget("doc:one", "first_seen", "last_seen"), ["100", "200"]
+        )
+        self.assertEqual(current.smembers("tags:two"), {"proto:https"})
+        self.assertEqual(pacing_status(self.raw)["missing_sources"], 1)
+        self.assertEqual(read_json(self.raw, "job")["processed"], 2)
+
+        self.raw.zadd(MISSING_SOURCES, {"one": 0})
+        supervisor = IndexSupervisor(self.raw, {})
+        with patch("app.utils.index_supervisor.subprocess.Popen") as process:
+            supervisor.tick(self.first)
+        process.assert_called_once()
+
+        self.meili.get_document.side_effect = None
+        self.meili.get_document.return_value = Document(source())
+        self.paced().run()
+        self.assertEqual(self.raw.get(ACTIVE), old_generation)
+        self.assertEqual(current.smembers("tags:one"), {"proto:https"})
+        self.assertEqual(current.hget("doc:one", "first_seen"), "100")
+        self.assertEqual(self.raw.zcard(MISSING_SOURCES), 0)
+
+    def test_missing_source_keeps_recent_and_pending_captures(self):
+        """An expired missing capture is removable once both export queues drain."""
+        self.raw.hset("doc:one", "last_seen", str(int(time.time())))
+        del self.documents["one"]
+        self.meili.get_document.side_effect = self.missing_document()
+        self.meili.get_stats.return_value = SimpleNamespace(
+            number_of_documents=1, is_indexing=False
+        )
+        self.meili.get_tasks.return_value = SimpleNamespace(results=[])
+        exports_pending = Mock(return_value=False)
+        queue_snapshot(self.raw, self.first)
+        self.paced(exports_pending=exports_pending).run()
+        current = GenerationClient(self.raw, writable=True)
+
+        self.raw.zadd(MISSING_SOURCES, {"one": 0})
+        self.paced(exports_pending=exports_pending).run()
+        self.assertTrue(current.sismember("all_uids", "one"))
+        exports_pending.assert_not_called()
+
+        current.hset("doc:one", "last_seen", "200")
+        exports_pending.return_value = True
+        self.raw.zadd(MISSING_SOURCES, {"one": 0})
+        self.paced(exports_pending=exports_pending).run()
+        self.assertTrue(current.sismember("all_uids", "one"))
+
+        exports_pending.return_value = False
+        self.meili.get_tasks.return_value = SimpleNamespace(results=[object()])
+        self.raw.zadd(MISSING_SOURCES, {"one": 0})
+        self.paced(exports_pending=exports_pending).run()
+        self.assertTrue(current.sismember("all_uids", "one"))
+
+        self.meili.get_tasks.return_value = SimpleNamespace(results=[])
+        self.meili.get_document.side_effect = [
+            self.missing_document(),
+            Document(source()),
+        ]
+        self.raw.zadd(MISSING_SOURCES, {"one": 0})
+        self.paced(exports_pending=exports_pending).run()
+        self.assertTrue(current.sismember("all_uids", "one"))
+
+        self.meili.get_document.side_effect = self.missing_document()
+        self.raw.zadd(MISSING_SOURCES, {"one": 0})
+        self.paced(exports_pending=exports_pending).run()
+        self.assertFalse(current.sismember("all_uids", "one"))
+        self.assertFalse(current.exists("doc:one"))
+        self.assertFalse(current.sismember("tag:type:server", "one"))
+        self.assertEqual(self.raw.zcard(MISSING_SOURCES), 0)
+
+    def test_missing_index_error_cannot_skip_an_indexed_capture(self):
+        """A missing endpoint/index remains a failing rebuild."""
+        del self.documents["one"]
+        self.meili.get_document.side_effect = self.missing_document("index_not_found")
+        queue_snapshot(self.raw, self.first)
+        with self.assertRaises(MeilisearchApiError):
+            self.paced().run()
+        self.assertIsNone(self.raw.get(ACTIVE))
+        self.assertEqual(self.raw.zcard(MISSING_SOURCES), 0)
 
     def test_planning_batches_are_independent_of_processing_batch(self):
         """Small capture batches no longer require one sleep per handful of IDs."""

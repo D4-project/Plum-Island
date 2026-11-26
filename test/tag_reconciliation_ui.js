@@ -93,10 +93,11 @@ async function advance(value) {
     assert.equal(detail.textContent, 'Indexing in the background');
     await advance({phase: 'blocked', pacing: {mode: 'idle_boost', slowdown_factor: 1}});
     assert.equal(detail.textContent, '');
-    await advance({phase: 'up_to_date', pacing: {excluded_sources: 2}});
+    await advance({phase: 'up_to_date', pacing: {excluded_sources: 2, missing_sources: 5}});
     assert.equal(bar.style.width, '100%');
     assert.equal(status.textContent, 'Detections up to date');
     assert.match(detail.textContent, /2 non-public source exclusions encountered/);
+    assert.match(detail.textContent, /5 captures awaiting a Meilisearch source/);
     assert.equal(requests, 17);
     console.log('Automatic detection progress checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -26,6 +26,22 @@ def install_stop_handlers(worker):
     signal.signal(signal.SIGINT, request_stop)
 
 
+def exports_pending():
+    """Check whether a completed scanner report still needs to be exported."""
+    from app import db  # pylint: disable=import-outside-toplevel
+    from app.models import Jobs  # pylint: disable=import-outside-toplevel
+
+    try:
+        return (
+            db.session.query(Jobs.id)
+            .filter(Jobs.finished.is_(True), Jobs.exported.isnot(True))
+            .first()
+            is not None
+        )
+    finally:
+        db.session.remove()
+
+
 def main():
     """Load controller configuration, then execute one frozen reconciliation."""
     os.environ.pop("WERKZEUG_RUN_MAIN", None)
@@ -62,7 +78,9 @@ def main():
     ).index("plum")
     with Session() as session, app.app_context():
         meili.http = ReconciliationHttpRequests(meili.config, session)
-        worker = PacedReconciliationWorker(raw, meili, app.config)
+        worker = PacedReconciliationWorker(
+            raw, meili, app.config, exports_pending=exports_pending
+        )
         install_stop_handlers(worker)
         worker.run()
 

@@ -1,16 +1,150 @@
-"""Preserve detached timestamp hashes left behind by legacy index rebuilds."""
+"""Recover unavailable sources without discarding indexed capture history."""
 
 import ipaddress
 import json
+import logging
+import time
+
+from meilisearch.errors import MeilisearchApiError
 
 from app.utils.index_generations import CONTROL, GenerationClient, read_json
-from app.utils.index_reconciliation import FIELDS, write_barrier
+from app.utils.index_reconciliation import (
+    FIELDS,
+    index_for,
+    ingest_sources,
+    journal_id,
+    load_document,
+    remove_document,
+    write_barrier,
+)
+from app.utils.index_sources import ExcludedSource
+from app.utils.kvrocks import KVrocksIndexer
 from app.utils.result_parser import is_external_ip
+
+logger = logging.getLogger(__name__)
+MISSING_SOURCES = CONTROL + "missing_sources"
+MISSING_SOURCE_RETRY_SECONDS = 300
+MISSING_SOURCE_GRACE_SECONDS = 86400
+MISSING_SOURCE_BATCH_SIZE = 16
 
 SOURCE_CONFLICT = (
     "Non-public source conflicts with indexed history or incremental "
     "work. Review source/index consistency before retrying."
 )
+
+
+def document_not_found(error):
+    """Recognize a missing document independently of missing-index errors."""
+    return error.status_code == 404 and error.code == "document_not_found"
+
+
+def defer_missing_source(raw, job, uid):
+    """Keep a known capture searchable while its raw document is unavailable."""
+    processed = CONTROL + "processed:" + job["id"]
+    with write_barrier(background=True):
+        if raw.sismember(CONTROL + "deleted:" + journal_id(job), uid):
+            raw.sadd(processed, uid)
+            return True
+        base = GenerationClient(raw, job["parent"])
+        if not base.sismember("all_uids", uid):
+            return False
+        target = GenerationClient(raw, job["id"], writable=True)
+        if job["full"]:
+            document = load_document(base, uid, preserve_storage=True)
+            index_for(target).add_documents_batch([document])
+            coverage = base.get(f"coverage:{uid}")
+            contributions = document["_contributions"]
+            pipe = target.pipeline()
+            if coverage:
+                pipe.set(f"coverage:{uid}", coverage)
+            if contributions:
+                pipe.set(
+                    f"contributions:{uid}", json.dumps(contributions, sort_keys=True)
+                )
+                for rule_id in contributions:
+                    pipe.sadd(f"rule_matches:{rule_id}", uid)
+            pipe.execute()
+        elif target.sismember("rule_drift", uid):
+            # A missing raw document is retried independently of rule drift.
+            target.srem("rule_drift", uid)
+        pipe = raw.pipeline(transaction=True)
+        pipe.zadd(
+            MISSING_SOURCES, {uid: time.time() + MISSING_SOURCE_RETRY_SECONDS}, nx=True
+        )
+        pipe.sadd(processed, uid)
+        queued, _ = pipe.execute()
+        if queued:
+            logger.info("Deferred missing Meilisearch capture %s", uid)
+    return True
+
+
+def retry_missing_sources(raw, sources, exports_pending, ready):
+    """Recheck a bounded set of missing captures once the main retag is done."""
+    if read_json(raw, "job", {}).get("phase") != "done":
+        return
+    snapshot = read_json(raw, "published", {})
+    if not snapshot:
+        return
+    uids = raw.zrangebyscore(
+        MISSING_SOURCES, "-inf", time.time(), start=0, num=MISSING_SOURCE_BATCH_SIZE
+    )
+    sources.use_candidates(uids)
+    active = GenerationClient(raw, writable=True)
+    for uid in uids:
+        if not ready():
+            return
+        if not active.sismember("all_uids", uid):
+            raw.zrem(MISSING_SOURCES, uid)
+            continue
+        # On any backend failure the UID remains queued for a later worker.
+        raw.zadd(MISSING_SOURCES, {uid: time.time() + MISSING_SOURCE_RETRY_SECONDS})
+        try:
+            source = sources.get_document(uid)
+        except MeilisearchApiError as error:
+            if not document_not_found(error):
+                raise
+            _remove_missing_if_expired(raw, active, sources, exports_pending, uid)
+        except ExcludedSource:
+            logger.warning("Deferred capture %s now has a non-public source", uid)
+        else:
+            source = source if isinstance(source, dict) else vars(source)
+            ingest_sources(raw, [source], snapshot)
+            raw.zrem(MISSING_SOURCES, uid)
+
+
+def _remove_missing_if_expired(raw, active, sources, exports_pending, uid):
+    """Remove verified old orphans only with a healthy, idle export path."""
+    cutoff = time.time() - MISSING_SOURCE_GRACE_SECONDS
+    observed = KVrocksIndexer.normalize_timestamp(
+        active.hget(f"doc:{uid}", "last_seen")
+    )
+    if observed is None or observed >= cutoff or exports_pending is None:
+        return
+    stats = sources.index.get_stats()
+    if not stats.number_of_documents or stats.is_indexing:
+        return
+    if sources.index.get_tasks(
+        {"statuses": ["enqueued", "processing"], "limit": 1}
+    ).results:
+        return
+    if exports_pending():
+        return
+    try:
+        sources.index.get_document(uid)
+    except MeilisearchApiError as error:
+        if not document_not_found(error):
+            raise
+    else:
+        # The report arrived while checking the export queues.
+        return
+    with write_barrier(background=True):
+        before = load_document(active, uid)
+        last_seen = KVrocksIndexer.normalize_timestamp(before.get("last_seen"))
+        if last_seen != observed:
+            return
+        remove_document(active, uid, before)
+        raw.zrem(MISSING_SOURCES, uid)
+        logger.warning("Removed expired capture %s missing from Meilisearch", uid)
 
 
 def _has_references(client, uid, addresses):

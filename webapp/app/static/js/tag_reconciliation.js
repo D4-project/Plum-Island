@@ -48,6 +48,9 @@
             if (Number(pacing.excluded_sources) > 0) {
                 notes.push(pacing.excluded_sources + ' non-public source exclusions encountered');
             }
+            if (Number(pacing.missing_sources) > 0) {
+                notes.push(pacing.missing_sources + ' captures awaiting a Meilisearch source');
+            }
             if (data.phase === 'planning' && Number.isFinite(pacing.candidates)) {
                 notes.push(pacing.candidates + ' captures identified');
             }

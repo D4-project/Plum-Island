@@ -290,6 +290,7 @@ class WorkerRetryTest(unittest.TestCase):
     def setUp(self):
         """Create isolated state for the regression checks."""
         self.raw = Mock()
+        self.raw.zcount.return_value = 0
         self.worker = PacedReconciliationWorker(self.raw, Mock(), {})
 
     def test_worker_reloads_durable_state_after_timeout(self):
