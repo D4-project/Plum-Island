@@ -244,7 +244,7 @@ class PacedReconciliationWorker(ReconciliationWorker):
                     "Index worker backend unavailable (%s); retrying in %.0fs from saved checkpoint",
                     type(error).__name__,
                     delay,
-                    exc_info=attempts == 1,
+                    exc_info=attempts == 1 and logger.isEnabledFor(logging.DEBUG),
                 )
                 if not self._wait_backend_retry(delay):
                     self._record_backend_pause()
@@ -410,19 +410,25 @@ class PacedReconciliationWorker(ReconciliationWorker):
         """Yield between captures, then finish a claimed unit even on SIGTERM."""
         self.load.wait(lambda: self.stopping)
         self.meili.use_candidates(self.job.get("pending_uids", ()))
+        exclusion = None
+        missing = None
         try:
             super().process_uid(uid)
         except ExcludedSource as error:
-            self.exclude_source(uid, error.address)
+            exclusion = error.address
         except MeilisearchApiError as error:
-            if not document_not_found(error) or not defer_missing_source(
-                self.raw, self.job, uid
-            ):
+            if not document_not_found(error):
                 raise
+            missing = error
         finally:
             if self.job["phase"] == "reparsing":
                 self.job["uses_meilisearch"] = True
                 self.load.uses_meilisearch = True
+        # A backend timeout during these writes must remain independently retryable.
+        if exclusion is not None:
+            self.exclude_source(uid, exclusion)
+        if missing is not None and not defer_missing_source(self.raw, self.job, uid):
+            raise missing
 
     def exclude_source(self, uid, address):
         """Count unindexed exclusions, preserving detached historical dates."""

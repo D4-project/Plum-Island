@@ -1039,6 +1039,51 @@ class ReconciliationPacingTest(ReconciliationCase):
         response._content = json.dumps({"code": code, "message": code}).encode()
         return MeilisearchApiError(code, response)
 
+    def test_copy_timeout_after_missing_document_retries_same_job(self):
+        """A lost COPY reply after a handled 404 keeps the durable candidate."""
+        self.publish(self.first)
+        current = GenerationClient(self.raw, writable=True)
+        current.sadd("rule_drift", "one")
+        changed = snapshot([("a", "port:443", ["type:server"])], {"server": True})
+        queue_snapshot(self.raw, changed)
+        del self.documents["one"]
+        self.meili.get_document.side_effect = self.missing_document()
+        worker = self.paced()
+        worker.start()
+        generation = worker.job["id"]
+        evaluate = self.raw.eval
+        copies = []
+
+        def lost_copy_reply(*args):
+            result = evaluate(*args)
+            if args[-1] == "rule_drift":
+                copies.append(args[-1])
+                if len(copies) == 1:
+                    raise redis.TimeoutError("response lost after COPY")
+            return result
+
+        def confirm_retry(_delay):
+            job = read_json(self.raw, "job")
+            self.assertEqual(job["phase"], "retrying")
+            self.assertEqual(job["id"], generation)
+            self.assertEqual(job["pending_uids"], ["one"])
+            self.assertEqual(self.raw.zcard(MISSING_SOURCES), 0)
+            return True
+
+        with (
+            patch.object(self.raw, "eval", side_effect=lost_copy_reply),
+            patch.object(
+                worker, "_wait_backend_retry", side_effect=confirm_retry
+            ) as wait,
+            self.assertLogs("app.utils.index_pacing", level="INFO") as logs,
+        ):
+            worker.run()
+        wait.assert_called_once()
+        self.assertEqual(copies, ["rule_drift"])
+        self.assertEqual(self.raw.get(ACTIVE), generation)
+        self.assertEqual(self.raw.zcard(MISSING_SOURCES), 1)
+        self.assertNotIn("Traceback", logs.output[0])
+
     def test_missing_source_does_not_block_full_rebuild_or_later_recovery(self):
         """A full generation copies the capture and the worker retries it later."""
         del self.documents["one"]

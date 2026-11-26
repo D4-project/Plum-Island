@@ -16,6 +16,7 @@
         retagging: 'Applying changed detection rules',
         catching_up: 'Catching up with incoming captures',
         paused: 'Detection update paused',
+        retrying: 'Index backend unavailable — retrying from checkpoint',
         failed: 'Detection update failed — active results retained',
         blocked: 'Detection update blocked — correct the reported rules or configuration',
         up_to_date: 'Detections up to date',
@@ -36,7 +37,8 @@
             const data = await response.json();
             const complete = data.phase === 'up_to_date' || data.phase === 'done';
             const scanning = ['scanning', 'reparsing', 'retagging'].includes(data.phase);
-            const measurable = (scanning || data.phase === 'paused') && Number(data.total) > 0;
+            const measurable = (scanning || ['paused', 'retrying'].includes(data.phase))
+                && Number(data.total) > 0;
             const percent = complete ? 100 : measurable
                 ? Math.min(99, Math.floor(Number(data.processed) * 100 / Number(data.total))) : null;
             status.textContent = labels[data.phase] || 'Checking detection updates';

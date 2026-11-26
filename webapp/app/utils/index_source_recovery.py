@@ -103,13 +103,15 @@ def retry_missing_sources(raw, sources, exports_pending, ready):
         except MeilisearchApiError as error:
             if not document_not_found(error):
                 raise
-            _remove_missing_if_expired(raw, active, sources, exports_pending, uid)
         except ExcludedSource:
             logger.warning("Deferred capture %s now has a non-public source", uid)
+            continue
         else:
             source = source if isinstance(source, dict) else vars(source)
             ingest_sources(raw, [source], snapshot)
             raw.zrem(MISSING_SOURCES, uid)
+            continue
+        _remove_missing_if_expired(raw, active, sources, exports_pending, uid)
 
 
 def _remove_missing_if_expired(raw, active, sources, exports_pending, uid):

@@ -58,6 +58,10 @@ async function advance(value) {
     assert.equal(bar.style.width, '64%');
     assert.match(detail.textContent, /64\/100 captures/);
     assert.match(eta.textContent, /ETA ∞/);
+    await advance({phase: 'retrying', processed: 64, total: 100});
+    assert.match(status.textContent, /retrying from checkpoint/);
+    assert.equal(bar.style.width, '64%');
+    assert(!classes.has('progress-bar-danger'));
     await advance({phase: 'reparsing', processed: 64, total: 100, heartbeat: 1,
         pacing: {mode: 'idle_boost', eta_seconds: 3900}});
     assert.match(eta.textContent, /ETA ∞/);
@@ -98,6 +102,6 @@ async function advance(value) {
     assert.equal(status.textContent, 'Detections up to date');
     assert.match(detail.textContent, /2 non-public source exclusions encountered/);
     assert.match(detail.textContent, /5 captures awaiting a Meilisearch source/);
-    assert.equal(requests, 17);
+    assert.equal(requests, 18);
     console.log('Automatic detection progress checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
