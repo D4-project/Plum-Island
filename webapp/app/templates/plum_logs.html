@@ -8,6 +8,7 @@
 {% block content %}
 <main class="plum-logs">
   <h1>Plum Logs</h1>
+  <p class="text-muted">Log directory <code>{{ log_dir }}</code></p>
   {% if error %}
     <div class="alert alert-warning" role="alert">{{ error }}</div>
   {% elif not files %}

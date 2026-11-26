@@ -8,7 +8,7 @@ import stat
 from flask import abort, current_app, make_response, request
 from flask_appbuilder import BaseView, expose, has_access
 
-from .logging_config import DEFAULT_LOG_DIR
+from .logging_config import configured_log_directory
 
 LOG_PAGE_BYTES = 256 * 1024
 
@@ -107,8 +107,8 @@ class PlumLogsView(BaseView):
             abort(400)
 
         files, page, error, status = [], None, None, 200
+        log_dir = configured_log_directory(current_app.config)
         try:
-            log_dir = current_app.config.get("LOG_DIR", DEFAULT_LOG_DIR)
             with _open_descriptor(log_dir, os.O_DIRECTORY) as directory:
                 files = _list_logs(directory)
                 if selected is not None and selected not in files:
@@ -124,7 +124,12 @@ class PlumLogsView(BaseView):
 
         response = make_response(
             self.render_template(
-                "plum_logs.html", files=files, selected=selected, page=page, error=error
+                "plum_logs.html",
+                log_dir=log_dir,
+                files=files,
+                selected=selected,
+                page=page,
+                error=error,
             ),
             status,
         )

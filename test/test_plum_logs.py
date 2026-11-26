@@ -136,6 +136,7 @@ class PlumLogsTest(unittest.TestCase):
                 response = self.client.get(URL)
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertIn(str(self.logs).encode(), response.data)
                 self.assertIn(b'value="island-261125.log" selected', response.data)
                 self.assertIn(b'value="island-261124.log"', response.data)
                 self.assertIn(b"&lt;script&gt;alert(1)&lt;/script&gt;", response.data)
@@ -144,6 +145,28 @@ class PlumLogsTest(unittest.TestCase):
                 self.assertIn(b"js/plum_logs.js", response.data)
         response = self.client.get(URL, query_string={"file": older.name})
         self.assertIn(b"earlier entry", response.data)
+
+    def test_resolves_configured_log_directory(self):
+        """Older and current logs are listed from the resolved LOG_DIR."""
+        self._login(self.admin)
+        archive = self.directory / "custom-logs"
+        archive.mkdir()
+        (archive / "island-261124.log").write_text("historic entry", encoding="utf-8")
+        (archive / "island-261126.log").write_text("current entry", encoding="utf-8")
+        (self.logs / "other.log").touch()
+        for configured in (str(archive), os.path.relpath(archive)):
+            with self.subTest(configured=configured), patch.dict(
+                self.app.config, LOG_DIR=configured
+            ):
+                response = self.client.get(URL)
+                self.assertIn(str(archive).encode(), response.data)
+                self.assertIn(b'value="island-261124.log"', response.data)
+                self.assertIn(b'value="island-261126.log"', response.data)
+                self.assertNotIn(b'value="other.log"', response.data)
+                selected = self.client.get(
+                    URL, query_string={"file": "island-261124.log"}
+                )
+                self.assertIn(b"historic entry", selected.data)
 
     def test_listing_and_open_refuse_non_log_paths(self):
         """A selectable name must be a regular .log file in the directory."""

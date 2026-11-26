@@ -42,7 +42,9 @@ profiles. It is explained and read-only; the remaining 54 fields are editable.
 The obsolete `LOG_ROTATION_DAYS` field is omitted: log files always rotate daily
 at local midnight. **Log retention** controls how long old log files are kept.
 Administrators can read regular `.log` files from the configured **Log directory**
-in **Security → Plum Logs**. The page opens at the end of the newest file, loads
+in **Security → Plum Logs**, where the resolved path is shown. Relative paths
+use the process working directory. Use an absolute path to share the same
+directory across processes. The page opens at the end of the newest file, loads
 up to 256 KiB per request, and offers **Older**, **Newer**, and **Latest** navigation.
 **Log Meilisearch HTTP requests** under **Logging** is disabled by
 default. Enable it with **Log level** set to **DEBUG** to trace requests from

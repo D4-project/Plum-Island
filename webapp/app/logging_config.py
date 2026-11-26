@@ -21,6 +21,11 @@ DEFAULT_LOG_ROTATION_DAYS = 90
 DEFAULT_LOG_RETENTION_DAYS = 90
 
 
+def configured_log_directory(config):
+    """Resolve the same configured directory for log writing and browsing."""
+    return Path(config.get("LOG_DIR", DEFAULT_LOG_DIR)).expanduser().resolve()
+
+
 class DateFileHandler(logging.Handler):
     """Write logs to date-named files and remove files past retention."""
 
@@ -104,7 +109,7 @@ def configure_logging(config):
     if not config.get("LOG_ENABLED", False):
         return None
 
-    log_dir = config.get("LOG_DIR", DEFAULT_LOG_DIR)
+    log_dir = configured_log_directory(config)
     prefix = config.get("LOG_FILE_PREFIX", DEFAULT_LOG_PREFIX)
     rotation_days = _get_positive_int(
         config, "LOG_ROTATION_DAYS", DEFAULT_LOG_ROTATION_DAYS
