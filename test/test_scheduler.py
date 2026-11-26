@@ -451,6 +451,10 @@ class StalledJobWatchdogTest(TestCase):
             jobs["scheduler_maintenance"].func,
             self.scheduler.task_scheduler_maintenance,
         )
+        cleanup = jobs["cleanup_jobs"]
+        self.assertIs(cleanup.func, self.scheduler.task_cleanup_jobs)
+        self.assertEqual(cleanup.trigger.interval, timedelta(minutes=10))
+        self.assertEqual(cleanup.max_instances, 1)
 
     def test_maintenance_tick_runs_queue_watchdog_independently(self):
         """The one-minute maintenance slot observes a stuck orchestration slot."""
@@ -473,8 +477,7 @@ class StalledJobWatchdogTest(TestCase):
         ), mock.patch.object(
             self.scheduler,
             "task_cleanup_jobs",
-            side_effect=lambda: call_order.append("cleanup_jobs") or {},
-        ), mock.patch.object(
+        ) as cleanup_jobs, mock.patch.object(
             self.scheduler,
             "task_cleanup_search_sessions",
             side_effect=lambda: call_order.append("cleanup_search") or {},
@@ -485,17 +488,153 @@ class StalledJobWatchdogTest(TestCase):
         ):
             self.scheduler.task_scheduler_maintenance()
 
+        cleanup_jobs.assert_not_called()
         self.assertEqual(
             call_order,
             [
                 "queue_watchdog",
                 "export",
                 "reports",
-                "cleanup_jobs",
                 "cleanup_search",
                 "cleanup_export",
             ],
         )
+
+    def _job_cleanup_fixture(self):
+        """Supply disposable job metadata and report storage for cleanup tests."""
+        directory = Path(
+            self.enterContext(
+                tempfile.TemporaryDirectory()  # pylint: disable=consider-using-with
+            )
+        )
+        path = directory / "jobs.db"
+        engine = create_engine(f"sqlite:///{path}")
+        self.addCleanup(engine.dispose)
+        self.scheduler.Jobs.metadata.create_all(engine)
+        session = scoped_session(sessionmaker(bind=engine))
+        self.addCleanup(session.remove)
+        self.enterContext(mock.patch.object(self.scheduler.db, "session", session))
+        self.enterContext(
+            mock.patch.dict(
+                self.scheduler.db.app.config,
+                {"JOB_SCAVENGE": 60, "JSON_FOLDER": str(directory)},
+            )
+        )
+        return path, session
+
+    def _archived_job(self, directory, session, **overrides):
+        """Create an expired job and its archived JSON file."""
+        defaults = {
+            "uid": str(uuid.uuid4()),
+            "job": "192.0.2.1",
+            "active": False,
+            "finished": True,
+            "exported": True,
+            "job_end": self.scheduler.utcnow_naive() - timedelta(days=61),
+        }
+        job = self.scheduler.Jobs(**{**defaults, **overrides})
+        session.add(job)
+        session.flush()
+        report = directory / job.uid[0] / f"{job.uid}.json"
+        report.parent.mkdir(exist_ok=True)
+        report.write_text("[]", encoding="utf-8")
+        return job, report
+
+    def test_cleanup_defers_on_real_sqlite_lock_and_preserves_the_report(self):
+        """A failed write leaves both the archived row and its file for retry."""
+        path, session = self._job_cleanup_fixture()
+        job, report = self._archived_job(path.parent, session)
+        job_id = job.id
+        session.commit()
+
+        with closing(sqlite3.connect(path)) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            with self.assertLogs(self.scheduler.logger, level="WARNING") as logs:
+                result = self.scheduler.task_cleanup_jobs()
+            self.assertTrue(result["deferred"])
+            self.assertIn("deferring the batch", logs.output[0])
+            self.assertEqual(writer.execute("SELECT id FROM jobs").fetchone(), (job_id,))
+            self.assertTrue(report.is_file())
+            writer.rollback()
+
+        result = self.scheduler.task_cleanup_jobs()
+        self.assertFalse(result["deferred"])
+        self.assertEqual(result["jobs_removed"], 1)
+        self.assertEqual(result["files_deleted"], 1)
+        self.assertIsNone(session.get(self.scheduler.Jobs, job_id))
+        self.assertFalse(report.exists())
+
+    def test_cleanup_batches_keep_remaining_and_unexported_report_files(self):
+        """Each tick commits bounded batches, then resumes the remaining rows."""
+        path, session = self._job_cleanup_fixture()
+        reports = [self._archived_job(path.parent, session)[1] for _ in range(5)]
+        unexported, pending_report = self._archived_job(
+            path.parent, session, exported=False
+        )
+        pending_id = unexported.id
+        session.commit()
+
+        with (
+            mock.patch.object(self.scheduler, "JOB_CLEANUP_BATCH_SIZE", 2),
+            mock.patch.object(self.scheduler, "MAX_JOB_CLEANUP_BATCHES", 2),
+            mock.patch.object(session, "commit", wraps=session.commit) as commit,
+        ):
+            result = self.scheduler.task_cleanup_jobs()
+            self.assertEqual(commit.call_count, 2)
+        self.assertEqual(result["jobs_removed"], 4)
+        self.assertEqual(result["files_deleted"], 4)
+        self.assertEqual([report.exists() for report in reports], [False] * 4 + [True])
+        self.assertTrue(pending_report.exists())
+
+        result = self.scheduler.task_cleanup_jobs()
+        self.assertEqual(result["jobs_removed"], 1)
+        self.assertFalse(reports[-1].exists())
+        self.assertIsNotNone(session.get(self.scheduler.Jobs, pending_id))
+        self.assertTrue(pending_report.exists())
+
+    def test_cleanup_keeps_filtered_work_and_running_cycles(self):
+        """Expire archived jobs while retaining their completed cycle counts."""
+        path, session = self._job_cleanup_fixture()
+        models = importlib.import_module("app.models")
+        profile = models.ScanProfiles(name="Cleanup", apply_to_all=False)
+        target = models.Targets(value="192.0.2.1")
+        finished = models.ScanProfileCycles(
+            scanprofile=profile, filter_revision=1, status="finished"
+        )
+        running = models.ScanProfileCycles(
+            scanprofile=profile, filter_revision=1, status="running"
+        )
+        session.add_all([target, finished, running])
+        done_job, done_report = self._archived_job(
+            path.parent, session, scanprofile_cycle=finished
+        )
+        live_job, live_report = self._archived_job(
+            path.parent, session, scanprofile_cycle=running
+        )
+        done_work = models.FilteredScanTargets(
+            cycle=finished,
+            configured_target=target,
+            target_kind="ip",
+            target_value=target.value,
+            ports="443",
+            completed_ports="443",
+            status="completed",
+            job=done_job,
+        )
+        session.add(done_work)
+        session.flush()
+        work_id, live_id = done_work.id, live_job.id
+        session.commit()
+
+        result = self.scheduler.task_cleanup_jobs()
+        self.assertEqual(result["jobs_removed"], 1)
+        self.assertFalse(done_report.exists())
+        work = session.get(models.FilteredScanTargets, work_id)
+        self.assertIsNone(work.job_id)
+        self.assertEqual(work.status, "completed")
+        self.assertEqual(work.completed_ports, "443")
+        self.assertIsNotNone(session.get(models.Jobs, live_id))
+        self.assertTrue(live_report.exists())
 
     def test_queue_generation_watchdog_reports_exact_stage_after_five_minutes(self):
         """Maintenance can diagnose create_jobs while its next ticks are skipped."""

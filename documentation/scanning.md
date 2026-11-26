@@ -174,6 +174,11 @@ Scan orchestration and search-backend maintenance use independent scheduled
 jobs. A slow export or report tick therefore cannot consume the
 `scan_orchestration` job's single running-instance slot.
 
+Archived job cleanup has its own ten-minute schedule. Each run processes up
+to four batches of 128 expired jobs. It commits each batch before removing its
+JSON files. If another SQLite writer is active, cleanup leaves that batch for
+its next scheduled run.
+
 If the task remains `enqueued` or `processing`, the scheduler does not write
 Kvrocks and does not mark jobs exported. On later ticks it checks the same task
 UID once without resubmitting the batch. Only `succeeded` permits the matching

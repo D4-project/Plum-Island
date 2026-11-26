@@ -127,6 +127,9 @@ QUEUE_GENERATION_ZERO_LOG_INTERVAL_SECONDS = 300
 DEFAULT_ORPHAN_SWEEP_INTERVAL_SECONDS = 900
 DEFAULT_ORPHAN_SWEEP_BATCH_SIZE = 2000
 DEFAULT_PRIORITY_RETAG_BATCH_SIZE = 1000
+JOB_CLEANUP_INTERVAL_MINUTES = 10
+JOB_CLEANUP_BATCH_SIZE = 128
+MAX_JOB_CLEANUP_BATCHES = 4
 STALLED_JOB_TIMEOUT = timedelta(hours=2)
 DEFAULT_MEILI_HTTP_TIMEOUT_SECONDS = 10
 DEFAULT_KVROCKS_SOCKET_TIMEOUT_SECONDS = 10
@@ -605,7 +608,6 @@ def task_scheduler_maintenance():
         step_durations = {
             "export_to_dbs": _run_scheduler_step("export_to_dbs", task_export_to_dbs),
             "reports": _run_scheduler_step("reports", task_run_due_reports),
-            "cleanup_jobs": _run_scheduler_step("cleanup_jobs", task_cleanup_jobs),
             "cleanup_search_sessions": _run_scheduler_step(
                 "cleanup_search_sessions", task_cleanup_search_sessions
             ),
@@ -616,12 +618,11 @@ def task_scheduler_maintenance():
         total_elapsed = time.perf_counter() - maintenance_started_at
         logger.info(
             "Scheduler MAINTENANCE: tick complete in %.2fs "
-            "(export_to_dbs=%.2fs, reports=%.2fs, cleanup_jobs=%.2fs, "
+            "(export_to_dbs=%.2fs, reports=%.2fs, "
             "cleanup_search_sessions=%.2fs, cleanup_export_jobs=%.2fs)",
             total_elapsed,
             step_durations["export_to_dbs"]["elapsed"],
             step_durations["reports"]["elapsed"],
-            step_durations["cleanup_jobs"]["elapsed"],
             step_durations["cleanup_search_sessions"]["elapsed"],
             step_durations["cleanup_export_jobs"]["elapsed"],
         )
@@ -3130,70 +3131,117 @@ def task_run_due_reports():
     }
 
 
-def task_cleanup_jobs():
-    """
-    This procedure will delete both Jobs from DB and Files
-    """
-
-    job_scavenge = db.app.config.get("JOB_SCAVENGE")
-    json_folder = os.path.expanduser(db.app.config.get("JSON_FOLDER"))
-    deleted_jobs = 0
-    deleted_job_files = 0
-    missing_job_files = 0
-    file_delete_errors = 0
-
-    job_snapshots = list(
-        db.session.query(Jobs.id, Jobs.uid).filter(
-            Jobs.active == False,
-            Jobs.exported == True,
-            Jobs.finished == True,
-            Jobs.job_end <= utcnow_naive() - timedelta(days=job_scavenge),
-        )
+def _expired_job_snapshots(cutoff):
+    """Select archived jobs whose results and cycle state are settled."""
+    return db.session.query(Jobs.id, Jobs.uid).filter(
+        Jobs.active.is_(False),
+        Jobs.exported.is_(True),
+        Jobs.finished.is_(True),
+        Jobs.job_end <= cutoff,
+        ~Jobs.scanprofile_cycle.has(
+            (ScanProfileCycles.filter_revision.isnot(None))
+            & (ScanProfileCycles.status == "running")
+        ),
     )
 
-    for job_data in job_snapshots:
-        filepath = os.path.join(
-            json_folder,
-            job_data.uid[0],
-            f"{job_data.uid}.json",
-        )
-        try:
-            os.remove(filepath)
-            deleted_job_files += 1
-        except FileNotFoundError:
-            missing_job_files += 1
-        except OSError as err:
-            file_delete_errors += 1
-            logger.error("Unable to delete job file %s: %s", filepath, err)
 
-    stale_job_ids = [job_data.id for job_data in job_snapshots]
-    if stale_job_ids:
+def _delete_expired_job_batch(job_snapshots, cutoff):
+    """Delete one batch without waiting behind another SQLite writer."""
+    connection = db.session.connection()
+    busy_timeout = None
+    if connection.dialect.name == "sqlite":
+        busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar_one()
+        connection.exec_driver_sql("PRAGMA busy_timeout=0")
+    try:
+        if busy_timeout is not None:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        expected = {row.id: row.uid for row in job_snapshots}
+        # The initial selection ran outside the write transaction. Recheck
+        # eligibility and identity before deleting dependants or the job.
+        expired = [
+            row
+            for row in _expired_job_snapshots(cutoff)
+            .filter(Jobs.id.in_(expected))
+            .with_for_update()
+            .all()
+            if expected[row.id] == row.uid
+        ]
+        if not expired:
+            return []
+        job_ids = [row.id for row in expired]
+        db.session.query(FilteredScanTargets).filter(
+            FilteredScanTargets.job_id.in_(job_ids)
+        ).update({FilteredScanTargets.job_id: None}, synchronize_session=False)
         db.session.execute(
             assoc_jobs_targets.delete().where(
-                assoc_jobs_targets.c.job_id.in_(stale_job_ids)
+                assoc_jobs_targets.c.job_id.in_(job_ids)
             )
         )
-        deleted_jobs = (
-            db.session.query(Jobs)
-            .filter(Jobs.id.in_(stale_job_ids))
-            .delete(synchronize_session=False)
+        db.session.query(Jobs).filter(Jobs.id.in_(job_ids)).delete(
+            synchronize_session=False
         )
+        return expired
+    finally:
+        if busy_timeout is not None:
+            connection.exec_driver_sql(f"PRAGMA busy_timeout={int(busy_timeout)}")
 
-    if deleted_jobs:
-        db.session.commit()
+
+def task_cleanup_jobs():
+    """Expire archived jobs in short transactions and defer on SQLite contention."""
+    cutoff = utcnow_naive() - timedelta(days=db.app.config["JOB_SCAVENGE"])
+    json_folder = os.path.expanduser(db.app.config["JSON_FOLDER"])
+    summary = {
+        "jobs_removed": 0,
+        "files_deleted": 0,
+        "files_missing": 0,
+        "file_delete_errors": 0,
+        "deferred": False,
+    }
+    db.session.remove()
+    try:
+        for _ in range(MAX_JOB_CLEANUP_BATCHES):
+            job_snapshots = (
+                _expired_job_snapshots(cutoff)
+                .order_by(Jobs.id)
+                .limit(JOB_CLEANUP_BATCH_SIZE)
+                .all()
+            )
+            # Close the read transaction before trying to acquire the writer.
+            db.session.rollback()
+            if not job_snapshots:
+                break
+
+            expired = _delete_expired_job_batch(job_snapshots, cutoff)
+            db.session.commit()
+            summary["jobs_removed"] += len(expired)
+            for row in expired:
+                filepath = os.path.join(json_folder, row.uid[0], f"{row.uid}.json")
+                try:
+                    os.remove(filepath)
+                    summary["files_deleted"] += 1
+                except FileNotFoundError:
+                    summary["files_missing"] += 1
+                except OSError as error:
+                    summary["file_delete_errors"] += 1
+                    logger.error("Unable to delete job file %s: %s", filepath, error)
+    except OperationalError as error:
+        if not _is_sqlite_lock(error):
+            raise
+        db.session.rollback()
+        summary["deferred"] = True
+        logger.warning("Cleanup Job TASK: SQLite is locked; deferring the batch")
+    finally:
+        db.session.remove()
+
+    if summary["jobs_removed"]:
         logger.info(
             "Cleanup Job TASK: %s jobs removed; %s files deleted; %s files already absent; %s file delete errors",
-            deleted_jobs,
-            deleted_job_files,
-            missing_job_files,
-            file_delete_errors,
+            summary["jobs_removed"],
+            summary["files_deleted"],
+            summary["files_missing"],
+            summary["file_delete_errors"],
         )
-    return {
-        "jobs_removed": deleted_jobs,
-        "files_deleted": deleted_job_files,
-        "files_missing": missing_job_files,
-        "file_delete_errors": file_delete_errors,
-    }
+    return summary
 
 
 def task_cleanup_export_jobs():
@@ -3344,6 +3392,13 @@ scheduler.add_job(
     id="scheduler_maintenance",
     max_instances=1,
     minutes=db.app.config.get("SCHEDULER_DELAY"),
+)
+scheduler.add_job(
+    func=task_cleanup_jobs,
+    trigger="interval",
+    id="cleanup_jobs",
+    max_instances=1,
+    minutes=JOB_CLEANUP_INTERVAL_MINUTES,
 )
 scheduler.start()
 
