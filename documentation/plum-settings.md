@@ -5,7 +5,7 @@ and background work. The configured Flask-AppBuilder administrator role is
 required for both the menu and direct requests; assigning the view's permissions
 to another role does not grant access.
 
-The page displays 55 Plum settings from `webapp/config.py.template`.
+The page displays 56 Plum settings from `webapp/config.py.template`.
 Authentication, themes, Flask/FAB options and SQLAlchemy configuration remain in
 `config.py`. Runtime clients and scheduler state are not editable.
 
