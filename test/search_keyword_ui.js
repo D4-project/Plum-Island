@@ -54,6 +54,8 @@ assert.match(
     source,
     /<span class="search-keyword" data-search-keyword="http_title" role="button" tabindex="0">http_title<\/span>/
 );
+assert.match(source, /data-search-keyword="nodata" role="button" tabindex="0">nodata<\/span>/);
+assert.match(source, /<code>nodata:443<\/code>/);
 assert.doesNotMatch(source, /<a[^>]*data-search-keyword/);
 
 const element = (dataset = {}) => ({
