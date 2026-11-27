@@ -118,6 +118,7 @@ class GenerationClient:
         "sismember",
         "sscan",
         "zrangebyscore",
+        "zrevrangebyscore",
         "zrange",
         "zcard",
         "zscore",
