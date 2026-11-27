@@ -14,7 +14,13 @@ from flask_appbuilder.models.sqla.interface import SQLAInterface
 from sqlalchemy import text
 
 from app import views
-from app.models import FilteredScanTargets, Jobs, ScanProfileCycles, ScanProfiles, Targets
+from app.models import (
+    FilteredScanTargets,
+    Jobs,
+    ScanProfileCycles,
+    ScanProfiles,
+    Targets,
+)
 from app.utils import filtered_scans, scan_cycles
 from app.utils.tagrules import compile_tag_rule_definition, validate_search_query
 from test.test_scanprofile_api import ProfileApiFixture
@@ -60,6 +66,12 @@ class FilteredScanPreparationTest(unittest.TestCase):
         self.cycle_id = cycle.id
 
     @staticmethod
+    def observation_batches(uids):
+        """Represent one paged index candidate at a time for the fallback tests."""
+        for uid in uids:
+            yield None, [(uid, "8.8.8.8", {})]
+
+    @staticmethod
     def document(uid, port):
         """Return one port-scoped historical report."""
         return {
@@ -93,15 +105,17 @@ class FilteredScanPreparationTest(unittest.TestCase):
     def test_nodata_selects_only_open_tcp_ports_without_details(self):
         """Use open-only observations as port evidence in filtered profiles."""
         document = self.document("nodata", 443)
-        document["body"]["ports"].extend([
-            {
-                "portid": "30",
-                "protocol": "tcp",
-                "state": {"state": "open", "reason_ttl": "0"},
-            },
-            {"portid": "31", "protocol": "tcp", "state": {"state": "closed"}},
-            {"portid": "53", "protocol": "udp", "state": {"state": "open"}},
-        ])
+        document["body"]["ports"].extend(
+            [
+                {
+                    "portid": "30",
+                    "protocol": "tcp",
+                    "state": {"state": "open", "reason_ttl": "0"},
+                },
+                {"portid": "31", "protocol": "tcp", "state": {"state": "closed"}},
+                {"portid": "53", "protocol": "udp", "state": {"state": "open"}},
+            ]
+        )
         for query, expected in (
             ("nodata", {30}),
             ("nodata:30", {30}),
@@ -158,9 +172,13 @@ class FilteredScanPreparationTest(unittest.TestCase):
         ]
         with patch.object(
             filtered_scans,
-            "matching_observations",
-            side_effect=lambda *_args, **_kwargs: iter(["u80", "u443"]),
-        ), patch.object(filtered_scans, "KVrocksIndexer"):
+            "observation_batches",
+            side_effect=lambda *_args, **_kwargs: self.observation_batches(
+                ["u80", "u443"]
+            ),
+        ), patch.object(filtered_scans, "KVrocksIndexer"), patch.object(
+            filtered_scans, "proven_indexed_ports", return_value={}
+        ):
             self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 2)
             cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
             cycle.preparation_status = "pending"
@@ -186,7 +204,7 @@ class FilteredScanPreparationTest(unittest.TestCase):
         def next_uid(*_args, **_kwargs):
             for uid in ports:
                 self.assertFalse(session.in_transaction())
-                yield uid
+                yield None, [(uid, "8.8.8.8", {})]
 
         def read_report(uid):
             self.assertFalse(session.in_transaction())
@@ -195,8 +213,9 @@ class FilteredScanPreparationTest(unittest.TestCase):
         meili = Mock()
         meili.get_document.side_effect = read_report
         with (
-            patch.object(filtered_scans, "matching_observations", next_uid),
+            patch.object(filtered_scans, "observation_batches", next_uid),
             patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "proven_indexed_ports", return_value={}),
             patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 2),
         ):
             self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 3)
@@ -218,9 +237,12 @@ class FilteredScanPreparationTest(unittest.TestCase):
         meili.get_document.side_effect = read_report
         with (
             patch.object(
-                filtered_scans, "matching_observations", return_value=iter(ports)
+                filtered_scans,
+                "observation_batches",
+                return_value=self.observation_batches(ports),
             ),
             patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "proven_indexed_ports", return_value={}),
             patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 2),
         ):
             self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 2)
@@ -253,10 +275,14 @@ class FilteredScanPreparationTest(unittest.TestCase):
         with (
             patch.object(
                 filtered_scans,
-                "matching_observations",
-                side_effect=[iter(["u80", "timeout"]), iter(["u443"])],
+                "observation_batches",
+                side_effect=[
+                    self.observation_batches(["u80", "timeout"]),
+                    self.observation_batches(["u443"]),
+                ],
             ),
             patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "proven_indexed_ports", return_value={}),
             patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 1),
         ):
             with self.assertRaises(TimeoutError):
@@ -439,7 +465,9 @@ class FilteredJobDeletionTest(ProfileApiFixture):
                 filter_revision=1,
                 apply_to_all=False,
             )
-            old, old_job, old_work = self.add_cycle(profile, target, earlier, "finished")
+            old, old_job, old_work = self.add_cycle(
+                profile, target, earlier, "finished"
+            )
             recent, recent_job, recent_work = self.add_cycle(
                 profile, target, later, status
             )

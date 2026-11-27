@@ -18,6 +18,7 @@ from app.utils.index_reconciliation import (
 )
 from app.utils.index_source_recovery import MISSING_SOURCES, requeue_orphan_exclusion
 from app.utils.index_retry import retry_delay, transient_error
+from app.utils.scan_port_backfill import BACKFILL_DONE
 from app.utils.tag_runtime import queue_committed_snapshot
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,8 @@ class IndexSupervisor:
                 "Index supervisor backend unavailable (%s); retrying in %.0fs",
                 type(error).__name__,
                 delay,
-                exc_info=self.retry_attempts == 1 and logger.isEnabledFor(logging.DEBUG),
+                exc_info=self.retry_attempts == 1
+                and logger.isEnabledFor(logging.DEBUG),
             )
         else:
             if self.retry_attempts:
@@ -92,16 +94,18 @@ class IndexSupervisor:
         force_full = bool(self.raw.get(CONTROL + "force_full"))
         pending = snapshot.get("revision") != published.get("revision")
         pending = pending or force_full
+        backfill_pending = bool(published) and self.raw.get(BACKFILL_DONE) != "1"
         if (
             job.get("phase") == "blocked"
             and snapshot.get("revision") == processing_revision(job)
             and not force_full
         ):
             job = requeue_orphan_exclusion(self.raw, job)
-            if job.get("phase") == "blocked":
+            if job.get("phase") == "blocked" and not backfill_pending:
                 return
         if (
             not pending
+            and not backfill_pending
             and job.get("phase", "done") == "done"
             and not has_rule_drift(self.raw)
             and not self.raw.zcount(MISSING_SOURCES, "-inf", time.time())
@@ -109,6 +113,7 @@ class IndexSupervisor:
             return
         if (
             not force_full
+            and not backfill_pending
             and max(
                 float(job.get("retry_at") or 0), float(failure.get("retry_at") or 0)
             )

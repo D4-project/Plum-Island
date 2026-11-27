@@ -39,6 +39,8 @@ from app.utils.index_source_recovery import (
     retry_missing_sources,
 )
 
+from app.utils.scan_port_backfill import BACKFILL_DONE, backfill_scan_ports
+
 logger = logging.getLogger(__name__)
 
 
@@ -219,6 +221,14 @@ class PacedReconciliationWorker(ReconciliationWorker):
         attempts = 0
         while not self.stopping:
             try:
+                if self.raw.get(BACKFILL_DONE) != "1":
+                    with file_lock(state_directory() / "worker.lock", blocking=False):
+                        self.load.uses_meilisearch = True
+                        backfill_scan_ports(
+                            self.raw, self.meili, self.load.wait, self._stopping
+                        )
+                if self.stopping:
+                    return
                 super().run()
                 if not self.stopping and self.raw.zcount(
                     MISSING_SOURCES, "-inf", time.time()
@@ -264,6 +274,12 @@ class PacedReconciliationWorker(ReconciliationWorker):
                     except redis.RedisError:
                         pass
                 return
+
+    def _stopping(self):
+        parent_pid = os.environ.get("PLUM_INDEX_PARENT_PID")
+        if parent_pid and os.getppid() != int(parent_pid):
+            self.stopping = True
+        return self.stopping
 
     def _record_backend_retry(self, delay):
         """Status is best effort; never overwrite an acknowledged publication."""

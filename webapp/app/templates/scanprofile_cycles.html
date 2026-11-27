@@ -27,7 +27,11 @@
             <td>{{ row.finished_at or '-' }}</td>
             <td>{{ row.duration }}</td>
             <td>{{ row.target_value if row.target_value is not none else '-' }}</td>
-            <td>{{ row.blockers or '-' }}</td>
+            <td>{{ row.blockers or '-' }}
+              {% if row.evaluating %}
+              <div data-target-evaluation="{{ url_for('ScanprofilesView.target_evaluation', pk=pk) }}" aria-live="polite"></div>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -38,3 +42,5 @@
     {% endif %}
   </div>
 </div>
+
+<script src="{{ url_for('static', filename='js/scan_profile_evaluation.js') }}" nonce="{{ baselib.get_nonce() }}" defer></script>

@@ -87,13 +87,19 @@ class RulePlanTest(unittest.TestCase):
                     patch(f"{module}.write_barrier", return_value=nullcontext()),
                     patch(f"{module}.save_document") as save,
                 ):
-                    worker.process_uid("one")
+                    with patch(
+                        "app.utils.index_reconciliation.read_scan_ports",
+                        return_value={},
+                    ):
+                        worker.process_uid("one")
                 if should_read:
                     meili.get_document.assert_called_once_with("one")
                 else:
                     meili.get_document.assert_not_called()
                 self.assertFalse(save.call_args.kwargs["full"])
-                self.assertEqual(save.call_args.args[1]["tag"], ["site:betzdorf-wasser"])
+                self.assertEqual(
+                    save.call_args.args[1]["tag"], ["site:betzdorf-wasser"]
+                )
 
     def test_removed_producer_and_negative_dependency(self):
         """Removed producer and negative dependency."""
@@ -188,10 +194,14 @@ class SupervisorTest(unittest.TestCase):
             "failure": {},
             "published": {},
         }
-        with patch("app.utils.index_supervisor.queue_snapshot"), patch(
-            "app.utils.index_supervisor.read_json",
-            side_effect=lambda _raw, key, _default: state[key],
-        ), patch("app.utils.index_supervisor.subprocess.Popen") as process:
+        with (
+            patch("app.utils.index_supervisor.queue_snapshot"),
+            patch(
+                "app.utils.index_supervisor.read_json",
+                side_effect=lambda _raw, key, _default: state[key],
+            ),
+            patch("app.utils.index_supervisor.subprocess.Popen") as process,
+        ):
             supervisor.tick({"revision": "current"})
         process.assert_not_called()
 
@@ -200,7 +210,9 @@ class SupervisorTest(unittest.TestCase):
         for forced in (False, True):
             with self.subTest(forced=forced):
                 raw = Mock()
-                raw.get.return_value = "1" if forced else None
+                raw.get.side_effect = lambda key: (
+                    "1" if forced or key.endswith(":done") else None
+                )
                 supervisor = IndexSupervisor(raw, {})
                 deadline = time.time() + 3600
                 state = {
@@ -212,14 +224,20 @@ class SupervisorTest(unittest.TestCase):
                     "failure": {"retry_at": deadline},
                     "published": {"revision": "old"},
                 }
-                with patch("app.utils.index_supervisor.queue_snapshot"), patch(
-                    "app.utils.index_supervisor.read_json",
-                    side_effect=lambda _raw, key, _default, _state=state: _state[key],
-                ), patch(
-                    "app.utils.index_supervisor.file_lock", return_value=nullcontext()
-                ), patch(
-                    "app.utils.index_supervisor.subprocess.Popen"
-                ) as process:
+                with (
+                    patch("app.utils.index_supervisor.queue_snapshot"),
+                    patch(
+                        "app.utils.index_supervisor.read_json",
+                        side_effect=lambda _raw, key, _default, _state=state: _state[
+                            key
+                        ],
+                    ),
+                    patch(
+                        "app.utils.index_supervisor.file_lock",
+                        return_value=nullcontext(),
+                    ),
+                    patch("app.utils.index_supervisor.subprocess.Popen") as process,
+                ):
                     supervisor.tick({"revision": "current"})
                 self.assertEqual(process.call_count, int(forced))
 
@@ -227,15 +245,15 @@ class SupervisorTest(unittest.TestCase):
         """Launching the child cannot recursively import another scheduler."""
         supervisor = IndexSupervisor(Mock(), {})
         state = {"job": {}, "failure": {}, "published": {"revision": "old"}}
-        with patch("app.utils.index_supervisor.queue_snapshot"), patch(
-            "app.utils.index_supervisor.read_json",
-            side_effect=lambda _raw, key, _default: state[key],
-        ), patch(
-            "app.utils.index_supervisor.file_lock", return_value=nullcontext()
-        ), patch(
-            "app.utils.index_supervisor.subprocess.Popen"
-        ) as process, patch.dict(
-            os.environ, {"WERKZEUG_RUN_MAIN": "true"}
+        with (
+            patch("app.utils.index_supervisor.queue_snapshot"),
+            patch(
+                "app.utils.index_supervisor.read_json",
+                side_effect=lambda _raw, key, _default: state[key],
+            ),
+            patch("app.utils.index_supervisor.file_lock", return_value=nullcontext()),
+            patch("app.utils.index_supervisor.subprocess.Popen") as process,
+            patch.dict(os.environ, {"WERKZEUG_RUN_MAIN": "true"}),
         ):
             process.return_value.poll.return_value = None
             supervisor.tick({"revision": "new"})

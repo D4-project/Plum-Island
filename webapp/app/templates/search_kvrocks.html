@@ -11,6 +11,7 @@
 
 <script src="{{ url_for('static', filename='js/ip_tag_enrichment.js') }}" nonce="{{ baselib.get_nonce() }}"></script>
 {% include 'search_query_helpers.html' %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/search_matching_ports.css') }}">
 <script>
 let lastSuccessfulSearch = null;
 let exportStatusPoller = null;
@@ -206,8 +207,13 @@ function updateIpTimestamps(ip, timestampData) {
     target.replaceWith(replacement);
 }
 
-function queueTagsForSearchChunk(results, timeRange) {
-    ipTagEnricher.queue(results, timeRange);
+function renderMatchingPorts(ip, ports) {
+    const target = document.querySelector(`[data-search-ip-matching-ports="${CSS.escape(ip)}"]`);
+    if (!target) return;
+    target.textContent = ports.slice(0, 3).map(port => `TCP/${port}`).join(", ");
+    if (ports.length > 3) target.textContent += ` +${ports.length - 3}`;
+    target.title = ports.map(port => `TCP/${port}`).join(", ");
+    target.hidden = !ports.length;
 }
 
 function scheduleIpExpansion() {
@@ -309,6 +315,7 @@ async function readJsonResponse(res) {
 ipTagEnricher = window.createIpTagEnricher({
     readJsonResponse,
     renderTags: renderIpTags,
+    renderMatchingPorts,
     renderRequestedHostnames: renderIpRequestedHostnames,
     renderTimestamps: updateIpTimestamps
 });
@@ -1119,7 +1126,7 @@ function appendUidPanels(ip, uids, timestamps) {
     }
 }
 
-function renderSearchChunk(data, baseIndex, hitsDiv) {
+function renderSearchChunk(data, baseIndex, hitsDiv, query) {
     const returnedIps = Object.keys(data.results || {});
     const requestedHostnames = data.requested_hostnames || {};
 
@@ -1174,6 +1181,13 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         copyButton.appendChild(copyIcon);
         title.appendChild(copyButton);
 
+        const matchingPorts = document.createElement('span');
+        matchingPorts.className = 'search-ip-matching-ports';
+        matchingPorts.dataset.searchIpMatchingPorts = ipLabel;
+        matchingPorts.setAttribute('aria-label', 'Matching TCP ports');
+        matchingPorts.hidden = true;
+        title.appendChild(matchingPorts);
+
         const tagContainer = document.createElement('span');
         tagContainer.className = 'search-ip-tags';
         tagContainer.hidden = true;
@@ -1212,7 +1226,7 @@ function renderSearchChunk(data, baseIndex, hitsDiv) {
         appendUidPanels(ipLabel, sortedUids, ipTimestamps);
     });
 
-    queueTagsForSearchChunk(data.results || {}, data.time_range || {});
+    ipTagEnricher.queue(data.results || {}, data.time_range || {}, query);
     queueIpExpansionForSearchChunk(data.results || {}, data.time_range || {}, document.getElementById('query').value || '');
 
     return returnedIps;
@@ -1329,7 +1343,7 @@ async function runSearchPage(cursorTs, append) {
             }
 
             const renderStarted = performance.now();
-            const returnedIps = renderSearchChunk(data, renderedCount, hitsDiv);
+            const returnedIps = renderSearchChunk(data, renderedCount, hitsDiv, query);
             recordSearchDebug(data, requestMs, performance.now() - renderStarted, searchAbortController);
             if (returnedIps.length > 0) {
                 renderedCount += returnedIps.length;

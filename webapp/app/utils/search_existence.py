@@ -56,11 +56,12 @@ def _candidate_batches(client, keys, start, end, check_deadline):
         offset += sum(seen == score for _, seen in entries)
 
 
-def _terms(node):
+def plan_terms(node):
+    """Yield the indexed predicates used by this plan."""
     if node.kind == "term":
         yield node
     for child in node.children:
-        yield from _terms(child)
+        yield from plan_terms(child)
 
 
 def _matches(node, matches):
@@ -130,25 +131,24 @@ def _recent_candidates(client, uids, start, end):
             yield uid, address
 
 
-def _batch_matches(indexer, plan, terms, candidates):
-    """Yield matching UIDs from one page of recent observations."""
+def evaluate_observation_batch(indexer, terms, candidates):
+    """Evaluate each predicate once per observation in one bounded pipeline."""
     pipe = indexer.r.pipeline(transaction=False)
     checks = [
         [_evaluate_term(indexer, pipe, term, uid, ip) for term in terms]
         for uid, ip in candidates
     ]
     responses = iter(pipe.execute())
-    for (uid, _ip), per_observation in zip(candidates, checks):
+    for (uid, ip), per_observation in zip(candidates, checks):
         matches = {
             term: check(next(responses, None) if reads_index else None)
             for term, (reads_index, check) in zip(terms, per_observation)
         }
-        if _matches(plan, matches):
-            yield uid
+        yield uid, ip, matches
 
 
-def matching_observations(indexer, query, start, end, timeout=10):
-    """Stream matching UIDs without materializing the result set."""
+def observation_batches(indexer, query, start, end, timeout=10, *, progress=None):
+    """Yield matched observations with predicate evidence for each index page."""
     deadline = time.monotonic() + timeout if timeout is not None else None
 
     def check_deadline():
@@ -156,16 +156,31 @@ def matching_observations(indexer, query, start, end, timeout=10):
             raise TimeoutError("Search filter verification timed out.")
 
     client = indexer.r
-    plan = build_plan(query, scoped_membership=True)
-    terms = tuple(dict.fromkeys(_terms(plan)))
+    plan = build_plan(query, scoped_membership=True, factor=False)
+    terms = tuple(dict.fromkeys(plan_terms(plan)))
     for uids in _candidate_batches(
         client, _seed_keys(plan), start, end, check_deadline
     ):
         check_deadline()
         candidates = list(_recent_candidates(client, uids, start, end))
+        if progress is not None:
+            progress(len(uids))
         if candidates:
-            yield from _batch_matches(indexer, plan, terms, candidates)
+            matches = [
+                item
+                for item in evaluate_observation_batch(indexer, terms, candidates)
+                if _matches(plan, item[2])
+            ]
+            if matches:
+                yield plan, matches
         check_deadline()
+
+
+def matching_observations(indexer, query, start, end, timeout=10):
+    """Stream matching UIDs without materializing the result set."""
+    for _plan, matches in observation_batches(indexer, query, start, end, timeout):
+        for uid, _ip, _predicates in matches:
+            yield uid
 
 
 def has_observation(indexer, query, start, end, timeout=10):

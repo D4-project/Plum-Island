@@ -148,7 +148,8 @@
                     body: JSON.stringify({
                         ips: batch,
                         from_ts: timeRange.fromTs,
-                        to_ts: timeRange.toTs
+                        to_ts: timeRange.toTs,
+                        query: timeRange.query
                     }),
                     signal: requestController.signal
                 })
@@ -169,6 +170,9 @@
                                 (data.ptr_hostnames_by_ip || {})[ip] || []
                             );
                         }
+                        if (settings.renderMatchingPorts) {
+                            settings.renderMatchingPorts(ip, data.matching_ports_by_ip?.[ip] || []);
+                        }
                         if (settings.renderTimestamps) {
                             settings.renderTimestamps(ip, (data.timestamps_by_ip || {})[ip]);
                         }
@@ -187,10 +191,11 @@
         }
 
         return {
-            queue(results, range) {
+            queue(results, range, query) {
                 timeRange = {
                     fromTs: range?.from_ts ?? null,
-                    toTs: range?.to_ts ?? null
+                    toTs: range?.to_ts ?? null,
+                    query
                 };
                 Object.keys(results || {}).forEach((ip) => {
                     if (!resolvedIps.has(ip)) {

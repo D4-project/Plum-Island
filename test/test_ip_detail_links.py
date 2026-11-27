@@ -2,11 +2,13 @@
 
 import ast
 import logging
+import json
 import shutil
 import subprocess
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from app.utils.scan_ports import read_scan_ports
 from test.test_kvrocks_search import make_indexer
 from types import SimpleNamespace
 
@@ -149,6 +151,9 @@ class IpDetailLinksTest(unittest.TestCase):
                 )
             ),
             "normalize_tags": normalize_tags,
+            "BATCH_SIZE": 64,
+            "read_scan_ports": read_scan_ports,
+            "url_for": lambda *_args, **_kwargs: "/observation",
             "port_web_scheme": port_web_scheme,
             "logger": logging.getLogger(__name__),
         }
@@ -159,6 +164,26 @@ class IpDetailLinksTest(unittest.TestCase):
         instance = namespace["IPDetailView"]()
         instance.render_template = lambda _name, **context: context
         return instance, indexer, documents, namespace, fetched
+
+    def test_indexed_observation_renders_without_source_fetch(self):
+        """Ports and matching tags render before an observation is opened."""
+        instance, indexer, _documents, _namespace, fetched = self._detail_fixture()
+        indexer.r.strings["scan_port:old"] = json.dumps(
+            {
+                "port": 443,
+                "protocol": "tcp",
+                "ttl": 52,
+                "service": "https",
+                "tags": ["proto:tls", "vendor:nginx"],
+                "open_tcp_port": 443,
+            }
+        )
+        context = instance.detail("8.8.8.8")
+        observation = context["port_cards"][0]["observations"][0]
+        self.assertEqual(observation["reason_ttl"], 52)
+        self.assertEqual(observation["tags"], ["proto:tls", "vendor:nginx"])
+        self.assertEqual(observation["details_url"], "/observation")
+        self.assertEqual(fetched, [])
 
     def test_detail_keeps_tag_and_tls_decisions_per_observation(self):
         """Only selected reports are loaded; per-observation tags remain intact."""

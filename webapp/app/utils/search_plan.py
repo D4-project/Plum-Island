@@ -51,7 +51,7 @@ def _group_plan(fields, scoped_membership):
     return _junction("all", positives + negative)
 
 
-def build_plan(query, scoped_membership=False):
+def build_plan(query, scoped_membership=False, *, factor=True):
     """Factor common conjunctions without ever expanding into a Cartesian product."""
     node = query_expression(query)
     if node.kind == "criteria":
@@ -61,9 +61,13 @@ def build_plan(query, scoped_membership=False):
         )
         return _group_plan(fields, scoped_membership)
     node = _junction(
-        node.kind, [build_plan(child, scoped_membership) for child in node.children]
+        node.kind,
+        [
+            build_plan(child, scoped_membership, factor=factor)
+            for child in node.children
+        ],
     )
-    if node.kind != "any" or len(node.children) < 2:
+    if not factor or node.kind != "any" or len(node.children) < 2:
         return node
     branches = [
         child.children if child.kind == "all" else (child,) for child in node.children

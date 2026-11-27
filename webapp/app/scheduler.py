@@ -3380,6 +3380,7 @@ scheduler.add_job(
     trigger="interval",
     id="index_reconciliation",
     max_instances=1,
+    next_run_time=utcnow_aware(),
     seconds=db.app.config.get("TAG_RECONCILIATION_POLL_SECONDS", 30),
 )
 scheduler.add_job(

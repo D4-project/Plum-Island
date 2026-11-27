@@ -11,6 +11,7 @@ from uuid import uuid4
 try:
     from .kvrocks import KVrocksIndexer
     from .search_query import iter_criteria
+    from .scan_ports import build_scan_port, queue_scan_port, read_scan_ports
     from .index_generations import (
         ACTIVE,
         CONTROL,
@@ -24,6 +25,7 @@ try:
 except ImportError:
     from kvrocks import KVrocksIndexer
     from search_query import iter_criteria
+    from scan_ports import build_scan_port, queue_scan_port, read_scan_ports
     from index_generations import (
         ACTIVE,
         CONTROL,
@@ -226,6 +228,8 @@ def save_reparse_delta(client, document, contributions, snapshot, before, rule_d
         pipe.set(f"contributions:{uid}", json.dumps(contributions, sort_keys=True))
     if tags:
         pipe.sadd(KVrocksIndexer.TAG_CATALOGUE_KEY, *sorted(tags))
+    if "scan_port" in document:
+        queue_scan_port(pipe, uid, document["scan_port"])
     queue_capture_coverage(client.raw, pipe, uid, snapshot, rule_drift)
     pipe.execute()
 
@@ -259,6 +263,8 @@ def save_document(
         pipe.sadd(f"rule_matches:{rule_id}", uid)
     if full or rule_drift is not None:
         queue_capture_coverage(client.raw, pipe, uid, snapshot, rule_drift)
+    if "scan_port" in document:
+        queue_scan_port(pipe, uid, document["scan_port"])
     pipe.set(f"contributions:{uid}", json.dumps(contributions, sort_keys=True))
     pipe.execute()
 
@@ -293,6 +299,9 @@ def ingest_sources(raw, sources, fallback_snapshot, *, live_snapshot=None):
             document = parsed_source(source, snapshot)
             tags, contributions = plan.evaluate(document, force=True, source=source)
             document["tag"] = tags
+            document["scan_port"] = build_scan_port(
+                source, document, plan, contributions=contributions
+            )
             with write_barrier():
                 if (raw.get(ACTIVE) or "") != generation:
                     continue
@@ -343,7 +352,7 @@ def ingest_indexer_sources(indexer, sources, *, live_snapshot=None):
     """Use the managed writer when enabled; leave legacy adapters unchanged."""
     if getattr(indexer, "accepts_source_documents", False) is not True:
         return False
-    desired = read_json(indexer.raw, "desired")
+    desired = read_json(indexer.raw, "desired") or live_snapshot
     if desired is None:
         return False
     ingest_sources(
@@ -380,6 +389,7 @@ def remove_document(client, uid, before):  # pylint: disable=too-many-locals
     pipe.srem("rule_drift", uid)
     pipe.zrem("first_seen_index", uid)
     pipe.zrem("last_seen_index", uid)
+    queue_scan_port(pipe, uid, None)
     pipe.delete(f"doc:{uid}", f"uid:{uid}", f"coverage:{uid}", f"contributions:{uid}")
     pipe.execute()
     for ip in ips:
@@ -828,6 +838,7 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
             else load_document(base, uid)
         )
         force = reparse or rule_drift
+        previous_port = None if reparse else read_scan_ports(base, [uid]).get(uid)
         needs_source = reparse or self.plan.needs_nse_source(previous, force)
         self.job["phase"] = "reparsing" if needs_source else "retagging"
         source = None
@@ -847,6 +858,10 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
             document, previous, force=force, source=source
         )
         document["tag"] = tags
+        if source is not None or previous_port is not None:
+            document["scan_port"] = build_scan_port(
+                source, document, self.plan, previous_port, contributions=contributions
+            )
         target = GenerationClient(self.raw, self.job["id"], writable=True)
         clear_drift = False if rule_drift else None
         with write_barrier(background=True):
@@ -987,6 +1002,9 @@ class ReconciliationWorker:  # pylint: disable=too-many-instance-attributes
                 document, force=True, source=entry["source"]
             )
             document["tag"] = tags
+            document["scan_port"] = build_scan_port(
+                entry["source"], document, plan, contributions=contributions
+            )
             target = GenerationClient(self.raw, self.job["id"], writable=True)
             with write_barrier(background=True):
                 save_document(

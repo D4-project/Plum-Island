@@ -20,6 +20,7 @@ from app.utils.index_reconciliation import (
 from app.utils.index_sources import ExcludedSource
 from app.utils.kvrocks import KVrocksIndexer
 from app.utils.result_parser import is_external_ip
+from app.utils.scan_ports import queue_scan_port, read_scan_ports
 
 logger = logging.getLogger(__name__)
 MISSING_SOURCES = CONTROL + "missing_sources"
@@ -57,6 +58,9 @@ def defer_missing_source(raw, job, uid):
             pipe = target.pipeline()
             if coverage:
                 pipe.set(f"coverage:{uid}", coverage)
+            summary = read_scan_ports(base, [uid]).get(uid)
+            if summary is not None:
+                queue_scan_port(pipe, uid, summary)
             if contributions:
                 pipe.set(
                     f"contributions:{uid}", json.dumps(contributions, sort_keys=True)

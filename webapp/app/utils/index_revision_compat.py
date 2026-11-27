@@ -8,6 +8,15 @@ Do not add a general bypass: frozen jobs and published coverage depend on this.
 # COPY now skips absent source keys, preserving the previously intended empty
 # field/tombstone semantics. Rules, parser output and stored formats are unchanged.
 STORAGE_COMPATIBLE_REVISIONS = {
+    # Port evidence adds independent keys without changing normalized fields
+    # or the inputs required to resume a frozen reconciliation job.
+    (
+        "bc67ba095b9656836597a6bba3076a0e1183a4833005ab6bdf44cddb6be5d4a2"
+        "828b286177f690a580fa30c8384d085f21d11c1034f037011fde04b511c261d1"
+    ): (
+        "a45819bf65c1334c10292103b5adf8fe9806c75e3f38ed02fa1c289211ad4946"
+        "502d749b9d26a483ffe9100ddc68fe31564608ccbbd992aacdb537802d3984aa"
+    ),
     # Selective incremental reparsing preserves the parsed fields, tag rules
     # and frozen generation format of the reviewed build.
     (

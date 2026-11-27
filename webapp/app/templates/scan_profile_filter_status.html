@@ -25,3 +25,8 @@
   <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
   Validating filter…
 </span>
+
+<div data-profile-filter-preview data-endpoint="{{ url_for('ScanprofilesView.filter_preview') }}" hidden>
+    <button type="button" class="btn btn-default btn-sm">Preview targets</button>
+    <span role="status"></span>
+</div>

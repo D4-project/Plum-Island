@@ -19,6 +19,7 @@ from app.utils.index_reconciliation import ReconciliationWorker, SnapshotInvalid
 from app.utils.index_retry import retry_delay, transient_error
 from app.utils.index_sources import ReconciliationHttpRequests, SourceDocuments
 from app.utils.index_supervisor import IndexSupervisor
+from app.utils.scan_port_backfill import BACKFILL_DONE
 from app.views import TagRulesView
 from meilisearch.errors import MeilisearchApiError, MeilisearchCommunicationError
 from requests import Response, Session
@@ -228,7 +229,9 @@ class ReconciliationStatusTest(unittest.TestCase):
 
     def test_read_timeout_returns_retryable_status(self):
         indexer = Mock()
-        indexer.raw.get.side_effect = redis.exceptions.TimeoutError("status read timed out")
+        indexer.raw.get.side_effect = redis.exceptions.TimeoutError(
+            "status read timed out"
+        )
         with app.test_request_context(), patch(
             "app.views.KVrocksIndexer", return_value=indexer
         ):
@@ -321,6 +324,7 @@ class WorkerRetryTest(unittest.TestCase):
         """Create isolated state for the regression checks."""
         self.raw = Mock()
         self.raw.zcount.return_value = 0
+        self.raw.get.return_value = "1"
         self.worker = PacedReconciliationWorker(self.raw, Mock(), {})
 
     def test_worker_reloads_durable_state_after_timeout(self):
@@ -357,7 +361,7 @@ class WorkerRetryTest(unittest.TestCase):
     def test_lost_publication_reply_never_overwrites_success(self):
         """Verify lost publication reply never overwrites success."""
         self.worker.job = {"id": "staging", "phase": "done"}
-        self.raw.get.return_value = "staging"
+        self.raw.get.side_effect = lambda key: "staging" if key == ACTIVE else "1"
         with patch.object(
             ReconciliationWorker, "run", side_effect=redis.exceptions.TimeoutError()
         ), patch.object(self.worker, "checkpoint") as checkpoint, patch.object(
@@ -443,9 +447,12 @@ class WorkerRetryTest(unittest.TestCase):
                 raise redis.exceptions.TimeoutError("write response lost")
             self.worker.stopping = True
 
-        self.raw.get.side_effect = redis.exceptions.TimeoutError(
-            "backend still unavailable"
-        )
+        def read_state(key):
+            if key == BACKFILL_DONE:
+                return "1"
+            raise redis.exceptions.TimeoutError("backend still unavailable")
+
+        self.raw.get.side_effect = read_state
         with patch(
             "app.utils.index_reconciliation.file_lock", return_value=nullcontext()
         ), patch.object(self.worker, "start", side_effect=start), patch.object(

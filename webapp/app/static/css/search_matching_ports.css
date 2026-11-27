@@ -1,0 +1,13 @@
+.search-ip-matching-ports {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 13rem;
+    padding: 1px 5px;
+    border: 1px solid var(--plum-border, #d9e2eb);
+    border-radius: 4px;
+    color: var(--plum-muted, #455e75);
+    font-size: 0.8em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

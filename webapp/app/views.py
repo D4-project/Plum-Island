@@ -104,8 +104,15 @@ from .utils.search_query import (
     parse_nse_body_term,
     tokenize_query,
 )
-from .utils.search_plan import CandidatePlanner
-from .utils.filtered_scans import first_scan_candidate
+from .utils.search_plan import CandidatePlanner, build_plan
+from .utils.search_existence import BATCH_SIZE, evaluate_observation_batch, plan_terms
+from .utils.filtered_scans import (
+    first_scan_candidate,
+    filtered_candidates,
+    filter_progress,
+)
+from .utils.scan_ports import DIRECT_PORT_FIELDS, proven_indexed_ports, read_scan_ports
+from .utils.scan_port_backfill import scan_port_backfill_status
 from .utils.search_timestamps import search_timestamps
 from .utils.resolved_export import write_resolved_csv
 from .utils.report_query import validate_report_query
@@ -627,9 +634,15 @@ def get_scanprofile_cycle_table(pk):
                 "duration": cycle.duration_html(),
                 "progress": cycle.progress_html(),
                 "target_value": (
-                    cycle.max_target_id if apply_to_all else cycle.completed_target_count
+                    cycle.max_target_id
+                    if apply_to_all
+                    else cycle.completed_target_count
                 ),
                 "blockers": cycle.blocker_summary(),
+                "evaluating": cycle.preparation_status
+                in {"pending", "extracting", "retry"}
+                and cycle.status == "running"
+                and cycle.filter_query,
             }
         )
 
@@ -2228,6 +2241,34 @@ class KVSearchView(BaseView):
             }
         )
 
+    @staticmethod
+    def _matching_ports_by_ip(indexer, criteria, ip_uids, eligible_uids):
+        """Label results using only port evidence from matching indexed observations."""
+        plan = build_plan(criteria, scoped_membership=True, factor=False)
+        terms = tuple(dict.fromkeys(plan_terms(plan)))
+        direct = DIRECT_PORT_FIELDS | {"port", "port_protocol"}
+        if not any(
+            term.fields[0][0].partition(".")[0] in direct | {"tag"} for term in terms
+        ):
+            return {}
+        result = {}
+        for ip, uids in ip_uids.items():
+            address = ipaddress.ip_address(ip)
+            candidates = [(uid, address) for uid in uids if uid in eligible_uids]
+            ports = set()
+            for offset in range(0, len(candidates), BATCH_SIZE):
+                batch = list(
+                    evaluate_observation_batch(
+                        indexer, terms, candidates[offset : offset + BATCH_SIZE]
+                    )
+                )
+                for numbers in proven_indexed_ports(
+                    indexer.r, plan, batch, direct
+                ).values():
+                    ports.update(numbers)
+            result[ip] = sorted(ports)
+        return result
+
     @expose("/tags", methods=["POST"])
     @has_access
     @prioritized_search
@@ -2382,14 +2423,28 @@ class KVSearchView(BaseView):
                     ptr_hostnames_by_ip[ip] = ptr_by_uid.get(uid, [])
             except Exception:  # Keep tags and requested hostnames available if Meili is unavailable.
                 logger.exception("Unable to enrich search results with PTR hostnames")
-        return jsonify(
-            {
-                "tags_by_ip": tags_by_ip,
-                "timestamps_by_ip": timestamps_by_ip,
-                "requested_hostnames_by_ip": requested_hostnames_by_ip,
-                "ptr_hostnames_by_ip": ptr_hostnames_by_ip,
-            }
-        )
+        response = {
+            "tags_by_ip": tags_by_ip,
+            "timestamps_by_ip": timestamps_by_ip,
+            "requested_hostnames_by_ip": requested_hostnames_by_ip,
+            "ptr_hostnames_by_ip": ptr_hostnames_by_ip,
+        }
+        query = payload.get("query")
+        if isinstance(query, str) and 0 < len(query) <= 2048:
+            criteria, valid, _error = self.parse_query(
+                query, allow_since_directive=True, allow_debug_directive=True
+            )
+            if valid:
+                labels = {
+                    uid
+                    for uid in eligible_uids
+                    if indexer.normalize_timestamp(documents[uid].get("last_seen"))
+                    <= time_range["to_ts"]
+                }
+                response["matching_ports_by_ip"] = self._matching_ports_by_ip(
+                    indexer, criteria, ip_uids, labels
+                )
+        return jsonify(response)
 
     @expose("/expand_ips", methods=["POST"])
     @has_access
@@ -3097,6 +3152,44 @@ class IPDetailView(BaseView):
         selected.sort(key=lambda uid: (-(timestamps[uid].get("last_seen") or -1), uid))
         return timestamps, choices, selected
 
+    @expose("/<string:ip>/observation/<string:uid>")
+    @has_access
+    @permission_name("detail")
+    @prioritized_search
+    def observation_details(self, ip, uid):
+        """Read one source only within the IP and requested-name scope."""
+        hostname = (request.args.get("hostname") or "").strip().lower()
+        if not is_valid_ip(ip) or not is_valid_uuid(uid) or len(hostname) > 253:
+            abort(404)
+        config = current_app.config
+        indexer = KVrocksIndexer(config["KVROCKS_HOST"], config["KVROCKS_PORT"])
+        pipe = indexer.r.pipeline(transaction=False)
+        pipe.get(f"uid:{uid}")
+        pipe.smembers(f"fqdn_requesteds:{uid}")
+        indexed_ip, names = pipe.execute()
+        if indexed_ip != ip or (hostname not in names if hostname else bool(names)):
+            abort(404)
+        document, _warning, warning = KVSearchView.load_meili_document(
+            client.index("plum"), uid
+        )
+        if warning:
+            return make_response("Unable to load observation details.", 404)
+        body = document.get("body") or {}
+        ports = body.get("ports") or []
+        if not ports:
+            abort(404)
+        ptr_records, resolved_hosts = self._extract_hostname_details(
+            body.get("hostnames") or []
+        )
+        return self.render_template(
+            "ip_observation_details.html",
+            observation={
+                "port": ports[0],
+                "ptr_records": ptr_records,
+                "resolved_hosts": resolved_hosts,
+            },
+        )
+
     @expose("/<string:ip>")
     @has_access
     @prioritized_search
@@ -3122,10 +3215,20 @@ class IPDetailView(BaseView):
         unmapped_documents = []
         warnings = []
         ip_tags = set()
+        summaries = {}
+        tags_by_uid = {}
+        for offset in range(0, len(sorted_uids), BATCH_SIZE):
+            batch = sorted_uids[offset : offset + BATCH_SIZE]
+            summaries.update(read_scan_ports(indexer.r, batch))
+            pipe = indexer.r.pipeline(transaction=False)
+            for uid in batch:
+                pipe.smembers(f"tags:{uid}")
+            tags_by_uid.update(zip(batch, pipe.execute()))
         for uid in sorted_uids:
+            summary = summaries.get(uid)
             uid_timestamps = ip_timestamps.get(uid, {})
             uid_tags = set()
-            for tag in indexer.r.smembers(f"tags:{uid}"):
+            for tag in tags_by_uid[uid]:
                 tag_values = normalize_tags([tag])
                 for tag_value in tag_values:
                     uid_tags.add(tag_value)
@@ -3135,9 +3238,30 @@ class IPDetailView(BaseView):
                 uid_timestamps.get("first_seen")
             )
             last_seen = self._safe_timestamp_to_display(uid_timestamps.get("last_seen"))
-            document, _warning, warning_message = KVSearchView.load_meili_document(
-                index, uid
-            )
+            if summary is None:
+                document, _warning, warning_message = KVSearchView.load_meili_document(
+                    index, uid
+                )
+            else:
+                uid_tags = sorted(normalize_tags(summary["tags"]), key=str.lower)
+                document = {
+                    "body": {
+                        "hostnames": (
+                            [{"type": "user", "name": selected_hostname}]
+                            if selected_hostname
+                            else []
+                        ),
+                        "ports": [
+                            {
+                                "protocol": summary["protocol"],
+                                "portid": str(summary["port"]),
+                                "state": {"reason_ttl": summary["ttl"]},
+                                "service": {"name": summary["service"]},
+                            }
+                        ],
+                    }
+                }
+                warning_message = None
             if warning_message:
                 warnings.append(warning_message)
                 logger.warning(warning_message)
@@ -3222,6 +3346,16 @@ class IPDetailView(BaseView):
                         "tags": uid_tags,
                         "port": port,
                         "web_scheme": port_web_scheme(port, uid_tags),
+                        "details_url": (
+                            url_for(
+                                "IPDetailView.observation_details",
+                                ip=ip,
+                                uid=uid,
+                                hostname=selected_hostname or None,
+                            )
+                            if summary is not None
+                            else None
+                        ),
                     }
                 )
         port_cards = []
@@ -4246,6 +4380,9 @@ class TagRulesView(ModelView):
         try:
             status = reconciliation_status(indexer.raw)
             status["pacing"] = pacing_status(indexer.raw)
+            backfill = scan_port_backfill_status(indexer.raw)
+            if backfill and status["phase"] != "retrying":
+                status.update(backfill, message="")
         except RedisError as error:
             if not transient_error(error):
                 raise
@@ -4782,7 +4919,7 @@ class SearchFilterUnavailable(RuntimeError):
 
 
 @pinned_read
-def validate_profile_search_query(query, require_candidate=True):
+def validate_profile_search_query(query, require_candidate=True, *, preview=False):
     """Validate a historical search draft and require at least one observation."""
     if query is None:
         return None
@@ -4817,6 +4954,27 @@ def validate_profile_search_query(query, require_candidate=True):
         config["KVROCKS_HOST"], config["KVROCKS_PORT"], socket_timeout=4
     )
     try:
+        if preview:
+            candidates = filtered_candidates(
+                indexer,
+                client.index("plum"),
+                criteria,
+                window["from_ts"],
+                window["to_ts"],
+                config,
+                timeout=3,
+            )
+            pairs = set()
+            try:
+                for _target, _kind, address, ports in candidates:
+                    for port in sorted(ports):
+                        pairs.add((address, port))
+                        if len(pairs) >= 5:
+                            return sorted(pairs)
+            except TimeoutError:
+                if not pairs:
+                    raise
+            return sorted(pairs)
         candidate = first_scan_candidate(
             indexer,
             client.index("plum"),
@@ -4976,6 +5134,60 @@ class ScanprofilesView(ModelView):
         "current_cycle_summary_html": "Scan Cycles",
         "cycle_summary_html": "Scan Cycles",
     }
+
+    @expose("/filter_preview")
+    @prioritized_search
+    def filter_preview(self):
+        """Read a small preview with the existing profile add/edit permissions."""
+        if not any(
+            appbuilder.sm.has_access(permission, self.class_permission_name)
+            for permission in ("can_add", "can_edit")
+        ):
+            abort(403)
+        try:
+            pairs = validate_profile_search_query(
+                request.args.get("q", ""), preview=True
+            )
+        except ValueError as error:
+            return jsonify(error=str(error)), 400
+        except SearchFilterUnavailable:
+            return (
+                jsonify(error="Search filter validation is unavailable. Try again."),
+                503,
+            )
+        return jsonify(candidates=pairs or [])
+
+    @expose("/target_evaluation/<int:pk>")
+    @has_access
+    @permission_name("show")
+    def target_evaluation(self, pk):
+        """Return progress for the current visible profile's filtered cycle."""
+        if self.datamodel.get(pk, self._base_filters) is None:
+            abort(404)
+        cycle = (
+            db.session.query(
+                ScanProfileCycles.id,
+                ScanProfileCycles.filter_revision,
+                ScanProfileCycles.preparation_status,
+            )
+            .filter_by(scanprofile_id=pk, status="running")
+            .order_by(ScanProfileCycles.id.desc())
+            .first()
+        )
+        db.session.rollback()
+        if not cycle or cycle.preparation_status not in {
+            "pending",
+            "extracting",
+            "retry",
+        }:
+            return jsonify(evaluating=False)
+        config = current_app.config
+        indexer = KVrocksIndexer(config["KVROCKS_HOST"], config["KVROCKS_PORT"])
+        try:
+            progress = filter_progress(indexer.raw, cycle.id, cycle.filter_revision)
+        except RedisError:
+            return jsonify(evaluating=True), 503
+        return jsonify(evaluating=True, **progress)
 
     def process_form(self, form, is_created):
         # The browser omits disabled controls. Leave their stored values intact.

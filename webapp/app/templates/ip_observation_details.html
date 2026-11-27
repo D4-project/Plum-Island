@@ -1,0 +1,75 @@
+<div data-observation-detail-fragment>
+                {% if observation.resolved_hosts or observation.ptr_records %}
+                <div class="ip-hosts-block">
+                    <div class="ip-hosts-title">Hostnames</div>
+                    <div class="ip-hosts-box">
+                    {% if observation.resolved_hosts %}
+                        {% for host in observation.resolved_hosts %}
+                        <div class="ip-host-line">{{ host }}</div>
+                        {% endfor %}
+                    {% endif %}
+                    {% if observation.ptr_records %}
+                        {% for host in observation.ptr_records %}
+                        <div class="ip-host-line">{{ host }} <span class="ip-ptr-icon" title="PTR"><i class="fa fa-backward" aria-hidden="true"></i></span></div>
+                        {% endfor %}
+                    {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                {% set scripts = observation.port | scanner_scripts %}
+                {% if scripts %}
+                    {% for script in scripts %}
+                    <div class="ip-script-block">
+                        <div class="ip-script-title">{{ script.id or "script" }}</div>
+                        {% if script.id == "ssl-cert" %}
+                        {% set cert_extensions = script.extensions or {} %}
+                        {% set cert_issuer = script.issuer or {} %}
+                        {% set cert_subject = script.subject or {} %}
+                        {% set cert_validity = script.validity or {} %}
+                        {% set cert_pubkey = script.pubkey or {} %}
+                        {% set cert_san = cert_extensions.get("X509v3 Subject Alternative Name") %}
+                        {% set cert_san_values = cert_san.split(",") if cert_san else [] %}
+                        {% endif %}
+                        {% if script.output and script.id == "ssl-cert" %}
+                        <div class="ip-cert-raw-box">{% if cert_subject %}<strong>Subject</strong>
+{% if cert_subject.commonName %}    CN: {{ cert_subject.commonName }}
+{% endif %}{% if cert_subject.organizationName %}    Org: {{ cert_subject.organizationName }}
+{% endif %}{% if cert_subject.organizationalUnitName %}    OU: {{ cert_subject.organizationalUnitName }}
+{% endif %}{% if cert_subject.stateOrProvinceName %}    State: {{ cert_subject.stateOrProvinceName }}
+{% endif %}{% if cert_subject.localityName %}    Locality: {{ cert_subject.localityName }}
+{% endif %}{% if cert_subject.countryName %}    Country: {{ cert_subject.countryName }}
+{% endif %}{% endif %}{% if cert_issuer %}<strong>Issuer</strong>
+{% if cert_issuer.commonName %}    CN: {{ cert_issuer.commonName }}
+{% endif %}{% if cert_issuer.organizationName %}    Org: {{ cert_issuer.organizationName }}
+{% endif %}{% if cert_issuer.organizationalUnitName %}    OU: {{ cert_issuer.organizationalUnitName }}
+{% endif %}{% if cert_issuer.stateOrProvinceName %}    State: {{ cert_issuer.stateOrProvinceName }}
+{% endif %}{% if cert_issuer.localityName %}    Locality: {{ cert_issuer.localityName }}
+{% endif %}{% if cert_issuer.countryName %}    Country: {{ cert_issuer.countryName }}
+{% endif %}{% endif %}{% if cert_san %}<strong>SAN</strong>
+{% for san_value in cert_san_values[:10] %}    {{ san_value|trim }}
+{% endfor %}{% if cert_san_values|length > 10 %}<details class="ip-cert-collapse ip-cert-san-more"><summary>{{ cert_san_values|length - 10 }} more SANs</summary><div class="ip-cert-san-list">{% for san_value in cert_san_values[10:] %}<div class="ip-cert-san-item">    {{ san_value|trim }}</div>{% endfor %}</div></details>{% endif %}{% endif %}{% for output_line in script.output.splitlines() %}{% if output_line.startswith("Signature Algorithm:") %}
+{% if cert_pubkey.type or cert_pubkey.bits or cert_pubkey.exponent %}<strong>Public Key:</strong> {{ cert_pubkey.type or "N/A" }}{% if cert_pubkey.bits %} / {{ cert_pubkey.bits }} bits{% endif %}{% if cert_pubkey.exponent %} / exponent {{ cert_pubkey.exponent }}{% endif %}
+{% endif %}<strong>Signature Algorithm:</strong> {{ output_line.split(":", 1)[1]|trim }}
+{% if script.md5 %}<strong>MD5:</strong> {{ script.md5|replace(":", "")|trim }}
+{% endif %}{% if script.sha1 %}<strong>SHA-1:</strong> {{ script.sha1|replace(":", "")|trim }}
+{% endif %}
+{% if cert_validity.notBefore %}<strong>Not valid before:</strong> {{ cert_validity.notBefore }}
+{% endif %}{% if cert_validity.notAfter %}<strong>Not valid after:</strong> {{ cert_validity.notAfter }}
+{% endif %}{% elif not output_line.startswith("Subject:") and not output_line.startswith("Subject Alternative Name:") and not output_line.startswith("Issuer:") and not output_line.startswith("Public Key type:") and not output_line.startswith("Public Key bits:") and not output_line.startswith("Not valid before:") and not output_line.startswith("Not valid after:") and not output_line.startswith("MD5:") and not output_line.startswith("SHA-1:") %}{{ output_line }}
+{% endif %}{% endfor %}{% if cert_extensions.get("X509v3 CRL Distribution Points") %}<strong>X509v3 CRL Distribution Points:</strong> {{ cert_extensions.get("X509v3 CRL Distribution Points") }}
+{% endif %}{% if cert_extensions.get("X509v3 Certificate Policies") %}<strong>X509v3 Certificate Policies:</strong> {{ cert_extensions.get("X509v3 Certificate Policies") }}
+{% endif %}{% if cert_extensions.get("X509v3 Extended Key Usage") %}<strong>X509v3 Extended Key Usage:</strong> {{ cert_extensions.get("X509v3 Extended Key Usage") }}
+{% endif %}{% if cert_extensions.get("X509v3 Key Usage") %}<strong>X509v3 Key Usage:</strong> {{ cert_extensions.get("X509v3 Key Usage") }}
+{% endif %}{% if script.pem %}
+<details class="ip-cert-collapse ip-cert-raw-details"><summary>PEM certificate</summary><pre>{{ script.pem }}</pre></details>{% endif %}</div>
+                        {% elif script.output %}
+                        <pre>{{ script.output }}</pre>
+                        {% else %}
+                        <div class="text-muted">No output.</div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                <div class="text-muted">No additional port details.</div>
+                {% endif %}
+</div>

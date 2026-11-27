@@ -24,8 +24,45 @@
     wrapper.appendChild(menu);
     if (typeof bindQueryTagHelper === "function") bindQueryTagHelper();
 
+    const preview = document.querySelector("[data-profile-filter-preview]");
+    if (preview) {
+      wrapper.after(preview);
+      const button = preview.querySelector("button");
+      const result = preview.querySelector("[role=status]");
+      let controller;
+
+      query.addEventListener("input", () => {
+        controller?.abort();
+        result.textContent = "";
+      });
+      button.addEventListener("click", async () => {
+        const draft = query.value.trim();
+        if (!draft) return;
+        controller = new AbortController();
+        const request = controller;
+        const url = new URL(preview.dataset.endpoint, location.href);
+        url.searchParams.set("q", draft);
+        button.disabled = true;
+        result.textContent = "Checking targets…";
+        try {
+          const response = await fetch(url, {cache: "no-store", signal: request.signal});
+          if (response.redirected) throw new Error();
+          const data = await response.json();
+          if (request.signal.aborted) return;
+          result.textContent = data.error || (data.candidates.length
+            ? data.candidates.map(([host, port]) => `${host.includes(":") ? `[${host}]` : host}:${port}`).join(", ")
+            : "This filter returned no scan candidates.");
+        } catch (_error) {
+          if (!request.signal.aborted) result.textContent = "Unable to check targets.";
+        } finally {
+          if (controller === request) button.disabled = false;
+        }
+      });
+    }
+
     function updateField() {
       query.disabled = applyToAll.checked;
+      if (preview) preview.hidden = query.disabled;
     }
 
     save.after(status);

@@ -363,3 +363,24 @@ and full-query latency/errors, export/ingestion lag, runtime, peak RAM/disk usag
 I/O, journal backlog and cutover duration. Establish acceptable latency and lag
 targets with the operator before claiming production availability. Passing small
 integration tests does not establish performance at that scale.
+
+## Port evidence for filtered scans
+
+On the first scheduler tick after upgrade, Plum queues the last 90 rolling days of
+port observations. The worker walks Kvrocks `last_seen_index` from newest to
+oldest, reads missing reports from Meilisearch in batches, and writes to the
+current tag generation. Search has priority over ingestion, then port
+backfill. A restart resumes from the last committed observation. The dashboard
+under **Tag Rules** displays the progress.
+
+Ingestion writes `scan_port:<uuid>` for each unambiguous single-port report.
+It records the observed transport, port, TTL, service, confirmed open TCP port,
+and tags justified by that port under the rule revision. Closed and UDP
+observations carry an explicit empty open TCP field. The worker stores only
+NSE rule provenance needed by later tag updates. Banner and certificate contents
+remain in the source report.
+
+Filtered scans reuse transport and nodata indexes and read port evidence in
+bounded batches. Older or ambiguous observations can still be verified from
+the source report. Search results show the TCP ports supported by the matching
+predicate. Opening an observation on `/ip` loads its banners and certificates.

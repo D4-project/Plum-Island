@@ -13,6 +13,7 @@
         planning: 'Identifying affected captures',
         scanning: 'Applying detection updates',
         reparsing: 'Updating indexed capture fields',
+        backfilling_scan_ports: 'Retagging ports from the last 90 days',
         retagging: 'Applying changed detection rules',
         catching_up: 'Catching up with incoming captures',
         paused: 'Detection update paused',
@@ -38,7 +39,7 @@
             if (!response.ok) throw new Error('Status unavailable');
             const data = await response.json();
             const complete = data.phase === 'up_to_date' || data.phase === 'done';
-            const scanning = ['scanning', 'reparsing', 'retagging'].includes(data.phase);
+            const scanning = ['scanning', 'reparsing', 'retagging', 'backfilling_scan_ports'].includes(data.phase);
             const measurable = (scanning || ['paused', 'retrying'].includes(data.phase))
                 && Number(data.total) > 0;
             const percent = complete ? 100 : measurable
@@ -47,6 +48,9 @@
             const notes = [];
             if (data.revision) notes.push('Revision ' + data.revision);
             if (measurable) notes.push(data.processed + '/' + data.total + ' captures');
+            if (data.phase === 'backfilling_scan_ports' && !measurable) {
+                notes.push(data.processed + ' captures checked');
+            }
             if (data.pending_changes) notes.push(data.pending_changes + ' additional rule changes pending');
             const pacing = data.pacing || {};
             if (Number(pacing.excluded_sources) > 0) {

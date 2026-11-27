@@ -2,10 +2,12 @@
 
 import ipaddress
 import logging
+import json
+import time
 from datetime import timedelta
 from itertools import islice
 
-from meilisearch.errors import MeilisearchError
+from meilisearch.errors import MeilisearchApiError, MeilisearchError
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -18,157 +20,85 @@ from app.models import (
     Targets,
 )
 from app.utils.domains import is_hostname_syntax
-from app.utils.index_generations import pinned_read
+from app.utils.index_generations import CONTROL, pinned_read
+from app.utils.index_source_recovery import document_not_found
 from app.utils.kvrocks import KVrocksIndexer
 from app.utils.result_parser import parse_json
-from app.utils.search_existence import matching_observations
-from app.utils.search_query import iter_criteria, query_expression
+from app.utils.scan_ports import (
+    DIRECT_PORT_FIELDS,
+    REQUESTED_HOST_FIELDS,
+    match_with_port_evidence,
+    port_tags,
+    proven_indexed_ports,
+    query_can_prove_port,
+)
+from app.utils.search_existence import observation_batches
 from app.utils.tagrules import (
     compile_tag_rule_records,
-    document_matches_criteria_groups,
+    nse_output_by_script,
 )
 from app.utils.timeutils import utcnow_naive
 
 logger = logging.getLogger("flask_appbuilder")
-PORT_EVIDENCE_FIELDS = {
-    "tag",
-    "banner",
-    "service",
-    "nodata",
-    "http_title",
-    "http_header",
-    "http_headval",
-    "http_server",
-    "http_cookiename",
-    "http_etag",
-    "x509_issuer",
-    "x509_subject",
-    "x509_issuer_cn",
-    "x509_subject_cn",
-    "x509_san",
-}
-DIRECT_PORT_FIELDS = PORT_EVIDENCE_FIELDS - {"tag"}
-REQUESTED_HOST_FIELDS = {"fqdn_requested", "domain_requested"}
 PREPARATION_BATCH_SIZE = 100
 
 
-def query_can_prove_port(criteria):
-    """Return whether a positive query term identifies an observed port."""
-    return any(
-        field.lstrip("!").partition(".")[0] in PORT_EVIDENCE_FIELDS
-        and field.lstrip("!").partition(".")[2] not in {"not", "nt"}
-        for group in iter_criteria(criteria)
-        for field in group
-        if not field.startswith("!")
+def _progress_key(cycle_id, revision):
+    return f"{CONTROL}filtered_progress:{cycle_id}:{revision}"
+
+
+def filter_progress(raw, cycle_id, revision):
+    """Load a small status record without touching the observation index."""
+    value = raw.get(_progress_key(cycle_id, revision))
+    return (
+        json.loads(value) if isinstance(value, str) else {"checked": 0, "retained": 0}
     )
 
 
-def _tag_term_matches(document, field, values):
-    negate = field.startswith("!")
-    _base, _, modifier = field.removeprefix("!").partition(".")
-    candidates = {
-        str(tag).strip().lower() for tag in document.get("tag", []) if str(tag).strip()
-    }
-    for raw_value in values:
-        value = str(raw_value).strip().lower()
-        if modifier in {"like", "lk"}:
-            matched = any(value in candidate for candidate in candidates)
-        elif modifier in {"begin", "bg"}:
-            matched = any(candidate.startswith(value) for candidate in candidates)
-        elif modifier in {"not", "nt"}:
-            matched = value not in candidates
-        else:
-            matched = value in candidates
-        if matched == negate:
-            return False
-    return True
+class FilterProgress:
+    """Publish counts outside SQLite transactions at most once per second."""
+
+    def __init__(self, raw, cycle_id, revision):
+        self.raw = raw
+        self.key = _progress_key(cycle_id, revision)
+        self.checked = 0
+        self.retained = set()
+        self.next_update = 0
+
+    def publish(self, force=False):
+        """Expire transient progress once a cycle is no longer visible."""
+        now = time.monotonic()
+        if force or now >= self.next_update:
+            self.next_update = now + 1
+            try:
+                self.raw.set(
+                    self.key,
+                    json.dumps(
+                        {"checked": self.checked, "retained": len(self.retained)}
+                    ),
+                    ex=86400,
+                )
+            except RedisError:
+                # Progress is optional and a failed write must not replay committed work.
+                pass
+
+    def observations(self, count):
+        """Count candidates examined by the index."""
+        self.checked += count
+        self.publish()
 
 
-def _port_query_matches(document, criteria):
-    """Match query syntax while allowing already proven per-port tags."""
-    node = query_expression(criteria)
-    if node.kind == "criteria":
-        for field, values in node.fields:
-            if field.removeprefix("!").partition(".")[0] == "tag":
-                if not _tag_term_matches(document, field, values):
-                    return False
-            elif not document_matches_criteria_groups(
-                document, [{field: list(values)}]
-            ):
-                return False
-        return True
-    matches = (_port_query_matches(document, child) for child in node.children)
-    return all(matches) if node.kind == "all" else any(matches)
-
-
-def _match_with_port_evidence(
-    document, criteria, proven_tags, direct_fields=DIRECT_PORT_FIELDS
-):
-    """Return query truth plus proof that one matching branch belongs to this port."""
-    node = query_expression(criteria)
-    if node.kind == "criteria":
-        if not _port_query_matches(document, node):
-            return False, False
-        evidence = False
-        for field, values in node.fields:
-            if field.startswith("!"):
-                continue
-            base, _, modifier = field.partition(".")
-            if modifier in {"not", "nt"}:
-                continue
-            if base in direct_fields:
-                evidence = True
-            elif base == "tag" and proven_tags:
-                evidence = True
-        return True, evidence
-
-    children = [
-        _match_with_port_evidence(document, child, proven_tags, direct_fields)
-        for child in node.children
-    ]
-    if node.kind == "all":
-        return all(match for match, _ in children), any(
-            match and evidence for match, evidence in children
-        )
-    return any(match for match, _ in children), any(
-        match and evidence for match, evidence in children
-    )
-
-
-def _port_tags(parsed, rules):
-    """Keep only tags transitively justified by evidence on this scoped port."""
-    proven = {
-        str(tag).lower()
-        for tag in parsed.get("tag", [])
-        if str(tag).lower() == "proto:tls"
-    }
-    while True:
-        before = len(proven)
-        document = dict(parsed, tag=sorted(proven))
-        for rule in rules:
-            matched, has_evidence = _match_with_port_evidence(
-                document, rule.get("criteria_groups", []), proven
-            )
-            if matched and has_evidence:
-                proven.update(str(tag).lower() for tag in rule.get("tags", []))
-        if len(proven) == before:
-            return sorted(proven)
-
-
-def _configured_targets(document, exact_targets, networks):
+def _configured_targets(ip, hostnames, exact_targets, networks):
     """Return every configured scan identity represented by one observation."""
     configured = []
-    body = document.get("body") or {}
-    for hostname in body.get("hostnames") or []:
-        if hostname.get("type") != "user":
-            continue
-        name = str(hostname.get("name") or "").strip().rstrip(".").lower()
+    for hostname in hostnames:
+        name = str(hostname or "").strip().rstrip(".").lower()
         if is_hostname_syntax(name) and name in exact_targets:
             candidate = (exact_targets[name], "fqdn", name)
             if candidate not in configured:
                 configured.append(candidate)
     try:
-        address = ipaddress.ip_address(document.get("ip"))
+        address = ipaddress.ip_address(ip)
     except (TypeError, ValueError):
         return configured
     address_value = str(address)
@@ -198,7 +128,7 @@ def _matching_ports(document, criteria, rules, parser_config):
         except (TypeError, ValueError):
             continue
         if (
-            str(port.get("protocol") or "tcp").lower() != "tcp"
+            str(port.get("protocol") or "").lower() != "tcp"
             or not 1 <= number <= 65535
             or state.get("state") != "open"
         ):
@@ -207,8 +137,9 @@ def _matching_ports(document, criteria, rules, parser_config):
         scoped["body"] = dict(body, ports=[port])
         parsed = parse_json(scoped, parser_config, tag_rules=[])
         if parsed:
-            parsed["tag"] = _port_tags(parsed, rules)
-            matched, has_port_evidence = _match_with_port_evidence(
+            parsed["nse_body"] = nse_output_by_script(scoped)
+            parsed["tag"] = port_tags(parsed, rules)
+            matched, has_port_evidence = match_with_port_evidence(
                 parsed, criteria, set(parsed.get("tag", [])), direct_fields
             )
             if matched and has_port_evidence:
@@ -228,10 +159,14 @@ def _selection_context():
         except ValueError:
             continue
     networks.sort(key=lambda item: item[0].prefixlen, reverse=True)
-    rules = compile_tag_rule_records(
-        db.session.query(TagRules).filter(TagRules.active.is_(True)).all()
+    rule_records = (
+        db.session.query(
+            TagRules.name, TagRules.description, TagRules.query, TagRules.tags
+        )
+        .filter(TagRules.active.is_(True))
+        .all()
     )
-    return exact, networks, rules
+    return exact, networks, rule_records
 
 
 def filtered_candidates(
@@ -244,23 +179,57 @@ def filtered_candidates(
     timeout=None,
     *,
     selection=None,
+    progress=None,
 ):  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Yield validated configured targets and exact matching TCP port sets."""
-    exact, networks, rules = (
+    exact, networks, rule_records = (
         selection if selection is not None else _selection_context()
     )
-    for uid in matching_observations(
-        indexer, criteria, from_ts, to_ts, timeout=timeout
+    rules = None
+    direct_fields = DIRECT_PORT_FIELDS
+    if not query_can_prove_port(criteria):
+        direct_fields = direct_fields | REQUESTED_HOST_FIELDS
+    for plan, observations in observation_batches(
+        indexer, criteria, from_ts, to_ts, timeout, progress=progress
     ):
-        document = meili_index.get_document(uid)
-        document = vars(document) if not isinstance(document, dict) else document
-        targets = _configured_targets(document, exact, networks)
-        if not targets:
-            continue
-        ports = _matching_ports(document, criteria, rules, parser_config)
-        if ports:
-            for target in targets:
-                yield (*target, ports)
+        proven = proven_indexed_ports(indexer.r, plan, observations, direct_fields)
+        hostnames = indexer.get_requested_hostnames_for_uids(
+            [uid for uid, ports in proven.items() if ports]
+        )
+        for uid, ip, _predicates in observations:
+            if uid in proven:
+                ports = proven[uid]
+                if not ports:
+                    continue
+                targets = _configured_targets(
+                    ip, hostnames.get(uid, []), exact, networks
+                )
+            else:
+                try:
+                    document = meili_index.get_document(uid)
+                except MeilisearchApiError as error:
+                    if not document_not_found(error):
+                        raise
+                    continue
+                document = (
+                    vars(document) if not isinstance(document, dict) else document
+                )
+                names = [
+                    item.get("name")
+                    for item in (document.get("body") or {}).get("hostnames") or []
+                    if isinstance(item, dict) and item.get("type") == "user"
+                ]
+                targets = _configured_targets(
+                    document.get("ip"), names, exact, networks
+                )
+                if not targets:
+                    continue
+                if rules is None:
+                    rules = compile_tag_rule_records(rule_records)
+                ports = _matching_ports(document, criteria, rules, parser_config)
+            if ports:
+                for target in targets:
+                    yield (*target, ports)
 
 
 def first_scan_candidate(
@@ -373,7 +342,7 @@ def _finish_preparation(cycle_id, revision, status):
         db.session.commit()
 
 
-def _write_preparation_batches(cycle_id, revision, candidates, scan_tool):
+def _write_preparation_batches(cycle_id, revision, candidates, scan_tool, progress):
     accepted = 0
     while batch := list(islice(candidates, PREPARATION_BATCH_SIZE)):
         current = _lock_preparation(cycle_id, revision)
@@ -395,6 +364,9 @@ def _write_preparation_batches(cycle_id, revision, candidates, scan_tool):
                 _merge_work(cycle, target_id, kind, value, ports, scan_family=family)
         db.session.commit()
         accepted += len(batch)
+        progress.retained.update((kind, value) for _, kind, value, _ in batch)
+        progress.publish()
+    progress.publish(force=True)
     _finish_preparation(cycle_id, revision, "ready" if accepted else "no_matches")
     return accepted
 
@@ -447,6 +419,8 @@ def prepare_cycle(cycle_id, meili_index):
             indexer = KVrocksIndexer(
                 parser_config["KVROCKS_HOST"], parser_config["KVROCKS_PORT"]
             )
+            progress = FilterProgress(indexer.raw, cycle_id, revision)
+            progress.publish()
             candidates = filtered_candidates(
                 indexer,
                 meili_index,
@@ -456,8 +430,11 @@ def prepare_cycle(cycle_id, meili_index):
                 parser_config,
                 timeout=None,
                 selection=selection,
+                progress=progress.observations,
             )
-            return _write_preparation_batches(cycle_id, revision, candidates, scan_tool)
+            return _write_preparation_batches(
+                cycle_id, revision, candidates, scan_tool, progress
+            )
         except (MeilisearchError, RedisError, OSError):
             db.session.rollback()
             _finish_preparation(cycle_id, revision, "retry")
