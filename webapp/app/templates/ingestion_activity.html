@@ -1,0 +1,39 @@
+<form id="stats-filters" method="get" class="form-inline">
+  <input type="hidden" name="tab" value="ingestion">
+  <input type="hidden" name="tool" value="{{ tool }}">
+  {% include "stats_period_select.html" %}
+</form>
+{% if ingestion.latest %}
+  {% set latest = ingestion.latest %}
+  <div class="stats-grid">
+    <div class="stats-card">
+      <div class="stats-label">Port documents awaiting ingestion</div>
+      <div class="stats-value">{{ "{:,}".format(latest.pending_documents) if latest.pending_documents is not none else "Unknown" }}</div>
+      {% if latest.unknown_reports %}
+        <div class="text-muted">{{ "{:,}".format(latest.unknown_reports) }} queued job reports still need a document count.</div>
+      {% endif %}
+    </div>
+    <div class="stats-card">
+      <div class="stats-label">Job reports awaiting export</div>
+      <div class="stats-value">{{ "{:,}".format(latest.pending_reports) }}</div>
+    </div>
+  </div>
+  <p class="text-muted">Last sample {{ latest.sampled_at }} UTC. Plum samples the queue every five minutes. Wider intervals show the last sample in each interval.</p>
+  {% with rows=ingestion.rows, series=[("pending_documents", "Port documents awaiting ingestion"), ("pending_reports", "Job reports awaiting export")], chart_description="Queue depth over time in UTC. Gaps indicate unavailable counts. Document counts are subtotals when some queued job reports have no count yet." %}
+    {% include "stats_charts.html" %}
+  {% endwith %}
+  <details class="stats-data"><summary>View data</summary>
+  <div class="table-responsive">
+    <table class="table table-striped">
+      <thead><tr><th>Interval start (UTC)</th><th>Sample (UTC)</th><th>Port documents counted</th><th>Job reports</th><th>Job reports without counts</th></tr></thead>
+      <tbody>
+        {% for row in ingestion.rows %}
+        <tr><td>{{ row.label }}</td><td>{{ row.sampled_at or '—' }}</td><td>{{ row.pending_documents if row.pending_documents is not none else '—' }}</td><td>{{ row.pending_reports if row.sampled_at else '—' }}</td><td>{{ row.unknown_reports if row.sampled_at else '—' }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  </details>
+{% else %}
+  <p class="text-muted" role="status">No ingestion samples in this interval yet.</p>
+{% endif %}

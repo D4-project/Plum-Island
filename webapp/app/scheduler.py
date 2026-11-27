@@ -78,6 +78,7 @@ from .utils.network_enrichment import (
     refresh_target_network,
 )
 from .utils.ip2asn import target_type
+from .utils.scan_stats import sample_ingestion_queue
 from .utils.timeutils import utcnow_aware, utcnow_naive
 from .utils.filtered_scans import prepare_cycle, start_due_cycle
 from .utils.scan_cycles import (
@@ -3356,8 +3357,23 @@ def task_supervise_indexing():
         db.session.remove()
 
 
+def task_sample_ingestion():
+    """Sample independently of slow or stalled import batches."""
+    try:
+        sample_ingestion_queue(db.session, utcnow_naive())
+    finally:
+        db.session.remove()
+
+
 # Start the scheduled jobs.
 scheduler = SafeBackgroundScheduler()
+scheduler.add_job(
+    func=task_sample_ingestion,
+    trigger="cron",
+    minute="*/5",
+    id="ingestion_statistics",
+    max_instances=1,
+)
 scheduler.add_job(
     func=task_supervise_indexing,
     trigger="interval",

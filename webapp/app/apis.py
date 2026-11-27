@@ -32,7 +32,11 @@ from sqlalchemy.exc import IntegrityError, NoResultFound
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash
 from marshmallow import EXCLUDE, Schema, fields, validate, validates, ValidationError
-from .utils.scan_stats import claim_completed_job, increment_completed_counters
+from .utils.scan_stats import (
+    claim_completed_job,
+    increment_completed_counters,
+    report_counts,
+)
 from .models import (
     Targets,
     Bots,
@@ -1210,7 +1214,8 @@ class Api(BaseApi):
             db.session.rollback()
             return self.response(500, message="result storage failed")
 
-        if not claim_completed_job(db.session, job_bot, now):
+        open_ports, document_count = report_counts(result_data)
+        if not claim_completed_job(db.session, job_bot, now, document_count):
             db.session.rollback()
             completed = (
                 db.session.query(Jobs.finished).filter(Jobs.id == job_bot.id).scalar()
@@ -1307,7 +1312,7 @@ class Api(BaseApi):
             )
         # Lock the shared minute bucket only after target/profile synchronization.
         increment_completed_counters(
-            db.session, job_bot, result_data, now, botinfo.get("PORTS_TARGETED")
+            db.session, job_bot, open_ports, now, botinfo.get("PORTS_TARGETED")
         )
         commit_started = time.perf_counter()
         db.session.commit()

@@ -86,7 +86,9 @@ class StatsViewTest(unittest.TestCase):
             "KVrocksIndexer": None,
             "utcnow_naive": lambda: None,
             "request": SimpleNamespace(args={"tab": "overview"}),
+            "PERIODS": ("hour", "hour48"),
             "activity_series": Mock(return_value={}),
+            "ingestion_series": Mock(return_value={}),
         }
         module = ast.fix_missing_locations(ast.Module(body=[view], type_ignores=[]))
         exec(compile(module, "<isolated StatsView>", "exec"), namespace)
@@ -100,16 +102,24 @@ class StatsViewTest(unittest.TestCase):
         self.assertEqual(context["stats_tab"], "overview")
         namespace["activity_series"].assert_not_called()
 
-        # Graphs read only the activity buckets, never the old inventory totals.
-        namespace["request"].args = {"period": "bad", "tool": "bad"}
+        # Legacy Graphs links still select Scanning.
+        namespace["request"].args = {"tab": "graphs", "period": "bad", "tool": "bad"}
         namespace["db"].session.query = Mock(
             side_effect=AssertionError("inventory query")
         )
         graphs = instance.index()
-        self.assertEqual(graphs["stats_tab"], "graphs")
+        self.assertEqual(graphs["stats_tab"], "scanning")
         self.assertNotIn("stats", graphs)
         namespace["activity_series"].assert_called_once_with(
             namespace["db"].session, None, "hour", "all"
+        )
+
+        namespace["request"].args = {"tab": "ingestion", "period": "hour48"}
+        ingestion = instance.index()
+        self.assertEqual(ingestion["stats_tab"], "ingestion")
+        self.assertNotIn("stats", ingestion)
+        namespace["ingestion_series"].assert_called_once_with(
+            namespace["db"].session, None, "hour48"
         )
 
 

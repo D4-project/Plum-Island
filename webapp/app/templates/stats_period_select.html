@@ -1,0 +1,7 @@
+<label for="stats-period">Interval</label>
+<select id="stats-period" name="period" class="form-control">
+  {% set recent = "5 minutes · last 60 minutes" if stats_tab == "ingestion" else "Minute · last 60 minutes" %}
+  {% for value, label in [("minute", recent), ("hour", "Hour · last 24 hours"), ("hour48", "Hour · last 48 hours"), ("day", "Day · last 30 days"), ("month", "Month · last 6 months")] %}
+  <option value="{{ value }}"{% if period == value %} selected{% endif %}>{{ label }}</option>
+  {% endfor %}
+</select>

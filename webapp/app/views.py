@@ -96,7 +96,7 @@ from .utils.index_reconciliation import reconciliation_status
 from .utils.index_retry import transient_error
 from .utils.ip_links import port_web_scheme
 from .utils.scanner_reports import display_scripts
-from .utils.scan_stats import activity_series
+from .utils.scan_stats import PERIODS, activity_series, ingestion_series
 from .utils.search_debug import profile_search_page
 from .utils.search_query import (
     compile_query,
@@ -5322,17 +5322,25 @@ class StatsView(BaseView):
     @expose("/")
     @has_access
     def index(self):
-        stats_tab = "overview" if request.args.get("tab") == "overview" else "graphs"
+        """Load only the metrics for the selected statistics tab."""
+        stats_tab = request.args.get("tab")
+        stats_tab = stats_tab if stats_tab in ("overview", "ingestion") else "scanning"
         period = request.args.get("period", "hour")
         tool = request.args.get("tool", "all")
-        period = period if period in ("minute", "hour", "day", "month") else "hour"
+        period = period if period in PERIODS else "hour"
         tool = tool if tool in ("all", "nmap", "masscan") else "all"
-        if stats_tab == "graphs":
+        page = {"title": "Stats", "stats_tab": stats_tab, "period": period, "tool": tool}
+        if stats_tab == "scanning":
             return self.render_template(
                 "stats.html",
-                title="Stats",
-                stats_tab=stats_tab,
                 activity=activity_series(db.session, utcnow_naive(), period, tool),
+                **page,
+            )
+        if stats_tab == "ingestion":
+            return self.render_template(
+                "stats.html",
+                ingestion=ingestion_series(db.session, utcnow_naive(), period),
+                **page,
             )
         targets = db.session.query(Targets.value).all()
         cidr_count = 0
@@ -5368,20 +5376,13 @@ class StatsView(BaseView):
             "kv_scanned_host_count": 0,
             "kv_scan_result_count": 0,
         }
-        indexer = db.app.config.get("KVROCKS_IDX") or KVrocksIndexer(
-            db.app.config["KVROCKS_HOST"],
-            db.app.config["KVROCKS_PORT"],
-        )
-        kv_counts = indexer.objects_count()
+        kv_counts = (
+            db.app.config.get("KVROCKS_IDX")
+            or KVrocksIndexer(db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"])
+        ).objects_count()
         stats["kv_scanned_host_count"] = kv_counts.get("ip_count", 0)
         stats["kv_scan_result_count"] = kv_counts.get("uid_count", 0)
-        return self.render_template(
-            "stats.html",
-            stats=stats,
-            title="Stats",
-            stats_tab=stats_tab,
-            activity={"period": period, "tool": tool},
-        )
+        return self.render_template("stats.html", stats=stats, **page)
 
 
 appbuilder.add_view(

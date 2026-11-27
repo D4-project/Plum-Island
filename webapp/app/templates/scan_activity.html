@@ -2,13 +2,8 @@
 <p class="text-muted">Completed jobs and open IP/transport/port observations received by Island. Times are UTC; the current interval is still in progress.</p>
 <p class="text-muted">Collection starts with this upgrade. Previous jobs are not included. Targeted ports include nonresponding targets; this is not a packet count.</p>
 <form id="stats-filters" method="get" class="form-inline">
-  <input type="hidden" name="tab" value="graphs">
-  <label for="stats-period">Interval</label>
-  <select id="stats-period" name="period" class="form-control">
-    {% for value, label in [("minute", "Minute · last 60 minutes"), ("hour", "Hour · last 24 hours"), ("day", "Day · last 30 days"), ("month", "Month · last 6 months")] %}
-    <option value="{{ value }}"{% if activity.period == value %} selected{% endif %}>{{ label }}</option>
-    {% endfor %}
-  </select>
+  <input type="hidden" name="tab" value="scanning">
+  {% include "stats_period_select.html" %}
   <label for="stats-tool">Scanner</label>
   <select id="stats-tool" name="tool" class="form-control">
     {% for value, label in [("all", "All scanners"), ("nmap", "Nmap"), ("masscan", "Masscan")] %}
@@ -23,7 +18,9 @@
 </div>
 <p class="text-muted">Targeted ports use the agent count when available, otherwise unique IP targets × configured ports from the job. Jobs containing hostnames require an agent count.</p>
 {% if activity.totals.jobs_without_target_count %}<p class="text-muted">Targeted-port counts unavailable for {{ activity.totals.jobs_without_target_count }} completed job(s). Those jobs are excluded from the targeted-port total.</p>{% endif %}
-{% include "scan_activity_graphs.html" %}
+{% with rows=activity.rows, series=[("jobs_completed", "Jobs completed"), ("open_ports", "Open port observations"), ("ports_targeted", "Ports targeted")], chart_description="Chronological intervals in UTC. Gaps indicate unavailable counts. Exact values are available in View data below." %}
+  {% include "stats_charts.html" %}
+{% endwith %}
 <details class="stats-data"><summary>View data</summary>
 <div class="table-responsive">
 <table class="table table-striped">

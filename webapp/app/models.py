@@ -248,6 +248,16 @@ class ScanStatBucket(Model):
     jobs_without_target_count = Column(BigInteger, nullable=False, default=0)
 
 
+class IngestionStatSample(Model):
+    """Five-minute samples of the result export queue."""
+
+    __tablename__ = "ingestion_stat_samples"
+    sampled_at = Column(DateTime, primary_key=True)
+    pending_reports = Column(BigInteger, nullable=False)
+    pending_documents = Column(BigInteger, nullable=False)
+    unknown_reports = Column(BigInteger, nullable=False)
+
+
 class Jobs(Model):
     """
     Class for the Job to be run by bots.
@@ -256,6 +266,16 @@ class Jobs(Model):
     """
 
     __tablename__ = "jobs"
+    __table_args__ = (
+        Index(
+            "idx_jobs_ingestion_queue",
+            "active",
+            "exported",
+            "finished",
+            "meili_documents_total",
+            "report_document_count",
+        ),
+    )
     id = Column(Integer, primary_key=True)
     uid = Column(String(36), unique=True, nullable=False)  # Bot UUID Generate
     job = Column(String, nullable=False)  # Target Bundles (list of str)
@@ -266,6 +286,7 @@ class Jobs(Model):
     meili_task_uid = Column(Integer, nullable=True)
     meili_documents_submitted = Column(Integer, default=0, nullable=False)
     meili_documents_total = Column(Integer, nullable=True)
+    report_document_count = Column(BigInteger, nullable=True)
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
     job_creation = Column(DateTime, default=utcnow_naive)  # Timestamp of job creation

@@ -1,17 +1,16 @@
 # Scan activity counters
 
-The **Status → Stats** page opens on **Graphs**, the first tab. **Overview**
-retains the original inventory totals; **Graphs** shows completed jobs, open port observations and
+The **Status → Stats** page opens on **Scanning**, the first tab. **Overview**
+shows inventory totals. **Scanning** shows completed jobs, open port observations and
 targeted ports as pastel line charts with points, with exact values
 available under **View data**. Unavailable targeted-port counts break the line,
 rather than being drawn as zeros. Selecting an interval or scanner immediately
 reloads the graphs; there is no Apply button.
 The graphs group completed scans by minute (last 60 minutes),
-hour (last 24 hours), day (last 30 days) or month (last six calendar months,
+hour (last 24 or 48 hours), day (last 30 days) or month (last six calendar months,
 including the current month). All interval starts are UTC; the
 current interval is partial. A scanner selector separates Nmap and Masscan.
-Both tabs use shared templates in the original and Plum themes. The Overview
-tab does not query activity buckets; Graphs does not count search-index inventory.
+All tabs use shared templates in the original and Plum themes.
 
 ## Counters
 
@@ -62,14 +61,32 @@ shared minute row. Both changes commit
 with the existing result-acceptance transaction. A rollback undoes both. Repeated
 or simultaneous submissions therefore count once, even across a minute boundary.
 
-No per-result event table, background aggregator, SQL job-table traversal or
-search-index count is required. The Stats page reads bounded SQL aggregates on
+Scanning reads bounded SQL aggregates on
 the timestamp primary key. At most two rows are added per active minute, one
 per scanner. Buckets have no automatic expiration in this first version.
 
 Counters survive job cleanup, report retention and index rebuilds. Retagging,
 historical imports and index reconciliation do not increment them. Collection
 starts with this upgrade: previous jobs are not backfilled.
+
+## Ingestion queue
+
+**Ingestion** charts pending per-port documents and job reports awaiting export.
+The scheduler samples queue depth every five minutes with an aggregate over a
+covering SQL index on `jobs`. Sampling runs independently of export and requires
+only the job counters stored in SQL. Wider intervals
+display the last sample in each bucket. The latest sample time is displayed in UTC.
+
+Plum counts eligible port records while processing the decoded submission and saves
+the count with the existing job claim. This measures documents queued for export,
+including repeated observations submitted under the same document ID. The count
+remains in the queue until the job is exported to both backends. When the export
+worker has prepared the job, its exact document total takes precedence.
+
+Jobs accepted before the upgrade may have no document count until their normal
+export reaches them. The page displays the number of such jobs and any known
+document subtotal. Missing measurements appear as gaps. The samples use one SQL
+row per five-minute interval and are retained for 185 days.
 
 ## Deployment
 
@@ -79,6 +96,10 @@ with the updater's normal backup. For MySQL, apply
 to the existing Plum database **before deploying the updated application**.
 The SQLite updater does not apply MySQL schema changes. New installations create
 the table through the normal SQLAlchemy metadata setup.
+
+Ingestion statistics use SQLite migration **35**. For MySQL, apply
+[`tools/sql/35_ingestion_stats_mysql.sql`](../../tools/sql/35_ingestion_stats_mysql.sql)
+before deploying. Queue history starts when the new scheduler first samples it.
 
 Upgrade Island before agents so that it accepts and requests the new optional
 counter. No scan-index rebuild or historical rehash is needed for statistics.

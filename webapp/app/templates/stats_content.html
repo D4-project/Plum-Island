@@ -1,11 +1,14 @@
 <nav aria-label="Statistics views">
   <ul class="nav nav-tabs stats-tabs">
-    <li{% if stats_tab == "graphs" %} class="active"{% endif %}><a href="?tab=graphs&amp;period={{ activity.period }}&amp;tool={{ activity.tool }}"{% if stats_tab == "graphs" %} aria-current="page"{% endif %}>Graphs</a></li>
-    <li{% if stats_tab != "graphs" %} class="active"{% endif %}><a href="?tab=overview&amp;period={{ activity.period }}&amp;tool={{ activity.tool }}"{% if stats_tab != "graphs" %} aria-current="page"{% endif %}>Overview</a></li>
+    {% for tab, label in [("scanning", "Scanning"), ("ingestion", "Ingestion"), ("overview", "Overview")] %}
+    <li{% if stats_tab == tab %} class="active"{% endif %}><a href="?tab={{ tab }}&amp;period={{ period }}&amp;tool={{ tool }}"{% if stats_tab == tab %} aria-current="page"{% endif %}>{{ label }}</a></li>
+    {% endfor %}
   </ul>
 </nav>
-{% if stats_tab == "graphs" %}
+{% if stats_tab == "scanning" %}
   {% include "scan_activity.html" %}
+{% elif stats_tab == "ingestion" %}
+  {% include "ingestion_activity.html" %}
 {% else %}
   {% include "stats_overview.html" %}
 {% endif %}

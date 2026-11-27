@@ -13,13 +13,16 @@ from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from app.models import Jobs, ScanStatBucket
+from app.models import IngestionStatSample, Jobs, ScanStatBucket
 from app.utils.scan_stats import (
     activity_series,
     claim_completed_job,
     count_open_ports,
     increment_completed_counters,
+    ingestion_series,
     job_targeted_ports,
+    report_counts,
+    sample_ingestion_queue,
 )
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import mysql
@@ -29,9 +32,10 @@ from sqlalchemy.schema import CreateTable
 
 def record_completed_job(session, job, report, now, ports_targeted=None):
     """Provide the record completed job test fixture."""
-    if not claim_completed_job(session, job, now):
+    open_ports, document_count = report_counts(report)
+    if not claim_completed_job(session, job, now, document_count):
         return False
-    return increment_completed_counters(session, job, report, now, ports_targeted)
+    return increment_completed_counters(session, job, open_ports, now, ports_targeted)
 
 
 class ScanStatsTest(unittest.TestCase):
@@ -85,6 +89,77 @@ class ScanStatsTest(unittest.TestCase):
             2,
         )
         self.assertEqual(count_open_ports([{}, {"ports": 1}, None]), 0)
+
+    def test_ingestion_counts_share_the_job_commit_and_include_only_indexable_inputs(
+        self,
+    ):
+        """Duplicate port JSONs are export inputs even if scanning counts them once."""
+        job = self.job()
+        ports = self.report()[0]["ports"][:2] + [{"portid": " "}, None]
+        report = [
+            {"addr": "93.184.216.34", "ports": ports},
+            {"addr": "192.0.2.1", "ports": ports},
+        ]
+        self.assertEqual(report_counts(report), (2, 2))
+        self.assertTrue(record_completed_job(self.session, job, report, self.now))
+        self.session.rollback()
+        self.assertIsNone(self.session.get(Jobs, job.id).report_document_count)
+        self.assertTrue(record_completed_job(self.session, job, report, self.now))
+        self.session.commit()
+        self.assertEqual(self.session.get(Jobs, job.id).report_document_count, 2)
+
+    def test_ingestion_queue_samples_legacy_jobs_and_completed_exports(self):
+        """Measure only outstanding jobs, with zero and unknown kept distinct."""
+        for accepted, prepared, exported in (
+            (5, 3, False),
+            (0, None, False),
+            (None, None, False),
+            (90, None, True),
+        ):
+            job = self.job()
+            job.active = False
+            job.finished = True
+            job.exported = exported
+            job.report_document_count = accepted
+            job.meili_documents_total = prepared
+        self.session.commit()
+        sample_ingestion_queue(self.session, self.now)
+        sample_ingestion_queue(self.session, self.now)
+        point = self.session.query(IngestionStatSample).one()
+        self.assertEqual(
+            (point.pending_documents, point.pending_reports, point.unknown_reports),
+            (3, 3, 1),
+        )
+
+        job.exported = False
+        self.session.commit()
+        later = self.now + timedelta(minutes=5)
+        sample_ingestion_queue(self.session, later)
+        history = ingestion_series(self.session, later, "hour48")
+        self.assertEqual(len(history["rows"]), 48)
+        self.assertEqual(history["latest"]["pending_documents"], 93)
+        self.assertIsNone(history["rows"][1]["pending_documents"])
+        minute = ingestion_series(self.session, later, "minute")
+        self.assertEqual(len(minute["rows"]), 12)
+        self.assertEqual(minute["rows"][1]["pending_documents"], 3)
+
+    def test_ingestion_queue_distinguishes_unmeasured_from_empty(self):
+        """A legacy queue of uncounted jobs must never be presented as empty."""
+        job = self.job()
+        job.active = False
+        job.finished = True
+        self.session.commit()
+        sample_ingestion_queue(self.session, self.now)
+        latest = ingestion_series(self.session, self.now)["latest"]
+        self.assertIsNone(latest["pending_documents"])
+        self.assertEqual(latest["unknown_reports"], 1)
+        job.exported = True
+        self.session.commit()
+        later = self.now + timedelta(minutes=5)
+        sample_ingestion_queue(self.session, later)
+        self.assertEqual(
+            ingestion_series(self.session, later)["latest"]["pending_documents"], 0
+        )
 
     def test_repeat_is_ignored_and_rollback_keeps_completion_atomic(self):
         """Verify repeat is ignored and rollback keeps completion atomic."""
@@ -252,7 +327,9 @@ class ScanStatsTest(unittest.TestCase):
         record_completed_job(self.session, self.job(), self.report(), self.now)
         self.session.commit()
         result = activity_series(self.session, self.now)
-        html = environment.get_template("scan_activity.html").render(activity=result)
+        html = environment.get_template("scan_activity.html").render(
+            activity=result, period=result["period"], stats_tab="scanning"
+        )
         self.assertIn("Unknown", html)
         self.assertIn("unavailable for 1 completed job", html)
         self.assertIn("Open port observations", html)
@@ -261,7 +338,7 @@ class ScanStatsTest(unittest.TestCase):
         self.assertIn('class="stats-chart-point"', html)
         self.assertNotIn("<rect ", html)
         self.assertNotIn(">Apply</button>", html)
-        self.assertIn('name="tab" value="graphs"', html)
+        self.assertIn('name="tab" value="scanning"', html)
 
     def test_both_themes_keep_overview_separate_from_graphs(self):
         """Verify both themes keep overview separate from graphs."""
@@ -289,6 +366,8 @@ class ScanStatsTest(unittest.TestCase):
             autoescape=select_autoescape(),
         )
         activity = activity_series(self.session, self.now)
+        sample_ingestion_queue(self.session, self.now)
+        ingestion = ingestion_series(self.session, self.now, "hour48")
         stats = dict.fromkeys(
             (
                 "cidr_count",
@@ -307,17 +386,26 @@ class ScanStatsTest(unittest.TestCase):
                 title="Stats",
                 stats=stats,
                 activity=activity,
+                ingestion=ingestion,
+                period="hour48",
+                tool="all",
                 baselib=SimpleNamespace(get_nonce=lambda: "nonce"),
             )
             overview = template.render(stats_tab="overview", **context)
             self.assertIn("Target CIDRs", overview)
             self.assertIn('aria-current="page">Overview', overview)
             self.assertNotIn("<svg", overview)
-            graphs = template.render(stats_tab="graphs", **context)
-            self.assertIn('aria-current="page">Graphs', graphs)
+            graphs = template.render(stats_tab="scanning", **context)
+            self.assertIn('aria-current="page">Scanning', graphs)
             self.assertNotIn("Target CIDRs", graphs)
             self.assertEqual(graphs.count("<svg"), 3)
             self.assertNotIn("nan", graphs.lower())
+            ingestion_html = template.render(stats_tab="ingestion", **context)
+            self.assertIn('aria-current="page">Ingestion', ingestion_html)
+            self.assertIn('value="hour48" selected', ingestion_html)
+            self.assertEqual(ingestion_html.count("<svg"), 2)
+            self.assertIn("Port documents awaiting ingestion", ingestion_html)
+            self.assertIn("form.requestSubmit()", ingestion_html)
 
     def test_simultaneous_submissions_count_once(self):
         """Verify simultaneous submissions count once."""
