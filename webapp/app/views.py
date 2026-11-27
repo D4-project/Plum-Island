@@ -3915,6 +3915,11 @@ class JobsView(ModelView):
         profile_ids = {
             work.cycle.scanprofile_id for work in work_rows if work.cycle is not None
         }
+        for job in jobs:
+            cycle = job.scanprofile_cycle
+            if cycle is not None and cycle.filter_revision is not None:
+                cycle_ids.add(cycle.id)
+                profile_ids.add(cycle.scanprofile_id)
         retry_cycles = {}
         for profile_id in sorted(profile_ids):
             cycle = (

@@ -1302,12 +1302,19 @@ class Api(BaseApi):
             job_bot.uid,
             time.perf_counter() - sync_started,
         )
-        if job_bot.scanprofile_id is not None:
+        job_cycle = job_bot.scanprofile_cycle
+        if (
+            job_bot.scanprofile_id is not None
+            and job_cycle is not None
+            and job_cycle.status == "running"
+            and job_cycle.scanprofile.current_cycle_id == job_cycle.id
+        ):
             # Historical-cycle pruning may unlink many retained jobs. It is
             # unrelated to accepting this result and must not extend this
             # latency-sensitive SQLite writer transaction.
             reconcile_scanprofile_cycle(
                 job_bot.scanprofile_id,
+                cycle=job_cycle,
                 prune_history=False,
             )
         # Lock the shared minute bucket only after target/profile synchronization.

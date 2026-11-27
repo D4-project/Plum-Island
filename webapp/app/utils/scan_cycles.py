@@ -273,23 +273,36 @@ def reconcile_scanprofile_cycle(
         cycle.max_target_id = get_current_max_target_id()
 
     if cycle.filter_revision is not None:
-        target_count = (
+        legacy_target_count = (
             db.session.query(func.count(FilteredScanTargets.id))
             .filter(FilteredScanTargets.cycle_id == cycle.id)
             .scalar()
             or 0
         )
-        completed_count = (
-            db.session.query(func.count(FilteredScanTargets.id))
-            .join(Jobs, FilteredScanTargets.job_id == Jobs.id)
-            .filter(
-                FilteredScanTargets.cycle_id == cycle.id,
-                FilteredScanTargets.status != "cancelled",
-                Jobs.finished.is_(True),
+        if legacy_target_count:
+            target_count = legacy_target_count
+            completed_count = (
+                db.session.query(func.count(FilteredScanTargets.id))
+                .join(Jobs, FilteredScanTargets.job_id == Jobs.id)
+                .filter(
+                    FilteredScanTargets.cycle_id == cycle.id,
+                    FilteredScanTargets.status != "cancelled",
+                    Jobs.finished.is_(True),
+                )
+                .scalar()
+                or 0
             )
-            .scalar()
-            or 0
-        )
+        else:
+            target_count = cycle.scan_unit_count or 0
+            completed_count = (
+                db.session.query(func.coalesce(func.sum(Jobs.scan_unit_count), 0))
+                .filter(
+                    Jobs.scanprofile_cycle_id == cycle.id,
+                    Jobs.finished.is_(True),
+                )
+                .scalar()
+                or 0
+            )
         queued_jobs, active_jobs = _unfinished_job_counts(cycle.id)
         cycle.target_count = target_count
         cycle.completed_target_count = completed_count

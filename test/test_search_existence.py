@@ -4,7 +4,11 @@ import unittest
 from unittest.mock import Mock
 
 from app.utils.kvrocks import KVrocksIndexer
-from app.utils.search_existence import has_observation, matching_observations
+from app.utils.search_existence import (
+    chronological_observation_batches,
+    has_observation,
+    matching_observations,
+)
 from app.views import KVSearchView
 
 
@@ -64,4 +68,37 @@ class SearchExistenceTest(unittest.TestCase):
         self.client.pipeline.side_effect = [metadata, matching]
         self.assertFalse(self.probe("http_headval:server.lk:nginx"))
         self.assertEqual(self.client.zrangebyscore.call_count, 2)
+        self.client.sscan.assert_not_called()
+
+    def test_filtered_scan_reads_frozen_window_newest_first_and_resumes(self):
+        """Filtered collection never scans tag history outside its since window."""
+        self.client.zrevrangebyscore.side_effect = [
+            [("new", 20), ("same-a", 15), ("same-b", 15)],
+            [],
+        ]
+        metadata, matching = Mock(), Mock()
+        metadata.execute.return_value = [
+            "192.0.2.1",
+            20,
+            "192.0.2.2",
+            15,
+            "192.0.2.3",
+            15,
+        ]
+        matching.execute.return_value = [True, True, True]
+        self.client.pipeline.side_effect = [metadata, matching]
+        criteria, valid, error = KVSearchView().parse_query("tag:vendor:nginx")
+        self.assertTrue(valid, error)
+        pages = list(
+            chronological_observation_batches(
+                self.indexer, criteria, 10, 20, resume=(20, 0)
+            )
+        )
+        self.assertEqual(pages[0][2], (15, 2))
+        self.client.zrevrangebyscore.assert_any_call(
+            "last_seen_index", 20, 10, start=0, num=64, withscores=True
+        )
+        self.client.zrevrangebyscore.assert_any_call(
+            "last_seen_index", 15, 10, start=2, num=64, withscores=True
+        )
         self.client.sscan.assert_not_called()

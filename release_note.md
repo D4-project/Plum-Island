@@ -1,5 +1,10 @@
 # Unreleased
 
+- Prepare filtered scan IP/FQDN and port sets in Kvrocks with a resumable,
+  time-bounded cursor. SQLite now stores cycle state and final jobs only.
+  Migration 36 closes legacy filtered cycles, preserves assigned jobs and
+  restarts enabled profiles immediately.
+
 - Reuse Meilisearch HTTP connections during automatic reconciliation. Retry
   interrupted reads from the saved checkpoint and enable verbose HTTP tracing
   on demand from Plum Settings (#297).

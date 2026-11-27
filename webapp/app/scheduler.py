@@ -4,6 +4,7 @@ This module manage asynchrone tasks
 
 import os
 import atexit
+import hashlib
 import ipaddress
 import logging
 import sqlite3
@@ -40,6 +41,7 @@ from .models import (
     ScanProfileCycles,
     Jobs,
     ScanProfiles,
+    Targets,
     TargetScanStates,
     assoc_jobs_targets,
 )
@@ -81,6 +83,7 @@ from .utils.ip2asn import target_type
 from .utils.scan_stats import sample_ingestion_queue
 from .utils.timeutils import utcnow_aware, utcnow_naive
 from .utils.filtered_scans import prepare_cycle, start_due_cycle
+from .utils.filtered_work import FilteredWorkStore
 from .utils.scan_cycles import (
     get_current_max_target_id,
     get_or_create_running_cycle,
@@ -1512,86 +1515,80 @@ def _stage_jobs_for_profile(
 
 
 def _stage_filtered_jobs(profile, cycle, scan_nses, max_jobs):
-    """Queue prepared targets grouped by identical port sets."""
+    """Consume prepared Kvrocks groups into replay-safe SQL jobs."""
     jobs_created = 0
+    store = FilteredWorkStore(
+        db.app.config["KVROCKS_IDX"].raw, cycle.id, cycle.filter_revision
+    )
     available_families = (
         _available_masscan_families(bool(profile.detect_protocol))
         if profile.scan_tool == "masscan"
         else None
     )
-    if available_families is not None:
-        unsupported = db.session.query(FilteredScanTargets).filter_by(
-            cycle_id=cycle.id, status="pending", job_id=None
-        )
-        if available_families:
-            unsupported = unsupported.filter(
-                ~FilteredScanTargets.scan_family.in_(available_families)
-            )
-        unsupported_families = sorted(
-            {row[0] for row in unsupported.with_entities(
-                FilteredScanTargets.scan_family
-            ).all()}
-        )
-        discarded = unsupported.delete(synchronize_session=False)
-        if discarded:
-            logger.warning(
-                "Filtered Masscan profile %s skipped %s target families with no enabled agent: %s",
-                profile.name,
-                discarded,
-                ", ".join(str(family or "unknown") for family in unsupported_families),
-            )
     while jobs_created < max_jobs:
-        pending_query = db.session.query(FilteredScanTargets).filter_by(
-            cycle_id=cycle.id, status="pending"
-        )
-        if profile.scan_tool == "masscan":
-            if available_families:
-                pending_query = pending_query.filter(
-                    FilteredScanTargets.scan_family.in_(available_families)
+        selected = None
+        for group_id, metadata in store.groups():
+            family = metadata.get("family")
+            if available_families is not None and family not in available_families:
+                while members := store.peek(group_id, JOB_TARGET_CHUNK_SIZE):
+                    store.acknowledge(group_id, members)
+                logger.warning(
+                    "Filtered Masscan profile %s skipped %s work with no enabled agent",
+                    profile.name,
+                    family or "unknown-family",
                 )
-            else:
-                cycle.preparation_status = "queued"
+                continue
+            members = store.peek(group_id, JOB_TARGET_CHUNK_SIZE)
+            if members:
+                selected = group_id, metadata, members
                 break
-        first = pending_query.order_by(FilteredScanTargets.id).first()
-        if first is None:
-            cycle.preparation_status = "queued"
+        if selected is None:
             break
-        rows = (
-            db.session.query(FilteredScanTargets)
-            .filter_by(
-                cycle_id=cycle.id,
-                status="pending",
-                ports=first.ports,
-                target_kind=first.target_kind,
-                scan_family=first.scan_family,
+        group_id, metadata, members = selected
+        candidates = [json.loads(member) for member in members]
+        identity = json.dumps(
+            {
+                "cycle": cycle.id,
+                "revision": cycle.filter_revision,
+                "group": group_id,
+                "members": members,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(identity.encode()).hexdigest()
+        job_uid = str(uuid.UUID(digest[:32]))
+        job = db.session.query(Jobs).filter_by(uid=job_uid).one_or_none()
+        if job is None:
+            target_ids = sorted({candidate["target_id"] for candidate in candidates})
+            targets = (
+                db.session.query(Targets).filter(Targets.id.in_(target_ids)).all()
             )
-            .order_by(FilteredScanTargets.id)
-            .limit(JOB_TARGET_CHUNK_SIZE)
-            .all()
-        )
-        targets = {row.configured_target.id: row.configured_target for row in rows}
-        job = Jobs(
-            uid=str(uuid.uuid4()),
-            job=",".join(row.target_value for row in rows),
-            scanprofile=profile,
-            scanprofile_name=profile.name,
-            scanprofile_cycle=cycle,
-            scan_ports=first.ports,
-            scan_nses=scan_nses,
-            nmap_additional_params=profile.nmap_additional_params,
-            scan_tool=profile.scan_tool or "nmap",
-            scan_family=first.scan_family,
-            detect_protocol=bool(profile.detect_protocol),
-            scan_unit_count=len(rows),
-            priority=profile.priority or 0,
-        )
-        job.targets.extend(targets.values())
-        db.session.add(job)
-        db.session.flush()
-        for row in rows:
-            row.status = "queued"
-            row.job = job
-        jobs_created += 1
+            job = Jobs(
+                uid=job_uid,
+                job=",".join(candidate["value"] for candidate in candidates),
+                scanprofile=profile,
+                scanprofile_name=profile.name,
+                scanprofile_cycle=cycle,
+                scan_ports=metadata["ports"],
+                scan_nses=scan_nses,
+                nmap_additional_params=profile.nmap_additional_params,
+                scan_tool=profile.scan_tool or "nmap",
+                scan_family=metadata.get("family"),
+                detect_protocol=bool(profile.detect_protocol),
+                scan_unit_count=len(candidates),
+                priority=profile.priority or 0,
+            )
+            job.targets.extend(targets)
+            db.session.add(job)
+            db.session.commit()
+            jobs_created += 1
+        store.acknowledge(group_id, members)
+    if store.empty():
+        store.reset()
+        cycle = db.session.get(ScanProfileCycles, cycle.id)
+        cycle.preparation_status = "queued"
+        db.session.commit()
     return jobs_created
 
 
@@ -1604,7 +1601,7 @@ def task_prepare_filtered_scans():
         profiles = (
             db.session.query(ScanProfiles)
             .filter(
-            ScanProfiles.search_query.isnot(None),
+                ScanProfiles.search_query.isnot(None),
                 ScanProfiles.search_query != "",
                 ScanProfiles.apply_to_all.is_(False),
             )
@@ -1636,56 +1633,23 @@ def task_prepare_filtered_scans():
                         },
                         synchronize_session=False,
                     )
-                db.session.query(FilteredScanTargets).filter(
-                    FilteredScanTargets.cycle_id == cycle.id,
-                    or_(
-                        FilteredScanTargets.status == "pending",
-                        (
-                            FilteredScanTargets.job_id.in_(queued_job_ids)
-                            if queued_job_ids
-                            else false()
-                        ),
-                    ),
-                ).update(
-                    {FilteredScanTargets.status: "cancelled"},
-                    synchronize_session=False,
-                )
+                FilteredWorkStore(
+                    db.app.config["KVROCKS_IDX"].raw,
+                    cycle.id,
+                    cycle.filter_revision,
+                ).reset()
+                db.session.query(FilteredScanTargets).filter_by(
+                    cycle_id=cycle.id
+                ).delete(synchronize_session=False)
                 cycle.preparation_status = (
-                    "cancelled" if not profile.scan_enabled else "revising"
+                    "cancelled" if not profile.scan_enabled else "superseded_kvrocks"
                 )
-                active_jobs = (
-                    db.session.query(Jobs.id)
-                    .filter_by(
-                        scanprofile_cycle_id=cycle.id, active=True, finished=False
-                    )
-                    .first()
-                )
-                if active_jobs is None and not profile.scan_enabled:
-                    cycle.status = "finished"
-                    cycle.finished_at = utcnow_naive()
-                    profile.current_cycle_id = None
-                    profile.last_cycle_finished_at = cycle.finished_at
+                cycle.status = "finished"
+                cycle.finished_at = utcnow_naive()
+                profile.current_cycle_id = None
+                profile.last_cycle_finished_at = cycle.finished_at
                 db.session.commit()
-                if active_jobs is None and profile.scan_enabled:
-                    cancelled = db.session.query(FilteredScanTargets).filter_by(
-                        cycle_id=cycle.id, status="cancelled"
-                    )
-                    cancelled.filter(
-                        FilteredScanTargets.completed_ports.isnot(None),
-                        FilteredScanTargets.completed_ports != "",
-                    ).update(
-                        {FilteredScanTargets.status: "completed",
-                         FilteredScanTargets.ports: FilteredScanTargets.completed_ports,
-                         FilteredScanTargets.job_id: None},
-                        synchronize_session=False,
-                    )
-                    cancelled.delete(synchronize_session=False)
-                    cycle.filter_revision = profile.filter_revision
-                    cycle.filter_query = profile.search_query
-                    cycle.preparation_status = "pending"
-                    db.session.commit()
-                elif active_jobs is None:
-                    cycle = None
+                cycle = None
             if not profile.scan_enabled:
                 continue
             if cycle and cycle.preparation_status == "cancelled":

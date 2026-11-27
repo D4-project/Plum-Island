@@ -42,6 +42,12 @@ IPv6 jobs for FQDN targets; filtered scan work is tracked separately per family.
 Nmap jobs keep `scan_family` empty. The scheduler safely requeues pending older
 Masscan work so it is regenerated with explicit family metadata.
 
+Migration 36 moves filtered scan candidate preparation from SQLite to Kvrocks.
+The updater closes old filtered cycles and their waiting jobs. Jobs already
+assigned to agents remain valid and may return normally. Enabled profiles start
+a fresh cycle immediately after the upgrade. Run `./updisland.sh` with Island
+stopped so the migration completes before scheduler startup.
+
 ### Unique scan profile names
 
 `./updisland.sh` applies migration 25 to the configured SQLite database before

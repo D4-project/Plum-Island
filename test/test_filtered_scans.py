@@ -4,6 +4,8 @@ import runpy
 import sqlite3
 import unittest
 import uuid
+import fnmatch
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -11,7 +13,7 @@ from unittest.mock import Mock, patch
 from flask import Flask
 from flask_appbuilder import SQLA
 from flask_appbuilder.models.sqla.interface import SQLAInterface
-from sqlalchemy import text
+from sqlalchemy import event, text
 
 from app import views
 from app.models import (
@@ -22,8 +24,98 @@ from app.models import (
     Targets,
 )
 from app.utils import filtered_scans, scan_cycles
+from app.utils.filtered_work import FilteredWorkStore
 from app.utils.tagrules import compile_tag_rule_definition, validate_search_query
 from test.test_scanprofile_api import ProfileApiFixture
+
+
+class MemoryPipeline:
+    """Small Redis pipeline used by filtered preparation tests."""
+
+    def __init__(self, store):
+        self.store = store
+        self.calls = []
+
+    def __getattr__(self, name):
+        def queue(*args, **kwargs):
+            self.calls.append((name, args, kwargs))
+            return self
+
+        return queue
+
+    def execute(self):
+        result = [
+            getattr(self.store, name)(*args, **kwargs)
+            for name, args, kwargs in self.calls
+        ]
+        self.calls.clear()
+        return result
+
+
+class MemoryRedis:
+    """Redis hash and sorted-set semantics needed by filtered work."""
+
+    def __init__(self):
+        self.data = {}
+
+    def pipeline(self, **_kwargs):
+        return MemoryPipeline(self)
+
+    def delete(self, *keys):
+        for key in keys:
+            self.data.pop(key, None)
+
+    def hset(self, key, field=None, value=None, mapping=None):
+        target = self.data.setdefault(key, {})
+        if mapping:
+            target.update({str(k): str(v) for k, v in mapping.items()})
+        elif field is not None:
+            target[str(field)] = str(value)
+
+    def hsetnx(self, key, field, value):
+        target = self.data.setdefault(key, {})
+        if str(field) in target:
+            return 0
+        target[str(field)] = str(value)
+        return 1
+
+    def hget(self, key, field):
+        return self.data.get(key, {}).get(str(field))
+
+    def hgetall(self, key):
+        return dict(self.data.get(key, {}))
+
+    def hkeys(self, key):
+        return list(self.data.get(key, {}))
+
+    def hlen(self, key):
+        return len(self.data.get(key, {}))
+
+    def hdel(self, key, *fields):
+        for field in fields:
+            self.data.get(key, {}).pop(str(field), None)
+
+    def hscan(self, key, cursor=0, count=10):
+        items = list(self.data.get(key, {}).items())
+        end = min(len(items), int(cursor) + count)
+        return (0 if end == len(items) else end), dict(items[int(cursor) : end])
+
+    def zadd(self, key, mapping):
+        self.data.setdefault(key, {}).update(mapping)
+
+    def zrange(self, key, start, end):
+        values = sorted(self.data.get(key, {}))
+        return values[start:] if end < 0 else values[start : end + 1]
+
+    def zrem(self, key, *members):
+        for member in members:
+            self.data.get(key, {}).pop(member, None)
+
+    def zcard(self, key):
+        return len(self.data.get(key, {}))
+
+    def scan_iter(self, match, **_kwargs):
+        return iter(key for key in self.data if fnmatch.fnmatchcase(key, match))
 
 
 class FilteredScanPreparationTest(unittest.TestCase):
@@ -43,6 +135,12 @@ class FilteredScanPreparationTest(unittest.TestCase):
         self.db = SQLA(self.app)
         self.db.create_all()
         self.enterContext(patch.object(filtered_scans, "db", self.db))
+        self.redis = MemoryRedis()
+        self.indexer = Mock(raw=self.redis, r=self.redis)
+        self.indexer.get_requested_hostnames_for_uids.return_value = {}
+        self.enterContext(
+            patch.object(filtered_scans, "KVrocksIndexer", return_value=self.indexer)
+        )
 
         target = Targets(value="8.8.8.8", is_ip_cidr=True)
         profile = ScanProfiles(
@@ -70,6 +168,12 @@ class FilteredScanPreparationTest(unittest.TestCase):
         """Represent one paged index candidate at a time for the fallback tests."""
         for uid in uids:
             yield None, [(uid, "8.8.8.8", {})]
+
+    @staticmethod
+    def chronological_batches(uids):
+        """Represent time-ordered pages with replay cursors."""
+        for offset, uid in enumerate(uids, start=1):
+            yield None, [(uid, "8.8.8.8", {})], (20 - offset, 1), 1
 
     @staticmethod
     def document(uid, port):
@@ -162,7 +266,7 @@ class FilteredScanPreparationTest(unittest.TestCase):
             self.assertIsNotNone(filtered_scans.start_due_cycle(profile, search))
 
     def test_same_target_ports_are_merged_and_retry_is_idempotent(self):
-        """Repeated preparation merges ports without duplicate target rows."""
+        """Repeated observations merge ports into one Kvrocks candidate."""
         meili = Mock()
         meili.get_document.side_effect = [
             self.document("u80", 80),
@@ -172,25 +276,21 @@ class FilteredScanPreparationTest(unittest.TestCase):
         ]
         with patch.object(
             filtered_scans,
-            "observation_batches",
-            side_effect=lambda *_args, **_kwargs: self.observation_batches(
+            "chronological_observation_batches",
+            side_effect=lambda *_args, **_kwargs: self.chronological_batches(
                 ["u80", "u443"]
             ),
-        ), patch.object(filtered_scans, "KVrocksIndexer"), patch.object(
-            filtered_scans, "proven_indexed_ports", return_value={}
-        ):
-            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 2)
+        ), patch.object(filtered_scans, "proven_indexed_ports", return_value={}):
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 1)
             cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
             cycle.preparation_status = "pending"
             self.db.session.commit()
-            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 2)
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 1)
 
-        rows = self.db.session.query(FilteredScanTargets).all()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(
-            (rows[0].target_kind, rows[0].target_value, rows[0].ports),
-            ("ip", "8.8.8.8", "80,443"),
-        )
+        self.assertEqual(self.db.session.query(FilteredScanTargets).count(), 0)
+        store = FilteredWorkStore(self.redis, self.cycle_id, 1)
+        self.assertEqual(store.counts()["retained"], 1)
+        self.assertEqual(store.groups()[0][1]["ports"], "80,443")
         self.assertEqual(
             self.db.session.get(ScanProfileCycles, self.cycle_id).preparation_status,
             "ready",
@@ -202,9 +302,9 @@ class FilteredScanPreparationTest(unittest.TestCase):
         session = self.db.session()
 
         def next_uid(*_args, **_kwargs):
-            for uid in ports:
+            for offset, uid in enumerate(ports, start=1):
                 self.assertFalse(session.in_transaction())
-                yield None, [(uid, "8.8.8.8", {})]
+                yield None, [(uid, "8.8.8.8", {})], (20 - offset, 1), 1
 
         def read_report(uid):
             self.assertFalse(session.in_transaction())
@@ -213,14 +313,42 @@ class FilteredScanPreparationTest(unittest.TestCase):
         meili = Mock()
         meili.get_document.side_effect = read_report
         with (
-            patch.object(filtered_scans, "observation_batches", next_uid),
-            patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "chronological_observation_batches", next_uid),
             patch.object(filtered_scans, "proven_indexed_ports", return_value={}),
-            patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 2),
         ):
-            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 3)
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 1)
         self.assertFalse(session.in_transaction())
-        self.assertEqual(session.query(FilteredScanTargets).one().ports, "80,443,8443")
+        self.assertEqual(session.query(FilteredScanTargets).count(), 0)
+        store = FilteredWorkStore(self.redis, self.cycle_id, 1)
+        self.assertEqual(store.groups()[0][1]["ports"], "80,443,8443")
+
+    def test_candidate_volume_does_not_add_sql_writes(self):
+        """Collection writes cycle state only, regardless of candidate count."""
+        target_id = self.db.session.query(Targets.id).scalar()
+        statements = Counter()
+
+        def count_writes(_conn, _cursor, statement, _params, _context, _many):
+            verb = statement.lstrip().split(None, 1)[0].upper()
+            if verb in {"INSERT", "UPDATE", "DELETE"}:
+                statements[verb] += 1
+
+        event.listen(self.db.engine, "before_cursor_execute", count_writes)
+
+        def pages(*_args, **_kwargs):
+            for offset in range(100):
+                yield None, [(f"u{offset}", "8.8.8.8", {})], (20 - offset / 1000, 1), 1
+
+        def candidates(_indexer, _meili, _plan, observations, *_args):
+            uid = observations[0][0]
+            return [(target_id, "fqdn", f"{uid}.example.org", {443})]
+
+        with patch.object(
+            filtered_scans, "chronological_observation_batches", pages
+        ), patch.object(filtered_scans, "_page_candidates", candidates):
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, Mock()), 100)
+        self.assertEqual(self.db.session.query(FilteredScanTargets).count(), 0)
+        self.assertEqual(statements["INSERT"], 0)
+        self.assertLessEqual(statements["UPDATE"], 2)
 
     def test_profile_edit_during_backend_read_discards_unwritten_batch(self):
         """A stale extraction cannot publish or persist its final batch."""
@@ -238,62 +366,47 @@ class FilteredScanPreparationTest(unittest.TestCase):
         with (
             patch.object(
                 filtered_scans,
-                "observation_batches",
-                return_value=self.observation_batches(ports),
+                "chronological_observation_batches",
+                return_value=self.chronological_batches(ports),
             ),
-            patch.object(filtered_scans, "KVrocksIndexer"),
             patch.object(filtered_scans, "proven_indexed_ports", return_value={}),
-            patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 2),
         ):
-            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 2)
-        row = self.db.session.query(FilteredScanTargets).one()
-        self.assertEqual(row.ports, "80,443")
-        self.assertEqual(row.cycle.preparation_status, "cancelled")
-
-    def test_retry_rebuilds_partial_work_and_preserves_completed_ports(self):
-        """A failed backend read leaves only unpublished work for the next attempt."""
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 1)
         cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
-        target = self.db.session.query(Targets).one()
-        self.db.session.add(
-            FilteredScanTargets(
-                cycle=cycle,
-                configured_target=target,
-                target_kind="ip",
-                target_value=target.value,
-                ports="22",
-                completed_ports="22",
-                status="completed",
-            )
-        )
-        self.db.session.commit()
+        self.assertEqual(cycle.preparation_status, "cancelled")
+        self.assertEqual(self.db.session.query(FilteredScanTargets).count(), 0)
+
+    def test_retry_resumes_after_the_last_committed_kvrocks_page(self):
+        """A failed read keeps collected work and resumes at its saved cursor."""
+        cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
         meili = Mock()
         meili.get_document.side_effect = [
             self.document("u80", 80),
-            TimeoutError("test timeout"),
             self.document("u443", 443),
         ]
+
+        def interrupted(*_args, **_kwargs):
+            yield from self.chronological_batches(["u80"])
+            raise TimeoutError("test timeout")
+
         with (
             patch.object(
                 filtered_scans,
-                "observation_batches",
+                "chronological_observation_batches",
                 side_effect=[
-                    self.observation_batches(["u80", "timeout"]),
-                    self.observation_batches(["u443"]),
+                    interrupted(),
+                    self.chronological_batches(["u443"]),
                 ],
             ),
-            patch.object(filtered_scans, "KVrocksIndexer"),
             patch.object(filtered_scans, "proven_indexed_ports", return_value={}),
-            patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 1),
         ):
             with self.assertRaises(TimeoutError):
                 filtered_scans.prepare_cycle(self.cycle_id, meili)
             self.assertEqual(cycle.preparation_status, "retry")
-            self.assertEqual(
-                self.db.session.query(FilteredScanTargets).one().ports, "80"
-            )
             self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 1)
-        row = self.db.session.query(FilteredScanTargets).one()
-        self.assertEqual((row.ports, row.completed_ports), ("443", "22"))
+        store = FilteredWorkStore(self.redis, self.cycle_id, 1)
+        self.assertEqual(store.groups()[0][1]["ports"], "80,443")
+        self.assertEqual(store.checkpoint(), (19.0, 1))
         self.assertEqual(cycle.preparation_status, "ready")
 
     def test_tag_proof_selects_only_contributing_port(self):
@@ -374,30 +487,24 @@ class FilteredScanPreparationTest(unittest.TestCase):
                 )
                 self.assertEqual(ports, expected)
 
-    def test_revised_filter_subtracts_ports_completed_in_same_cycle(self):
-        """A filter edit queues only newly selected ports for an existing target."""
-        cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
+    def test_kvrocks_candidate_merge_is_idempotent(self):
+        """Replaying one search page does not duplicate its target or ports."""
         target = self.db.session.query(Targets).one()
-        row = FilteredScanTargets(
-            cycle=cycle,
-            configured_target=target,
-            target_kind="ip",
-            target_value="8.8.8.8",
-            ports="443",
-            completed_ports="443",
-            status="completed",
+        store = FilteredWorkStore(self.redis, self.cycle_id, 1)
+        store.begin(10, 20)
+        work = [(target.id, "ip", "8.8.8.8", {443, 8443}, None)]
+        store.add_candidates(work, 1, (19, 1))
+        store.add_candidates(work, 2, (18, 1))
+        store.finish_collection()
+        self.assertEqual(
+            store.groups(),
+            [
+                (
+                    store.groups()[0][0],
+                    {"kind": "ip", "family": None, "ports": "443,8443"},
+                )
+            ],
         )
-        self.db.session.add(row)
-        self.db.session.commit()
-
-        filtered_scans._merge_work(  # pylint: disable=protected-access
-            cycle, target.id, "ip", "8.8.8.8", {443, 8443}
-        )
-        self.db.session.commit()
-
-        self.assertEqual(row.completed_ports, "443")
-        self.assertEqual(row.ports, "8443")
-        self.assertEqual(row.status, "pending")
 
 
 class FilteredJobDeletionTest(ProfileApiFixture):
@@ -568,6 +675,76 @@ class FilteredScanMigrationTest(unittest.TestCase):
             ).fetchall()
         }
         self.assertIn("completed_ports", work_columns)
+
+    def test_kvrocks_cutover_keeps_active_jobs_and_closes_old_cycle(self):
+        """Migration drops queued preparation while active agents may report."""
+        migrate = runpy.run_path(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "webapp"
+                / "sql_upd"
+                / "36_migrate_from_dca246bd1bb5ebb51d51998595b860eab029798e.py"
+            )
+        )["migrate"]
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.executescript("""
+            CREATE TABLE scanprofiles (
+                id INTEGER PRIMARY KEY,
+                current_cycle_id INTEGER,
+                last_cycle_finished_at DATETIME
+            );
+            CREATE TABLE scanprofile_cycles (
+                id INTEGER PRIMARY KEY,
+                scanprofile_id INTEGER,
+                status TEXT,
+                finished_at DATETIME,
+                filter_revision INTEGER,
+                preparation_status TEXT
+            );
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY,
+                scanprofile_cycle_id INTEGER,
+                active BOOLEAN,
+                finished BOOLEAN,
+                exported BOOLEAN,
+                job_end DATETIME
+            );
+            CREATE TABLE filtered_scan_targets (
+                id INTEGER PRIMARY KEY,
+                cycle_id INTEGER
+            );
+            INSERT INTO scanprofiles VALUES (1, 10, NULL);
+            INSERT INTO scanprofile_cycles VALUES (10, 1, 'running', NULL, 7, 'ready');
+            INSERT INTO jobs VALUES (20, 10, 0, 0, 0, NULL);
+            INSERT INTO jobs VALUES (21, 10, 1, 0, 0, NULL);
+            INSERT INTO filtered_scan_targets VALUES (30, 10);
+        """)
+        migrate(connection)
+        migrate(connection)
+        self.assertEqual(
+            connection.execute(
+                "SELECT active, finished, exported FROM jobs ORDER BY id"
+            ).fetchall(),
+            [(0, 1, 1), (1, 0, 0)],
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT status, preparation_status FROM scanprofile_cycles"
+            ).fetchone(),
+            ("finished", "legacy_sql_superseded"),
+        )
+        self.assertIsNone(
+            connection.execute("SELECT current_cycle_id FROM scanprofiles").fetchone()[
+                0
+            ]
+        )
+        self.assertEqual(
+            connection.execute("SELECT COUNT(*) FROM filtered_scan_targets").fetchone()[
+                0
+            ],
+            0,
+        )
 
 
 if __name__ == "__main__":

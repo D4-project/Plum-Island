@@ -384,3 +384,16 @@ Filtered scans reuse transport and nodata indexes and read port evidence in
 bounded batches. Older or ambiguous observations can still be verified from
 the source report. Search results show the TCP ports supported by the matching
 predicate. Opening an observation on `/ip` loads its banners and certificates.
+
+Filtered scan preparation freezes its rolling `since` window when a cycle
+starts. It reads `last_seen_index` newest first and never walks observations
+older than that window. Candidate IP/FQDN and port sets, the replay cursor and
+grouping state live temporarily in Kvrocks. SQLite receives only cycle updates
+and the final scanner jobs. Job UIDs are deterministic for one prepared slice,
+so a restart between the SQL commit and the Kvrocks acknowledgement cannot
+create a duplicate job.
+
+Migration 36 closes filtered cycles using the former SQLite preparation table,
+cancels their waiting jobs and preserves jobs already assigned to agents. Each
+enabled filtered profile starts a fresh cycle immediately. Its next cycles use
+the configured minimum frequency as usual.

@@ -147,7 +147,9 @@ def evaluate_observation_batch(indexer, terms, candidates):
         yield uid, ip, matches
 
 
-def observation_batches(indexer, query, start, end, timeout=10, *, progress=None):
+def observation_batches(  # pylint: disable=too-many-arguments
+    indexer, query, start, end, timeout=10, *, progress=None
+):
     """Yield matched observations with predicate evidence for each index page."""
     deadline = time.monotonic() + timeout if timeout is not None else None
 
@@ -174,6 +176,56 @@ def observation_batches(indexer, query, start, end, timeout=10, *, progress=None
             if matches:
                 yield plan, matches
         check_deadline()
+
+
+def chronological_observation_batches(
+    indexer,
+    query,
+    start,
+    end,
+    timeout=None,
+    *,
+    resume=None,
+):  # pylint: disable=too-many-arguments,too-many-locals
+    """Read only the frozen time window, newest first, with a safe page cursor."""
+    deadline = time.monotonic() + timeout if timeout is not None else None
+
+    def check_deadline():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("Search filter verification timed out.")
+
+    client = indexer.r
+    plan = build_plan(query, scoped_membership=True, factor=False)
+    terms = tuple(dict.fromkeys(plan_terms(plan)))
+    maximum, offset = resume or (end, 0)
+    while maximum >= start:
+        check_deadline()
+        entries = client.zrevrangebyscore(
+            "last_seen_index",
+            maximum,
+            start,
+            start=offset,
+            num=BATCH_SIZE,
+            withscores=True,
+        )
+        if not entries:
+            return
+        last_score = entries[-1][1]
+        next_offset = offset if last_score == maximum else 0
+        next_offset += sum(score == last_score for _, score in entries)
+        cursor = (last_score, next_offset)
+        candidates = list(
+            _recent_candidates(client, [uid for uid, _score in entries], start, end)
+        )
+        matches = []
+        if candidates:
+            matches = [
+                item
+                for item in evaluate_observation_batch(indexer, terms, candidates)
+                if _matches(plan, item[2])
+            ]
+        yield plan, matches, cursor, len(entries)
+        maximum, offset = cursor
 
 
 def matching_observations(indexer, query, start, end, timeout=10):

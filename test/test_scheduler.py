@@ -94,7 +94,7 @@ class StalledJobWatchdogTest(TestCase):
         return models, session, profile, cycle, states
 
     def test_filtered_targets_become_agent_jobs_grouped_by_ports(self):
-        """Prepared rows preserve exact ports and 256-target job boundary."""
+        """Kvrocks groups preserve exact ports and 256-target job boundary."""
         models = importlib.import_module("app.models")
         engine = create_engine("sqlite:///:memory:")
         self.addCleanup(engine.dispose)
@@ -113,32 +113,124 @@ class StalledJobWatchdogTest(TestCase):
         target = models.Targets(value="93.184.216.0/24", is_ip_cidr=True)
         session.add_all([profile, cycle, target])
         session.flush()
+        records = {}
         for offset in range(257):
-            session.add(
-                models.FilteredScanTargets(
-                    cycle=cycle,
-                    configured_target=target,
-                    target_kind="ip",
-                    target_value=f"93.184.{offset // 256}.{offset % 256}",
-                    ports="80,443" if offset < 256 else "8443",
+            ports = "80,443" if offset < 256 else "8443"
+            records.setdefault(ports, []).append(
+                json.dumps(
+                    {
+                        "target_id": target.id,
+                        "kind": "ip",
+                        "value": f"93.184.{offset // 256}.{offset % 256}",
+                        "family": None,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
             )
         session.commit()
-        with mock.patch.object(self.scheduler.db, "session", session):
+
+        class WorkStore:
+            def groups(self):
+                return [
+                    (ports, {"kind": "ip", "family": None, "ports": ports})
+                    for ports, members in records.items() if members
+                ]
+
+            @staticmethod
+            def peek(group_id, limit):
+                return records[group_id][:limit]
+
+            @staticmethod
+            def acknowledge(group_id, members):
+                records[group_id] = [
+                    member for member in records[group_id] if member not in members
+                ]
+
+            def empty(self):
+                return not any(records.values())
+
+            @staticmethod
+            def reset():
+                return None
+
+        with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
+            self.scheduler, "FilteredWorkStore", return_value=WorkStore()
+        ):
             created = self.scheduler._stage_filtered_jobs(
                 profile, cycle, "banner.nse", max_jobs=2
             )
-            session.commit()
         self.assertEqual(created, 2)
         jobs = session.query(models.Jobs).order_by(models.Jobs.scan_ports).all()
         self.assertEqual(
             [(job.scan_ports, len(job.job.split(","))) for job in jobs],
             [("80,443", 256), ("8443", 1)],
         )
-        self.assertTrue(all(row.status == "queued" for row in cycle.filtered_targets))
+        self.assertEqual(session.query(models.FilteredScanTargets).count(), 0)
+        self.assertEqual(cycle.preparation_status, "queued")
 
-    def test_filtered_restart_and_revision_preserve_completed_ports(self):
-        """Interrupted extraction resumes; repeated edits retain completed receipts."""
+    def test_filtered_job_commit_is_recovered_before_kvrocks_ack(self):
+        """A retry acknowledges the same deterministic job without duplicating it."""
+        models = importlib.import_module("app.models")
+        engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
+        models.Model.metadata.create_all(engine)
+        session = sessionmaker(bind=engine)()
+        self.addCleanup(session.close)
+        profile = models.ScanProfiles(
+            name="Filtered", search_query="tag:vendor:nginx", filter_revision=1
+        )
+        cycle = models.ScanProfileCycles(
+            scanprofile=profile, status="running", filter_revision=1,
+            preparation_status="ready",
+        )
+        target = models.Targets(value="192.0.2.0/24", is_ip_cidr=True)
+        session.add_all([profile, cycle, target])
+        session.commit()
+        member = json.dumps(
+            {"target_id": target.id, "kind": "ip", "value": "192.0.2.1", "family": None},
+            sort_keys=True, separators=(",", ":"),
+        )
+
+        class WorkStore:
+            pending = [member]
+            fail = True
+
+            def groups(self):
+                return [("group", {"kind": "ip", "family": None, "ports": "443"})]
+
+            def peek(self, _group_id, _limit):
+                return list(self.pending)
+
+            def acknowledge(self, _group_id, _members):
+                if self.fail:
+                    self.fail = False
+                    raise self_scheduler.RedisError("test acknowledgement failure")
+                self.pending.clear()
+
+            def empty(self):
+                return not self.pending
+
+            @staticmethod
+            def reset():
+                return None
+
+        self_scheduler = self.scheduler
+        store = WorkStore()
+        with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
+            self.scheduler, "FilteredWorkStore", return_value=store
+        ):
+            with self.assertRaises(self.scheduler.RedisError):
+                self.scheduler._stage_filtered_jobs(profile, cycle, "", max_jobs=1)
+            self.assertEqual(session.query(models.Jobs).count(), 1)
+            self.assertEqual(
+                self.scheduler._stage_filtered_jobs(profile, cycle, "", max_jobs=1), 0
+            )
+        self.assertEqual(session.query(models.Jobs).count(), 1)
+        self.assertEqual(cycle.preparation_status, "queued")
+
+    def test_filtered_revision_closes_old_cycle_and_restarts_immediately(self):
+        """A changed filter abandons old preparation and starts one fresh cycle."""
         models = importlib.import_module("app.models")
         engine = create_engine("sqlite:///:memory:")
         self.addCleanup(engine.dispose)
@@ -153,13 +245,7 @@ class StalledJobWatchdogTest(TestCase):
             scanprofile=profile, filter_revision=1, status="running",
             preparation_status="extracting",
         )
-        target = models.Targets(value="8.8.8.8", is_ip_cidr=True)
-        receipt = models.FilteredScanTargets(
-            cycle=cycle, configured_target=target, target_kind="ip",
-            target_value="8.8.8.8", ports="8443", completed_ports="443",
-            status="pending",
-        )
-        session.add_all([cycle, receipt])
+        session.add(cycle)
         session.commit()
         with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
             session, "remove", create=True
@@ -171,10 +257,16 @@ class StalledJobWatchdogTest(TestCase):
             session.commit()
             self.assertNotIn("error", self.scheduler.task_prepare_filtered_scans())
             session.expire_all()
-            self.assertEqual(receipt.completed_ports, "443")
-            self.assertEqual(receipt.status, "completed")
-            self.assertEqual(cycle.filter_revision, 2)
-            prepare.assert_called_once_with(cycle.id, self.scheduler.index)
+            old = session.get(models.ScanProfileCycles, cycle.id)
+            self.assertEqual(old.status, "finished")
+            self.assertEqual(old.preparation_status, "superseded_kvrocks")
+            current = (
+                session.query(models.ScanProfileCycles)
+                .filter_by(scanprofile_id=profile.id, status="running")
+                .one()
+            )
+            self.assertEqual(current.filter_revision, 2)
+            prepare.assert_called_once_with(current.id, self.scheduler.index)
 
     def test_cached_unannounced_jobs_finish_without_scanner_or_export(self):
         """Fresh ASN zero completes IPv4/IPv6 while FQDN work stays queued."""
