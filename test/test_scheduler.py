@@ -131,7 +131,7 @@ class StalledJobWatchdogTest(TestCase):
         session.commit()
 
         class WorkStore:
-            def groups(self):
+            def iter_groups(self):
                 return [
                     (ports, {"kind": "ip", "family": None, "ports": ports})
                     for ports, members in records.items() if members
@@ -196,7 +196,7 @@ class StalledJobWatchdogTest(TestCase):
             pending = [member]
             fail = True
 
-            def groups(self):
+            def iter_groups(self):
                 return [("group", {"kind": "ip", "family": None, "ports": "443"})]
 
             def peek(self, _group_id, _limit):
@@ -220,6 +220,13 @@ class StalledJobWatchdogTest(TestCase):
         with mock.patch.object(self.scheduler.db, "session", session), mock.patch.object(
             self.scheduler, "FilteredWorkStore", return_value=store
         ):
+            self.assertEqual(
+                self.scheduler._stage_filtered_jobs(
+                    profile, cycle, "", max_jobs=1, deadline=0
+                ), 0
+            )
+            self.assertEqual(session.query(models.Jobs).count(), 0)
+            self.assertEqual(store.pending, [member])
             with self.assertRaises(self.scheduler.RedisError):
                 self.scheduler._stage_filtered_jobs(profile, cycle, "", max_jobs=1)
             self.assertEqual(session.query(models.Jobs).count(), 1)

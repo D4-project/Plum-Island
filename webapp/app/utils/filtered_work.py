@@ -157,6 +157,18 @@ class FilteredWorkStore:  # pylint: disable=too-many-public-methods
             )
         ]
 
+    def iter_groups(self):
+        """Stream bounded group pages; consumed groups may disappear during scan."""
+        cursor = 0
+        while True:
+            cursor, records = self.raw.hscan(
+                self.keys["groups"], cursor=cursor, count=SCAN_BATCH_SIZE
+            )
+            for group_id, metadata in records.items():
+                yield group_id, json.loads(metadata)
+            if not cursor:
+                break
+
     def peek(self, group_id, limit):
         """Read one deterministic candidate slice without consuming it."""
         return self.raw.zrange(self.group_key(group_id), 0, max(0, limit - 1))

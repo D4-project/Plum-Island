@@ -393,6 +393,11 @@ and the final scanner jobs. Job UIDs are deterministic for one prepared slice,
 so a restart between the SQL commit and the Kvrocks acknowledgement cannot
 create a duplicate job.
 
+The upper time bound is the cycle start timestamp, not the end of that UTC day.
+Job staging streams group pages and checks the scheduler time budget between
+bounded slices, including discarded unsupported address families. Empty
+collections remove their temporary Kvrocks state before completing the cycle.
+
 Migration 36 closes filtered cycles using the former SQLite preparation table,
 cancels their waiting jobs and preserves jobs already assigned to agents. Each
 enabled filtered profile starts a fresh cycle immediately. Its next cycles use

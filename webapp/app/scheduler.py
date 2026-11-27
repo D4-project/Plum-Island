@@ -1514,9 +1514,11 @@ def _stage_jobs_for_profile(
     }
 
 
-def _stage_filtered_jobs(profile, cycle, scan_nses, max_jobs):
+def _stage_filtered_jobs(profile, cycle, scan_nses, max_jobs, deadline=None):
     """Consume prepared Kvrocks groups into replay-safe SQL jobs."""
     jobs_created = 0
+    if deadline is None:
+        deadline = time.perf_counter() + DEFAULT_QUEUE_TIME_BUDGET_SECONDS
     store = FilteredWorkStore(
         db.app.config["KVROCKS_IDX"].raw, cycle.id, cycle.filter_revision
     )
@@ -1525,20 +1527,24 @@ def _stage_filtered_jobs(profile, cycle, scan_nses, max_jobs):
         if profile.scan_tool == "masscan"
         else None
     )
-    while jobs_created < max_jobs:
+    groups = iter(store.iter_groups())
+    current_group = None
+    while jobs_created < max_jobs and time.perf_counter() < deadline:
         selected = None
-        for group_id, metadata in store.groups():
+        while time.perf_counter() < deadline:
+            if current_group is None:
+                current_group = next(groups, None)
+            if current_group is None:
+                break
+            group_id, metadata = current_group
+            members = store.peek(group_id, JOB_TARGET_CHUNK_SIZE)
+            if not members:
+                current_group = None
+                continue
             family = metadata.get("family")
             if available_families is not None and family not in available_families:
-                while members := store.peek(group_id, JOB_TARGET_CHUNK_SIZE):
-                    store.acknowledge(group_id, members)
-                logger.warning(
-                    "Filtered Masscan profile %s skipped %s work with no enabled agent",
-                    profile.name,
-                    family or "unknown-family",
-                )
+                store.acknowledge(group_id, members)
                 continue
-            members = store.peek(group_id, JOB_TARGET_CHUNK_SIZE)
             if members:
                 selected = group_id, metadata, members
                 break
@@ -1864,6 +1870,7 @@ def task_create_jobs():
                 scan_cycle,
                 _serialize_profile_nses(profile),
                 queue_deficit,
+                deadline=generation_deadline,
             )
             db.session.commit()
             if scan_cycle.preparation_status == "queued":

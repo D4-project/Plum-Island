@@ -2,7 +2,7 @@
 
 import ipaddress
 import logging
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 from meilisearch.errors import MeilisearchApiError, MeilisearchError
 from redis.exceptions import RedisError
@@ -370,6 +370,8 @@ def prepare_cycle(cycle_id, meili_index):  # pylint: disable=too-many-locals
                 store.finish_collection()
             counts = store.counts()
             retained = counts["retained"]
+            if not retained:
+                store.reset()
             _finish_preparation(
                 cycle_id,
                 revision,
@@ -417,7 +419,7 @@ def start_due_cycle(profile, search_view):
         preparation_status="pending",
         filter_query=profile.search_query,
         filter_from_ts=window["from_ts"],
-        filter_to_ts=window["to_ts"],
+        filter_to_ts=int(now.replace(tzinfo=timezone.utc).timestamp()),
     )
     db.session.add(cycle)
     db.session.flush()

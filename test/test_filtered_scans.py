@@ -6,7 +6,7 @@ import unittest
 import uuid
 import fnmatch
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -263,7 +263,24 @@ class FilteredScanPreparationTest(unittest.TestCase):
             cycle.finished_at = now
             profile.last_cycle_finished_at = now
             self.db.session.commit()
-            self.assertIsNotNone(filtered_scans.start_due_cycle(profile, search))
+            created = filtered_scans.start_due_cycle(profile, search)
+            self.assertIsNotNone(created)
+            self.assertEqual(
+                created.filter_to_ts,
+                int(now.replace(tzinfo=timezone.utc).timestamp()),
+            )
+
+    def test_empty_collection_removes_temporary_state(self):
+        """Empty recurring tours must not accumulate persistent Kvrocks keys."""
+        with patch.object(
+            filtered_scans, "chronological_observation_batches", return_value=iter(())
+        ):
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, Mock()), 0)
+        self.assertEqual(self.redis.data, {})
+        self.assertEqual(
+            self.db.session.get(ScanProfileCycles, self.cycle_id).preparation_status,
+            "no_matches",
+        )
 
     def test_same_target_ports_are_merged_and_retry_is_idempotent(self):
         """Repeated observations merge ports into one Kvrocks candidate."""
