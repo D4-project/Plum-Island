@@ -18,14 +18,14 @@ It requires both `PASSIVE_USER` and `PASSIVE_PWD` before settings can be saved
 with the switch on. `setup.sh` enables it only when the operator selects Passive
 DNS and supplies both credentials. Existing installations without the switch
 retain their previous credential-based behavior after upgrade; an explicit
-`PDNS_ENABLED = False` always disables it. Restart Plum-Agent after changing it.
+`PDNS_ENABLED = False` always disables it. Restart Plum-Island after changing it.
 Disabled Passive DNS stays visible as a status on IP pages; reports and exports
 omit PDNS data. If an enabled lookup fails, IP pages show a failure dialog and
 reports/exports warn that PDNS data is incomplete.
 
 Under **IP detail map**, **Show location map** (`MAP_ENABLED`, default **True**)
 controls the Location card in the IP detail **Informations** tab. Restart
-**Plum-Agent** after changing it. See [network requirements](network.md#browser-and-scanner-traffic)
+**Plum-Island** after changing it. See [network requirements](network.md#browser-and-scanner-traffic)
 for the browser’s tile requests.
 
 ## Cards and field help
@@ -33,7 +33,7 @@ for the browser’s tile requests.
 Cards group connectivity to Meilisearch, Kvrocks, CIRCL services and SMTP;
 scheduling; background indexing; storage and retention; search, reports and
 domain parsing; and logging. Each field shows its purpose, unit, configuration
-key, **Default: …**, and **Restart required: Plum-Agent**. Defaults remain visible
+key, **Default: …**, and **Restart required: Plum-Island**. Defaults remain visible
 after saving a different value. Empty defaults say **Not set**; the insecure
 example Meilisearch key is never offered as a usable default.
 
@@ -67,13 +67,13 @@ restart a process, or reindex data. Fields whose saved values differ from the
 current web process show **Pending restart** and the applied non-secret value.
 Secret changes show pending status without either value.
 
-Every page displays a persistent **Configuration changed. Restart Plum-Agent to
+Every page displays a persistent **Configuration changed. Restart Plum-Island to
 apply changes.** banner while saved settings differ from the loaded configuration.
 It survives navigation and cannot be dismissed like a normal flash message. It
 disappears after restart, or when pending edits are reverted to the applied values.
 All roles see the reminder; it contains no configuration values or credentials.
 
-Restart **Plum-Agent**, using your normal process manager. This includes the web
+Restart **Plum-Island**, using your normal process manager. This includes the web
 application and scheduler. In the shipped launcher, the scheduler runs inside the web
 application and owns its indexing child; it is not a separate service. Restarting
 only the indexing child is insufficient: it inherits its parent's already-applied

@@ -89,8 +89,10 @@ python run.py
 
 ### Application logs
 
-`LOG_LEVEL` in `webapp/config.py` controls the root logger, including console
-output, even when `LOG_ENABLED = False`. Standard levels are `DEBUG`, `INFO`,
+`LOG_LEVEL` in `webapp/config.py` sets the minimum severity for Plum-Island's
+console output, including messages from its HTTP libraries. A saved override in
+**Security → Plum Settings → Logging** takes precedence. Restart Plum-Island to
+apply the effective setting. Standard levels are `DEBUG`, `INFO`,
 `WARNING`, `ERROR` and `CRITICAL` (case-insensitive). Missing or invalid values
 fall back to `WARNING`. Existing explicit `DEBUG` settings remain effective;
 set `INFO` or `WARNING` to reduce production log volume, then restart the app.

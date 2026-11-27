@@ -50,7 +50,7 @@ class PlumSettingsView(BaseView):
                 )
                 if runtime.pending(updated):
                     flash(
-                        "Settings saved. Restart Plum-Agent to apply changes.",
+                        "Settings saved. Restart Plum-Island to apply changes.",
                         "info",
                     )
                 else:

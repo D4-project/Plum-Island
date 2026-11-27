@@ -157,7 +157,7 @@ class PlumSettingsUiTest(unittest.TestCase):
                     r'<option value="true">[^<]*</option>\s*'
                     r'<option value="false" selected>',
                 )
-                self.assertIn("Restart Plum-Agent to apply changes.", page)
+                self.assertIn("Restart Plum-Island to apply changes.", page)
                 self.assertNotIn("Web application and scheduler", page)
                 self.assertNotIn("Use runtime default", page)
                 self.assertRegex(page, r'name="KVROCKS_PORT"[^>]*value="6666"')

@@ -51,6 +51,36 @@ class ApplicationLoggingTest(TestCase):
                 self.assertEqual(output.getvalue().splitlines(), expected)
                 self.assertEqual(root.handlers, [handler])
 
+    def test_console_filters_explicit_library_debug_levels(self):
+        """Propagated records honor the app threshold with file logging off."""
+        root = logging.Logger("isolated-root")
+        output = io.StringIO()
+        handler = logging.StreamHandler(output)
+        root.addHandler(handler)
+        sources = [
+            logging.Logger(name, logging.DEBUG)
+            for name in ("flask_appbuilder", "urllib3.connectionpool")
+        ]
+        for source in sources:
+            source.parent = root
+        with mock.patch("app.logging_config.logging.getLogger", return_value=root):
+            configure_logging({"LOG_LEVEL": "WARNING", "LOG_ENABLED": False})
+            for source in sources:
+                source.debug("suppressed")
+                source.warning("warning from %s", source.name)
+            configure_logging({"LOG_LEVEL": "DEBUG", "LOG_ENABLED": False})
+            for source in sources:
+                source.debug("debug from %s", source.name)
+        self.assertEqual(
+            output.getvalue().splitlines(),
+            [
+                "warning from flask_appbuilder",
+                "warning from urllib3.connectionpool",
+                "debug from flask_appbuilder",
+                "debug from urllib3.connectionpool",
+            ],
+        )
+
     def test_missing_or_invalid_level_falls_back_to_warning(self):
         """Missing names and non-level module attributes must neither crash nor debug."""
         configs = [{}] + [

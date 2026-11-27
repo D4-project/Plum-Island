@@ -28,6 +28,18 @@ def configured_log_directory(config):
     return (WEBAPP_DIR / path).resolve()
 
 
+class _MinimumLogLevel(logging.Filter):  # pylint: disable=too-few-public-methods
+    """Apply Plum's severity threshold to propagated records at the handler."""
+
+    def __init__(self, level):
+        super().__init__()
+        self.level = level
+
+    def filter(self, record):
+        """Allow records at or above the configured severity."""
+        return record.levelno >= self.level
+
+
 class DateFileHandler(logging.Handler):
     """Write logs to date-named files and remove files past retention."""
 
@@ -107,6 +119,18 @@ def configure_logging(config):
     level = LOG_LEVELS.get(level_name, logging.WARNING)
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
+    # A child logger with an explicit level bypasses the root logger's level
+    # when its records propagate. Filter at the handlers without lowering
+    # thresholds a process manager may have set on its own handlers.
+    for handler in root_logger.handlers:
+        minimum = next(
+            (rule for rule in handler.filters if isinstance(rule, _MinimumLogLevel)),
+            None,
+        )
+        if minimum is None:
+            handler.addFilter(_MinimumLogLevel(level))
+        else:
+            minimum.level = level
 
     if not config.get("LOG_ENABLED", False):
         return None

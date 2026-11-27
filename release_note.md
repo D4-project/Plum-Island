@@ -1,5 +1,9 @@
 # Unreleased
 
+- Apply Plum-Island's configured minimum severity to console messages from
+  libraries that set their own log levels. Name Plum-Island in the settings
+  restart prompts.
+
 - Complete jobs with empty agent reports at receipt without writing a report
   file or queueing an export. Keep the job, scan statistics, and report URL
   available until normal job cleanup.

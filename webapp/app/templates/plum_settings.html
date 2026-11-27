@@ -24,7 +24,7 @@
         {% else %}
         <strong>No pending changes</strong>
         {% endif %}
-        <p>Restart Plum-Agent to apply changes.</p>
+        <p>Restart Plum-Island to apply changes.</p>
       </div>
       <button type="submit" class="btn btn-primary"><i class="fa fa-save" aria-hidden="true"></i> Save settings</button>
     </div>
@@ -91,7 +91,7 @@
             <div id="help-{{ field.key }}" class="settings-help">
               <p>{{ field.help }}</p>
               <p class="settings-default"><strong>Default:</strong> {{ item.default }}{% if field.unit %} {{ field.unit }}{% endif %}</p>
-              <p class="settings-application">{% if field.inactive %}<strong>Inactive legacy setting</strong>{% else %}<strong>Restart required:</strong> Plum-Agent{% endif %}</p>
+              <p class="settings-application">{% if field.inactive %}<strong>Inactive legacy setting</strong>{% else %}<strong>Restart required:</strong> Plum-Island{% endif %}</p>
               <p class="settings-key"><code>{{ field.key }}</code></p>
             </div>
             {% if item.pending %}
