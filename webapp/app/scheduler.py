@@ -1705,21 +1705,22 @@ def task_prepare_filtered_scans():
                 )
                 if unfinished_cycle_job is not None:
                     continue
+                cycle_id, profile_id = cycle.id, profile.id
                 try:
                     result = {
-                        "cycle_id": cycle.id,
-                        "targets": prepare_cycle(cycle.id, index),
+                        "cycle_id": cycle_id,
+                        "targets": prepare_cycle(cycle_id, index),
                     }
-                    cycle = db.session.get(ScanProfileCycles, cycle.id)
-                    if cycle.preparation_status == "no_matches":
-                        reconcile_scanprofile_cycle(profile.id, cycle=cycle)
+                    cycle = db.session.get(ScanProfileCycles, cycle_id)
+                    if cycle is not None and cycle.preparation_status == "no_matches":
+                        reconcile_scanprofile_cycle(profile_id, cycle=cycle)
                         db.session.commit()
                     return result
                 except Exception as error:  # pylint: disable=broad-except
                     logger.exception(
-                        "Filtered scan preparation failed for cycle %s", cycle.id
+                        "Filtered scan preparation failed for cycle %s", cycle_id
                     )
-                    return {"cycle_id": cycle.id, "error": type(error).__name__}
+                    return {"cycle_id": cycle_id, "error": type(error).__name__}
         return {"cycle_id": None, "targets": 0}
     finally:
         db.session.remove()

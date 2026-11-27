@@ -1335,7 +1335,18 @@ class ScanProfileCycles(Model):
             queued_jobs,
             active_jobs,
         )
-        return blockers or "reconciliation pending"
+        if blockers:
+            return blockers
+        if self.preparation_status in {
+            "pending",
+            "extracting",
+            "retry",
+            "revising",
+            "ready",
+            "error",
+        }:
+            return "Target evaluation"
+        return "PostJob Reconciliation"
 
     def duration_html(self):
         """

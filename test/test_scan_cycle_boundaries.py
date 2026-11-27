@@ -127,6 +127,21 @@ class ScanCycleBoundaryTest(unittest.TestCase):
             self.assertNotIn("finalizing", cycle.progress_html())
             self.assertNotIn("finalizing", cycle.summary_badge_html("Previous"))
 
+    def test_empty_blocker_summary_names_the_cycle_phase(self):
+        """Tell pre-job preparation apart from scheduler finalization."""
+        cycle = ScanProfileCycles(status="running", filter_revision=1)
+        for status in ("pending", "extracting", "retry", "revising", "ready", "error"):
+            with self.subTest(status=status):
+                cycle.preparation_status = status
+                self.assertEqual(cycle.blocker_summary(), "Target evaluation")
+
+        cycle.preparation_status = "queued"
+        self.assertEqual(cycle.blocker_summary(), "PostJob Reconciliation")
+        with mock.patch.object(cycle, "_job_blocker_counts", return_value=(2, 1)):
+            self.assertEqual(cycle.blocker_summary(), "2 queued job, 1 active job")
+        cycle.status = "finished"
+        self.assertEqual(cycle.blocker_summary(), "")
+
 
 class ScanCycleBoundaryMigrationTest(unittest.TestCase):
     """Validate migration of cycles with jobs already in progress."""

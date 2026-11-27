@@ -178,6 +178,98 @@ class FilteredScanPreparationTest(unittest.TestCase):
             "ready",
         )
 
+    def test_backend_reads_do_not_hold_a_sql_transaction_between_batches(self):
+        """Even slow backend reads run outside every SQLite writer transaction."""
+        ports = {"u80": 80, "u443": 443, "u8443": 8443}
+        session = self.db.session()
+
+        def next_uid(*_args, **_kwargs):
+            for uid in ports:
+                self.assertFalse(session.in_transaction())
+                yield uid
+
+        def read_report(uid):
+            self.assertFalse(session.in_transaction())
+            return self.document(uid, ports[uid])
+
+        meili = Mock()
+        meili.get_document.side_effect = read_report
+        with (
+            patch.object(filtered_scans, "matching_observations", next_uid),
+            patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 2),
+        ):
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 3)
+        self.assertFalse(session.in_transaction())
+        self.assertEqual(session.query(FilteredScanTargets).one().ports, "80,443,8443")
+
+    def test_profile_edit_during_backend_read_discards_unwritten_batch(self):
+        """A stale extraction cannot publish or persist its final batch."""
+        ports = {"u80": 80, "u443": 443, "u8443": 8443}
+
+        def read_report(uid):
+            if uid == "u8443":
+                profile = self.db.session.query(ScanProfiles).one()
+                profile.filter_revision += 1
+                self.db.session.commit()
+            return self.document(uid, ports[uid])
+
+        meili = Mock()
+        meili.get_document.side_effect = read_report
+        with (
+            patch.object(
+                filtered_scans, "matching_observations", return_value=iter(ports)
+            ),
+            patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 2),
+        ):
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 2)
+        row = self.db.session.query(FilteredScanTargets).one()
+        self.assertEqual(row.ports, "80,443")
+        self.assertEqual(row.cycle.preparation_status, "cancelled")
+
+    def test_retry_rebuilds_partial_work_and_preserves_completed_ports(self):
+        """A failed backend read leaves only unpublished work for the next attempt."""
+        cycle = self.db.session.get(ScanProfileCycles, self.cycle_id)
+        target = self.db.session.query(Targets).one()
+        self.db.session.add(
+            FilteredScanTargets(
+                cycle=cycle,
+                configured_target=target,
+                target_kind="ip",
+                target_value=target.value,
+                ports="22",
+                completed_ports="22",
+                status="completed",
+            )
+        )
+        self.db.session.commit()
+        meili = Mock()
+        meili.get_document.side_effect = [
+            self.document("u80", 80),
+            TimeoutError("test timeout"),
+            self.document("u443", 443),
+        ]
+        with (
+            patch.object(
+                filtered_scans,
+                "matching_observations",
+                side_effect=[iter(["u80", "timeout"]), iter(["u443"])],
+            ),
+            patch.object(filtered_scans, "KVrocksIndexer"),
+            patch.object(filtered_scans, "PREPARATION_BATCH_SIZE", 1),
+        ):
+            with self.assertRaises(TimeoutError):
+                filtered_scans.prepare_cycle(self.cycle_id, meili)
+            self.assertEqual(cycle.preparation_status, "retry")
+            self.assertEqual(
+                self.db.session.query(FilteredScanTargets).one().ports, "80"
+            )
+            self.assertEqual(filtered_scans.prepare_cycle(self.cycle_id, meili), 1)
+        row = self.db.session.query(FilteredScanTargets).one()
+        self.assertEqual((row.ports, row.completed_ports), ("443", "22"))
+        self.assertEqual(cycle.preparation_status, "ready")
+
     def test_tag_proof_selects_only_contributing_port(self):
         """A service tag must retain its producing port, not sibling ports."""
         document = {
@@ -273,7 +365,7 @@ class FilteredScanPreparationTest(unittest.TestCase):
         self.db.session.commit()
 
         filtered_scans._merge_work(  # pylint: disable=protected-access
-            cycle, target, "ip", "8.8.8.8", {443, 8443}
+            cycle, target.id, "ip", "8.8.8.8", {443, 8443}
         )
         self.db.session.commit()
 

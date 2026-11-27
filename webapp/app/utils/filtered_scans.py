@@ -3,9 +3,11 @@
 import ipaddress
 import logging
 from datetime import timedelta
+from itertools import islice
 
 from meilisearch.errors import MeilisearchError
 from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
 from app.models import (
@@ -47,6 +49,7 @@ PORT_EVIDENCE_FIELDS = {
 }
 DIRECT_PORT_FIELDS = PORT_EVIDENCE_FIELDS - {"tag"}
 REQUESTED_HOST_FIELDS = {"fqdn_requested", "domain_requested"}
+PREPARATION_BATCH_SIZE = 100
 
 
 def query_can_prove_port(criteria):
@@ -214,12 +217,14 @@ def _matching_ports(document, criteria, rules, parser_config):
 
 
 def _selection_context():
-    targets = db.session.query(Targets).all()
-    exact = {target.value.strip().rstrip(".").lower(): target for target in targets}
+    targets = db.session.query(Targets.id, Targets.value).all()
+    exact = {
+        value.strip().rstrip(".").lower(): target_id for target_id, value in targets
+    }
     networks = []
-    for target in targets:
+    for target_id, value in targets:
         try:
-            networks.append((ipaddress.ip_network(target.value, strict=False), target))
+            networks.append((ipaddress.ip_network(value, strict=False), target_id))
         except ValueError:
             continue
     networks.sort(key=lambda item: item[0].prefixlen, reverse=True)
@@ -237,9 +242,13 @@ def filtered_candidates(
     to_ts,
     parser_config,
     timeout=None,
+    *,
+    selection=None,
 ):  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Yield validated configured targets and exact matching TCP port sets."""
-    exact, networks, rules = _selection_context()
+    exact, networks, rules = (
+        selection if selection is not None else _selection_context()
+    )
     for uid in matching_observations(
         indexer, criteria, from_ts, to_ts, timeout=timeout
     ):
@@ -272,11 +281,13 @@ def first_scan_candidate(
     )
 
 
-def _merge_work(cycle, configured_target, kind, value, ports, scan_family=None):
+def _merge_work(cycle, target_id, kind, value, ports, scan_family=None):
     row = (
         db.session.query(FilteredScanTargets)
         .filter_by(
-            cycle_id=cycle.id, target_kind=kind, target_value=value,
+            cycle_id=cycle.id,
+            target_kind=kind,
+            target_value=value,
             scan_family=scan_family,
         )
         .one_or_none()
@@ -295,7 +306,7 @@ def _merge_work(cycle, configured_target, kind, value, ports, scan_family=None):
     if row is None:
         row = FilteredScanTargets(
             cycle=cycle,
-            configured_target=configured_target,
+            configured_target_id=target_id,
             target_kind=kind,
             target_value=value,
             scan_family=scan_family,
@@ -311,36 +322,88 @@ def _merge_work(cycle, configured_target, kind, value, ports, scan_family=None):
 
 def _reset_unpublished_work(cycle):
     """Discard partial extraction output while retaining completed scan work."""
-    rows = (
-        db.session.query(FilteredScanTargets)
-        .filter_by(cycle_id=cycle.id, status="pending", job_id=None)
-        .all()
+    pending = db.session.query(FilteredScanTargets).filter_by(
+        cycle_id=cycle.id, status="pending", job_id=None
     )
-    for row in rows:
-        completed = sorted(
-            int(port) for port in (row.completed_ports or "").split(",") if port
+    pending.filter(
+        FilteredScanTargets.completed_ports.isnot(None),
+        FilteredScanTargets.completed_ports != "",
+    ).update(
+        {
+            FilteredScanTargets.ports: FilteredScanTargets.completed_ports,
+            FilteredScanTargets.status: "completed",
+        },
+        synchronize_session=False,
+    )
+    pending.delete(synchronize_session=False)
+
+
+def _lock_preparation(cycle_id, revision=None):
+    """Start a short write transaction and verify that the cycle still owns it."""
+    connection = db.session.connection()
+    if connection.dialect.name == "sqlite":
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+    query = (
+        db.session.query(ScanProfileCycles, ScanProfiles)
+        .join(ScanProfileCycles.scanprofile)
+        .filter(ScanProfileCycles.id == cycle_id, ScanProfileCycles.status == "running")
+    )
+    if revision is not None:
+        query = query.filter(
+            ScanProfileCycles.filter_revision == revision,
+            ScanProfileCycles.preparation_status == "extracting",
         )
-        if completed:
-            row.ports = ",".join(map(str, completed))
-            row.status = "completed"
-        else:
-            db.session.delete(row)
-
-
-@pinned_read
-def prepare_cycle(
-    cycle_id, meili_index
-):  # pylint: disable=too-many-locals,too-many-statements
-    """Rebuild one cycle's target list. Safe to retry before publication."""
-    cycle = db.session.query(ScanProfileCycles).filter_by(id=cycle_id).one_or_none()
-    if cycle is None or cycle.status != "running":
-        return 0
-    profile = db.session.query(ScanProfiles).filter_by(id=cycle.scanprofile_id).one()
+    current = query.with_for_update().one_or_none()
+    if current is None:
+        db.session.rollback()
+        return None
+    cycle, profile = current
     if not profile.scan_enabled or profile.filter_revision != cycle.filter_revision:
         cycle.preparation_status = "cancelled"
         db.session.commit()
-        return 0
+        return None
+    return current
 
+
+def _finish_preparation(cycle_id, revision, status):
+    current = _lock_preparation(cycle_id, revision)
+    if current is not None:
+        cycle, _profile = current
+        cycle.preparation_status = status
+        db.session.commit()
+
+
+def _write_preparation_batches(cycle_id, revision, candidates, scan_tool):
+    accepted = 0
+    while batch := list(islice(candidates, PREPARATION_BATCH_SIZE)):
+        current = _lock_preparation(cycle_id, revision)
+        if current is None:
+            return accepted
+        cycle, _profile = current
+        for target_id, kind, value, ports in batch:
+            if scan_tool == "masscan":
+                families = (
+                    ("ipv4", "ipv6")
+                    if kind == "fqdn"
+                    else (
+                        "ipv4" if ipaddress.ip_address(value).version == 4 else "ipv6",
+                    )
+                )
+            else:
+                families = (None,)
+            for family in families:
+                _merge_work(cycle, target_id, kind, value, ports, scan_family=family)
+        db.session.commit()
+        accepted += len(batch)
+    _finish_preparation(cycle_id, revision, "ready" if accepted else "no_matches")
+    return accepted
+
+
+def _start_preparation(cycle_id):
+    current = _lock_preparation(cycle_id)
+    if current is None:
+        return None
+    cycle, profile = current
     from app.views import KVSearchView  # pylint: disable=import-outside-toplevel
 
     criteria, valid, error = KVSearchView().parse_query(
@@ -355,60 +418,52 @@ def prepare_cycle(
     # failing. Rebuild that unpublished set from the search results so obsolete
     # ports cannot leak into the jobs staged after preparation completes.
     _reset_unpublished_work(cycle)
-
-    parser_config = db.app.config
-    indexer = KVrocksIndexer(
-        db.app.config["KVROCKS_HOST"], db.app.config["KVROCKS_PORT"]
+    preparation = (
+        cycle.filter_revision,
+        criteria,
+        cycle.filter_from_ts,
+        cycle.filter_to_ts,
+        profile.scan_tool,
     )
     cycle.preparation_status = "extracting"
     db.session.commit()
-    accepted = 0
+    return preparation
+
+
+@pinned_read
+def prepare_cycle(cycle_id, meili_index):
+    """Extract each batch outside SQL and commit it before resuming backend reads."""
+    db.session.rollback()
     try:
-        for seen, target in enumerate(
-            filtered_candidates(
+        preparation = _start_preparation(cycle_id)
+        if preparation is None:
+            return 0
+        revision, criteria, from_ts, to_ts, scan_tool = preparation
+        selection = _selection_context()
+        db.session.rollback()
+
+        parser_config = db.app.config
+        try:
+            indexer = KVrocksIndexer(
+                parser_config["KVROCKS_HOST"], parser_config["KVROCKS_PORT"]
+            )
+            candidates = filtered_candidates(
                 indexer,
                 meili_index,
                 criteria,
-                cycle.filter_from_ts,
-                cycle.filter_to_ts,
+                from_ts,
+                to_ts,
                 parser_config,
                 timeout=None,
-            ),
-            start=1,
-        ):
-            if seen == 1 or seen % 100 == 0:
-                current_revision = (
-                    db.session.query(ScanProfiles.filter_revision)
-                    .filter_by(id=profile.id, scan_enabled=True)
-                    .scalar()
-                )
-                if current_revision != cycle.filter_revision:
-                    cycle.preparation_status = "cancelled"
-                    db.session.commit()
-                    return accepted
-            configured_target, kind, value, ports = target
-            if profile.scan_tool == "masscan":
-                families = ("ipv4", "ipv6") if kind == "fqdn" else (
-                    "ipv4" if ipaddress.ip_address(value).version == 4 else "ipv6",
-                )
-            else:
-                families = (None,)
-            for family in families:
-                _merge_work(
-                    cycle, configured_target, kind, value, ports,
-                    scan_family=family,
-                )
-            accepted += 1
-            if accepted % 100 == 0:
-                db.session.commit()
-        cycle.preparation_status = "ready" if accepted else "no_matches"
-        db.session.commit()
-        return accepted
-    except (MeilisearchError, RedisError, OSError, TimeoutError):
+                selection=selection,
+            )
+            return _write_preparation_batches(cycle_id, revision, candidates, scan_tool)
+        except (MeilisearchError, RedisError, OSError):
+            db.session.rollback()
+            _finish_preparation(cycle_id, revision, "retry")
+            raise
+    except SQLAlchemyError:
         db.session.rollback()
-        cycle = db.session.query(ScanProfileCycles).filter_by(id=cycle_id).one()
-        cycle.preparation_status = "retry"
-        db.session.commit()
         raise
 
 
