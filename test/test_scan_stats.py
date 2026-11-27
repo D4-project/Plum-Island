@@ -41,6 +41,26 @@ def record_completed_job(session, job, report, now, ports_targeted=None):
 class ScanStatsTest(unittest.TestCase):
     """Regression checks for scan stats test."""
 
+    def test_empty_report_migration_preserves_existing_jobs(self):
+        """Existing jobs remain unmarked after a replayable SQLite migration."""
+        directory = Path(__file__).resolve().parents[1] / "webapp/sql_upd"
+        migrate = runpy.run_path(str(next(directory.glob("37_*.py"))))["migrate"]
+        connection = sqlite3.connect(":memory:")
+        self.addCleanup(connection.close)
+        connection.execute("CREATE TABLE jobs (id INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO jobs VALUES (1)")
+        migrate(connection)
+        self.assertEqual(
+            connection.execute("SELECT report_empty FROM jobs").fetchone(), (0,)
+        )
+        connection.execute("UPDATE jobs SET report_empty = 1 WHERE id = 1")
+        connection.execute("INSERT INTO jobs (id) VALUES (2)")
+        migrate(connection)
+        self.assertEqual(
+            connection.execute("SELECT report_empty FROM jobs ORDER BY id").fetchall(),
+            [(1,), (0,)],
+        )
+
     def setUp(self):
         """Create isolated state for the regression checks."""
         self.engine = create_engine("sqlite://")

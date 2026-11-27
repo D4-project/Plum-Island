@@ -287,6 +287,7 @@ class Jobs(Model):
     meili_documents_submitted = Column(Integer, default=0, nullable=False)
     meili_documents_total = Column(Integer, nullable=True)
     report_document_count = Column(BigInteger, nullable=True)
+    report_empty = Column(Boolean, nullable=False, default=False, server_default="0")
     job_end = Column(DateTime, default=None)  # Last job termination.
     job_start = Column(DateTime, default=None)  # Last job Start time
     job_creation = Column(DateTime, default=utcnow_naive)  # Timestamp of job creation

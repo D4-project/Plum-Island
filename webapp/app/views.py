@@ -4040,18 +4040,23 @@ class JobsView(ModelView):
     @expose("/file_get/<uid>")
     @has_access
     def file_get(self, uid):
-        """Serve the saved report for a visible job, even before indexing."""
+        """Serve the report for a visible job, including a stored empty marker."""
         if not is_valid_uuid(uid):
             abort(404)
         pk = db.session.query(Jobs.id).filter(Jobs.uid == uid).scalar()
-        if pk is None or not self.datamodel.get(pk, self._base_filters):
+        job = self.datamodel.get(pk, self._base_filters) if pk is not None else None
+        if job is None:
             abort(404)
 
         filename = f"{uid}.json"
-        path = os.path.join(db.app.config["JSON_FOLDER"], uid[0], filename)
+        source = (
+            io.BytesIO(b"[]")
+            if job.report_empty
+            else os.path.join(db.app.config["JSON_FOLDER"], uid[0], filename)
+        )
         try:
             response = send_file(
-                path, mimetype="application/json", download_name=filename
+                source, mimetype="application/json", download_name=filename
             )
         except FileNotFoundError:
             abort(404)

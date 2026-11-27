@@ -26,6 +26,7 @@ from app.models import (
     Bots,
     ApiKeys,
     ScanProfiles,
+    ScanProfileCycles,
     TargetScanStates,
 )
 from app.apis import PublicTargetsApi, TargetsApi, Api
@@ -494,7 +495,9 @@ class NetworkPersistenceTest(unittest.TestCase):
                 agent_version="test",
                 system_version="test",
             )
-            profile = ScanProfiles(name="test", scan_cycle_minutes=1440)
+            profile = ScanProfiles(
+                name="test", scan_cycle_minutes=1440, apply_to_all=True
+            )
             target = session.get(Targets, target_id)
             target.network_refresh_pending = False
             target.last_scan = NOW - timedelta(days=2)
@@ -513,12 +516,19 @@ class NetworkPersistenceTest(unittest.TestCase):
             )
             session.flush()
             state = TargetScanStates(target=target, scanprofile=profile, working=True)
+            cycle = ScanProfileCycles(
+                scanprofile=profile, started_at=NOW - timedelta(minutes=6)
+            )
+            session.add(cycle)
+            session.flush()
+            profile.current_cycle_id = cycle.id
             jobs = [
                 Jobs(
                     uid=f"11111111-1111-4111-8111-11111111111{number}",
                     job=target.value,
                     targets=[target],
                     scanprofile=profile,
+                    scanprofile_cycle=cycle,
                     bot_id=bot.id,
                     active=True,
                     job_start=NOW - timedelta(minutes=5),
@@ -551,6 +561,19 @@ class NetworkPersistenceTest(unittest.TestCase):
                 self.assertFalse(jobs[1].finished)
                 self.assertTrue(jobs[0].finished)
                 lookup.assert_not_called()
+                self.assertEqual(cycle.status, "running")
+
+            payload.update(JOB_UID=jobs[1].uid, RESULT="[]")
+            with mock.patch.object(db, "session", session), mock.patch.dict(
+                app.config, {"JSON_FOLDER": str(folder)}
+            ), app.test_request_context("/bot_api/sndjob", method="POST", json=payload):
+                self.assertEqual(Api().sndjobs().status_code, 200)
+            self.assertTrue(jobs[1].report_empty)
+            self.assertTrue(jobs[1].exported)
+            self.assertFalse((folder / "1" / f"{jobs[1].uid}.json").exists())
+            self.assertFalse(state.working)
+            self.assertEqual(cycle.status, "finished")
+            self.assertEqual(cycle.completed_target_count, 1)
 
 
 class NetworkRefreshAccessTest(unittest.TestCase):

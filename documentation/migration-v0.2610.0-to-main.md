@@ -164,6 +164,15 @@ Masscan's default rate is 1,000 packets per second; set `masscan_rate` on the ag
 when a different local limit is required. Existing agents that do not announce a
 capability list continue to receive Nmap jobs only.
 
+### Empty agent reports
+
+`./updisland.sh` applies SQLite migration 37. MySQL deployments must apply
+[`tools/sql/37_empty_job_reports_mysql.sql`](../tools/sql/37_empty_job_reports_mysql.sql)
+before starting the updated controller. The migration preserves existing jobs
+and their report files. New accepted `[]` reports complete the job immediately
+without storing a file or entering the export queue. The report URL still returns
+`[]` until the job expires under `JOB_SCAVENGE`.
+
 ## 1. Deploy code and synchronize roles
 
 Use the normal controller service stop/restart procedure during code replacement.

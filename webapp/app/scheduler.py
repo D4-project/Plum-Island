@@ -3106,7 +3106,7 @@ def task_run_due_reports():
 
 def _expired_job_snapshots(cutoff):
     """Select archived jobs whose results and cycle state are settled."""
-    return db.session.query(Jobs.id, Jobs.uid).filter(
+    return db.session.query(Jobs.id, Jobs.uid, Jobs.report_empty).filter(
         Jobs.active.is_(False),
         Jobs.exported.is_(True),
         Jobs.finished.is_(True),
@@ -3193,7 +3193,8 @@ def task_cleanup_jobs():
                     os.remove(filepath)
                     summary["files_deleted"] += 1
                 except FileNotFoundError:
-                    summary["files_missing"] += 1
+                    if not row.report_empty:
+                        summary["files_missing"] += 1
                 except OSError as error:
                     summary["file_delete_errors"] += 1
                     logger.error("Unable to delete job file %s: %s", filepath, error)

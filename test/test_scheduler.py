@@ -639,6 +639,31 @@ class StalledJobWatchdogTest(TestCase):
         report.write_text("[]", encoding="utf-8")
         return job, report
 
+    def test_cleanup_distinguishes_empty_and_missing_reports(self):
+        """Expire intentionally empty jobs and count only unexpected missing files."""
+        path, session = self._job_cleanup_fixture()
+        _, absent = self._archived_job(path.parent, session, report_empty=True)
+        _, residual = self._archived_job(path.parent, session, report_empty=True)
+        _, missing = self._archived_job(path.parent, session)
+        recent, recent_file = self._archived_job(
+            path.parent, session, report_empty=True, job_end=self.scheduler.utcnow_naive()
+        )
+        absent.unlink()
+        missing.unlink()
+        recent_file.unlink()
+        recent_uid = recent.uid
+        session.commit()
+
+        summary = self.scheduler.task_cleanup_jobs()
+
+        self.assertEqual(summary["jobs_removed"], 3)
+        self.assertEqual(summary["files_deleted"], 1)
+        self.assertEqual(summary["files_missing"], 1)
+        self.assertEqual(summary["file_delete_errors"], 0)
+        self.assertFalse(summary["deferred"])
+        self.assertFalse(residual.exists())
+        self.assertEqual(session.query(self.scheduler.Jobs).one().uid, recent_uid)
+
     def test_cleanup_defers_on_real_sqlite_lock_and_preserves_the_report(self):
         """A failed write leaves both the archived row and its file for retry."""
         path, session = self._job_cleanup_fixture()

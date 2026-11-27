@@ -1,5 +1,9 @@
 # Unreleased
 
+- Complete jobs with empty agent reports at receipt without writing a report
+  file or queueing an export. Keep the job, scan statistics, and report URL
+  available until normal job cleanup.
+
 - Prepare filtered scan IP/FQDN and port sets in Kvrocks with a resumable,
   time-bounded cursor. SQLite now stores cycle state and final jobs only.
   Migration 36 closes legacy filtered cycles, preserves assigned jobs and

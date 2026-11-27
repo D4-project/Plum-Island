@@ -11,7 +11,7 @@ from pathlib import Path
 from test.test_scanprofile_api import ProfileApiFixture
 from unittest.mock import patch
 
-from app import apis
+from app import apis, views
 from app.models import (
     ApiKeys,
     Bots,
@@ -20,6 +20,8 @@ from app.models import (
     ScanProfiles,
     ScanStatBucket,
 )
+from app.utils.scan_stats import ingestion_series, sample_ingestion_queue
+from flask_appbuilder.models.sqla.interface import SQLAInterface
 from werkzeug.security import generate_password_hash
 
 
@@ -353,12 +355,33 @@ class BotInventoryTest(ProfileApiFixture):
             with patch.dict(self.app.config, JSON_FOLDER=directory), patch.object(
                 apis, "utcnow_naive", return_value=current.job_start
             ):
+                shard = Path(directory, message["job_uid"][0])
+                with patch.object(
+                    apis, "claim_completed_job", return_value=False
+                ), patch.object(apis.os, "replace") as publish:
+                    lost = self.client.post("/bot_api/sndjob", json=immediate_result)
+                self.assertEqual(lost.status_code, 409)
+                publish.assert_not_called()
+                self.assertEqual(list(shard.iterdir()), [])
+
+                with patch.object(apis.os, "replace", side_effect=OSError("fixture")):
+                    failed = self.client.post("/bot_api/sndjob", json=immediate_result)
+                self.assertEqual(failed.status_code, 500)
+                self.assertEqual(list(shard.iterdir()), [])
+                self.db.session.refresh(current)
+                self.assertTrue(current.active)
+                self.assertFalse(current.finished)
+                self.assertEqual(self.db.session.query(ScanStatBucket).count(), 0)
+
                 response = self.client.post("/bot_api/sndjob", json=immediate_result)
             saved = Path(directory, message["job_uid"][0], message["job_uid"] + ".json")
-            self.assertEqual(json.loads(saved.read_text()), report)
+            self.assertEqual(json.loads(saved.read_text(encoding="utf-8")), report)
         self.assertEqual(response.status_code, 200)
         self.db.session.refresh(current)
         self.assertTrue(current.finished)
+        self.assertFalse(current.report_empty)
+        self.assertFalse(current.exported)
+        self.assertEqual(current.report_document_count, 0)
         counters = self.db.session.query(ScanStatBucket).one()
         self.assertEqual((counters.jobs_completed, counters.open_ports), (1, 1))
         self.assertEqual(counters.jobs_without_target_count, 0)
@@ -382,27 +405,90 @@ class BotInventoryTest(ProfileApiFixture):
         self.db.session.commit()
         second = self.client.post("/bot_api/getjob", json=masscan).json["message"]
         self.assertEqual(second["job_uid"], empty.uid)
+        late_retry = self.client.post("/bot_api/sndjob", json=immediate_result)
+        self.assertEqual(late_retry.status_code, 200)
+        self.assertTrue(
+            self.db.session.query(Bots).filter_by(uid=masscan["UID"]).one().running
+        )
+        empty_payload = dict(
+            masscan,
+            JOB_UID=empty.uid,
+            ATTEMPT_UID=second["attempt_uid"],
+            RESULT="[ ]",
+            PORTS_TARGETED=256,
+        )
         with tempfile.TemporaryDirectory() as directory:
-            Path(directory, empty.uid[0]).mkdir()
             with patch.dict(self.app.config, JSON_FOLDER=directory), patch.object(
                 apis, "utcnow_naive", return_value=empty.job_start
             ):
-                response = self.client.post(
-                    "/bot_api/sndjob",
-                    json=dict(
-                        masscan,
-                        JOB_UID=empty.uid,
-                        ATTEMPT_UID=second["attempt_uid"],
-                        RESULT="[]",
-                        PORTS_TARGETED=256,
-                    ),
-                )
-            self.assertEqual(response.status_code, 200)
-            saved = Path(directory, empty.uid[0], empty.uid + ".json")
-            self.assertEqual(json.loads(saved.read_text()), [])
+                response = self.client.post("/bot_api/sndjob", json=empty_payload)
+                self.assertEqual(response.status_code, 200)
+                retry = self.client.post("/bot_api/sndjob", json=empty_payload)
+                self.assertEqual(retry.status_code, 200)
+            self.assertEqual(list(Path(directory).iterdir()), [])
         self.db.session.refresh(empty)
         self.assertTrue(empty.finished)
+        self.assertFalse(empty.active)
+        self.assertTrue(empty.exported)
+        self.assertTrue(empty.report_empty)
+        self.assertEqual(empty.report_document_count, 0)
+        self.assertIsNone(empty.meili_documents_total)
+        bot = self.db.session.query(Bots).filter_by(uid=masscan["UID"]).one()
+        self.assertFalse(bot.running)
+        sample_ingestion_queue(self.db.session, empty.job_end)
+        sample = ingestion_series(self.db.session, empty.job_end)["latest"]
+        self.assertEqual(
+            (sample["pending_reports"], sample["pending_documents"]), (1, 0)
+        )
         rows = self.db.session.query(ScanStatBucket).all()
         self.assertEqual(sum(row.jobs_completed for row in rows), 2)
         self.assertEqual(sum(row.open_ports for row in rows), 1)
         self.assertEqual(sum(row.ports_targeted for row in rows), 257)
+
+
+class JobReportDownloadTest(ProfileApiFixture):
+    """Exercise the normal authorized report URL for jobs without files."""
+
+    def configure_catalogue(self):
+        """Bind the production Jobs view to this fixture's database."""
+
+        class ReportJobsView(views.JobsView):
+            """Expose the job report route through the test AppBuilder instance."""
+
+            route_base = "/jobsview"
+            datamodel = SQLAInterface(Jobs)
+
+        self.builder.add_view_no_menu(ReportJobsView)
+
+    def test_only_marked_jobs_return_empty_reports_without_files(self):
+        """Preserve authorization and keep an unexplained missing report at 404."""
+        jobs = [
+            Jobs(
+                uid=str(uuid.uuid4()),
+                job="192.0.2.1",
+                finished=True,
+                exported=True,
+                report_empty=empty,
+                report_document_count=0,
+            )
+            for empty in (True, False)
+        ]
+        self.db.session.add_all(jobs)
+        self.db.session.commit()
+        empty_url, missing_url = (f"/jobsview/file_get/{job.uid}" for job in jobs)
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            views, "db", self.db
+        ), patch.dict(self.app.config, JSON_FOLDER=directory):
+            with self.app.app_context():
+                self.assertNotEqual(self.client.get(empty_url).status_code, 200)
+            admin = self.builder.sm.find_user(username="Admin")
+            with self.client.session_transaction() as session:
+                session["_user_id"] = admin.get_id()
+            response = self.client.get(empty_url)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json, [])
+            self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+            self.assertIn(
+                jobs[0].uid + ".json", response.headers["Content-Disposition"]
+            )
+            self.assertEqual(self.client.get(missing_url).status_code, 404)

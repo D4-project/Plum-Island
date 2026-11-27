@@ -11,6 +11,7 @@ This module contains all code related to API's.
 # pylint: disable=too-many-lines
 
 import base64
+from contextlib import contextmanager
 from datetime import date, datetime, time as datetime_time, timedelta, timezone
 import hashlib
 import ipaddress
@@ -18,6 +19,7 @@ import os
 import json
 import logging
 import re
+import tempfile
 import time
 import uuid
 import meilisearch
@@ -324,6 +326,33 @@ def _nse_file_path(nse):
     Resolve the uploaded NSE file path on disk.
     """
     return os.path.join(db.app.config.get("UPLOAD_FOLDER"), nse.filebody)
+
+
+@contextmanager
+def _stage_scan_report(path, report):
+    """Stage a decoded report beside its destination and remove abandoned files."""
+    if path is None:
+        yield None
+        return
+    staged_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=os.path.dirname(path),
+            prefix=".report-",
+            suffix=".tmp",
+            delete=False,
+        ) as staged:
+            staged_path = staged.name
+            json.dump(report, staged, indent=2)
+        yield staged_path
+    finally:
+        if staged_path is not None:
+            try:
+                os.unlink(staged_path)
+            except FileNotFoundError:
+                pass  # Published with os.replace().
 
 
 def _get_bot_by_uid(bot_uid):
@@ -1131,9 +1160,6 @@ class Api(BaseApi):
                 job_bot.uid,
                 job_bot.bot_id,
             )
-            submitting_bot.running = False
-            submitting_bot.last_seen = utcnow_naive()
-            db.session.commit()
             return self.response(200, message="ready")
 
         if job_bot.bot_id != submitting_bot.id:
@@ -1185,9 +1211,6 @@ class Api(BaseApi):
             )
             return self.response(429, message="job submitted too quickly")
 
-        # Write the result file BEFORE mutating ORM state.
-        # If the write fails (disk full, OSError, malformed JSON), the job
-        # must not be marked finished — the agent can retry and resubmit.
         result_payload = botinfo.get("RESULT")
         if result_payload is None:
             logger.warning(
@@ -1198,32 +1221,46 @@ class Api(BaseApi):
             db.session.rollback()
             return self.response(400, message="missing result")
 
-        base = os.path.join(
-            db.app.config.get("JSON_FOLDER"),
-            botinfo.get("JOB_UID")[0],
-            f"{botinfo.get('JOB_UID')}.json",
-        )
         try:
             result_data = json.loads(result_payload)
-            with open(base, "w", encoding="utf-8") as f:
-                json.dump(result_data, f, indent=2)
-        except (OSError, TypeError, json.JSONDecodeError):
-            logger.exception(
-                "Failed to write result file for job %s", botinfo.get("JOB_UID")
-            )
+        except (TypeError, json.JSONDecodeError):
+            logger.exception("Failed to decode result for job %s", job_bot.uid)
             db.session.rollback()
             return self.response(500, message="result storage failed")
 
-        open_ports, document_count = report_counts(result_data)
-        if not claim_completed_job(db.session, job_bot, now, document_count):
-            db.session.rollback()
-            completed = (
-                db.session.query(Jobs.finished).filter(Jobs.id == job_bot.id).scalar()
+        report_empty = isinstance(result_data, list) and not result_data
+        report_path = None
+        if not report_empty:
+            report_path = os.path.join(
+                db.app.config["JSON_FOLDER"], job_bot.uid[0], f"{job_bot.uid}.json"
             )
-            if completed:
-                return self.response(200, message="ready")
-            return self.response(409, message="job is no longer active")
+        open_ports, document_count = report_counts(result_data)
+        job_id = job_bot.id
+        try:
+            # Prepare the bytes before taking the SQL writer lock. Only the
+            # submission that claims the job can publish the final filename.
+            with _stage_scan_report(report_path, result_data) as staged_path:
+                if not claim_completed_job(db.session, job_bot, now, document_count):
+                    db.session.rollback()
+                    completed = (
+                        db.session.query(Jobs.finished).filter_by(id=job_id).scalar()
+                    )
+                    if completed:
+                        return self.response(200, message="ready")
+                    return self.response(409, message="job is no longer active")
+                if staged_path is not None:
+                    os.replace(staged_path, report_path)
+        except OSError:
+            logger.exception("Failed to store result for job %s", job_bot.uid)
+            db.session.rollback()
+            return self.response(500, message="result storage failed")
 
+        job_bot.report_empty = report_empty
+        if report_empty:
+            job_bot.exported = True
+            job_bot.meili_task_uid = None
+            job_bot.meili_documents_submitted = 0
+            job_bot.meili_documents_total = None
         job_bot.finished = True
         job_bot.active = False
         job_bot.job_end = now
@@ -1335,8 +1372,9 @@ class Api(BaseApi):
             else int(isinstance(result_data, dict))
         )
         logger.info(
-            "Scanner result received: job=%s json_files=1 scan_results=%s",
+            "Scanner result received: job=%s json_files=%s scan_results=%s",
             job_bot.uid,
+            int(not report_empty),
             scan_results_received,
         )
         return self.response(200, message="ready")

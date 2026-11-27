@@ -77,6 +77,11 @@ covering SQL index on `jobs`. Sampling runs independently of export and requires
 only the job counters stored in SQL. Wider intervals
 display the last sample in each bucket. The latest sample time is displayed in UTC.
 
+An accepted empty JSON array completes the job and contributes to scan activity
+with zero open ports. Plum stores the empty-report marker on the job, returns
+`[]` through the authorized report URL, and skips file storage and export.
+The job remains available until the normal `JOB_SCAVENGE` cutoff.
+
 Plum counts eligible port records while processing the decoded submission and saves
 the count with the existing job claim. This measures documents queued for export,
 including repeated observations submitted under the same document ID. The count
