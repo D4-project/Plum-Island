@@ -8,6 +8,16 @@ Do not add a general bypass: frozen jobs and published coverage depend on this.
 # COPY now skips absent source keys, preserving the previously intended empty
 # field/tombstone semantics. Rules, parser output and stored formats are unchanged.
 STORAGE_COMPATIBLE_REVISIONS = {
+    # f535390 only enables ZREVRANGEBYSCORE in the generation read adapter.
+    # All ten fingerprinted files otherwise match 7c0ce89 exactly. Preserve
+    # its canonical revision (including the existing port-evidence alias).
+    (
+        "ea3f202f66030c12cc27abb497c9bc921f99d6640f82b8a33edc39499fde65ab5"
+        "789d3e7075f0b0358e3037f80014ea3105d2abaedcf31f6385668f8cc11bd65"
+    ): (
+        "a45819bf65c1334c10292103b5adf8fe9806c75e3f38ed02fa1c289211ad4946"
+        "502d749b9d26a483ffe9100ddc68fe31564608ccbbd992aacdb537802d3984aa"
+    ),
     # Port evidence adds independent keys without changing normalized fields
     # or the inputs required to resume a frozen reconciliation job.
     (

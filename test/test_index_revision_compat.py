@@ -20,6 +20,21 @@ COPY_FIX_BUILD = (
 class StorageRevisionTest(unittest.TestCase):
     """A storage fix must neither invalidate frozen inputs nor hide new code."""
 
+    def test_reverse_read_adapter_keeps_pre_fix_frozen_revision(self):
+        """The allowlist addition must not restart existing retagging work."""
+        root = Path(__file__).resolve().parents[1] / "webapp" / "app" / "utils"
+        original = Path.read_text
+        current = code_revision()
+
+        def before_fix(path, *args, **kwargs):
+            content = original(path, *args, **kwargs)
+            if path == root / "index_generations.py":
+                content = content.replace('        "zrevrangebyscore",\n', '')
+            return content
+
+        with patch.object(Path, "read_text", before_fix):
+            self.assertEqual(current, code_revision())
+
     def test_copy_fix_keeps_published_coverage_and_frozen_revision(self):
         """Existing jobs and document coverage use the pre-fix fingerprint."""
         self.assertEqual(
